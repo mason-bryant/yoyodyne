@@ -109,11 +109,15 @@ The patch is bounded, and the bound is spent whole file by whole file rather
 than cutting the patch at a byte count: a patch cut tail-first keeps whichever
 files Git rendered first and loses the rest without naming them, so a reviewer
 handed one could not say which files its verdict covered. Every file the patch
-shows it shows in full, and every file it cannot show is named above the patch with the file's size, the size of its diff, and the bound
-that dropped it — a diff bigger than the whole patch bound, one the bound had no
-room left for by the time it was reached, a new file bigger than the per-file
-ceiling, or content with no reviewable diff — delivered but too large to show,
-rather than absent. A reviewer that cannot tell a file the change delivers from
+shows it shows in full, and every file it cannot show is named above the patch
+with the file's size, the bound that dropped it, and — for a tracked file, whose
+diff was rendered before the bound was applied — the size of that diff: a diff
+bigger than the whole patch bound, one the bound had no room left for by the
+time it was reached, a new file bigger than the per-file ceiling (measured
+before anything is rendered, so it carries no diff size), or content with no
+reviewable diff — delivered but too large to show, rather than absent. A new
+file that is not a readable regular file is named with neither size, because
+there is nothing to measure. A reviewer that cannot tell a file the change delivers from
 one it never wrote judges the delivery blind, and an absence it is told about is
 one it can hold the change to. Above the patch is also a listing of every file
 the change touches, with Git's status, the file's size at the tip, whether it is

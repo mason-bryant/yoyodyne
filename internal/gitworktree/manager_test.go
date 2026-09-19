@@ -1582,6 +1582,71 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	}
 }
 
+// A type change — a tracked file that became a symlink — is one entry in Git's
+// listing and two blocks in its patch, a deletion and a creation of the same
+// path. It is one file's change and is carried as one section, so a legal
+// change containing one is rendered and listed rather than refused as a patch
+// that could not be paired with its listing.
+func TestManagerUnifiedChangesCarriesAFileThatBecameASymlink(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	writeFile(t, repository, "target.txt", "the target\n")
+	runGit(t, repository, "add", "target.txt")
+	runGit(t, repository, "commit", "-m", "the link's target")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-typechange", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "other.txt", "beside it\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: link the README")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	// Both halves of the type change are in the patch, and so is the file
+	// beside it, which the pairing would have misnamed had it taken the two
+	// blocks for two files.
+	for _, want := range []string{"deleted file mode 100644", "-test\n", "new file mode 120000", "+target.txt", "diff --git a/other.txt b/other.txt", "+beside it"} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch is missing %q:\n%s", want, changes.Patch)
+		}
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Errorf("a type change was reported as cut: %#v", changes.OmittedFiles)
+	}
+	// Listed once, with Git's own status for it. A symlink is not a regular
+	// file the harness measures, so it is listed at zero bytes.
+	want := []ChangedFile{
+		{Path: "README.txt", Status: "T", Bytes: 0, Committed: true},
+		{Path: "other.txt", Status: "A", Bytes: 10, Committed: true},
+	}
+	if !reflect.DeepEqual(changes.Files, want) {
+		t.Fatalf("files = %#v, want %#v", changes.Files, want)
+	}
+
+	// Under a bound the type change is kept or dropped as one file, never as a
+	// deletion shown without its creation.
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "README.txt" || bounded.OmittedFiles[0].Reason != OmittedTooLarge {
+		t.Fatalf("omitted files = %#v, want the type change dropped whole", bounded.OmittedFiles)
+	}
+	if strings.Contains(bounded.Patch, "README.txt") || !strings.Contains(bounded.Patch, "+beside it") {
+		t.Fatalf("bounded patch = %q, want the file beside the dropped type change and nothing of the type change", bounded.Patch)
+	}
+}
+
 // The tree listing: every file the change touches, with its size at the tip,
 // whether it is binary, and whether an earlier attempt already committed it.
 // The patch shows none of a binary and nothing distinguishes a committed file

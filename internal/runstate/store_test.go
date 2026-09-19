@@ -1916,6 +1916,77 @@ func TestStateHoldsTheHarnessCommitThatPermitsAMovedHead(t *testing.T) {
 	}
 }
 
+// The two commits a review was judged between are the record of what the
+// reviewer was shown, so they survive the process that made the review, and
+// a record that names one without the other or names something that is not a
+// commit is refused: it reads as evidence and is not.
+func TestStateHoldsTheCommitsAReviewWasJudgedBetween(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.ReviewBaseCommit = strings.Repeat("a", 40)
+	state.ReviewHeadCommit = strings.Repeat("b", 40)
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ReviewBaseCommit != state.ReviewBaseCommit || loaded.ReviewHeadCommit != state.ReviewHeadCommit {
+		t.Fatalf("loaded review span = %s..%s, want %s..%s", loaded.ReviewBaseCommit, loaded.ReviewHeadCommit, state.ReviewBaseCommit, state.ReviewHeadCommit)
+	}
+	// A run that has not been reviewed carries neither, which is every record
+	// written before they existed.
+	unreviewed := state
+	unreviewed.ReviewBaseCommit = ""
+	unreviewed.ReviewHeadCommit = ""
+	if err := unreviewed.Validate(); err != nil {
+		t.Fatalf("Validate() without a review span error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*State)
+		problem string
+	}{
+		{
+			name:    "a base without a tip",
+			mutate:  func(state *State) { state.ReviewHeadCommit = "" },
+			problem: "review_base_commit and review_head_commit must be recorded together",
+		},
+		{
+			name:    "a tip without a base",
+			mutate:  func(state *State) { state.ReviewBaseCommit = "" },
+			problem: "review_base_commit and review_head_commit must be recorded together",
+		},
+		{
+			name:    "a base that is not a commit",
+			mutate:  func(state *State) { state.ReviewBaseCommit = "main" },
+			problem: "review_base_commit is invalid",
+		},
+		{
+			name:    "a tip that is not a commit",
+			mutate:  func(state *State) { state.ReviewHeadCommit = "HEAD" },
+			problem: "review_head_commit is invalid",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			broken := state
+			test.mutate(&broken)
+			if err := broken.Validate(); err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("Validate() error = %v, want one mentioning %q", err, test.problem)
+			}
+		})
+	}
+}
+
 // A stopped provider has to survive the process that recorded it for the same
 // reason a pause deadline does: it is what tells the next invocation the run is
 // owed a continuation rather than a fresh start.

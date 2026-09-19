@@ -1209,7 +1209,11 @@ type trackedSection struct {
 // newline, or a byte outside ASCII and leaves one with a space bare, and parsing
 // that back is a second copy of Git's quoting rules. The listing and the patch
 // are two renderings of the same diff under the same options, so they name the
-// same files in the same order; the count is checked rather than trusted.
+// same files in the same order, with one shape to allow for: a type change — a
+// file that became a symlink, or the reverse — is one `T` entry in the listing
+// and two blocks in the patch, a deletion and a creation of the same path,
+// which are one section here because they are one file's change. The pairing
+// is checked rather than trusted, and a patch it cannot pair is refused.
 func (m *Manager) trackedSections(ctx context.Context, dir, baseCommit, headCommit string) ([]trackedSection, error) {
 	patchArgs := []string{"-C", dir, "diff", "--no-ext-diff", "--patch", baseCommit}
 	namesArgs := []string{"-C", dir, "diff", "--no-ext-diff", "--name-status", "-z", baseCommit}
@@ -1231,14 +1235,23 @@ func (m *Manager) trackedSections(ctx context.Context, dir, baseCommit, headComm
 	if names.Status != execution.ProcessSucceeded {
 		return nil, fmt.Errorf("list tracked changes failed with exit code %d: %s", names.ExitCode, strings.TrimSpace(names.Stderr))
 	}
-	paths := parseNameStatus(names.Stdout)
+	entries := parseNameStatus(names.Stdout)
 	blocks := splitPatchSections(patch.Stdout)
-	if len(blocks) != len(paths) {
-		return nil, fmt.Errorf("tracked patch renders %d file(s) where the listing names %d; a section that cannot be named is not reviewable", len(blocks), len(paths))
+	sections := make([]trackedSection, 0, len(entries))
+	next := 0
+	for _, entry := range entries {
+		take := 1
+		if strings.HasPrefix(entry.status, "T") {
+			take = 2
+		}
+		if next+take > len(blocks) {
+			return nil, fmt.Errorf("tracked patch renders %d block(s) where the listing names %d file(s); a section that cannot be named is not reviewable", len(blocks), len(entries))
+		}
+		sections = append(sections, trackedSection{path: entry.path, patch: strings.Join(blocks[next:next+take], "")})
+		next += take
 	}
-	sections := make([]trackedSection, 0, len(blocks))
-	for i, block := range blocks {
-		sections = append(sections, trackedSection{path: paths[i].path, patch: block})
+	if next != len(blocks) {
+		return nil, fmt.Errorf("tracked patch renders %d block(s) where the listing names %d file(s); a section that cannot be named is not reviewable", len(blocks), len(entries))
 	}
 	return sections, nil
 }
