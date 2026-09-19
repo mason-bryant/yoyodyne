@@ -973,7 +973,7 @@ which has been answered without any of them being read:
 | Mark | What it means |
 | --- | --- |
 | :thinking_face: | Recorded, and not settled yet. It goes on as the reply arrives and stays while the directive stands. |
-| :white_check_mark: | The directive is settled — carried out, decided, or answered. It lands when the outcome is said in the thread, not when the directive was written down. |
+| :white_check_mark: | The directive is answered — carried out, decided, answered, or withdrawn. It lands when the outcome is said in the thread, not when the directive was written down. |
 | :no_entry_sign: | Nothing was recorded. The thread says why. |
 
 The mark is about the directive rather than about the harness having read you:
@@ -1005,9 +1005,15 @@ there; carrying it out records what it produced and withdraws nothing, so it is
 still listed by `yoyo directive list` as in force, with what it became under it.
 What ends one is you withdrawing it — `yoyo directive withdraw --by <who>
 --reason <why> <id>`, or `/withdraw` in a conversation — which takes it out of
-force without deleting it. There is no way to do that from a thread: the reply that recorded a
-directive keeps its check mark, and the listing is where a withdrawn one reads as
-withdrawn.
+force without deleting it. There is no way to do that from a thread, but a
+directive you asked for from a thread and later withdrew is answered there all
+the same: one line in that thread, tagging you, saying it was taken back and why
+— *The operator took that back, so it no longer applies; what was directed while
+it stood stays on the record: recorded in error* — in the voice of the role whose
+conversation you withdrew it in, or the harness's own where you did it at a
+terminal. A reply still wearing :thinking_face: moves to :white_check_mark: at
+that moment, because there is now an answer to read; one that already had the
+check mark keeps it. The listing is where a withdrawn one reads as withdrawn.
 
 Five things are refused, visibly:
 

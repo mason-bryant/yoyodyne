@@ -306,7 +306,7 @@ func TestWithdrawingAnOperationalDirectiveTakesItOutOfForce(t *testing.T) {
 	t.Parallel()
 
 	recorded := operational()
-	withdrawn, err := recorded.Withdraw("the operator, at a command line",
+	withdrawn, err := recorded.Withdraw("the operator, at a command line", "",
 		"recorded in error: this was a question about a run, not an instruction", recordedAt.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
@@ -336,7 +336,7 @@ func TestAWithdrawnDirectiveKeepsWhatItSaidAndSaysWhoEndedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CarryOut() error = %v", err)
 	}
-	withdrawn, err := carried.Withdraw("the operator, at a command line",
+	withdrawn, err := carried.Withdraw("the operator, at a command line", "",
 		"we open small documentation pull requests again", recordedAt.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
@@ -363,6 +363,36 @@ func TestAWithdrawnDirectiveKeepsWhatItSaidAndSaysWhoEndedIt(t *testing.T) {
 	}
 }
 
+// A withdrawal made under a role carries the role, so a surface that answers the
+// thread the directive came from can answer in that role's voice, and the listing
+// says so beside who did it. One made by the operator at a terminal carries none,
+// which is what the operator being nobody's persona looks like on the record.
+func TestAWithdrawalCarriesTheRoleItWasMadeUnder(t *testing.T) {
+	t.Parallel()
+
+	withdrawn, err := operational().Withdraw("the operator, from conversation chat-1, after turn 3", domain.RoleProductManager,
+		"recorded in error", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if withdrawn.WithdrawnRole != domain.RoleProductManager {
+		t.Fatalf("withdrawn role = %q, want the role it was withdrawn under", withdrawn.WithdrawnRole)
+	}
+	if rendered := withdrawn.Render(); !strings.Contains(rendered, "(as the product manager)") {
+		t.Fatalf("Render() = %q, want the role named beside who withdrew it", rendered)
+	}
+	if _, err := operational().Withdraw("the operator, at a command line", "janitor", "recorded in error", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("Withdraw() under a role the harness does not have error = nil, want a refusal")
+	}
+	plain, err := operational().Withdraw("the operator, at a command line", "", "recorded in error", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if plain.WithdrawnRole != "" || strings.Contains(plain.Render(), "(as the") {
+		t.Fatalf("withdrawn = %#v, want no role on a withdrawal the operator made at a terminal", plain)
+	}
+}
+
 // Withdrawing a directive that pauses work lifts the pause without answering
 // what it was waiting for. That is what taking back a question means: there is
 // no answer to one the operator no longer means to have asked, and leaving the
@@ -374,7 +404,7 @@ func TestWithdrawingAPausingDirectiveLiftsThePauseUnanswered(t *testing.T) {
 	pausing.Kind = KindAmbiguous
 	pausing.Unresolved = "which of the two readings was meant"
 	pausing.Scope = []string{"yoyodyne-ifd.1"}
-	withdrawn, err := pausing.Withdraw("the operator, at a command line",
+	withdrawn, err := pausing.Withdraw("the operator, at a command line", "",
 		"never mind: the work went the other way and the question no longer arises", recordedAt.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
@@ -398,17 +428,17 @@ func TestWithdrawalRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
 	t.Parallel()
 
 	recorded := operational()
-	if _, err := recorded.Withdraw("", "recorded in error", recordedAt.Add(time.Hour)); err == nil {
+	if _, err := recorded.Withdraw("", "", "recorded in error", recordedAt.Add(time.Hour)); err == nil {
 		t.Fatal("Withdraw() with nobody withdrawing it error = nil, want a refusal")
 	}
-	if _, err := recorded.Withdraw("the operator, at a command line", "  ", recordedAt.Add(time.Hour)); err == nil {
+	if _, err := recorded.Withdraw("the operator, at a command line", "", "  ", recordedAt.Add(time.Hour)); err == nil {
 		t.Fatal("Withdraw() with no reason error = nil, want a refusal")
 	}
-	withdrawn, err := recorded.Withdraw("the operator, at a command line", "recorded in error", recordedAt.Add(time.Hour))
+	withdrawn, err := recorded.Withdraw("the operator, at a command line", "", "recorded in error", recordedAt.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("Withdraw() error = %v", err)
 	}
-	if _, err := withdrawn.Withdraw("the operator, at a command line", "again", recordedAt.Add(2*time.Hour)); err == nil {
+	if _, err := withdrawn.Withdraw("the operator, at a command line", "", "again", recordedAt.Add(2*time.Hour)); err == nil {
 		t.Fatal("Withdraw() on a withdrawn directive error = nil, want a refusal")
 	}
 	// Nothing is written onto a directive nobody means any more: an outcome on it
@@ -431,7 +461,7 @@ func TestWithdrawalRefusesADirectiveThatHasAlreadyEnded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if _, err := resolved.Withdraw("the operator, at a command line", "never mind", recordedAt.Add(2*time.Hour)); err == nil {
+	if _, err := resolved.Withdraw("the operator, at a command line", "", "never mind", recordedAt.Add(2*time.Hour)); err == nil {
 		t.Fatal("Withdraw() on a resolved directive error = nil, want a refusal")
 	}
 	if _, err := resolved.Resolve("again", recordedAt.Add(2*time.Hour)); err == nil {
@@ -483,6 +513,30 @@ func TestValidateHoldsAWithdrawalToWhoAndWhen(t *testing.T) {
 				d.Withdrawal = "recorded in error"
 				d.WithdrawnBy = "the operator, at a command line"
 				d.WithdrawnAt = &withdrawnAt
+			},
+		},
+		{
+			name:    "a role with no withdrawal is refused",
+			mutate:  func(d *Directive) { d.WithdrawnRole = domain.RoleProductManager },
+			wantErr: "requires who withdrew it",
+		},
+		{
+			name: "a role the harness does not have is refused",
+			mutate: func(d *Directive) {
+				d.Withdrawal = "recorded in error"
+				d.WithdrawnBy = "the operator, from conversation chat-1, after turn 3"
+				d.WithdrawnAt = &withdrawnAt
+				d.WithdrawnRole = "janitor"
+			},
+			wantErr: "withdrawn role",
+		},
+		{
+			name: "a role the harness has is valid beside the three",
+			mutate: func(d *Directive) {
+				d.Withdrawal = "recorded in error"
+				d.WithdrawnBy = "the operator, from conversation chat-1, after turn 3"
+				d.WithdrawnAt = &withdrawnAt
+				d.WithdrawnRole = domain.RoleProductManager
 			},
 		},
 	}

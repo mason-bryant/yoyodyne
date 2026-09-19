@@ -180,6 +180,14 @@ type Directive struct {
 	Withdrawal  string     `json:"withdrawal,omitempty"`
 	WithdrawnBy string     `json:"withdrawn_by,omitempty"`
 	WithdrawnAt *time.Time `json:"withdrawn_at,omitempty"`
+	// WithdrawnRole is the role the withdrawal was made under: the role whose
+	// conversation the operator withdrew it in, or the agent that withdrew it at a
+	// command line. It is empty where no persona was involved — the operator at a
+	// terminal — and it is attribution in the same sense ReceivedBy is: it decides
+	// nothing about the record, and it is here so a surface that answers the
+	// thread the directive came from can answer in the voice of whoever took it
+	// back rather than in nobody's.
+	WithdrawnRole domain.AgentRole `json:"withdrawn_role,omitempty"`
 }
 
 var (
@@ -272,7 +280,13 @@ func (d Directive) Validate() error {
 	case d.WithdrawnAt != nil:
 		problems = append(problems, boundedText("withdrawal", d.Withdrawal, MaxWithdrawalBytes, true))
 		problems = append(problems, boundedLine("withdrawn by", d.WithdrawnBy, true))
-	case strings.TrimSpace(d.Withdrawal) != "" || strings.TrimSpace(d.WithdrawnBy) != "":
+		// The role is optional, because the operator at a terminal is nobody's
+		// persona; one that is named has to be a role the harness has, or a surface
+		// would be asked to speak in a voice nobody wrote.
+		if d.WithdrawnRole != "" && !d.WithdrawnRole.Valid() {
+			problems = append(problems, fmt.Errorf("withdrawn role %q is not one of the harness's roles", d.WithdrawnRole))
+		}
+	case strings.TrimSpace(d.Withdrawal) != "" || strings.TrimSpace(d.WithdrawnBy) != "" || d.WithdrawnRole != "":
 		problems = append(problems, errors.New("a withdrawal requires who withdrew it and the time they did"))
 	}
 	if err := errors.Join(problems...); err != nil {
@@ -446,7 +460,10 @@ func (d Directive) CarryOut(outcome string, at time.Time) (Directive, error) {
 // without answering what it was waiting for — which is the honest record of "I
 // take it back" and the only one that fits, because there is no answer to a
 // question the operator no longer means to have asked.
-func (d Directive) Withdraw(by, reason string, at time.Time) (Directive, error) {
+//
+// by is who took it back, in words the record answers for; role is the persona
+// it was taken back under, and is empty for the operator at a terminal.
+func (d Directive) Withdraw(by string, role domain.AgentRole, reason string, at time.Time) (Directive, error) {
 	if d.Withdrawn() {
 		return Directive{}, d.alreadyWithdrawn()
 	}
@@ -468,6 +485,7 @@ func (d Directive) Withdraw(by, reason string, at time.Time) (Directive, error) 
 	withdrawn.Withdrawal = strings.TrimSpace(reason)
 	withdrawn.WithdrawnBy = strings.TrimSpace(by)
 	withdrawn.WithdrawnAt = &withdrawnAt
+	withdrawn.WithdrawnRole = domain.AgentRole(strings.TrimSpace(string(role)))
 	if err := withdrawn.Validate(); err != nil {
 		return Directive{}, err
 	}
@@ -562,8 +580,12 @@ func (d Directive) Render() string {
 	// stood, are what make a withdrawn directive readable as withdrawn rather
 	// than as a record somebody deleted the middle of.
 	if d.Withdrawn() {
+		by := d.WithdrawnBy
+		if d.WithdrawnRole != "" {
+			by += " (as the " + d.WithdrawnRole.Title() + ")"
+		}
 		fmt.Fprintf(&rendered, "  withdrawn %s by %s, and no longer in force: %s\n",
-			d.WithdrawnAt.UTC().Format(time.RFC3339), d.WithdrawnBy, indented(d.Withdrawal))
+			d.WithdrawnAt.UTC().Format(time.RFC3339), by, indented(d.Withdrawal))
 	}
 	return rendered.String()
 }

@@ -161,10 +161,17 @@ const (
 	// and an outcome never held one. Said as a resolution, the commonest kind of
 	// directive would be reported to the thread that asked for it in words about
 	// work resuming that had never stopped.
+	//
+	// Withdrawn is the fifth, and it is the one that is not a settlement: the
+	// operator took the directive back, so nothing was carried out and nothing was
+	// answered. It is still said to the thread that asked, because a directive
+	// recorded from a thread and later withdrawn otherwise wore the thinking face
+	// forever — the thread was told it was heard and never told it was taken back.
 	KindDirectiveRecorded   Kind = "directive.recorded"
 	KindDirectiveResolved   Kind = "directive.resolved"
 	KindDirectiveCarriedOut Kind = "directive.carried-out"
 	KindDirectiveRefused    Kind = "directive.refused"
+	KindDirectiveWithdrawn  Kind = "directive.withdrawn"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -346,6 +353,7 @@ func Kinds() []Kind {
 		KindDirectiveResolved,
 		KindDirectiveCarriedOut,
 		KindDirectiveRefused,
+		KindDirectiveWithdrawn,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -384,6 +392,7 @@ func (k Kind) Valid() bool {
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
+		KindDirectiveWithdrawn,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,

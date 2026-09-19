@@ -229,9 +229,9 @@ func (s *DirectiveStore) CarryOut(reference, outcome string, at time.Time) (dire
 // with the directive taken out of it. A run that was held or judged while it
 // stood has to stay explicable afterwards, and that needs the words the operator
 // used, which is exactly what deleting the file would throw away.
-func (s *DirectiveStore) Withdraw(reference, by, reason string, at time.Time) (directive.Directive, error) {
+func (s *DirectiveStore) Withdraw(reference, by string, role domain.AgentRole, reason string, at time.Time) (directive.Directive, error) {
 	return s.settle(reference, func(found directive.Directive) (directive.Directive, error) {
-		return found.Withdraw(by, reason, at)
+		return found.Withdraw(by, role, reason, at)
 	})
 }
 

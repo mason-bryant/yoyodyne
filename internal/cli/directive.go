@@ -196,6 +196,8 @@ func withdrawDirective(args []string, stdout, stderr io.Writer) int {
 	reason := flags.set.String("reason", "",
 		"why you no longer mean it; required, because the record keeps what was said and this is what says why it stopped applying")
 	by := flags.set.String("by", "", "who is withdrawing it; required, and it is what the record answers for who ended the directive")
+	as := flags.set.String("as", "",
+		"the role withdrawing it, where an agent is: developer, reviewer, architect, development-manager, or product-manager; leave it out if you are the operator")
 	if code, ok := flags.parse(args, 1); !ok {
 		return code
 	}
@@ -210,7 +212,9 @@ func withdrawDirective(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	withdrawn, err := store.Withdraw(flags.argument(), *by, *reason, time.Now())
+	// The role is what a thread the directive came from is answered in the voice
+	// of, and the record refuses one the harness does not have.
+	withdrawn, err := store.Withdraw(flags.argument(), *by, domain.AgentRole(strings.TrimSpace(*as)), *reason, time.Now())
 	if err != nil {
 		return reportDirectiveError(stdout, stderr, *flags.jsonOutput, err)
 	}
@@ -334,7 +338,7 @@ and it continues from where it stopped once the directive is resolved.
   list [--all]                         the directives in force, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
-  withdraw --by <who> --reason <why> <id>
+  withdraw --by <who> [--as <role>] --reason <why> <id>
                                        take one back; it stops being in force
 
 A directive that pauses work stops being in force when it is resolved. An
@@ -350,7 +354,9 @@ a question means.
 
 Who is asked for rather than assumed. Agents run this binary too, so a command
 line does not say who typed at it, and --by is the one field the record answers
-for who ended the directive.
+for who ended the directive. An agent withdrawing one names its role with --as,
+which is the voice a Slack thread the directive came from is answered in; the
+operator leaves it out.
 
 An id may be shortened to any prefix that names exactly one directive.
 
@@ -367,5 +373,6 @@ record options:
 
 withdraw options:
   --reason <why>        why you no longer mean it; required
-  --by <who>            who is withdrawing it; required`)
+  --by <who>            who is withdrawing it; required
+  --as <role>           the role withdrawing it, where an agent is; the operator leaves it out`)
 }

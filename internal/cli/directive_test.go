@@ -320,6 +320,18 @@ func TestWithdrawingADirectiveFromTheCommandLineEndsItWithoutDeletingIt(t *testi
 			t.Fatalf("listing = %q, want the withdrawn directive kept in full and marked withdrawn", everything)
 		}
 	}
+
+	// An agent withdrawing one names its role, and the record carries it beside
+	// who did it: it is the voice a thread the directive came from is answered in.
+	agents := recordFromCommandLine(t, configPath, "prefer the smaller change here")
+	byAgent := runDirectiveOK(t, configPath, "withdraw",
+		"--by", "the developer, run run-1234",
+		"--as", "developer",
+		"--reason", "the smaller change was the wrong one and the item says so now",
+		agents)
+	if !strings.Contains(byAgent, "the developer, run run-1234 (as the developer)") {
+		t.Fatalf("withdrawal = %q, want the role named beside who withdrew it", byAgent)
+	}
 }
 
 // What the command line will not withdraw. Each of these would leave the record
@@ -368,6 +380,14 @@ func TestWithdrawRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
 			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "recorded in error", "directive-" + strings.Repeat("0", 32)},
 			code: 1,
 			want: "no directive is recorded under that reference",
+		},
+		{
+			// A role nobody has a voice for would be a thread answered in a voice
+			// nobody wrote, so the record refuses it before anything is written.
+			name: "withdrawing as a role the harness does not have",
+			args: []string{"withdraw", "--by", "the janitor, run 7", "--as", "janitor", "--reason", "recorded in error", standing},
+			code: 1,
+			want: "withdrawn role",
 		},
 		{
 			name: "withdrawing nothing in particular",
