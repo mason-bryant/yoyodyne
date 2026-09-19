@@ -30,6 +30,10 @@ revisions:
       by: architect
       at: 2026-09-07T20:00:00Z
       reason: yoyodyne-ifd.348 - the operator's direction that the management roles act rather than only record, stated as capability additions to the shipped default bundles enforced in Go per the authority-by-capability parity guard; scopes, durable counters incremented before the act, and the excluded capabilities named
+    - action: amended
+      by: architect
+      at: 2026-09-18T21:40:00Z
+      reason: 'operator design question of 2026-09-18 ruled: a harness-mediated read-only repository read for the management bundles, at a recorded commit, bounded, redacted, recorded, evidence-framed, product-manager content labeled as description, reviewer excluded; a distinct action from research; freshness discipline retained and recommended mechanical for yoyodyne-ifd.382'
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -65,6 +69,8 @@ Sequenced as the brief's authority workstream, with its guard binding: the autho
 The shipped default bundles for the management roles carry acting authority, not merely recording authority. The development manager holds `run.cause`, `run.repair-continue`, `publication.merge-repeat`, and a bounded `budget.cross-cap`, each scoped to work it may act on, each gated by the intake hold and the spending pause, each bounded by durable per-item counters incremented before the act, and each recording what was done and why. The product manager holds `work-item.repair-state` over her own backlog — terminal-run blockers, dead dependency links, attributions — which is state hygiene and never a substitute for closing or retiring. Neither bundle carries gate-evidence minting, approval of work it caused, integration, or writes to protected role definitions; the separation policy and the integration evidence rule refuse those whatever a bundle says. Broad authority is visible authority: every act is recorded and reported under the communication rule.
 
 Role definitions may live in the repository under `.yoyodyne/roles/` with two hard properties: the protected-path gate refuses any grant naming that directory — an absolute exception to the grant mechanism, with no decided-change override — and no definition is effective until operator-authorized activation records its digest, so the *activated digest* is the authority and a file changed by anyone is inert until a person activates it. Audit history is a CLI surface, never an agent one.
+
+The management bundles — product manager, development manager, architect — hold `repository.read` and `repository.list`: the harness resolves a named path, or one directory's names, against the tree of a recorded commit, never the working tree, bounded per turn by count and bytes, redacted, recorded on the conversation as commit, path, and time, and returned as evidence framed as untrusted. Confinement holds by construction, because a committed tree contains no traversable link. Content returned to the product manager is labeled as description of the implementation, never intent. The reviewer holds neither; its evidence is the change. This is a distinct action from research, which is evidence from outside the repository.
 
 ## Profiles, context, triggers, and the Sentinel
 
