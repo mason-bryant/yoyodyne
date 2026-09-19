@@ -103,7 +103,7 @@ func TestTheCapacityBlockedStateHasOneShape(t *testing.T) {
       "refused_by": "an exhausted five_hour usage limit",
       "since": "2026-09-18T09:40:00Z",
       "resets_at": "2026-09-18T11:00:00Z",
-      "waited": 5400000000000,
+      "waited_seconds": 5400,
       "preserved": true,
       "remedy": "nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; ` + "`yoyo resume`" + ` with the work item named asks now instead of at the probe"
     }
@@ -157,7 +157,7 @@ func TestARunTheHarnessWouldNotWaitForIsCapacityBlocked(t *testing.T) {
 	if !run.Since.Equal(capacityReadAt.Add(-2 * time.Hour)) {
 		t.Fatalf("since = %s, want the moment it stopped", run.Since)
 	}
-	if run.Waited != 6*time.Hour || !run.Preserved || run.RefusedBy != "an exhausted seven_day usage limit" {
+	if run.WaitedSeconds != 21600 || !run.Preserved || run.RefusedBy != "an exhausted seven_day usage limit" {
 		t.Fatalf("run = %+v, want the budget it spent, its change preserved, and the limit named", run)
 	}
 	if !strings.Contains(run.Remedy, "usage_limit_max_pause") || !strings.Contains(run.Remedy, "development manager") {

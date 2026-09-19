@@ -1285,8 +1285,8 @@ latest run that is either `waiting` — in flight and asleep on a recorded
 deadline, still counted on the running line — or `capacity-blocked`, which is a
 run the provider refused and the harness would not wait for, so it stopped with
 a blocker on its item. Each says what refused it, since when, the reset it is
-waiting out or none, how much of `execution.usage_limit_max_pause` it has spent,
-whether its change is preserved, and what a person can do about it — for a
+waiting out or none, how much of `execution.usage_limit_max_pause` it has spent
+(`waited_seconds`), whether its change is preserved, and what a person can do about it — for a
 waiting run, that nothing needs doing. `conversations` lists each conversation
 the provider is still refusing, read from
 [the refusals recorded outside a run](#a-provider-refusal-outside-a-run): one

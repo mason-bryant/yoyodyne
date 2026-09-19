@@ -69,18 +69,21 @@ type CapacityBlockedRun struct {
 	// Since is when the record last said the run was waiting. For a blocked run
 	// that is the moment it stopped. For a waiting run it is the start of the
 	// probe it is sleeping, because each probe re-records the wait and the record
-	// does not keep when the first one began; Waited below is how long the run has
-	// spent waiting in total, which is the figure the maximum pause is measured
-	// against.
+	// does not keep when the first one began; WaitedSeconds below is how long the
+	// run has spent waiting in total, which is the figure the maximum pause is
+	// measured against.
 	Since time.Time `json:"since"`
 	// ResetsAt is the deadline the run is waiting out, and nil where there is
 	// none: a run that stopped rather than waited recorded no deadline, and one
 	// the provider gave no reset time waits the configured probe interval
 	// instead. Nil is a different fact from a reset that has passed.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
-	// Waited is how much of the run's pause budget has been committed across
-	// every wait it has taken, in the whole seconds the record keeps it in.
-	Waited time.Duration `json:"waited"`
+	// WaitedSeconds is how much of the run's pause budget has been committed
+	// across every wait it has taken, in the whole seconds the record keeps it
+	// in and with the unit in the key: a script reading this shape gets a
+	// number it can compare with execution.usage_limit_max_pause rather than a
+	// bare integer of nanoseconds.
+	WaitedSeconds int64 `json:"waited_seconds"`
 	// Preserved reports the run's change surviving: a branch or a worktree the
 	// harness has not recorded as removed. A waiting run holds everything it has
 	// by definition; on a blocked run it is the difference between work somebody
@@ -243,13 +246,13 @@ func capacityBlockedRun(run runstate.State) (CapacityBlockedRun, bool) {
 		return CapacityBlockedRun{}, false
 	}
 	entry := CapacityBlockedRun{
-		RunID:      run.RunID,
-		WorkItemID: run.WorkItemID,
-		Phase:      run.Phase,
-		RefusedBy:  runstate.DescribePause(run.PauseCause, run.UsageLimitKind),
-		Since:      run.UpdatedAt.UTC(),
-		Waited:     run.UsageLimitPaused(),
-		Preserved:  run.Artifacts().Preserved(),
+		RunID:         run.RunID,
+		WorkItemID:    run.WorkItemID,
+		Phase:         run.Phase,
+		RefusedBy:     runstate.DescribePause(run.PauseCause, run.UsageLimitKind),
+		Since:         run.UpdatedAt.UTC(),
+		WaitedSeconds: run.UsageLimitPausedSeconds,
+		Preserved:     run.Artifacts().Preserved(),
 	}
 	if run.UsageLimitResetsAt != nil {
 		resetsAt := run.UsageLimitResetsAt.UTC()
