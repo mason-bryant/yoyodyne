@@ -378,6 +378,66 @@ func TestTheSweepSettlesALandingWhoseProcessDiedAsUnverified(t *testing.T) {
 	}
 }
 
+// A landing in progress is held by the process running it — the run's lease is
+// still that process's — so a sweep that arrives while the checks run leaves
+// the landing and its checkout exactly as they are, rather than settling a
+// landing as unverified and removing the checkout from under a running suite.
+func TestTheSweepLeavesALandingALiveProcessIsRunningAlone(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"true"}), provider)
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The shape of a landing mid-checks: the checkout cut, the landing recorded
+	// as started, and the run's lease held by the process running them.
+	manager := newObserver(t, repository, worktreeRoot).(*gitworktree.Manager)
+	checkout, err := manager.CheckoutCommit(context.Background(), outcome.RunID, outcome.Integration.TargetCommit)
+	if err != nil {
+		t.Fatalf("CheckoutCommit() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	state.LandingChecks = &runstate.LandingChecks{Commit: outcome.Integration.TargetCommit, StartedAt: state.UpdatedAt, BoundSeconds: 7200}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	_, lease, err := store.AdoptRun(context.Background(), outcome.RunID)
+	if err != nil {
+		t.Fatalf("AdoptRun() error = %v", err)
+	}
+	defer lease.Release()
+
+	results, err := (Reconciler{Tracker: tracker, Worktrees: manager, Store: store}).Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionHeld {
+		t.Fatalf("reconciliation = %#v, want the held run left alone", results)
+	}
+	held, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if held.LandingChecks == nil || held.LandingChecks.Finished() {
+		t.Fatalf("landing = %#v, want it left running", held.LandingChecks)
+	}
+	if _, err := os.Lstat(checkout); err != nil {
+		t.Fatalf("Lstat(%s) = %v, want the running landing's checkout untouched", checkout, err)
+	}
+	if err := manager.RemoveCheckout(context.Background(), checkout); err != nil {
+		t.Fatalf("RemoveCheckout() error = %v", err)
+	}
+}
+
 // recordingFiler is a tracker that takes the items a red landing files, or
 // refuses them, and lists what it has taken as open work.
 type recordingFiler struct {

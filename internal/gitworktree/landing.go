@@ -72,8 +72,17 @@ func (m *Manager) CheckoutCommit(ctx context.Context, runID, commit string) (str
 	// authoritative for are as current as that commit made them. They are
 	// refreshed for the reason a run worktree's are — a check that reads one
 	// reads the current export — and held out of a change nothing will make.
+	// A checkout whose exports could not be refreshed is removed here rather
+	// than handed back with the error: the caller records the failure and reads
+	// no path from it, and a landing checkout nothing removes is one the sweep
+	// never finds — it settles landings the record says are still running, and
+	// this one is recorded as ended.
 	if err := m.refreshExports(ctx, path); err != nil {
-		return path, fmt.Errorf("refresh the current exports in the landing checkout: %w", err)
+		refresh := fmt.Errorf("refresh the current exports in the landing checkout: %w", err)
+		if removeErr := m.removeCheckout(ctx, path); removeErr != nil {
+			return "", errors.Join(refresh, fmt.Errorf("remove the landing checkout at %s afterwards: %w", path, removeErr))
+		}
+		return "", refresh
 	}
 	return path, nil
 }

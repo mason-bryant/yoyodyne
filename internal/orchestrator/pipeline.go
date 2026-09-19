@@ -4591,6 +4591,11 @@ func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.Landing
 		target, commit, a.state.WorkItemID, a.state.WorkItemTitle, what, target, commit, failing.Command, landed.Commit)
 	notes := fmt.Sprintf("Filed by the harness for the red landing of %s (%s) at %s on %s, under the operator's standing order that a red landing files its own item.\n%s",
 		a.state.WorkItemID, a.state.RunID, commit, target, marker)
+	// The goal line is written in the words the landed item states it in, and
+	// the tracker client's Create derives the goal witness from the notes it is
+	// handed — every creation that writes a `Goal served:` line records
+	// yoyodyne_goal_recorded beside it — so the filed item's attribution is
+	// witnessed exactly as an admission's is.
 	if statement, named := goal.NamedIn(a.item.Notes); named {
 		notes += "\n\n" + goal.Note(statement)
 	}

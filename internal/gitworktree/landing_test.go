@@ -100,3 +100,35 @@ func TestRemovingAnythingButALandingCheckoutIsRefused(t *testing.T) {
 		t.Fatalf("the run worktree was touched: %v", err)
 	}
 }
+
+// A checkout whose exports could not be refreshed is not handed back: it is
+// removed with the error, because the caller reads no path from a failure and
+// the sweep only ever removes a landing checkout of a landing the record says
+// is still running.
+func TestALandingCheckoutWhoseRefreshFailsIsRemovedWithTheError(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
+	manager := newExportManager(t, repository, worktreeRoot)
+	// The primary checkout's export is unreadable as a file, so refreshing it
+	// into the checkout fails after the checkout has been cut.
+	if err := os.MkdirAll(filepath.Join(repository, exportPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	commit := strings.TrimSpace(gitOutput(t, repository, "rev-parse", "HEAD"))
+
+	path, err := manager.CheckoutCommit(context.Background(), testRunID, commit)
+	if err == nil || !strings.Contains(err.Error(), "refresh the current exports in the landing checkout") {
+		t.Fatalf("CheckoutCommit() = %q, %v, want the refresh failure", path, err)
+	}
+	if path != "" {
+		t.Fatalf("CheckoutCommit() handed back %q with an error, want no path", path)
+	}
+	if _, err := os.Lstat(filepath.Join(manager.worktreeRoot, "landing-01234567")); !os.IsNotExist(err) {
+		t.Fatalf("Lstat() = %v, want the failed checkout removed", err)
+	}
+	if listing := gitOutput(t, repository, "worktree", "list"); strings.Contains(listing, "landing-") {
+		t.Fatalf("worktree listing still names the failed landing checkout:\n%s", listing)
+	}
+}
