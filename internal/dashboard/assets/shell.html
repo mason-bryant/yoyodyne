@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Product}} — yoyo dashboard</title>
+<link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+<header>
+  <h1>{{.Product}}</h1>
+  <p class="observed">observed <time id="observed-at">—</time></p>
+</header>
+<main data-state="loading">
+  <section class="state state-loading" aria-live="polite">
+    <p>Reading where the harness stands…</p>
+  </section>
+  <section class="state state-error" role="alert">
+    <h2>The read model could not be read</h2>
+    <p id="problem"></p>
+    <p class="hint">The dashboard keeps asking, and shows the answer once there is one.</p>
+  </section>
+  <section class="state state-ready">
+    <p id="summary"></p>
+    <ul id="problems" class="problems"></ul>
+  </section>
+</main>
+<script src="/assets/dashboard.js"></script>
+</body>
+</html>

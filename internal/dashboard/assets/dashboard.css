@@ -1,0 +1,125 @@
+/* The shell's own style: enough for its states to be legible, and no more. The
+   page's content and its look are the third child of the dashboard work item;
+   what is here is the frame that child fills in. Everything is served from
+   this origin, because the policy allows nothing else. */
+
+:root {
+  color-scheme: light dark;
+  --ink: #1b1f24;
+  --paper: #fbfbfa;
+  --muted: #5c6470;
+  --rule: #d9dde3;
+  --alert: #a12f2f;
+  --alert-paper: #fbeeee;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8eaed;
+    --paper: #16191d;
+    --muted: #9aa3ad;
+    --rule: #2c3138;
+    --alert: #ff8a8a;
+    --alert-paper: #2b1a1a;
+  }
+}
+
+html {
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+body {
+  margin: 0;
+  padding: 2rem clamp(1rem, 4vw, 3rem);
+  max-width: 64rem;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+.observed,
+.hint {
+  color: var(--muted);
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* One state is shown at a time, chosen by the script through data-state on
+   main. Nothing is shown before the script has an answer except the loading
+   state, and nothing of the read model is in the markup to begin with. */
+.state {
+  display: none;
+}
+
+main[data-state="loading"] .state-loading,
+main[data-state="error"] .state-error,
+main[data-state="ready"] .state-ready,
+main[data-state="signin"] .state-signin,
+main[data-state="unreadable"] .state-error {
+  display: block;
+}
+
+.state-error {
+  border: 1px solid var(--alert);
+  background: var(--alert-paper);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+}
+
+.state-error h2 {
+  color: var(--alert);
+}
+
+.note {
+  color: var(--alert);
+}
+
+.problems {
+  color: var(--muted);
+  padding-left: 1.25rem;
+}
+
+form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 28rem;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+button {
+  cursor: pointer;
+  justify-self: start;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95em;
+}

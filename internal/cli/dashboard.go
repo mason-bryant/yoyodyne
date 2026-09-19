@@ -1,0 +1,140 @@
+package cli
+
+// Serving the read model to a browser on this machine.
+//
+// `yoyo dashboard` is the standalone command the observability-and-dashboard
+// design names as the V1 shape: a process of its own that reads the same
+// durable records `yoyo status` reads and projects them at a loopback port, for
+// as long as it is left running. It is a projection and nothing else — it owns
+// no state, offers no write, and restarting it changes nothing about the
+// harness — so it is started and stopped freely, and a later supervisor can
+// own its lifecycle without a redesign.
+//
+// What it prints when it starts is the whole of what an operator needs and the
+// one thing that is printed once: the URL, and beside it the token every request
+// has to carry. The token is never put in the URL, where it would reach a
+// browser history and every log a proxy keeps; the page asks for it, once, and
+// keeps it in a cookie for the browser session.
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/mason-bryant/yoyodyne/internal/dashboard"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
+)
+
+func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	port := flags.Int("port", 0, "the loopback port to serve on (default: one the operating system chooses)")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "dashboard does not accept positional arguments")
+		printDashboardUsage(stderr)
+		return 2
+	}
+
+	// The records are opened once before anything is bound, so a configuration
+	// that does not resolve refuses at the terminal rather than at the first
+	// request. They are opened again on every request after that, because a
+	// dashboard left running for a week must not go on serving a state root
+	// that has since stopped being readable.
+	reader := dashboardReader{configPath: *configPath}
+	if err := reader.Ready(ctx); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	resolved, err := loadConfiguration(*configPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	server, err := dashboard.New(string(resolved.Config.Product.ID), reader)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	url, err := server.Listen(*port)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "dashboard for %s serving at %s\n", resolved.Config.Product.ID, url)
+	fmt.Fprintf(stdout, "token: %s\n", server.Token())
+	fmt.Fprintln(stdout, "the page asks for the token once and keeps it for the browser session; a tool sends it as `Authorization: Bearer <token>` to /api/standing")
+	fmt.Fprintln(stdout, "it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c")
+
+	if err := server.Serve(ctx); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "dashboard stopped")
+	return 0
+}
+
+// dashboardReader is the read model as the dashboard is handed it, over the
+// same records and the same wiring `yoyo status` reads: the four lines are one
+// derivation, and a dashboard that assembled its own would be the second
+// surface the read model exists to prevent.
+type dashboardReader struct {
+	configPath string
+}
+
+// Ready opens what the reading needs and closes nothing else: the configuration,
+// the state root, and the run store that every other record sits beside. A
+// failure here is the state being unreadable, which the dashboard refuses on
+// rather than serving a shell over.
+func (r dashboardReader) Ready(context.Context) error {
+	resolved, err := loadConfiguration(r.configPath)
+	if err != nil {
+		return err
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return err
+	}
+	if _, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Standing is the four lines and everything the model carries beside them. What
+// a source that could not be read costs is said inside the answer, line by
+// line, exactly as the terminal says it; what refuses the whole answer is the
+// state being unreadable at all.
+func (r dashboardReader) Standing(ctx context.Context) (readmodel.Standing, error) {
+	if err := r.Ready(ctx); err != nil {
+		return readmodel.Standing{}, err
+	}
+	return readmodel.ReadStanding(ctx, standingSources(r.configPath)), nil
+}
+
+func printDashboardUsage(writer io.Writer) {
+	fmt.Fprintln(writer, `Usage: yoyo dashboard [options]
+
+Serves the read model -- the same four lines and capacity state `+"`yoyo status`"+`
+reads -- to a browser on this machine, at a loopback port, until stopped. It
+prints the URL and, once, the token every request has to carry: the page asks
+for it and keeps it in a cookie for the browser session, and a tool sends it as
+`+"`Authorization: Bearer <token>`"+`. It serves the page shell at / and the read
+model as JSON at /api/standing, and refuses everything else: a request with no
+token or the wrong one, a Host or Origin that is not the address it bound, and
+durable state it cannot read each get a refusal and never part of a page.
+
+It is a projection. It owns no state, offers no write, and restarting it changes
+nothing about the harness.
+
+Options:
+  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
+  --port <n>        the loopback port to serve on (default: one the operating system chooses)`)
+}
