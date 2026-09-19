@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The provider's own names for the events this dialect reads. Everything else in
@@ -122,8 +123,17 @@ func (Dialect) Name() string { return sourceName }
 // A terminal that succeeded is deliberately not an answer. Codex says nothing
 // about capacity on a completed task, so reading one as evidence that a limit
 // has lifted would be this dialect inventing a fact the provider never stated.
+//
+// Stderr is not an answer either, and the case is stated rather than left to
+// the default so that it is a decision. The Claude Code dialect reads a login
+// refusal and an unreachable API off stderr because that CLI can refuse before
+// it writes an envelope; no recorded Codex process has done so, its adapter
+// hands this dialect no stderr, and a reading nobody has a specimen for is a
+// guess about diagnostics. The first recorded occurrence is the case for one.
 func (Dialect) Observe(event backend.ProviderEvent) (backend.Observation, bool) {
 	switch {
+	case event.Channel == domain.ProviderChannelStderr:
+		return backend.Observation{}, false
 	case event.Type == eventStreamError:
 		return backend.Observation{Answer: backend.AnswerRetrying}, true
 	case event.Terminal && event.Failed:

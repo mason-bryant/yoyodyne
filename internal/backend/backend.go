@@ -262,6 +262,12 @@ type ProviderOutage struct {
 	// Detail is the provider's own words, carried as evidence rather than
 	// interpreted by the harness.
 	Detail string
+	// Channel is where the provider said it: on the terminal of its stream, or
+	// on its process's stderr because it refused before writing a terminal at
+	// all. It is evidence for the record rather than anything the harness acts
+	// on — the wait is the same either way — and it is what lets a reader of a
+	// run that waited tell which of the two shapes the provider produced.
+	Channel domain.ProviderChannel
 }
 
 // RunResult is what one provider invocation is worth: the invocation's own

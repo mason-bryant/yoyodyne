@@ -385,6 +385,9 @@ func (p *streamParser) observe(event backend.ProviderEvent) {
 	if !said {
 		return
 	}
+	// Where the provider said it is the event's fact rather than the dialect's
+	// claim, so it is written here, after the answer and before the record.
+	observation.Channel = event.Channel
 	observation.Record(&p.result)
 }
 

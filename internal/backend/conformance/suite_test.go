@@ -128,6 +128,12 @@ type Sample struct {
 	Name string
 	// Stream is the provider's own stdout, one envelope per line.
 	Stream string
+	// Stderr is what the process wrote to its error stream, one line per line.
+	// It is empty for nearly every sample: a provider says what it has to say on
+	// its stream, and what it puts here is diagnostics. The exception is the
+	// refusal a CLI makes before it writes a single envelope, which is the one
+	// shape a stream alone cannot carry.
+	Stderr string
 	// ExitCode is what the process exited with. A non-zero one is a process the
 	// runner reports as failed, which is what a provider that refused work
 	// usually leaves behind and what a stream ending without a terminal has to
@@ -349,10 +355,17 @@ func (r streamRunner) Run(_ context.Context, _ execution.Command, observer execu
 			}
 			observer(execution.Output{Stream: execution.StreamStdout, Text: line})
 		}
+		for _, line := range strings.Split(strings.TrimSuffix(r.sample.Stderr, "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			observer(execution.Output{Stream: execution.StreamStderr, Text: line})
+		}
 	}
 	return execution.ProcessResult{
 		Status:   status,
 		ExitCode: r.sample.ExitCode,
 		Stdout:   r.sample.Stream,
+		Stderr:   r.sample.Stderr,
 	}, nil
 }

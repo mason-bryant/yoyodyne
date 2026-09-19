@@ -4,15 +4,18 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -134,6 +137,161 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 		t.Fatalf("finished run committed %s to the pause budget, want nothing", finished.UsageLimitPaused())
 	}
 	// The attempt the provider served is what ends the outage for every surface.
+	if _, away, err := outages.Standing(); err != nil || away {
+		t.Fatalf("Standing() after the provider answered = %t, %v, want the outage cleared", away, err)
+	}
+}
+
+// loginRefusedOnStderr is the CLI's own title for an account it will not accept,
+// paired with the remedy it prints beside it. It is what a CLI that refuses an
+// expired login before writing a single envelope has to say on stderr, because
+// stderr is the only channel left to it.
+const loginRefusedOnStderr = "Not logged in · Please run /login"
+
+// stderrRefusingRunner stands in for the Claude Code process under the real
+// adapter. It refuses the first refusals developer invocations the way a CLI
+// that will not accept an expired login before writing any stream envelope
+// does: the refusal on stderr, nothing on stdout, exit 1. Afterwards it serves
+// the work — it writes the change into the worktree it was pointed at and ends
+// on the provider's ordinary terminal. The two questions the adapter asks before
+// a dispatch, the version and whether the machine is logged in, it answers as an
+// installed, logged-in CLI would, because the login it refuses is one that
+// expired after that check.
+type stderrRefusingRunner struct {
+	mu       sync.Mutex
+	refusals int
+	refused  int
+	served   int
+}
+
+func (r *stderrRefusingRunner) Run(_ context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(command.Args) > 0 {
+		switch command.Args[0] {
+		case "--version":
+			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "2.1.276 (Claude Code)\n"}, nil
+		case "auth":
+			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"loggedIn":true,"authMethod":"claude.ai"}` + "\n"}, nil
+		}
+	}
+	if r.refused < r.refusals {
+		r.refused++
+		observer(execution.Output{Stream: execution.StreamStderr, Text: loginRefusedOnStderr})
+		return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: loginRefusedOnStderr + "\n"}, nil
+	}
+	r.served++
+	if err := os.WriteFile(filepath.Join(command.Dir, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+		return execution.ProcessResult{}, err
+	}
+	stream := []string{
+		`{"type":"system","subtype":"init","session_id":"developer-session","model":"` + developerResolved + `"}`,
+		`{"type":"result","subtype":"success","session_id":"developer-session","is_error":false,"terminal_reason":"end_turn","result":"implemented the work item","total_cost_usd":0.01,"usage":{}}`,
+	}
+	for _, line := range stream {
+		observer(execution.Output{Stream: execution.StreamStdout, Text: line})
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: strings.Join(stream, "\n") + "\n"}, nil
+}
+
+// The shape yoyodyne-ifd.377 could not see. A CLI that refuses an expired login
+// before it writes any stream envelope hands the dialect no terminal, so the
+// attempt used to end as a process failure nobody classified — and a process
+// failure is relaunched into the same login, spends the budget, and blocks,
+// which is the 2026-09-17 stall replayed through the one gap 377 left. The
+// replay here goes through the real adapter with the process stood in for: the
+// refusal is on stderr and nothing else is written, and what the run does is
+// enter 377's wait, spending nothing, with the channel it read the refusal off
+// recorded on the run.
+func TestRunWaitsOutALoginRefusedOnStderrBeforeAnyEnvelope(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// The reviewer is served by the usual fake; the developer's provider is the
+	// real adapter over a process that refuses on stderr.
+	reviewer := refusingBackend(0, nil, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, reviewer, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, reviewer), clock, 10*time.Minute, 10*time.Minute)
+	// A relaunch budget the refusals would exhaust if any of them were counted
+	// as a death, so the run provably does not relaunch.
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 1
+	pipeline.Config.Execution.UsageLimitUnknownResetPause = config.Duration(30 * time.Minute)
+	runner := &stderrRefusingRunner{refusals: 3}
+	pipeline.Backend = claudecode.Backend{Runner: runner, Clock: clock}
+	outages := newOutageStore(t)
+	pipeline.ProviderOutages = outages
+
+	var pausedState runstate.State
+	var standing runstate.ProviderOutage
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the wait error = %v", err)
+			return
+		}
+		pausedState = loaded
+		outage, away, err := outages.Standing()
+		if err != nil || !away {
+			t.Errorf("Standing() during the wait = %t, %v, want the outage recorded on the product", away, err)
+			return
+		}
+		standing = outage
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The wait is 377's: the login's pause cause, the next probe durable, and a
+	// run a later process would resume. What is new is the channel beside it.
+	if pausedState.PauseCause != runstate.PauseProviderUnauthenticated || pausedState.UsageLimitResetsAt == nil {
+		t.Fatalf("paused state = %#v, want a run recorded as waiting on the login with its next probe durable", pausedState)
+	}
+	if !pausedForUsageLimit(pausedState) {
+		t.Fatal("the waiting run is not one a later process would resume, so a process dying mid-wait would strand it")
+	}
+	if pausedState.ProviderOutageChannel != domain.ProviderChannelStderr {
+		t.Fatalf("paused state records the refusal read off %q, want %q: the record has to say the provider died before writing a terminal",
+			pausedState.ProviderOutageChannel, domain.ProviderChannelStderr)
+	}
+	if standing.Cause != domain.ProviderUnauthenticated || standing.Channel != domain.ProviderChannelStderr || !strings.Contains(standing.Detail, loginRefusedOnStderr) {
+		t.Fatalf("outage on the product = %#v, want the login, read off stderr, in the CLI's own words", standing)
+	}
+	// Three refusals, each waited out on the probe interval, and nothing spent
+	// on any of them: no relaunch against a budget one would have exhausted, no
+	// repair attempt, and no pause budget.
+	if clock.waited() != 3*30*time.Minute {
+		t.Fatalf("waited %s in total, want three probe intervals", clock.waited())
+	}
+	if pausedState.UsageLimitPausedSeconds != 0 || pausedState.TransientRelaunches != 0 {
+		t.Fatalf("paused state = %#v, want the wait to have spent nothing", pausedState)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the waited-out run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	if outcome.TransientRelaunches != 0 || outcome.RepairAttempts != 0 {
+		t.Fatalf("outcome = %#v, want the relaunch and repair counters untouched once the provider returned", outcome)
+	}
+	if outcome.ProviderOutageChannel != domain.ProviderChannelStderr {
+		t.Fatalf("outcome records the refusal read off %q, want %q", outcome.ProviderOutageChannel, domain.ProviderChannelStderr)
+	}
+	if runner.served != 1 {
+		t.Fatalf("served developer invocations = %d, want the one the provider answered after three refusals", runner.served)
+	}
+	finished, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if finished.UsageLimitResetsAt != nil || finished.PauseCause != "" || finished.TransientRelaunches != 0 || finished.UsageLimitPausedSeconds != 0 {
+		t.Fatalf("a finished run still reads as waiting, as relaunched, or as having spent the pause budget: %#v", finished)
+	}
+	// The channel outlives the deadline, as the limit's kind does: what stopped
+	// the run is worth knowing once it has resumed.
+	if finished.ProviderOutageChannel != domain.ProviderChannelStderr {
+		t.Fatalf("finished run records the refusal read off %q, want it kept as evidence", finished.ProviderOutageChannel)
+	}
 	if _, away, err := outages.Standing(); err != nil || away {
 		t.Fatalf("Standing() after the provider answered = %t, %v, want the outage cleared", away, err)
 	}

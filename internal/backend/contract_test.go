@@ -188,3 +188,21 @@ func TestAProviderNobodyCanReachIsAWaitThatSpendsNothing(t *testing.T) {
 		}
 	}
 }
+
+// The record says which channel the refusal came on, in the word rather than
+// in an absence: an observation that named none was read off an envelope, which
+// is what every observation was before stderr was read at all.
+func TestAProviderOutageRecordsTheChannelItWasReadOn(t *testing.T) {
+	t.Parallel()
+
+	var envelope RunResult
+	Observation{Answer: AnswerUnauthenticated, Detail: "Not logged in"}.Record(&envelope)
+	if envelope.ProviderOutage == nil || envelope.ProviderOutage.Channel != domain.ProviderChannelEnvelope {
+		t.Fatalf("ProviderOutage = %#v, want the envelope named as the channel", envelope.ProviderOutage)
+	}
+	var stderr RunResult
+	Observation{Answer: AnswerUnreachable, Detail: "Can't reach the API server", Channel: domain.ProviderChannelStderr}.Record(&stderr)
+	if stderr.ProviderOutage == nil || stderr.ProviderOutage.Channel != domain.ProviderChannelStderr {
+		t.Fatalf("ProviderOutage = %#v, want stderr named as the channel", stderr.ProviderOutage)
+	}
+}

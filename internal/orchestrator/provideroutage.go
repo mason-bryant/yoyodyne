@@ -75,8 +75,10 @@ func providerAway(result backend.RunResult, err error) (backend.ProviderOutage, 
 
 // noticeProviderOutage records the outage on the product, so every surface can
 // name the wait, and reports only what went wrong recording it. A pipeline with
-// nowhere to record one records nothing and says nothing.
-func (p Pipeline) noticeProviderOutage(cause domain.ProviderOutageCause, detail, waiting, alias string) error {
+// nowhere to record one records nothing and says nothing. The channel is where
+// the refusal was read, and empty for one met somewhere other than an
+// invocation.
+func (p Pipeline) noticeProviderOutage(cause domain.ProviderOutageCause, channel domain.ProviderChannel, detail, waiting, alias string) error {
 	if p.ProviderOutages == nil {
 		return nil
 	}
@@ -85,6 +87,7 @@ func (p Pipeline) noticeProviderOutage(cause domain.ProviderOutageCause, detail,
 		Provider:     p.developer().Backend,
 		AccountAlias: alias,
 		Detail:       detail,
+		Channel:      channel,
 		Waiting:      waiting,
 		At:           p.clock().Now(),
 	}); err != nil {
@@ -122,7 +125,7 @@ func (p Pipeline) noticeProviderServed() error {
 func (a *activeRun) pauseForProviderOutage(ctx context.Context, outage backend.ProviderOutage) error {
 	p := a.pipeline
 	waiting := fmt.Sprintf("run %s of %s", a.state.RunID, a.state.WorkItemID)
-	if err := p.noticeProviderOutage(outage.Cause, outage.Detail, waiting, a.state.AccountAlias); err != nil {
+	if err := p.noticeProviderOutage(outage.Cause, outage.Channel, outage.Detail, waiting, a.state.AccountAlias); err != nil {
 		// The wait is taken whether or not it could be recorded: the record is what
 		// tells the operator, and losing it is worse than losing a run, but not so
 		// much worse that the run should be failed over it. It is said on the
@@ -136,6 +139,12 @@ func (a *activeRun) pauseForProviderOutage(ctx context.Context, outage backend.P
 	a.outcome.UsageLimitKind = ""
 	a.state.PauseCause = runstate.PauseCauseForOutage(outage.Cause)
 	a.outcome.PauseCause = a.state.PauseCause
+	// Which channel the refusal was read on is recorded beside the cause. It
+	// changes nothing about the wait; it is what lets whoever reads the run
+	// afterwards tell a terminal the provider wrote from a process that died
+	// before writing one, which is the shape the dialect used to miss.
+	a.state.ProviderOutageChannel = outage.Channel
+	a.outcome.ProviderOutageChannel = outage.Channel
 	// The deadline is the next probe, made durable before the wait starts so a
 	// process that dies mid-wait comes back to a run that is still waiting, and
 	// resumes it through the same path a usage-limit pause resumes through.
@@ -228,7 +237,7 @@ func (p Pipeline) requireBackendReady(ctx context.Context, workItemID string) er
 		detail := fmt.Sprintf("the %s backend is not authenticated; `yoyo doctor` names the login that fixes it (auth method: %s)",
 			named, availability.AuthMethod)
 		refused := ProviderOutageError{Cause: domain.ProviderUnauthenticated, Detail: detail}
-		if recordErr := p.noticeProviderOutage(domain.ProviderUnauthenticated, detail, "the dispatch of "+workItemID, ""); recordErr != nil {
+		if recordErr := p.noticeProviderOutage(domain.ProviderUnauthenticated, "", detail, "the dispatch of "+workItemID, ""); recordErr != nil {
 			return errors.Join(refused, recordErr)
 		}
 		return refused

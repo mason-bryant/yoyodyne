@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The reset formats a declarative rule may name. They are the shapes providers
@@ -71,6 +73,13 @@ type DialectRule struct {
 	// Match is a regular expression the event's prose must contain. It is how a
 	// provider that reports a limit in a sentence is read at all.
 	Match string `yaml:"match,omitempty" json:"match,omitempty"`
+	// Channel is where the event has to have been said: "envelope" for the
+	// provider's event stream, "stderr" for what its process wrote to stderr.
+	// Empty is the envelope, so every rule written before stderr was read at all
+	// keeps matching exactly what it did, and stderr is read only by a rule that
+	// asks for it. A stderr rule has to carry a match expression, because stderr
+	// is prose with no type, no subtype, and no payload to condition on.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 	// Fields are dotted paths into the event's payload that must equal the
 	// stated value. A path the payload does not carry matches nothing, so a
 	// field the provider omits is absent rather than false.
@@ -179,6 +188,7 @@ func compileRule(rule DialectRule) (compiledRule, []string) {
 			problems = append(problems, fmt.Sprintf("matches a field with no path against %q", expected))
 		}
 	}
+	problems = append(problems, rule.channelProblems()...)
 	problems = append(problems, rule.limitProblems()...)
 	if rule.ResetMatch != "" {
 		expression, err := regexp.Compile(rule.ResetMatch)
@@ -226,9 +236,41 @@ func (r DialectRule) limitProblems() []string {
 	return problems
 }
 
+// channelProblems reports a rule that names a channel this contract does not,
+// or one that would read stderr on nothing but its arrival. Stderr has no type,
+// no subtype, and no payload, so the match expression is the only condition a
+// stderr rule can carry, and one without it answers for whatever the process
+// happened to complain about.
+func (r DialectRule) channelProblems() []string {
+	var problems []string
+	if r.Channel != "" && !domain.ProviderChannel(r.Channel).Valid() {
+		problems = append(problems, fmt.Sprintf("names channel %q, which is not one of %s", r.Channel, describeChannels()))
+	}
+	if domain.ProviderChannel(r.Channel) == domain.ProviderChannelStderr && r.Match == "" {
+		problems = append(problems, "reads stderr without a match expression, and stderr carries everything the process complained about")
+	}
+	return problems
+}
+
+// channel is the channel a rule reads, with the empty value read as the envelope
+// every rule read before there was another.
+func (r DialectRule) channel() domain.ProviderChannel {
+	return ChannelOf(domain.ProviderChannel(r.Channel))
+}
+
+func describeChannels() string {
+	named := make([]string, 0, len(domain.ProviderChannels()))
+	for _, channel := range domain.ProviderChannels() {
+		named = append(named, string(channel))
+	}
+	return strings.Join(named, ", ")
+}
+
 // conditional reports a rule that says anything at all about which events it is
 // for. A rule with no condition answers for the whole stream, which is never
-// what somebody meant to write.
+// what somebody meant to write. The channel is not a condition for this
+// purpose: a rule naming only the envelope has said nothing, and one naming
+// only stderr is refused by channelProblems for want of a match.
 func (r DialectRule) conditional() bool {
 	return r.Type != "" || r.Subtype != "" || r.Terminal != nil || r.Failed != nil || r.Match != "" || len(r.Fields) > 0
 }
@@ -243,6 +285,12 @@ func knownResetFormat(format string) bool {
 }
 
 func (c compiledRule) matches(event ProviderEvent) bool {
+	// The channel is always a condition, whether or not the rule stated one: a
+	// rule that said nothing is reading the envelope, and stderr reaches only a
+	// rule that asked for it.
+	if c.spec.channel() != ChannelOf(event.Channel) {
+		return false
+	}
 	if c.spec.Type != "" && c.spec.Type != event.Type {
 		return false
 	}

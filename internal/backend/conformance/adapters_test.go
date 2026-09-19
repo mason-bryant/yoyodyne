@@ -72,6 +72,27 @@ func claudeCodeAdapter() Adapter {
 					Stream:   lines(claudeInit, claudeTerminal("api_error", "Not logged in")),
 					ExitCode: 1,
 				},
+				{
+					// The one recorded shape: a home nobody has logged into, asked on
+					// 2026-09-19 with Claude Code 2.1.276, ends on a terminal with
+					// terminal_reason "api_error", the title paired with its remedy,
+					// and nothing on stderr.
+					Name:     "an account that is not logged in, as the CLI actually reports it",
+					Stream:   lines(claudeInit, claudeTerminal("api_error", "Not logged in · Please run /login")),
+					ExitCode: 1,
+				},
+				{
+					// The shape yoyodyne-ifd.377 could not see: a CLI that refuses the
+					// login before it writes any envelope has only stderr to say so
+					// on, and a stream with nothing in it. Read from documentation
+					// rather than a recording — the recorded refusal above arrived on
+					// a terminal — because the cost of missing it is the 2026-09-17
+					// stall replayed: a process failure nobody classified is
+					// relaunched into the same login until the budget is spent.
+					Name:     "a login refused on stderr before any envelope was written",
+					Stderr:   "Not logged in · Please run /login\n",
+					ExitCode: 1,
+				},
 			},
 			ProviderUnreachable: {
 				{
@@ -88,6 +109,14 @@ func claudeCodeAdapter() Adapter {
 					// carries onto its terminal when Node reports the failure itself.
 					Name:     "a name that does not resolve",
 					Stream:   lines(claudeInit, claudeTerminal("api_error", "API Error: getaddrinfo ENOTFOUND api.anthropic.com")),
+					ExitCode: 1,
+				},
+				{
+					// The same words on stderr with no envelope before them, for the
+					// reason the login has a stderr sample: a process that died
+					// before writing a terminal has said what it had to say there.
+					Name:     "nothing answering, said on stderr before any envelope was written",
+					Stderr:   "API Error: Can't reach the API server\n",
 					ExitCode: 1,
 				},
 			},

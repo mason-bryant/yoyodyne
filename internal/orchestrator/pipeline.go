@@ -736,6 +736,11 @@ type Outcome struct {
 	// exhausted account both park a run on a deadline, and only this tells a
 	// reader which of them they are looking at.
 	PauseCause string `json:"pause_cause,omitempty"`
+	// ProviderOutageChannel is where the provider's refusal was read on a run
+	// waiting out an outage: the terminal of its stream, or its process's stderr
+	// because it refused before writing one. Evidence, reported for the reason
+	// the kind above is.
+	ProviderOutageChannel domain.ProviderChannel `json:"provider_outage_channel,omitempty"`
 	// ProviderStop names why the harness stopped a provider invocation on time
 	// rather than the provider ending it: runstate.ProviderStopStalled when it
 	// stopped emitting events, runstate.ProviderStopBudgetExhausted when it was
@@ -1414,6 +1419,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			Retries:               state.Retries,
 			UsageLimitKind:        state.UsageLimitKind,
 			PauseCause:            state.PauseCause,
+			ProviderOutageChannel: state.ProviderOutageChannel,
 			// A resumed run keeps the pull request the interrupted process
 			// published, so the attempt it is owed updates that request rather than
 			// opening a second one for the same branch. It reports a skipped
@@ -3216,6 +3222,11 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	a.outcome.UsageLimitKind = limit.Kind
 	a.state.PauseCause = runstate.PauseUsageLimit
 	a.outcome.PauseCause = runstate.PauseUsageLimit
+	// A limit is the account's state rather than an outage, so a channel left
+	// over from an earlier outage pause would describe this one as a refusal it
+	// is not. It is cleared for the reason the kind is cleared on an overload.
+	a.state.ProviderOutageChannel = ""
+	a.outcome.ProviderOutageChannel = ""
 	maximum := p.Config.Execution.UsageLimitMaxPause
 	spent := a.state.UsageLimitPaused()
 	now := p.clock().Now()
@@ -3296,6 +3307,8 @@ func (a *activeRun) pauseForServerOverload(ctx context.Context, overload backend
 	// is not.
 	a.state.UsageLimitKind = ""
 	a.outcome.UsageLimitKind = ""
+	a.state.ProviderOutageChannel = ""
+	a.outcome.ProviderOutageChannel = ""
 	a.state.PauseCause = runstate.PauseServerOverload
 	a.outcome.PauseCause = runstate.PauseServerOverload
 	maximum := p.Config.Execution.UsageLimitMaxPause
@@ -4604,6 +4617,7 @@ func (a *activeRun) pause(paused usageLimitPause) (Outcome, error) {
 	a.outcome.Paused = true
 	a.outcome.UsageLimitKind = paused.kind
 	a.outcome.PauseCause = paused.cause
+	a.outcome.ProviderOutageChannel = a.state.ProviderOutageChannel
 	resetsAt := paused.resetsAt
 	a.outcome.UsageLimitResetsAt = &resetsAt
 	a.outcome.Branch = a.state.Branch

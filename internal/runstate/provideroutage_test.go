@@ -54,6 +54,7 @@ func TestAProviderOutageSurvivesTheProcessThatNoticedIt(t *testing.T) {
 	again, err := store.Notice(ProviderOutageObservation{
 		Cause:   domain.ProviderUnauthenticated,
 		Detail:  "Not logged in",
+		Channel: domain.ProviderChannelStderr,
 		Waiting: "the development manager conversation chat-1",
 		At:      since.Add(time.Hour),
 	})
@@ -63,8 +64,8 @@ func TestAProviderOutageSurvivesTheProcessThatNoticedIt(t *testing.T) {
 	if !again.Since.Equal(since) || !again.LastSeen.Equal(since.Add(time.Hour)) || again.Refusals != 2 {
 		t.Fatalf("second Notice() = %#v, want the same outage confirmed an hour on", again)
 	}
-	if again.Waiting != "the development manager conversation chat-1" || again.Detail != "Not logged in" {
-		t.Fatalf("second Notice() = %#v, want the latest refusal's words and what it stopped", again)
+	if again.Waiting != "the development manager conversation chat-1" || again.Detail != "Not logged in" || again.Channel != domain.ProviderChannelStderr {
+		t.Fatalf("second Notice() = %#v, want the latest refusal's words, the channel they came on, and what it stopped", again)
 	}
 	if again.Provider != domain.BackendClaudeCode || again.AccountAlias != "default" {
 		t.Fatalf("second Notice() = %#v, want the endpoint kept from the sighting that named it", again)
@@ -75,7 +76,7 @@ func TestAProviderOutageSurvivesTheProcessThatNoticedIt(t *testing.T) {
 	if err != nil || !standing {
 		t.Fatalf("Standing() = %t, %v, want the recorded outage", standing, err)
 	}
-	if !loaded.Since.Equal(since) || loaded.Refusals != 2 {
+	if !loaded.Since.Equal(since) || loaded.Refusals != 2 || loaded.Channel != domain.ProviderChannelStderr {
 		t.Fatalf("Standing() = %#v, want the outage as it was recorded", loaded)
 	}
 
@@ -182,4 +183,39 @@ func writeFileForTest(path, content string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// The channel a refusal was read on is part of what an outage record and a
+// paused run say, and a channel this harness does not name is refused on both
+// rather than written down as a word nobody can read back.
+func TestAnOutageRecordNamesTheChannelItWasReadOnOrNone(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 9, 17, 18, 17, 0, 0, time.UTC)
+	for _, channel := range append(domain.ProviderChannels(), "") {
+		recorded := ProviderOutage{
+			SchemaVersion: ProviderOutageSchemaVersion, ProductID: "yoyodyne",
+			Cause: domain.ProviderUnauthenticated, Since: since, LastSeen: since, Refusals: 1, Channel: channel,
+		}
+		if err := recorded.Validate(); err != nil {
+			t.Fatalf("Validate() with channel %q error = %v", channel, err)
+		}
+	}
+	unnamed := ProviderOutage{
+		SchemaVersion: ProviderOutageSchemaVersion, ProductID: "yoyodyne",
+		Cause: domain.ProviderUnauthenticated, Since: since, LastSeen: since, Refusals: 1, Channel: "stdout",
+	}
+	if err := unnamed.Validate(); err == nil || !strings.Contains(err.Error(), `channel "stdout"`) {
+		t.Fatalf("Validate() with an unnamed channel error = %v, want it refused", err)
+	}
+
+	state := testState(t, StatusRunning)
+	state.ProviderOutageChannel = domain.ProviderChannelStderr
+	if err := state.Validate(); err != nil {
+		t.Fatalf("State.Validate() with the stderr channel error = %v", err)
+	}
+	state.ProviderOutageChannel = "stdout"
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "provider_outage_channel is invalid") {
+		t.Fatalf("State.Validate() with an unnamed channel error = %v, want it refused", err)
+	}
 }

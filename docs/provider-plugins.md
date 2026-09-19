@@ -329,6 +329,7 @@ agents:
 | `type`, `subtype` | The provider's own names for the event, matched exactly. |
 | `terminal`, `failed` | Whether the event ends the invocation, and whether it ended badly. |
 | `match` | A regular expression the event's prose must contain. |
+| `channel` | Where the event was said: `envelope` for the provider's stream, `stderr` for what its process wrote to stderr. Omitted is `envelope`, so a rule that says nothing reads the stream and never a process's diagnostics. |
 | `fields` | Dotted paths into the event payload that must equal the given value. |
 | `kind`, `kind_field` | The provider's own name for the limit, stated or read from the payload. `limit-reached` only. |
 | `reset_field`, `reset_match` | Where the reset time is: a payload path, or a regular expression over the prose with exactly one capturing group. `limit-reached` only. |
@@ -337,7 +338,30 @@ agents:
 A rule that states no condition at all is refused, because it would answer for
 every event the provider emits. So is a rule that reads a reset time without
 saying how to read it: a number with no unit is not a time, and guessing the unit
-is how a five-hour wait becomes five days.
+is how a five-hour wait becomes five days. And so is a `stderr` rule with no
+`match`: stderr carries no type, no subtype, and no payload, so the expression
+is the only condition it can have, and without one the rule answers for whatever
+the process happened to complain about.
+
+Stderr is handed to a dialect as one event, and only when the process ended
+without a terminal of its own. It exists for the refusal a CLI makes before it
+writes anything structured — a login it will not accept, an API nothing reaches
+— which the built-in Claude Code dialect reads as `unauthenticated` and
+`unreachable` and nothing else. A declared dialect reads it only through a rule
+that names the channel:
+
+```yaml
+        - answer: unauthenticated
+          channel: stderr
+          match: '(?i)not signed in'
+```
+
+A terminal the provider did write is never second-guessed by what it said on
+stderr, so a rule on this channel cannot change the answer to any invocation
+that ended the way the provider ends one. Which channel an `unauthenticated` or
+`unreachable` answer came on is recorded beside the wait it earned — on the run
+and on the product's outage record — as evidence rather than as anything the
+harness acts on.
 
 A field the provider omits is *absent* rather than false, and a rule matching
 something absent matches nothing. That is the safe direction — what it costs is a
