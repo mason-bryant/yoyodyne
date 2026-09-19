@@ -597,6 +597,18 @@ func TestTheGuardRefusesTheWriterAndSaysNothingAboutAnythingElse(t *testing.T) {
 			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --append-notes=\"what I did\""}}`,
 		},
 		{
+			// The other silent rewrite: the status moves and nothing on the item
+			// says what moved it. This is the line that reopened two merged items
+			// and released two escalations on 2026-09-18.
+			name:    "a status set with no note saying what moved it",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --status=open"}}`,
+			denied:  true,
+		},
+		{
+			name:    "the same move carrying its account",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --status=open --append-notes=\"released for the repair the development manager handed back\""}}`,
+		},
+		{
 			// Nothing but a shell command can carry the writer, and a guard with an
 			// opinion about reading a file is a guard in the way of every run.
 			name:    "a tool that is not a shell",

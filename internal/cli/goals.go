@@ -21,8 +21,10 @@ package cli
 // One command here refuses, and it is the same boundary again seen from in
 // front: guarding reads a shell command an agent session is about to run and
 // stops the one that would replace an item's notes without carrying its goal
-// through. It judges no work either -- what it knows is what the command would
-// destroy, which is a fact about the command and not about the item.
+// through, and the one that would set an item's status with no note saying
+// what moved it. It judges no work either -- what it knows is what the command
+// would destroy or leave unaccounted, which is a fact about the command and not
+// about the item.
 
 import (
 	"context"
@@ -566,7 +568,8 @@ type hookDecisionOutput struct {
 
 // guardNotesReplacement decides one shell command an agent session is about to
 // run: it refuses `bd update --notes` where the replacement would destroy the
-// goal the item records, and says nothing about anything else.
+// goal the item records, refuses `bd update --status` where no note is appended
+// saying what moved the status, and says nothing about anything else.
 //
 // It is deliberately the only thing here that never fails a session. A tool call
 // this cannot read is allowed, and said so on stderr: this stands in front of
@@ -604,14 +607,22 @@ func guardNotesReplacement(args []string, stdin io.Reader, stdout, stderr io.Wri
 	if call.ToolName != "Bash" {
 		return 0
 	}
-	destroyed := beads.DestroyedAttribution(call.ToolInput.Command)
-	if destroyed == "" {
+	// Two rules over the same line, the attribution first: a command replacing
+	// the notes is refused for what it destroys before anything is said about
+	// where it moves the status, because the destroyed record is the loss that
+	// leaves nothing behind. A bare status move is the other silent rewrite --
+	// the status changes and nothing on the item says what moved it.
+	refusal := beads.DestroyedAttribution(call.ToolInput.Command)
+	if refusal == "" {
+		refusal = beads.UnaccountedStatusMove(call.ToolInput.Command)
+	}
+	if refusal == "" {
 		return 0
 	}
 	return writeJSON(stdout, stderr, hookDecision{Output: hookDecisionOutput{
 		EventName: "PreToolUse",
 		Decision:  "deny",
-		Reason:    destroyed,
+		Reason:    refusal,
 	}})
 }
 
@@ -1054,7 +1065,8 @@ appends the goal an item already named, named by that goal's identity.
   reattribute   move an attribution that matches on a goal's wording onto that
                 goal's identity
   guard         refuse a shell command that would replace an item's notes and
-                destroy the goal recorded in them
+                destroy the goal recorded in them, or set an item's status
+                with no note saying what moved it
 
 "list" is laid out to be read: one goal to an entry, a blank line between
 entries, and where the goal is stated indented under it, closing with a line
@@ -1114,9 +1126,14 @@ adding to them, taking the recorded goal with them. A replacement that carries a
 `+"`Goal served:`"+` line through is allowed, because the record survives one. It
 decides from the command line alone and never reads the item, so it checks that
 such a line is present and not that it is the item's own; a substitution is
-caught by the witness rather than here. It takes no options, prints nothing at
-all to allow a command, and allows a tool call it cannot read rather than failing
-a session over a payload it did not recognise.
+caught by the witness rather than here. It also refuses `+"`bd update <id> --status`"+`
+where no `+"`--append-notes`"+` is on the same command, because a status set with no
+note saying what moved it is the other silent rewrite -- four items were moved
+backwards that way on 2026-09-18 -- and the direction of the move is not readable
+from the line, so a note is asked for on every status set here. `+"`--claim`"+` is
+not a status set and passes. It takes no options, prints nothing at all to allow
+a command, and allows a tool call it cannot read rather than failing a session
+over a payload it did not recognise.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)
