@@ -120,7 +120,9 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 // leave the cap counting nothing for a publishing project. The question has to
 // be measured against the run's recorded base commit, and this is the run that
 // proves it is: a published attempt, judged with its status clean, whose repair
-// verdict is charged.
+// verdict is charged. The live counters of the first post-391 run sent back on
+// a published change, which agree, are quoted in
+// docs/diagnoses/yoyodyne-ifd-399-empty-diff-rule-is-base-relative.md.
 func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
 	t.Parallel()
 

@@ -3862,7 +3862,9 @@ trivial residue. Whether a diff is empty is measured against the run's recorded
 base commit, not against what happens to be uncommitted: under
 `approvals.publishing: automatic` the harness commits each attempt before the
 reviewer sees it, so a published change judged with a clean status is a change
-that was present, and a repair verdict on it spends a round.
+that was present, and a repair verdict on it spends a round
+([the counters of the first such run](diagnoses/yoyodyne-ifd-399-empty-diff-rule-is-base-relative.md)
+say so).
 
 The last two are about the reservation a grant makes rather than about a
 verdict. A repair grant reserves its rounds against the cap the moment it is
