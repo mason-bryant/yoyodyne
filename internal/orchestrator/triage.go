@@ -547,8 +547,9 @@ func (d Docketer) RecordUnstartedRun(state runstate.State) (bool, error) {
 //
 // It is separate from RecordStoppedRun because the two are separate facts and
 // only one of them is a stoppage. A stopped run spent its budget failing and
-// carries a durable blocker; an escalated run spent the round it was raised in,
-// integrated nothing, carries no blocker, and left its item parked. A single
+// carries a durable blocker; an escalated run ended in the review it was raised
+// in and charged the item no round for it, integrated nothing, carries no
+// blocker, and left its item parked. A single
 // entry that had to describe both would say neither.
 //
 // A run nobody escalated dockets nothing and is not an error, which is nearly

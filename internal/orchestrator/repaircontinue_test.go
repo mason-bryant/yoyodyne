@@ -296,6 +296,40 @@ func TestARepairIsRefusedWithoutTheDevelopmentManagersGrant(t *testing.T) {
 	}
 }
 
+// A repair the development manager has since decided against is not one to
+// carry out. One decision stands per stopped run, and a re-run recorded in the
+// repair's place released the rounds the repair reserved — which is
+// yoyodyne-ifd.309's shape, a repair the harness could not carry out and a
+// re-run recorded instead — so a repair carried out on that run afterwards would
+// spend attempts the item's record no longer holds room for, on a decision
+// nobody holds any more.
+func TestARepairIsRefusedOnceARerunStandsInItsPlace(t *testing.T) {
+	t.Parallel()
+
+	state := continuableState()
+	harness := newUndecidedHarness(t, state)
+	// The repair decided about this very stoppage, then the re-run decided about
+	// it instead.
+	if _, err := harness.runs.Triage().GrantRepair(context.Background(), state.WorkItemID, triageDecided(runstate.TriageDecisionRepair, state.RunID), continueGrantRounds, docketedNow, continueCaps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if _, err := harness.runs.Triage().RecordRerun(context.Background(), state.WorkItemID, triageDecided(runstate.TriageDecisionRerun, state.RunID), docketedNow, continueCaps); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil || !strings.Contains(err.Error(), `is "rerun" rather than a repair`) {
+		t.Fatalf("Continue() error = %v, want a refusal naming the re-run standing in the repair's place", err)
+	}
+	if len(harness.started) != 0 || harness.tracker.claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued on a superseded decision", harness.started, harness.tracker.claimed)
+	}
+	// And the reservation went with the repair: the item stands committed to
+	// nothing beyond what it has spent.
+	if spent := harness.spent(t); spent.CommittedRounds != spent.ReviewRounds {
+		t.Fatalf("committed rounds = %d with %d spent, want the superseded repair's reservation released", spent.CommittedRounds, spent.ReviewRounds)
+	}
+}
+
 // The invariant's second half, and the item's own requirement: the reasoning is
 // recorded durably in both places a later reader looks — on the run, which is
 // what outlives the process, and on the item, which is what a person reads.
@@ -914,9 +948,10 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The development manager's decision, recorded exactly as the conversation
-	// records one: it spends the item's repair grant, and the three rounds the
-	// stopped run cost leave the cap room for one of the two it asks for.
-	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID),
+	// records one — about the docketed run — and it spends the item's repair
+	// grant; the three rounds the stopped run cost leave the cap room for one of
+	// the two it asks for.
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, outcome.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage))
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
@@ -977,5 +1012,20 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	}
 	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
 		t.Fatalf("integrated feature.txt = %q, want the repaired content", integrated)
+	}
+	// The granted round approved the change, so it spent nothing and the
+	// reservation the grant made for it is released: the item stands at the three
+	// rounds it cost, not the four it was committed to. That is the accounting
+	// yoyodyne-ifd.349 was refused its re-run under, read at the end of a real
+	// continuation rather than replayed against the store alone.
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 3 || counters.CommittedRounds != 3 {
+		t.Fatalf("counters after the approved continuation = %d spent, %d committed; want the reserved round released to 3 and 3", counters.ReviewRounds, counters.CommittedRounds)
+	}
+	if counters.GrantOutstanding() {
+		t.Fatal("the grant reads as outstanding after the round it bought was judged, so the docket would go on offering the stoppage a handback on it")
 	}
 }

@@ -3471,7 +3471,7 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Four more things refuse it. The stopped run has to be really over, terminal and
+Five more things refuse it. The stopped run has to be really over, terminal and
 still standing on whichever of the two docketed it, read from the run's own
 record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
@@ -3486,9 +3486,14 @@ checkout the harness would call its own and that holds nothing passes the gate
 above and fails this one, and a developer handed the reviewer's findings and an
 empty directory delivers an empty repair or reinvents the change from them, with
 nothing in the run's record afterwards to tell either from a repair that went
-well. The intake hold applies for the reason it applies to a
-re-run: this spends on a provider, and the development manager naming the item is
-not the operator naming it.
+well. And the decision standing about the stoppage has to still be the repair:
+one decision stands per stopped run, and a re-run, an escalation, or a wait
+recorded in the repair's place released the rounds the repair had reserved (see
+[what spends a round and what does not](#what-spends-a-round-and-what-does-not)),
+so a repair carried out on that run afterwards would spend attempts the item's
+record no longer holds room for, on a decision nobody holds any more. The intake
+hold applies for the reason it applies to a re-run: this spends on a provider,
+and the development manager naming the item is not the operator naming it.
 
 **The resumed run asks the same question again**, and blocks rather than
 spending where the answer has changed. That is the enforcement rather than a
@@ -3788,7 +3793,7 @@ Which threshold refuses which action:
 
 | Action | Refused by |
 | --- | --- |
-| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
+| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it and a run whose standing decision is no longer a repair |
 | another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget and is written beside it, naming the stoppage and where it was recorded; `yoyo triage rerun` starts the run, is bounded again by one re-run per docketed stoppage, and reads that decision back — with this counter, against the re-runs already claimed — as the proof that one is there to carry out and as the words its attribution is built from |
 | re-arming a merge the forge dropped | one per **publication**, not per item — a re-arm repeats one already-authorized merge request, so an item that published three times has three separate budgets. One precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds `yoyo triage rearm`, which takes the target branch's promotion lease and repeats only the identical already-authorized request. The decision recorded here spends that publication's budget and is written beside it, naming the run whose publication it is about; the action reads both back — the budget against the re-arms the publication's own record says the harness has made, and the decision as the one still standing about that run — as the proof that a decision is there to carry out, and a second drop is an escalation rather than another re-arm |
 
@@ -3804,7 +3809,11 @@ The room it is cut to counts what a grant already recorded has promised, not
 only the rounds the item has produced. A grant is spendable from the moment it
 is written, so two taken before either is carried out would otherwise be cut
 against the same room and promise between them more than the cap has, with
-neither one overshooting it.
+neither one overshooting it. What a grant has promised and the item has not
+spent is a reservation, and it is released where the round is not going to be
+produced — see [what spends a round and what does not](#what-spends-a-round-and-what-does-not)
+below — so the room a later decision is cut to is what the item may still
+actually cost.
 
 **The round cap is not their only bound, and could not be.** Each of those two
 is also once per item, which is not configured because it is the workflow rather
@@ -3828,6 +3837,51 @@ bound in both halves: it granted one publication a second re-arm the design
 calls an escalation, and it refused a later publication of the same item its
 first. It is now once per publication and reads no configuration at all, so an
 operator raising the integration retries cannot move it back.
+
+#### What spends a round and what does not
+
+Stated once, because the rule above — an approval is not a round, and neither
+is a trivial residue — was yoyodyne-ifd.279's and the record afterwards showed
+it not holding: eleven approved overrides in five days, every one on an
+undisputed change. So yoyodyne-ifd.391 completed it: **the cap counts only
+rounds that ended in a verdict requiring repair against a change that was
+present.** The counter is charged at verdict time and by nothing else. A round
+spends when the reviewer sent the work back with more than one minor note,
+about a change that was in the worktree to be judged. A round spends nothing
+when it approved the change; when its whole residue was one minor finding; when
+the reviewer escalated the item instead of judging the change, which hands
+nothing back; when it judged an empty diff, whatever it said about it — a
+mis-selected run, a stale worktree, and a developer that delivered nothing all
+put the same empty diff in front of a reviewer, and the development manager
+reported those rounds counting identically to real repair rounds; when it was
+granted and never executed; and when a promotion after an approval conflicted
+on replay, which reached no verdict and leaves the approval standing on the
+stopped run for the conflict path to re-enter through. What bounds a developer
+that delivers nothing is the run's own repair budget, exactly as it bounds a
+trivial residue.
+
+The last two are about the reservation a grant makes rather than about a
+verdict. A repair grant reserves its rounds against the cap the moment it is
+recorded, so that a second grant cannot promise the same room twice, and the
+round budget refuses against what the item is committed to rather than what it
+has cost. That reservation is released, not spent, where the round it promised
+is not going to be produced: by a granted round whose verdict charged nothing,
+one round at a time and only for a round of the run the repair was decided
+about — a verdict in some other run of the item reserved nothing and releases
+nothing — and by a decision recorded in the repair's place — a re-run, an
+escalation, a wait — for what the repair reserved and the item never spent.
+Both regression cases cost an operator override before this held. On
+2026-09-15 yoyodyne-ifd.349's granted round approved the change and the
+promotion stopped on a replay conflict, and the re-run was refused at 4 of 4
+with three rounds spent — the approving round counted through the commitment.
+On 2026-09-18 a repair on yoyodyne-ifd.309 reserved the cap's last round, the
+harness found the run's worktree retired and refused to carry it out, and the
+re-run recorded in its place was refused at 6 of 6 — a round that never ran
+counted the same way. Each repair decision records the rounds it reserved,
+which is what the decision superseding it releases; a repair superseded by a
+repair keeps both reservations and records their sum; and `yoyo triage repair`
+refuses a run whose standing decision is no longer a repair, because the rounds
+that repair reserved have gone with it.
 
 #### Crossing a cap the operator decides to cross
 

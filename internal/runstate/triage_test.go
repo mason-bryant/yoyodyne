@@ -26,6 +26,11 @@ const countingProcess = "pid-1-000000000000000a"
 // than about which stoppage was decided, so one run stands for all of them.
 const decidedRunID = "run-11112222333344445555666677778888"
 
+// otherStoppageRunID is a second stopped run of the same item, for the tests
+// where which stoppage a decision is about is the point: a decision about this
+// run supersedes nothing decided about decidedRunID.
+const otherStoppageRunID = "run-99998888777766665555444433332222"
+
 // triageDecided is one decision as the durable record requires it: the word, the
 // stoppage, the reasoning, and who recorded it where.
 func triageDecided(decision, runID string) TriageDecision {
@@ -312,9 +317,12 @@ func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T)
 	if !refusedByRounds || rounds.Spent != 4 {
 		t.Fatalf("refusal = %+v, want the round budget refusing it with the item's four committed rounds", refusal)
 	}
-	// A re-run is refused by the same room, because it too would produce a verdict
-	// past what the cap has left.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
+	// A re-run of some other stoppage is refused by the same room, because it too
+	// would produce a verdict past what the cap has left. It has to be another
+	// stoppage: a re-run decided about the run the grants stand on supersedes them
+	// and takes their reservation with it, which is
+	// TestARerunInPlaceOfARepairReleasesWhatTheRepairReserved.
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", triageDecided(TriageDecisionRerun, otherStoppageRunID), time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordRerun() with the cap's room promised = %v, want a refusal", err)
 	}
 }
@@ -890,59 +898,315 @@ func TestNegativeTriageCapsAreRefused(t *testing.T) {
 	}
 }
 
-// An uncharged verdict leaves every one of the item's budgets exactly where it
-// stood, which is the whole of what the operator directed on 2026-09-05: a round
-// that approved the work, or left one trivial note beside it, must not walk the
-// item toward a cap on its own success.
+// An uncharged verdict spends nothing and releases the round a grant reserved for
+// it, which is the whole of what the operator directed on 2026-09-05 and what
+// yoyodyne-ifd.391 completed: a round that approved the work, or left one trivial
+// note beside it, must not walk the item toward a cap on its own success — and a
+// commitment that went on holding that round was exactly that walk by another
+// figure, since the round budget is refused against what the item is committed
+// to.
 //
-// Every field is compared rather than the rounds alone. The rounds are what the
-// verdict obviously touches, and the failure this guards against is a later
-// change spending something else in passing — a commitment, a grant, the head of
-// the record — on a verdict that was supposed to cost nothing.
-func TestAnUnchargedVerdictLeavesEveryBudgetWhereItStood(t *testing.T) {
+// Every field is compared rather than the rounds alone. What may move is the
+// judged attempt, which is not a budget, and the commitment, which moves in the
+// one direction that is not a spend; the failure this guards against is a later
+// change spending something else in passing — a grant, the head of the record,
+// the rounds themselves — on a verdict that was supposed to cost nothing.
+func TestAnUnchargedVerdictSpendsNothingAndReleasesTheRoundItWasReserved(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
 	ctx := context.Background()
 	const item = "yoyodyne-ifd.279"
 	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
-	// An item mid-flight rather than a fresh one: a grant recorded, a round spent
-	// against it, so every counter the record keeps carries something an uncharged
-	// verdict could disturb.
+	// An item mid-flight rather than a fresh one: a grant of two recorded, one of
+	// its rounds spent, so every counter the record keeps carries something an
+	// uncharged verdict could disturb — and one reserved round is still standing
+	// for the attempt about to be judged.
 	if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	if _, err := store.RecordReviewRound(ctx, item, "run-a#1", countingProcess, time.Now()); err != nil {
+	if _, err := store.RecordReviewRound(ctx, item, RoundKey(decidedRunID, 1), countingProcess, time.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
 	before, err := store.Counters(item)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
+	if before.CommittedRounds != 2 || before.ReviewRounds != 1 {
+		t.Fatalf("counters before the verdict = %d committed, %d spent; want the grant's second round still reserved", before.CommittedRounds, before.ReviewRounds)
+	}
 
-	after, err := store.RecordUnchargedVerdict(ctx, item, "run-a#2", time.Now())
+	granted := RoundKey(decidedRunID, 2)
+	after, err := store.RecordUnchargedVerdict(ctx, item, granted, time.Now())
 	if err != nil {
 		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
 	}
-	// The judged attempt is the one thing that moves, and it is not a budget: it
-	// is what keeps the replay of this attempt free.
-	if after.LastJudged != "run-a#2" {
+	// The judged attempt moves, and it is not a budget: it is what keeps the
+	// replay of this attempt free.
+	if after.LastJudged != granted {
 		t.Fatalf("LastJudged = %q, want the attempt the reviewer answered about", after.LastJudged)
+	}
+	// The reservation for this round is released and nothing was spent: the round
+	// ran, the reviewer answered, and the answer was not the reviewer arguing.
+	if after.CommittedRounds != 1 || after.ReviewRounds != 1 {
+		t.Fatalf("counters after the verdict = %d committed, %d spent; want the reserved round released and the rounds untouched", after.CommittedRounds, after.ReviewRounds)
 	}
 	stripped := after
 	stripped.LastJudged = before.LastJudged
+	stripped.CommittedRounds = before.CommittedRounds
 	stripped.UpdatedAt = before.UpdatedAt
 	if !reflect.DeepEqual(stripped, before) {
-		t.Fatalf("counters after an uncharged verdict = %+v, want them left at %+v", after, before)
+		t.Fatalf("counters after an uncharged verdict = %+v, want everything but the judged attempt and the reservation left at %+v", after, before)
 	}
-	// And the room the guards read is the room they read before it, which is the
-	// figure the escalations were about.
-	if after.RoundsRemaining(caps.ReviewRounds) != before.RoundsRemaining(caps.ReviewRounds) ||
-		after.RoundsUncommitted(caps.ReviewRounds) != before.RoundsUncommitted(caps.ReviewRounds) {
-		t.Fatalf("room after an uncharged verdict = %d remaining / %d uncommitted, want %d / %d",
-			after.RoundsRemaining(caps.ReviewRounds), after.RoundsUncommitted(caps.ReviewRounds),
-			before.RoundsRemaining(caps.ReviewRounds), before.RoundsUncommitted(caps.ReviewRounds))
+	// And the room the guards read has the released round back in it, which is
+	// the figure the escalations were about.
+	if after.RoundsRemaining(caps.ReviewRounds) != 3 || after.RoundsUncommitted(caps.ReviewRounds) != 3 {
+		t.Fatalf("room after an uncharged verdict = %d remaining / %d uncommitted, want 3 / 3",
+			after.RoundsRemaining(caps.ReviewRounds), after.RoundsUncommitted(caps.ReviewRounds))
 	}
+	// A second answer about the same attempt — the integration replay — releases
+	// nothing further: the attempt was judged once, and its round was resolved by
+	// that judgement.
+	again, err := store.RecordUnchargedVerdict(ctx, item, granted, time.Now())
+	if err != nil {
+		t.Fatalf("RecordUnchargedVerdict() again error = %v", err)
+	}
+	if again.CommittedRounds != 1 {
+		t.Fatalf("committed rounds after a re-review of the same attempt = %d, want the reservation left where the first verdict put it", again.CommittedRounds)
+	}
+	// An item with nothing reserved has nothing to release: an uncharged verdict
+	// on it moves no budget at all, which is what every item nobody has granted
+	// anything looks like.
+	if _, err := store.RecordUnchargedVerdict(ctx, "yoyodyne-ifd.279.ungranted", "run-b#0", time.Now()); err != nil {
+		t.Fatalf("RecordUnchargedVerdict() on an ungranted item error = %v", err)
+	}
+	ungranted, err := store.Counters("yoyodyne-ifd.279.ungranted")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if ungranted.CommittedRounds != 0 || ungranted.ReviewRounds != 0 {
+		t.Fatalf("an ungranted item after an uncharged verdict = %d committed, %d spent; want zero of each", ungranted.CommittedRounds, ungranted.ReviewRounds)
+	}
+}
+
+// yoyodyne-ifd.349, 2026-09-15, replayed: three rounds spent, the one repair
+// grant recorded and cut to the round the cap had left, that round ending in an
+// approve-as-implementation verdict, and the promotion then stopping on a replay
+// conflict. The development manager's re-run was refused at 4 of 4 — the
+// approving round was counted, through the commitment the grant had made — and
+// it took an operator override. Under the completed rule the approval releases
+// the round it was reserved and the re-run is recorded without one.
+func TestTheApprovedGrantedRoundOfIfd349ReachesItsRerunWithoutAnOverride(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.349"
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	spendTriageRounds(t, store, item, 3)
+	granted, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 1 || !granted.Truncated || granted.Counters.CommittedRounds != 4 {
+		t.Fatalf("grant = %+v, want the one round the cap had left, reserved to 4 of 4", granted)
+	}
+	// The granted round ran — the continuation of the run the repair was decided
+	// about — and the reviewer approved the change.
+	approved, err := store.RecordUnchargedVerdict(ctx, item, RoundKey(decidedRunID, 3), time.Now())
+	if err != nil {
+		t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+	}
+	if approved.CommittedRounds != 3 || approved.ReviewRounds != 3 {
+		t.Fatalf("counters after the approval = %d committed, %d spent; want the approving round released and 3 of 4 spent", approved.CommittedRounds, approved.ReviewRounds)
+	}
+	// The replay conflicted and the run stopped; the development manager decides
+	// to run the item again on the moved base. Nothing is overridden.
+	rerun, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
+	if err != nil {
+		t.Fatalf("RecordRerun() after the approving round = %v, want it permitted without an override", err)
+	}
+	if rerun.Reruns != 1 || len(rerun.Overrides) != 0 {
+		t.Fatalf("counters after the re-run = %+v, want one re-run recorded and no override", rerun)
+	}
+}
+
+// yoyodyne-ifd.309, 2026-09-18, replayed: a repair recorded against a cap with
+// one round left reserved that round, the harness then found the stopped run's
+// worktree retired and refused to carry the repair out, and the re-run recorded
+// in its place was refused at 6 of 6 — a round that never ran was counted. Under
+// the completed rule the re-run supersedes the repair, releases what it
+// reserved, and is recorded without an override.
+func TestTheNeverRunGrantedRoundOfIfd309ReachesItsRerunWithoutAnOverride(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.309"
+	caps := TriageCaps{ReviewRounds: 6, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
+	spendTriageRounds(t, store, item, 5)
+	granted, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 1 || granted.Counters.CommittedRounds != 6 {
+		t.Fatalf("grant = %+v, want the cap's last round reserved", granted)
+	}
+	if decision, found := granted.Counters.DecisionOf(decidedRunID); !found || decision.Rounds != 1 {
+		t.Fatalf("the repair decision = %+v (found %t), want it to record the one round it reserved", decision, found)
+	}
+	// Nothing ran: the carry-out refused. The re-run recorded in the repair's
+	// place is measured against the rounds the item spent, not the one the repair
+	// reserved and nothing will produce.
+	rerun, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
+	if err != nil {
+		t.Fatalf("RecordRerun() in place of the repair = %v, want it permitted without an override", err)
+	}
+	if rerun.CommittedRounds != 5 || rerun.ReviewRounds != 5 || rerun.Reruns != 1 {
+		t.Fatalf("counters after the re-run = %+v, want the reservation released and 5 of 6 spent", rerun)
+	}
+	if decision, found := rerun.DecisionOf(decidedRunID); !found || decision.Decision != TriageDecisionRerun {
+		t.Fatalf("the standing decision = %+v (found %t), want the re-run in the repair's place", decision, found)
+	}
+	// The grant itself stays spent: what was released is the reservation, not the
+	// decision that was recorded and refused.
+	if rerun.RepairGrants != 1 || rerun.GrantedRounds != 1 {
+		t.Fatalf("grants after the re-run = %d of %d round(s), want the grant still recorded", rerun.RepairGrants, rerun.GrantedRounds)
+	}
+}
+
+// The release reaches exactly what the superseded repair reserved. A re-run
+// decided about some other stoppage of the item releases nothing, because the
+// repair it does not supersede may still be carried out; and a decision that
+// spends nothing — an escalation — releases the reservation as a re-run does,
+// since it is just as much the decision that the repair's attempts will not be
+// made.
+func TestARerunInPlaceOfARepairReleasesWhatTheRepairReserved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 2, Reruns: 2, MergeRearms: 2}
+	const item = "yoyodyne-ifd.391"
+
+	t.Run("a re-run of another stoppage leaves the reservation standing", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		spendTriageRounds(t, store, item, 2)
+		if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		counters, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, otherStoppageRunID), time.Now(), caps)
+		if err != nil {
+			t.Fatalf("RecordRerun() error = %v", err)
+		}
+		if counters.CommittedRounds != 3 {
+			t.Fatalf("committed rounds = %d, want the other stoppage's reservation left standing at 3", counters.CommittedRounds)
+		}
+	})
+
+	t.Run("an escalation in place of the repair releases it", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		spendTriageRounds(t, store, item, 2)
+		if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		counters, err := store.RecordDecision(ctx, item, triageDecided(TriageDecisionEscalate, decidedRunID), time.Now())
+		if err != nil {
+			t.Fatalf("RecordDecision() error = %v", err)
+		}
+		if counters.CommittedRounds != 2 {
+			t.Fatalf("committed rounds = %d, want the superseded repair's reservation released to 2", counters.CommittedRounds)
+		}
+	})
+
+	t.Run("a repair in place of a repair keeps both reservations and records their sum", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		for range 2 {
+			if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
+				t.Fatalf("GrantRepair() error = %v", err)
+			}
+		}
+		counters, err := store.Counters(item)
+		if err != nil {
+			t.Fatalf("Counters() error = %v", err)
+		}
+		if counters.CommittedRounds != 2 {
+			t.Fatalf("committed rounds = %d, want both grants reserved", counters.CommittedRounds)
+		}
+		if decision, _ := counters.DecisionOf(decidedRunID); decision.Rounds != 2 {
+			t.Fatalf("the standing repair records %d reserved round(s), want both grants' 2", decision.Rounds)
+		}
+		released, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
+		if err != nil {
+			t.Fatalf("RecordRerun() error = %v", err)
+		}
+		if released.CommittedRounds != 0 {
+			t.Fatalf("committed rounds after the re-run = %d, want both reservations released", released.CommittedRounds)
+		}
+	})
+
+	t.Run("an uncharged verdict in another run leaves the reservation standing", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps); err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		// A re-run of some other stoppage starts a fresh run beside the grant, and
+		// its approval is not a round the grant reserved.
+		if _, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, otherStoppageRunID), time.Now(), caps); err != nil {
+			t.Fatalf("RecordRerun() error = %v", err)
+		}
+		counters, err := store.RecordUnchargedVerdict(ctx, item, RoundKey("run-0123456789abcdef0123456789abcdef", 0), time.Now())
+		if err != nil {
+			t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+		}
+		if counters.CommittedRounds != 1 {
+			t.Fatalf("committed rounds = %d, want the grant's reservation left standing for the run it was decided about", counters.CommittedRounds)
+		}
+	})
+
+	t.Run("a reservation no decision accounts for is released by whichever attempt is judged", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		granted, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 1, time.Now(), caps)
+		if err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		// A record written before decisions were durable: the grant and its
+		// commitment, and nothing saying which stoppage it was about.
+		legacy := granted.Counters
+		legacy.Decisions = nil
+		if err := store.save(item, legacy); err != nil {
+			t.Fatalf("save() error = %v", err)
+		}
+		counters, err := store.RecordUnchargedVerdict(ctx, item, "run-a#0", time.Now())
+		if err != nil {
+			t.Fatalf("RecordUnchargedVerdict() error = %v", err)
+		}
+		if counters.CommittedRounds != 0 {
+			t.Fatalf("committed rounds = %d, want the unattributed reservation released", counters.CommittedRounds)
+		}
+	})
+
+	t.Run("a release never reaches below what the item has spent", func(t *testing.T) {
+		t.Parallel()
+		store := newTriageStore(t)
+		if _, err := store.GrantRepair(ctx, item, triageDecided(TriageDecisionRepair, decidedRunID), 2, time.Now(), caps); err != nil {
+			t.Fatalf("GrantRepair() error = %v", err)
+		}
+		// Both granted rounds were spent, so the commitment has been spent through
+		// and there is nothing left to release.
+		spendTriageRounds(t, store, item, 2)
+		counters, err := store.RecordRerun(ctx, item, triageDecided(TriageDecisionRerun, decidedRunID), time.Now(), caps)
+		if err != nil {
+			t.Fatalf("RecordRerun() error = %v", err)
+		}
+		if counters.CommittedRounds != 2 || counters.ReviewRounds != 2 {
+			t.Fatalf("counters after the re-run = %d committed, %d spent; want the spent rounds untouched", counters.CommittedRounds, counters.ReviewRounds)
+		}
+	})
 }
 
 // The escalation shapes this change was directed at, replayed against the new

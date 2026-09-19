@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -164,14 +165,33 @@ func TestADeveloperEscalationEndsTheRunInTheRoundItWasRaised(t *testing.T) {
 }
 
 // The reviewer's half. yoyodyne-ifd.100.1 replayed: the criteria are the problem
-// rather than the change, and the verdict costs the round it was raised in
-// instead of the repair rounds that used to be the only way to say it.
-func TestAReviewerEscalationCostsOneRoundAndNoRepairAttempt(t *testing.T) {
+// rather than the change, and the verdict costs no repair attempt — and, under
+// yoyodyne-ifd.391, no review round either, where it used to cost the one it was
+// raised in. The cap counts only a verdict requiring repair against a change,
+// and an escalation is the reviewer saying the item cannot be met rather than
+// arguing with the change; charged, it walked an item at 3 of 4 to 4 of 4 on the
+// honest answer and refused the re-run recorded once the escalation was decided.
+// The reservation a grant made for the round is released exactly as an approval
+// releases it, so the item stands at what it cost.
+func TestAReviewerEscalationCostsNoRoundAndNoRepairAttempt(t *testing.T) {
 	t.Parallel()
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, escalateVerdict)
 	pipeline, store, docket := escalatingPipeline(t, tracker, provider)
+	// The item as an escalation finds it at its most expensive: three of the
+	// cap's four rounds spent across earlier runs, and a grant on an earlier
+	// stoppage reserving the last. Charged, the escalation would put the item at
+	// 4 of 4.
+	caps := TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)
+	for round := range 3 {
+		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
+			t.Fatalf("RecordReviewRound() error = %v", err)
+		}
+	}
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 1, time.Now(), caps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err != nil {
@@ -209,11 +229,11 @@ func TestAReviewerEscalationCostsOneRoundAndNoRepairAttempt(t *testing.T) {
 	if !strings.Contains(entry.Escalation.Reason, "this needs replanning") {
 		t.Errorf("the entry does not carry the reviewer's summary: %q", entry.Escalation.Reason)
 	}
-	// One round, against the same durable counter a repair grant would be
-	// truncated against. The escalation charged the round it was raised in and
-	// nothing beyond it, which is what leaves the item affordable to replan.
-	if entry.Counters.ReviewRounds != 1 {
-		t.Errorf("review rounds = %d, want the one round the verdict was raised in", entry.Counters.ReviewRounds)
+	// No round, against the same durable counter a repair grant would be
+	// truncated against: the three the item had already spent are all it has spent,
+	// which is what leaves the item affordable to replan.
+	if entry.Counters.ReviewRounds != 3 {
+		t.Errorf("review rounds = %d, want the three spent before the escalation and none for it", entry.Counters.ReviewRounds)
 	}
 	if entry.Counters.RepairAttempts != 0 {
 		t.Errorf("repair attempts on the entry = %d, want none", entry.Counters.RepairAttempts)
@@ -222,8 +242,23 @@ func TestAReviewerEscalationCostsOneRoundAndNoRepairAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	if counters.ReviewRounds != 1 {
-		t.Errorf("durable review rounds = %d, want one", counters.ReviewRounds)
+	if counters.ReviewRounds != 3 {
+		t.Errorf("durable review rounds = %d, want the three spent before the escalation", counters.ReviewRounds)
+	}
+	// The verdict was recorded rather than passed over — a re-review of this
+	// attempt stays free — and the reservation standing for the earlier stoppage
+	// was not this run's to release, so it stands.
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastJudged != want {
+		t.Errorf("last judged attempt = %q, want the escalated attempt %q recorded uncharged", counters.LastJudged, want)
+	}
+	if counters.CommittedRounds != 4 {
+		t.Errorf("committed rounds = %d, want the other stoppage's reservation left standing", counters.CommittedRounds)
+	}
+	// And the re-run the development manager records once the escalation is
+	// decided — in place of the repair, whose reservation it releases — is
+	// permitted at the cap the escalation used to exhaust.
+	if _, err := store.Triage().RecordRerun(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRerun, priorRunID), time.Now(), caps); err != nil {
+		t.Errorf("RecordRerun() after the escalation = %v, want it permitted without an override", err)
 	}
 }
 

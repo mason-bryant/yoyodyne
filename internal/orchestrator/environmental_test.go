@@ -209,10 +209,21 @@ func TestNoSequenceOfEnvironmentalRefusalsWalksAnItemToItsCap(t *testing.T) {
 }
 
 // The other half of the definition, which is what keeps the class honest. A run
-// that delivers nothing and records no environmental cause spends exactly as any
-// round does: laziness cannot hide in a class built for a harness that handed a
-// round nothing.
-func TestAnEmptyDeliveryWithNoEnvironmentalCauseStillSpends(t *testing.T) {
+// that delivers nothing and records no environmental cause is in no class at
+// all: nothing is given back, because nothing was refused, and the run stops on
+// its own repair budget exactly as any run that could not satisfy its reviewer.
+//
+// What it is not charged is a review round, and that is yoyodyne-ifd.391's rule
+// rather than this class's: the cap counts only rounds that ended in a verdict
+// requiring repair against a change that was present, and a reviewer shown an
+// empty diff was not arguing with a change. Until that item the empty delivery
+// spent as any round did, so that laziness could not hide in the class — but a
+// mis-selected run and a stale worktree deliver the same empty diff, and the
+// development manager reported both counting identically to real repair rounds.
+// What bounds a developer that delivers nothing is still the run's own repair
+// budget, spent here, and the once-per-item grant and re-run any further run of
+// the item needs.
+func TestAnEmptyDeliveryWithNoEnvironmentalCauseIsInNoClassAndSpendsNoRound(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
@@ -239,12 +250,22 @@ func TestAnEmptyDeliveryWithNoEnvironmentalCauseStillSpends(t *testing.T) {
 	if spent.Environmental != nil {
 		t.Fatalf("the run records an environmental cause it never had: %#v", spent.Environmental)
 	}
+	// The run spent its own budget: every verdict was reached and every attempt
+	// the reviewer asked for was made.
+	if spent.ReviewRounds < 2 || spent.RepairAttempts < 1 {
+		t.Fatalf("run review rounds = %d, repair attempts = %d; want the run to have spent its own repair budget on the empty delivery", spent.ReviewRounds, spent.RepairAttempts)
+	}
 	counters, err := store.Triage().Counters(tracker.item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	if counters.ReviewRounds < 1 {
-		t.Fatalf("review rounds = %d, want the empty delivery charged for every verdict it bought", counters.ReviewRounds)
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: no verdict here was against a change that was present", counters.ReviewRounds)
+	}
+	// And the verdicts were recorded rather than passed over, so a re-review of
+	// the last attempt would still be free.
+	if want := runstate.RoundKey(outcome.RunID, spent.RepairAttempts); counters.LastJudged != want {
+		t.Fatalf("last judged attempt = %q, want %q: an uncharged verdict is still recorded against the attempt it judged", counters.LastJudged, want)
 	}
 	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations == 0 {
 		t.Fatal("no developer was invoked, so this is not the empty delivery the test is about")

@@ -125,6 +125,14 @@ type TriageCounters struct {
 	// room and together promise more than the cap has; and the rounds granted
 	// cannot say what the item had already cost before them.
 	//
+	// It is a reservation and not a spend, and it is released where the rounds it
+	// promised are not going to be produced: by a granted attempt whose verdict
+	// charged nothing, one round at a time, and by a decision that supersedes the
+	// repair before its attempts are made, for what that repair reserved. A
+	// commitment that outlived the rounds it stood for was the cap counting an
+	// approving round and a round that never ran, which yoyodyne-ifd.349 and
+	// yoyodyne-ifd.309 each paid an operator override for.
+	//
 	// A record written before this was counted carries zero, which is the
 	// accounting that was in force when it was written rather than a record that
 	// is wrong: it reads as an item nothing is outstanding on, which is what the
@@ -163,9 +171,11 @@ type TriageCounters struct {
 	// reason: the cap this feeds stops an item buying the same argument another
 	// round, and an approval ends that argument. Neither is a repair whose whole
 	// residue is one trivial finding, which is that same ending with a note
-	// attached rather than another turn of the argument. What is counted is decided
-	// by whoever calls RecordReviewRound, which is the run that obtained the
-	// verdict; this record counts what it is handed.
+	// attached rather than another turn of the argument. Nor is any verdict on a
+	// run with no change present, because a reviewer shown an empty diff was not
+	// arguing with the change. What is counted is decided by whoever calls
+	// RecordReviewRound, which is the run that obtained the verdict; this record
+	// counts what it is handed.
 	ReviewRounds int `json:"review_rounds,omitempty"`
 	// LastJudged identifies the developer attempt a reviewer has most recently
 	// answered about, whichever way the verdict went, and it is what makes the
@@ -392,6 +402,42 @@ func (c TriageCounters) committed() int {
 		return c.CommittedRounds
 	}
 	return c.ReviewRounds
+}
+
+// reserved is how many rounds a grant has committed this item to beyond what it
+// has spent: the reservation still standing. It is never negative, because an
+// item whose rounds have caught up with its commitment has nothing reserved.
+func (c TriageCounters) reserved() int {
+	if outstanding := c.CommittedRounds - c.ReviewRounds; outstanding > 0 {
+		return outstanding
+	}
+	return 0
+}
+
+// releaseReservedRounds gives back rounds a grant reserved and the item is not
+// going to spend, and it is the only thing besides a grant that moves the
+// commitment. A reservation is a promise that attempts the harness will hand a
+// run may each cost a round; a round that ended in a verdict the cap does not
+// count, and a round the harness never ran, were reserved and are not spent, and
+// a commitment that went on holding them was the cap counting rounds nothing
+// produced. That is what refused yoyodyne-ifd.349's re-run at 4 of 4 with three
+// rounds spent, and yoyodyne-ifd.309's at 6 of 6 with three.
+//
+// It releases at most what is reserved, whatever it is asked for, so a
+// reservation already spent through — the item's rounds caught up with its
+// commitment — releases nothing. Zero asks for everything outstanding, which is
+// what a repair recorded before decisions carried their reservation has to be
+// released by: such a record can be holding one grant's rounds and nothing says
+// how many.
+func (c *TriageCounters) releaseReservedRounds(rounds int) {
+	outstanding := c.reserved()
+	if outstanding == 0 {
+		return
+	}
+	if rounds <= 0 || rounds > outstanding {
+		rounds = outstanding
+	}
+	c.CommittedRounds -= rounds
 }
 
 // TriageCaps bounds each triage action for one work item. They are per item and
@@ -759,9 +805,34 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 // That is the round the replay exclusion has always promised to keep off the
 // bill, and this is what keeps the promise now that not every verdict is a round.
 //
+// The third is a verdict of any kind on a run with no change present: the
+// reviewer was shown an empty diff, and whatever it said about nothing is not the
+// change disputing with it. The development manager reported rounds of that
+// shape counting identically to real repair rounds, and yoyodyne-ifd.391 rules
+// them out with the other two: the cap counts only rounds that ended in a
+// verdict requiring repair against a change that was present.
+//
 // No charging process is asked for, because nothing is charged. An uncharged
 // verdict leaves the round at the head, and whatever process holds it, exactly as
 // it found them: a later round given back is still that process's to give.
+//
+// What it does move is the reservation, where a grant is holding one for this
+// attempt. A granted attempt is judged exactly once, and the round the grant
+// reserved for it is resolved by that judgement: a repair verdict spends it, and
+// a verdict that charges nothing releases it. Leaving it committed is the
+// reservation counting the round the cap does not — which is how
+// yoyodyne-ifd.349, its granted round approved and its promotion then
+// conflicted, was refused a re-run at 4 of 4 with three rounds spent.
+//
+// Whether the reservation is this attempt's is read from the decisions: a grant
+// is carried out by continuing the run it was decided about, so a granted
+// attempt is one of that run's, and a standing repair naming the attempt's run is
+// what says the round was reserved for it. An uncharged verdict in some other
+// run — a re-run started beside a grant standing on another stoppage of the item
+// — releases nothing, because the round it judged was never reserved. A
+// reservation with no repair decision standing anywhere on the record is a grant
+// recorded before decisions were durable, and that one is released by whichever
+// attempt is judged, since nothing on the record can say whose it is.
 func (s *TriageStore) RecordUnchargedVerdict(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
 		return TriageCounters{}, errors.New("a developer attempt is required to record the verdict that cost it nothing")
@@ -771,8 +842,31 @@ func (s *TriageStore) RecordUnchargedVerdict(ctx context.Context, workItemID, at
 			return errNoTriageChange
 		}
 		counters.LastJudged = attemptID
+		if counters.reservedFor(attemptID) {
+			counters.releaseReservedRounds(1)
+		}
 		return nil
 	})
+}
+
+// reservedFor reports a standing reservation being one made for the run the
+// attempt belongs to. See RecordUnchargedVerdict for the two readings.
+func (c TriageCounters) reservedFor(attemptID string) bool {
+	if c.reserved() == 0 {
+		return false
+	}
+	runID, _, _ := strings.Cut(attemptID, "#")
+	repairStanding := false
+	for _, decision := range c.Decisions {
+		if decision.Decision != TriageDecisionRepair {
+			continue
+		}
+		if decision.RunID == runID {
+			return true
+		}
+		repairStanding = true
+	}
+	return !repairStanding
 }
 
 // alreadyJudged reports an attempt a reviewer has already answered about, which
@@ -987,6 +1081,10 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, decisi
 		counters.RepairGrants++
 		counters.GrantedRounds += granted.Rounds
 		counters.CommittedRounds = counters.committed() + granted.Rounds
+		// The decision carries what it reserved, so a decision that supersedes it
+		// can release exactly that rather than everything the item stands committed
+		// to.
+		decided.Rounds = granted.Rounds
 		return counters.recordDecision(decided)
 	})
 	if err != nil {
@@ -1032,6 +1130,16 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, decisi
 		return TriageCounters{}, err
 	}
 	return s.update(ctx, workItemID, when, func(counters *TriageCounters) error {
+		// The decision is put on the record ahead of the budget it is measured
+		// against, because recording it is what releases a repair it supersedes: a
+		// re-run decided in place of a repair the harness could not carry out has
+		// to be measured against the rounds that repair reserved and nothing will
+		// spend, or it is refused for them — which is what yoyodyne-ifd.309 was.
+		// Nothing is saved on a refusal, so a decision recorded here and then
+		// refused below was never recorded.
+		if err := counters.recordDecision(decided); err != nil {
+			return err
+		}
 		// The caps as the operator's own recorded decisions leave them, for the
 		// reason a grant's are: this refusal is the one that deadlocked the
 		// escalation protocol, and an override is what crosses it.
@@ -1067,7 +1175,7 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, decisi
 			}
 		}
 		counters.Reruns++
-		return counters.recordDecision(decided)
+		return nil
 	})
 }
 

@@ -377,7 +377,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	}
 	// That the development manager granted this repair is read rather than taken
 	// on trust, and so is how much of that grant is left to carry out.
-	granted, err := c.granted(entry.WorkItemID)
+	granted, err := c.granted(entry.WorkItemID, entry.RunID)
 	if err != nil {
 		return result, err
 	}
@@ -471,7 +471,16 @@ type repairGrant struct {
 // item's runs record, and a grant with nothing left is refused: a further
 // stoppage needs a further decision, which past the cap is an escalation rather
 // than a larger budget.
-func (c RepairContinuer) granted(workItemID string) (repairGrant, error) {
+//
+// The decision standing about this stoppage is asked as well, as a re-run asks
+// it. One decision stands per stopped run, and a re-run, a wait, or an
+// escalation recorded in place of the repair released the rounds the repair
+// reserved — so a repair carried out on that run afterwards would spend
+// attempts the cap no longer holds room for, on a decision nobody holds any
+// more. A stoppage with no decision recorded about it at all is one decided
+// before decisions were durable, and the grant's footprint is still read as the
+// decision there.
+func (c RepairContinuer) granted(workItemID, runID string) (repairGrant, error) {
 	counters, err := c.Decisions.Counters(workItemID)
 	if err != nil {
 		return repairGrant{}, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
@@ -480,6 +489,11 @@ func (c RepairContinuer) granted(workItemID string) (repairGrant, error) {
 		return repairGrant{}, fmt.Errorf(
 			"triage has granted %s no repair, so there is no decision here to carry out: the development manager records the decision, which spends the item's repair budget, before the harness continues anything on it",
 			workItemID)
+	}
+	if standing, found := counters.DecisionOf(runID); found && standing.Decision != runstate.TriageDecisionRepair {
+		return repairGrant{}, fmt.Errorf(
+			"the decision standing about the stoppage of run %s is %q rather than a repair, %s: a repair recorded earlier about it was superseded by that decision and the rounds it reserved were released with it, so carrying a repair out here would spend attempts the item's record no longer holds",
+			runID, standing.Decision, standing.Cite())
 	}
 	carried, err := c.carriedOut(workItemID)
 	if err != nil {

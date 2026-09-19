@@ -6010,6 +6010,85 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	}
 }
 
+// The conflict half of yoyodyne-ifd.349's shape through the pipeline: an item
+// one round from its cap whose approving round is followed by a replay conflict.
+// The approval charges nothing, the conflict charges nothing — no verdict was
+// reached about it — and the run stops on the conflict path with the approval
+// standing on its record, so the re-run the development manager records to run
+// the change again on the moved base is permitted without an override. The
+// reservation half — the approving round was a granted continuation, and the
+// grant's reservation is released by it — is asserted where a real continuation
+// runs, at the end of TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad;
+// what this run's approval must not do is touch a reservation standing for some
+// other stoppage of the item, which it never judged.
+func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-ifd.349", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("this run's answer\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+		runPipelineGit(t, repository, "add", "docs/design.md")
+		runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	// Two rounds already spent across the item's earlier runs and a repair grant
+	// of one standing on an earlier stoppage, so the item is committed to three
+	// of the cap's four before this run reaches its reviewer.
+	caps := TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)
+	for round := range 2 {
+		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
+			t.Fatalf("RecordReviewRound() error = %v", err)
+		}
+	}
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 1, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 1 || granted.Counters.CommittedRounds != 3 {
+		t.Fatalf("grant = %+v, want one round reserved on the earlier stoppage", granted)
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "cannot be replayed onto the moved integration target") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !outcome.Blocked || outcome.Integration != nil {
+		t.Fatalf("Run() outcome = %#v, want the conflict blocking the run", outcome)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The approval stands on the stopped run: a conflict is not a verdict, and
+	// the verdict that was reached is what the decision about the stoppage reads.
+	if state.ReviewDecision != string(review.DecisionApprove) || state.ReviewRounds != 1 {
+		t.Fatalf("stopped run = decision %q, %d review round(s); want the approval standing and the one verdict it reached", state.ReviewDecision, state.ReviewRounds)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	// Neither the approval nor the conflict spent anything, and the approval
+	// released nothing either: the round it judged was this run's, and the
+	// reservation standing is the earlier stoppage's.
+	if counters.ReviewRounds != 2 || counters.CommittedRounds != 3 {
+		t.Fatalf("counters after the conflict = %d spent, %d committed; want the two earlier rounds and the other stoppage's reservation untouched", counters.ReviewRounds, counters.CommittedRounds)
+	}
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastJudged != want {
+		t.Fatalf("last judged attempt = %q, want the approved attempt %q recorded without being charged", counters.LastJudged, want)
+	}
+	// The development manager's re-run, recorded against the same cap, needs no
+	// override.
+	if _, err := store.Triage().RecordRerun(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRerun, outcome.RunID), time.Now(), caps); err != nil {
+		t.Fatalf("RecordRerun() after the approved-then-conflicted run = %v, want it permitted without an override", err)
+	}
+}
+
 func writePipelineFile(t *testing.T, root, relative, content string) {
 	t.Helper()
 	path := filepath.Join(root, relative)
