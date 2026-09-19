@@ -322,9 +322,11 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	if len(empty) != 0 {
 		t.Fatalf("List() unfiltered = %#v", empty)
 	}
+	// The cap is lifted on every listing: bd's default is a page of fifty, and a
+	// reading that decides over the whole set cannot be handed a page of it.
 	wantArgs := [][]string{
-		{"list", "--json", "--status=open"},
-		{"list", "--json"},
+		{"list", "--json", "--limit=0", "--status=open"},
+		{"list", "--json", "--limit=0"},
 	}
 	if !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)

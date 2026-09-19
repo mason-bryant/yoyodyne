@@ -371,11 +371,20 @@ func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 	return decodeSingleWorkItem(data)
 }
 
+// unboundedListing is what bd is told so that a listing is the whole of what
+// matches rather than its first page. `bd list` caps its output at fifty rows by
+// default, and at twenty in what it takes for an agent session; zero is its
+// word for no cap. Every reading here is a decision over the whole set — which
+// work is closed, which is open, which is blocked — and a page of it decides
+// wrongly for whatever fell past the cap, so the cap is lifted on the command
+// line rather than left to bd's reading of whether its output is a terminal.
+const unboundedListing = "--limit=0"
+
 // List reports the work items Beads currently holds, optionally narrowed to one
 // status. It is read-only: nothing about listing work claims, changes, or
-// closes any of it.
+// closes any of it. It reads the whole set: see unboundedListing.
 func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
-	args := []string{"list", "--json"}
+	args := []string{"list", "--json", unboundedListing}
 	if trimmed := strings.TrimSpace(status); trimmed != "" {
 		if !statusPattern.MatchString(trimmed) {
 			return nil, fmt.Errorf("invalid Beads status %q", status)
