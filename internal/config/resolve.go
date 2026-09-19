@@ -257,9 +257,22 @@ func newResolution() *resolution {
 			// that says nothing about accounts still has runs that say which account
 			// they ran under, and naming a second one is what a project writes.
 			Accounts: map[string]Account{DefaultAccountAlias: {}},
+			// Every part of the product is present at its default whether or not
+			// a project mentions it, because the set of parts is the product's
+			// shape: what a project writes is which of them are on, and where the
+			// one that listens is reached.
+			Services: DefaultServices(),
 		},
 		origins: map[string]string{
 			"accounts":                                            OriginDefault,
+			"services.slack.enabled":                              OriginDefault,
+			"services.dashboard.enabled":                          OriginDefault,
+			"services.dashboard.port":                             OriginDefault,
+			"services.dashboard.bind":                             OriginDefault,
+			"services.dashboard.allowed_hosts":                    OriginDefault,
+			"services.dashboard.token":                            OriginDefault,
+			"services.scheduler.enabled":                          OriginDefault,
+			"services.maintenance.enabled":                        OriginDefault,
 			"product.specifications":                              OriginDefault,
 			"product.invariants":                                  OriginDefault,
 			"product.designs":                                     OriginDefault,
@@ -375,6 +388,38 @@ func (r *resolution) apply(applied layer) error {
 				r.config.Slack.Avatars[speaker] = avatar
 				r.origins["slack.avatars."+speaker] = applied.origin
 			}
+		}
+	}
+	if services := document.Services; services != nil {
+		// Each service overrides field by field, the way execution does: a layer
+		// that switches the dashboard on has said nothing about its port.
+		if slack := services.Slack; slack != nil {
+			setValue(r.origins, "services.slack.enabled", slack.Enabled, &r.config.Services.Slack.Enabled, applied.origin)
+		}
+		if dashboard := services.Dashboard; dashboard != nil {
+			setValue(r.origins, "services.dashboard.enabled", dashboard.Enabled, &r.config.Services.Dashboard.Enabled, applied.origin)
+			setValue(r.origins, "services.dashboard.port", dashboard.Port, &r.config.Services.Dashboard.Port, applied.origin)
+			if dashboard.Bind != nil {
+				r.config.Services.Dashboard.Bind = strings.TrimSpace(*dashboard.Bind)
+				r.origins["services.dashboard.bind"] = applied.origin
+			}
+			// Copied rather than aliased, like the check list: a layer's own slice
+			// must not become the resolved configuration's, or a later layer would
+			// be editing what an earlier document holds.
+			if dashboard.AllowedHosts != nil {
+				r.config.Services.Dashboard.AllowedHosts = append(make([]string, 0, len(*dashboard.AllowedHosts)), (*dashboard.AllowedHosts)...)
+				r.origins["services.dashboard.allowed_hosts"] = applied.origin
+			}
+			if dashboard.Token != nil {
+				r.config.Services.Dashboard.Token = DashboardTokenSource(strings.TrimSpace(string(*dashboard.Token)))
+				r.origins["services.dashboard.token"] = applied.origin
+			}
+		}
+		if scheduler := services.Scheduler; scheduler != nil {
+			setValue(r.origins, "services.scheduler.enabled", scheduler.Enabled, &r.config.Services.Scheduler.Enabled, applied.origin)
+		}
+		if maintenance := services.Maintenance; maintenance != nil {
+			setValue(r.origins, "services.maintenance.enabled", maintenance.Enabled, &r.config.Services.Maintenance.Enabled, applied.origin)
 		}
 	}
 	// A supplied operators mapping replaces the inherited one entirely, for the

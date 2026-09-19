@@ -363,6 +363,8 @@ approvals:
 
 	renderScaffoldReporting(&builder)
 
+	renderScaffoldServices(&builder, effective.Services)
+
 	renderScaffoldRecurring(&builder)
 
 	renderScaffoldChecks(&builder, detection)
@@ -482,6 +484,73 @@ func renderScaffoldReporting(builder *strings.Builder) {
 #       - own-intent
 #       - direct-work
 `, slackGuide)
+}
+
+// renderScaffoldServices writes the parts of the product, every one of them
+// present and at its default, live rather than commented: the section is the
+// product's shape rather than an option, and a file that showed only the parts
+// that happened to be on would be a file whose reader could not see what else
+// there is. Which parts are on is the one thing here worth deciding, and the
+// comment says why each default is what it is.
+func renderScaffoldServices(builder *strings.Builder, services Services) {
+	fmt.Fprintf(builder, `
+# The parts of this product, and whether each one runs. Slack, the dashboard,
+# the scheduler, and the maintenance pass are declared here so that a person
+# starts the product once and its enabled parts start and stop together, rather
+# than each being a separate tool started by hand. Every part is listed whether
+# or not it is on; this is the product's shape, and "enabled" is the decision.
+#
+# The scheduler and the maintenance pass are on, because they need nothing that
+# is not already in this file -- they are the harness's own loop and its
+# self-maintenance, and a product started with neither starts nothing. Slack and
+# the dashboard are off, because each needs something arranged outside it first:
+# Slack needs the "slack" section above switched on and this project's two
+# tokens stored, and the dashboard needs a port you mean to open. Nothing here
+# widens what any part may do; a part started from this section holds exactly
+# what it holds when started by hand.
+#
+# The dashboard binds loopback and generates its token at each start, printed
+# once where you can read it. Binding an interface address instead lets another
+# device on your network open the page, and is an opt-in with a condition: a
+# token printed to one terminal is unusable from another device, so a bind
+# outside loopback has to name where its token is stored -- "keychain" or
+# "file", the two stores the Slack tokens use, under names that carry the
+# product -- and is refused at load until it does. allowed_hosts are the names,
+# beyond the bound address, a request may carry as its Host; write them without
+# a port. The token itself is never written in this file.
+services:
+  slack:
+    enabled: %t
+  dashboard:
+    enabled: %t
+    port: %d
+    bind: %s
+    allowed_hosts: %s
+    token: %s
+  scheduler:
+    enabled: %t
+  maintenance:
+    enabled: %t
+`,
+		services.Slack.Enabled,
+		services.Dashboard.Enabled,
+		services.Dashboard.Port,
+		services.Dashboard.Bind,
+		renderScaffoldList(services.Dashboard.AllowedHosts),
+		services.Dashboard.Token,
+		services.Scheduler.Enabled,
+		services.Maintenance.Enabled,
+	)
+}
+
+// renderScaffoldList writes a list of plain words inline, which for the empty
+// list a generated file carries is `[]` -- the spelling the checks placeholder
+// already teaches, and one the operator replaces whole.
+func renderScaffoldList(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	return "[" + strings.Join(values, ", ") + "]"
 }
 
 // renderScaffoldRecurring writes the recurring-task section, commented out and
