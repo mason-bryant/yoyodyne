@@ -1508,8 +1508,12 @@ Five things refuse it, all asked before anything is written, so a refused
 resume leaves the run exactly as it stopped and asking again once the cause
 has cleared resumes the same run. The run's own record has to say it is one
 of these — an approving verdict standing, no promotion, an integration stop
-recorded, the branch still there — and a run whose record says anything else
-is refused naming what it is and which verb it needs. The primary checkout has
+recorded, the branch still there, fewer than sixteen resumptions already on it
+— and a run whose record says anything else is refused naming what it is and
+which verb it needs. The sixteen is the record's own bound rather than a cap on
+the item: nothing spends toward it, and a promotion the environment has
+stopped that often needs somebody looking at the machine, after which a re-run
+is the way on. The primary checkout has
 to be one a promotion can be made from again, because it is what stopped the
 run once already. The item must not be closed or waiting on other work. And
 the preserved worktree has to be as the harness left it and still hold the

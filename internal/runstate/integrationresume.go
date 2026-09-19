@@ -27,11 +27,14 @@ import (
 	"time"
 )
 
-// MaxIntegrationResumptions bounds how many resumptions one run's record may
-// carry. Nothing in the harness spends toward it — a resumption charges no
-// budget, which is the point of it — so it is the record's own bound: an
-// environment that keeps refusing the same promotion is a machine somebody has
-// to look at, not a state file that grows until it does.
+// MaxIntegrationResumptions bounds how many times one run's integration is
+// resumed. Nothing in the harness spends toward it — a resumption charges no
+// budget, which is the point of it — so it is the record's own bound rather
+// than a cap on the item: an environment that keeps refusing the same
+// promotion sixteen times is a machine somebody has to look at, not a state
+// file that grows until it does. The resuming action refuses at it before it
+// writes anything, and the record refuses past it, so the two say the same
+// thing; a run at the bound is a re-run's or a person's.
 const MaxIntegrationResumptions = 16
 
 // ResumingIntegrationSays is what every surface says of a run resumed at its
@@ -103,6 +106,12 @@ type IntegrationResumption struct {
 	// the clearing losing the evidence of what stopped it.
 	SupersededFailure string `json:"superseded_failure,omitempty"`
 	SupersededBlocker string `json:"superseded_blocker,omitempty"`
+	// SupersededRefusal is the environmental refusal the run carried when it was
+	// resumed, where it carried one: the round that ended, settled and paid back.
+	// Re-entry clears it from the run for the reason it clears the failure — the
+	// promotion this resumes is not a round — and keeping it here is what stops
+	// the clearing losing the account of what that round cost the item.
+	SupersededRefusal *EnvironmentalRefusal `json:"superseded_refusal,omitempty"`
 }
 
 // Validate reports every contract violation in the record at once.
@@ -126,7 +135,21 @@ func (r IntegrationResumption) Validate() error {
 	if len(r.SupersededBlocker) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("superseded_blocker is %d bytes, which exceeds the %d byte bound", len(r.SupersededBlocker), MaxBlockerBytes))
 	}
+	if r.SupersededRefusal != nil {
+		if err := r.SupersededRefusal.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("superseded_refusal: %w", err))
+		}
+	}
 	return errors.Join(problems...)
+}
+
+// ResumptionsLeft reports how many more times this run's integration may be
+// resumed before the bound above refuses it.
+func (s State) ResumptionsLeft() int {
+	if left := MaxIntegrationResumptions - len(s.IntegrationResumptions); left > 0 {
+		return left
+	}
+	return 0
 }
 
 // validateIntegrationResume reports every contract violation in the record's
@@ -177,8 +200,9 @@ func (s State) ApprovedAwaitingIntegration() bool {
 
 // ResumableIntegration reports a stopped run whose integration may be resumed
 // where it stopped: it ended, its approval is standing, the environment is what
-// stopped it, and the branch that holds the approved change is still there. The
-// worktree need not be: a checkout the convergence sweep retired is put back
+// stopped it, the branch that holds the approved change is still there, and it
+// has not been resumed as many times as the record bounds. The worktree need
+// not be: a checkout the convergence sweep retired is put back
 // from the branch at the commit the run recorded, and only the branch going is
 // the end of the change. Everything else about whether it may be resumed now — the
 // checkout being clean again, the worktree being as the harness left it, the
@@ -191,7 +215,7 @@ func (s State) ResumableIntegration() bool {
 	if s.WorktreePath == "" || s.Branch == "" || s.BaseCommit == "" || s.TargetBranch == "" {
 		return false
 	}
-	return !s.BranchRemoved
+	return !s.BranchRemoved && s.ResumptionsLeft() > 0
 }
 
 // ResumingIntegration reports a run that is at its promotion again after an

@@ -232,8 +232,12 @@ attempt, so the repair count and the review evidence are exactly what the
 reviewer left, and every counter on the item's triage record stands where the
 review left it. While the promotion is going, `yoyo status` says
 **approved, resuming integration** of the run rather than the bare phase. A
-run can be resumed as many times as the environment stops it; the one thing
-that leaves the path is a replay that conflicts, which re-enters the conflict
+run can be resumed each time the environment stops it, up to sixteen times —
+a bound on the run's record rather than a cap on the item, refused before
+anything is written, because an environment that has refused one promotion
+that often is a machine somebody has to look at rather than a run to resume
+again. The one thing that leaves the path before that is a replay that
+conflicts, which re-enters the conflict
 path above — the run stops, both sides survive, and a person decides — and is
 never recorded as a stop the harness can resume past. Before this existed
 every verb that could pick such a run up spent something for it, and

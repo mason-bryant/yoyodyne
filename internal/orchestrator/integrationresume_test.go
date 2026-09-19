@@ -208,7 +208,7 @@ func (h *resumeHarness) closure(t *testing.T) (triage.Closure, bool) {
 func (h *resumeHarness) assertNothingWritten(t *testing.T) {
 	t.Helper()
 	state := h.reload(t)
-	if state.Status != runstate.StatusFailed || len(state.IntegrationResumptions) != 0 || (state.IntegrationStop == nil) != (h.recorded.IntegrationStop == nil) {
+	if state.Status != runstate.StatusFailed || len(state.IntegrationResumptions) != len(h.recorded.IntegrationResumptions) || (state.IntegrationStop == nil) != (h.recorded.IntegrationStop == nil) {
 		t.Fatalf("a refused resumption changed the run: %s/%s, resumptions %#v, stop %#v", state.Status, state.Phase, state.IntegrationResumptions, state.IntegrationStop)
 	}
 	if len(h.tracker.calls) != 0 {
@@ -280,6 +280,11 @@ func TestAResumptionMakesTheStoppedRunLiveAtItsPromotionChargingNothing(t *testi
 	}
 	if state.IntegrationStop != nil || state.Failure != "" || state.Blocker != "" || state.Environmental != nil {
 		t.Fatalf("resumed run still carries its stop: stop %#v failure %q blocker %q environmental %#v", state.IntegrationStop, state.Failure, state.Blocker, state.Environmental)
+	}
+	// The refusal the round settled is carried onto the resumption rather than
+	// lost with the clearing: it is the account of what that round cost the item.
+	if resumed.SupersededRefusal == nil || resumed.SupersededRefusal.Cause != runstate.CauseDirtyPrimary || !resumed.SupersededRefusal.Settled {
+		t.Fatalf("resumption = %#v, want the settled environmental refusal carried onto it", resumed.SupersededRefusal)
 	}
 	// The item was told and put back, and the docket entry closed in the
 	// harness's name rather than left for the development manager to decide.
@@ -359,6 +364,32 @@ func TestAResumptionIsRefusedForARunThatIsNotAnApprovedChangeTheEnvironmentStopp
 			}
 			harness.assertNothingWritten(t)
 		})
+	}
+}
+
+// The bound on one run's resumptions is asked before anything is written,
+// because the save that would refuse it comes after the item has been put back
+// — which is the half-made state the ordering exists to prevent.
+func TestAResumptionAtTheBoundIsRefusedBeforeAnythingIsWritten(t *testing.T) {
+	t.Parallel()
+
+	state := approvedStoppedState()
+	for index := 0; index < runstate.MaxIntegrationResumptions; index++ {
+		state.IntegrationResumptions = append(state.IntegrationResumptions, runstate.IntegrationResumption{
+			Cause: runstate.CauseDirtyPrimary, Reason: "resumed", ResumedAt: docketedNow.Add(-time.Duration(index+1) * time.Hour),
+		})
+	}
+	if state.ResumableIntegration() || state.ResumptionsLeft() != 0 {
+		t.Fatalf("a run at the bound reads as resumable: left %d", state.ResumptionsLeft())
+	}
+	harness := newResumeHarness(t, state)
+	_, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if !errors.Is(err, ErrNotResumable) || !strings.Contains(err.Error(), "the bound on one run's resumptions") {
+		t.Fatalf("Resume() error = %v, want the bound refused by name", err)
+	}
+	harness.assertNothingWritten(t)
+	if reloaded := harness.reload(t); len(reloaded.IntegrationResumptions) != runstate.MaxIntegrationResumptions {
+		t.Fatalf("resumptions = %d, want the record untouched at the bound", len(reloaded.IntegrationResumptions))
 	}
 }
 

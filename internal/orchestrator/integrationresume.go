@@ -412,6 +412,15 @@ func resumableStop(prior runstate.State) error {
 	if prior.ReviewDecision != runstate.ReviewApprove || strings.TrimSpace(prior.ReviewSessionID) == "" {
 		return fmt.Errorf("%w: run %s has no approving verdict standing, so there is nothing here authorized to promote; `yoyo triage repair` and `yoyo triage rerun` are what a change that was not approved needs", ErrNotResumable, prior.RunID)
 	}
+	// The bound on resumptions is asked here, before anything is written, rather
+	// than met at the save that would refuse it: a refusal there would come after
+	// the item had been put back, which is the half-made state the ordering above
+	// exists to prevent. Sixteen environmental stops of one promotion is not a
+	// promotion the environment is going to let through, and what it needs is a
+	// person looking at the machine.
+	if prior.ResumptionsLeft() == 0 {
+		return fmt.Errorf("%w: run %s has been resumed %d times, which is the bound on one run's resumptions; an environment that has stopped the same promotion that often is a machine somebody has to look at, and `yoyo triage rerun` is what starts the item over once it is right", ErrNotResumable, prior.RunID, len(prior.IntegrationResumptions))
+	}
 	if prior.IntegrationStop == nil {
 		return fmt.Errorf("%w: run %s stopped after its approval for something the environment does not answer for — %s — so it is a person's to decide about", ErrNotResumable, prior.RunID, singleLine(nonEmpty(prior.Failure, prior.Blocker, "the record names no failure"), 240))
 	}
@@ -458,6 +467,7 @@ func (r IntegrationResumer) supersedeOnRun(prior runstate.State, reason string) 
 			ResumedAt:         r.now(),
 			SupersededFailure: prior.Failure,
 			SupersededBlocker: prior.Blocker,
+			SupersededRefusal: prior.Environmental,
 		})
 	// The stop is superseded by the resumption that carries it, and the run that
 	// is going again has neither failed nor stopped: a terminal run whose blocker
@@ -468,7 +478,7 @@ func (r IntegrationResumer) supersedeOnRun(prior runstate.State, reason string) 
 	resumed.Failure = ""
 	// The environmental refusal on the record belongs to the round that ended;
 	// that round settled and was paid back, and the promotion this resumes is not
-	// a round at all.
+	// a round at all. It is carried onto the resumption above rather than lost.
 	resumed.Environmental = nil
 	resumed.Status = runstate.StatusRunning
 	resumed.Phase = runstate.PhaseIntegrating
