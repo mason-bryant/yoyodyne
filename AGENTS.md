@@ -179,6 +179,41 @@ not a licence for a developer run to run `bd update`, which
 guard is still wired into developer runs because a hook that is present
 everywhere is one nobody has to remember to install.
 
+## A tracker status is never moved backwards without a note
+
+**`bd update <id> --status=...` on its own moves a status and records nothing
+about what moved it. Put the account on the same command, with `--append-notes`,
+and never reopen an item that closed because its change merged.**
+
+```bash
+bd update <id> --status=open --append-notes="released for the repair the development manager handed back at turn N"   # says what moved it
+bd update <id> --status=open                                                                                        # silent; REFUSED by the guard
+```
+
+On 2026-09-18 four items were moved backwards this way inside a day, none of
+them carrying a word about it: yoyodyne-ifd.297 and .349, closed on confirmed
+forge merges, read as open again; yoyodyne-ifd.272 and .187, escalated to a
+person, read as released. The writer was not a merge of the export -- nothing
+merges it; the harness copies it one way, primary checkout to worktree, and
+holds it out of every change -- but an operator's script outside the repository
+that ran `bd update <id> --status=open` ahead of `yoyo triage rerun` on a queue
+of decisions that had already been carried out. The verb refused, correctly, and
+the status had already moved.
+`docs/diagnoses/yoyodyne-ifd-392-status-rewrites-by-the-carry-out-queue.md`
+matches each rewrite to the firing that made it.
+
+Every status the harness sets carries its account on the same invocation --
+`Block`, `Unblock`, `Reopen`, and the claim's own stale-block correction in
+`internal/beads/client.go` each pass `--status` and `--append-notes` together --
+and a re-run or repair verb claims the item itself and clears a stale blocked
+status with a note as it does, so nothing has to open an item ahead of asking
+the harness to run it. `yoyo goals guard` refuses a `bd update --status` that
+appends no note, and `bd reopen`, before either runs; it decides from the
+command line alone and cannot read which way the move goes, so it asks for a
+note on every status set there and passes `--claim`. A script is a command line
+the guard does not see inside, which is why this rule binds whoever writes the
+script as well as whoever types the command.
+
 ## A developer run writes its scratch files to the directory it was given
 
 **The harness cuts every developer run its own directory, outside that run's

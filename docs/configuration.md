@@ -1458,7 +1458,13 @@ takes the goal recorded in them with it; a replacement carrying a
 `Goal served:` line through is allowed, because that one destroys nothing. It
 decides from the command line alone and never reads the item, so it checks such a
 line is present and not that it is the item's own — a substitution passes it, and
-the witness rather than the guard is what holds the words that were replaced. The
+the witness rather than the guard is what holds the words that were replaced. It
+also refuses `bd update <id> --status=...` with no `--append-notes` on the same
+command: a status set with no note saying what moved it is the other silent
+rewrite, the one that on 2026-09-18 reopened two items closed on confirmed merges
+and released two escalations with nothing on any of them saying so. The
+direction of a move is not readable from the line, so a note is asked for on
+every status set there; `--claim` is not a status set and passes. The
 harness gives it to every developer run it makes on the Claude Code backend,
 which is the backend that passes the hook; any other agent session is covered
 only by wiring the same command into that session's own hooks. It is passed to
@@ -1470,7 +1476,7 @@ yoyo goals list          # the goals work may be attributed to, their identities
 yoyo goals attribution   # what each work item the tracker holds says it is for
 yoyo goals witness       # witness the goals already recorded on work items
 yoyo goals reattribute   # move an attribution off the wording and onto the goal's identity
-yoyo goals guard         # refuse a command that would replace notes and destroy a goal
+yoyo goals guard         # refuse a command that would replace notes and destroy a goal, or set a status with no note
 ```
 
 `attribution` exits non-zero for an item whose attribution is `unresolved` or

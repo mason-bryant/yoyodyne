@@ -92,6 +92,8 @@ func TestOrdinaryCommandsAndTheAppendingWriterPassUnremarked(t *testing.T) {
 
 	for _, allowed := range []string{
 		`bd update yoyodyne-ifd.45 --append-notes="what I did"`,
+		// Not this rule's to refuse: it destroys no attribution. The status
+		// guard beside this one is what refuses it, for what it leaves unsaid.
 		`bd update yoyodyne-ifd.45 --status=open`,
 		`bd create --title="A new item" --notes="Goal served: nothing yet"`,
 		`bd show yoyodyne-ifd.45 --json`,

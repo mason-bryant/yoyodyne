@@ -38,8 +38,9 @@ const defaultIdleTimeout = 5 * time.Minute
 // because this is the settings source the harness owns. A developer run has
 // Bash and is told to record its work with the tracker, so it is the most
 // routine path to `bd update <id> --notes`, which replaces an item's notes and
-// takes the goal recorded in them with it; `yoyo goals guard` reads the command
-// and refuses that one. It rests on `yoyo` being on the PATH of the run, which
+// takes the goal recorded in them with it, and to `bd update <id> --status`
+// with no note saying what moved the status; `yoyo goals guard` reads the
+// command and refuses both. It rests on `yoyo` being on the PATH of the run, which
 // is where the harness itself was invoked from -- and where it is not, Claude
 // Code reports the hook as failed and runs the command, which is the behaviour
 // there was before this. The guard can therefore be missing, but not wrong.

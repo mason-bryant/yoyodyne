@@ -137,7 +137,7 @@ the item.
 ./bin/yoyo goals attribution   # what each work item the tracker holds says it is for
 ./bin/yoyo goals witness       # witness the goals already recorded on work items
 ./bin/yoyo goals reattribute   # move an attribution off the wording and onto the goal's identity
-./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
+./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal, or set a status with no note
 ```
 
 No command there decides what a piece of work is for, for the same reason
@@ -195,7 +195,16 @@ when the notes genuinely have to be rewritten. It decides from the command line
 alone and never reads the item, which is what keeps it from waiting on a locked
 tracker in front of every command an agent runs; the price is that it checks such
 a line is present and not that it is the item's own, so a statement invented in
-the replacement passes and the witness is what catches it. The harness gives the
+the replacement passes and the witness is what catches it. The same guard refuses
+`bd update <id> --status=...` with no `--append-notes` on the same command: a
+status set with no note saying what moved it is the other silent rewrite, and on
+2026-09-18 it moved four items backwards — two closed on confirmed merges, two
+escalated to a person — with nothing on any of them saying so
+(`docs/diagnoses/yoyodyne-ifd-392-status-rewrites-by-the-carry-out-queue.md`).
+The direction of a move is not readable from the command line, so a note is asked
+for on every status set there; `--claim` is not a status set and passes. The
+harness's own writers already carry the account on the same invocation, so the
+rule costs them nothing. The harness gives the
 guard to every developer run it makes on the Claude Code backend, which is where
 the hook is passed; an interactive session in your own repository gets it by
 wiring the same command as a `PreToolUse` hook on `Bash` in

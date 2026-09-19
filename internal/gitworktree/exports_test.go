@@ -70,6 +70,68 @@ func TestCreatedWorktreeCarriesThePrimaryCheckoutsExport(t *testing.T) {
 	}
 }
 
+// The 297 shape as the development manager hypothesised it -- an item closed on
+// its merge, and a worktree cut earlier still carrying the export from when the
+// item was open -- replayed to show the export path cannot be the writer. The
+// refresh is one way: the primary checkout's copy goes into a worktree, nothing
+// goes back, and the copy is held out of every change, so an older copy cannot
+// reach the target branch or the primary by any route a run takes. The status
+// stays closed everywhere that is read. What did reopen 297 was a `bd update
+// --status=open` typed against the store, which is the writer the guard in
+// internal/beads/statusguard.go refuses; this test pins the half of the
+// hypothesis that was checked and found not to be the cause
+// (docs/diagnoses/yoyodyne-ifd-392-status-rewrites-by-the-carry-out-queue.md).
+func TestAnOlderWorktreeCopyNeverMovesAnItemsStatusBackwards(t *testing.T) {
+	t.Parallel()
+
+	const (
+		openItem   = `{"id":"yoyodyne-ifd.297","status":"open"}` + "\n"
+		closedItem = `{"id":"yoyodyne-ifd.297","status":"closed","closed_at":"2026-09-15T18:41:15Z"}` + "\n"
+	)
+	repository := newExportRepository(t)
+	manager := newExportManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	// The worktree is cut while the item is open, so its copy says so.
+	writeFile(t, repository, exportPath, openItem)
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-ifd.223", BaseRef: "main", TargetBranch: "main"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if content := readFile(t, worktree.Path, exportPath); content != openItem {
+		t.Fatalf("worktree export = %q, want the copy from when the item was open %q", content, openItem)
+	}
+
+	// Then the item is closed on its merge, which the store records and the
+	// primary checkout's copy reflects. The worktree's copy is now the older side.
+	writeFile(t, repository, exportPath, closedItem)
+
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	promoted := gitOutput(t, repository, "show", "--name-only", "--format=", integration.SourceCommit)
+	if strings.Contains(promoted, exportPath) {
+		t.Fatalf("the worktree's older export was promoted with the change: %s", promoted)
+	}
+	if committed := gitOutput(t, repository, "show", "main:"+exportPath); committed != committedExport {
+		t.Fatalf("target's export = %q, want the committed copy %q untouched by the older worktree copy", committed, committedExport)
+	}
+	if content := readFile(t, repository, exportPath); content != closedItem {
+		t.Fatalf("primary checkout's export = %q, want the item still closed %q", content, closedItem)
+	}
+
+	// And the next worktree cut reads the item closed, because what it is given
+	// is the primary checkout's copy and not any run's.
+	later, err := manager.Create(context.Background(), CreateRequest{RunID: "run-" + strings.Repeat("b", 32), WorkItemID: "yoyodyne-ifd.224", BaseRef: "main", TargetBranch: "main"})
+	if err != nil {
+		t.Fatalf("Create() for the later run error = %v", err)
+	}
+	if content := readFile(t, later.Path, exportPath); content != closedItem {
+		t.Fatalf("later worktree export = %q, want the item closed %q", content, closedItem)
+	}
+}
+
 func TestReplayCrossesATargetThatCommittedANewExport(t *testing.T) {
 	t.Parallel()
 
