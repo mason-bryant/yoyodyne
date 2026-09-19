@@ -51,6 +51,8 @@ var terminalEventSites = map[string]string{
 		"one that names none nowhere, asserted by TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot",
 	"internal/chat/activity.go": "reads them: a conversation's activity line says a turn finished, and attributes no " +
 		"money to any phase",
+	"internal/runstate/stream.go": "reads them: the spend report prices each terminal on the local day it happened " +
+		"and by the stream that recorded it, and attributes no money to any phase",
 }
 
 // TestEveryTerminalEventSiteIsAccountedFor fails when the tree grows a file that

@@ -116,7 +116,7 @@ func TestBranchReviewStoreKeepsTheEventStreamOfItsInvocation(t *testing.T) {
 			t.Errorf("events[%d] = %#v", index, event)
 		}
 	}
-	// The stream is where `yoyo-status` looks for it: this store's own directory,
+	// The stream is where `yoyo status --follow` looks for it: this store's own directory,
 	// named for the review, beside the runs rather than among them.
 	expected := filepath.Join(root, "products", "yoyodyne", "branch-reviews", branchReviewID+".events.jsonl")
 	if _, err := os.Stat(expected); err != nil {

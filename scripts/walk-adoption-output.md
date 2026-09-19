@@ -183,8 +183,9 @@ ok  	github.com/mason-bryant/yoyodyne/internal/gitworktree	0.366s
   ok: nothing is inherited from the built-in bundle
 
 === 11. following a run or a conversation
-  ok: yoyo-status honors YOYODYNE_STATE_HOME
-  ok: yoyo-status honors XDG_STATE_HOME by appending yoyodyne
+  ok: yoyo status --list honors YOYODYNE_STATE_HOME
+  ok: yoyo status --list honors XDG_STATE_HOME by appending yoyodyne
+  ok: yoyo status --spend reports on a machine with nothing recorded
 
 === 12. drive it from the conversation
 skipped: set WALK_PROVIDER=1 to invoke the provider on this step.
