@@ -141,12 +141,17 @@ func TestARunningSinkRecordsWhatItIsAndForgetsItOnTheWayOut(t *testing.T) {
 	}
 
 	cancel()
+	// The bound is generous on purpose. Every wait inside Run honours the
+	// context, so what this guards against is a Run that never returns, and a
+	// tight bound is met instead by a machine running the whole tree's race
+	// suites at once: on 2026-09-19 a five-second bound failed the harness's
+	// check with Run still on its way out, over nothing the sink did.
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Run() did not return")
 	}
 

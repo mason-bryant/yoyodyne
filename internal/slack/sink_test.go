@@ -961,7 +961,9 @@ func TestStoppingTheSinkStopsIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run() error = %v, want a stopped sink to be a clean exit", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
+		// Generous for the reason the presence test's bound is: the guard is
+		// against a Run that never returns, and a loaded race run is not that.
 		t.Fatal("Run() did not return after its context ended")
 	}
 }
