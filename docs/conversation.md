@@ -1488,11 +1488,11 @@ nobody disputed. Five overrides were signed on yoyodyne-ifd.309 that way, four
 of them for the environment.
 
 So the harness records such a stop for what it is. As the run ends it reads
-the error that ended it — the dirty-checkout sentinel, or the same closed
-reading of a transport failure the [recovery
-rule](operations.md#recovering-interrupted-runs) waits out elsewhere — and
-where the change was approved and nothing was promoted, it writes an
-*integration stop* on the run: the cause and the step. The docket entry carries
+the error that ended it — a dirty checkout by the worktree manager's sentinel,
+a transport that did not answer by the same closed reading of the error's
+text the [recovery rule](operations.md#waiting-out-a-network-that-dropped)
+waits out elsewhere — and where the change was approved and nothing was
+promoted, it writes an *integration stop* on the run: the cause and the step. The docket entry carries
 it too, names the harness as the next mover, and prints the command. The
 resume then makes the run live again at exactly that step, with the approval
 it already has, and the pipeline promotes — replay onto where the target now
@@ -1504,18 +1504,29 @@ integration** of the run while it promotes, and the item's notes carry the
 harness's own account of the stop it superseded, plus whatever `--reason` you
 gave beside it, attributed to the command rather than to any role.
 
-Six things refuse it, all asked before anything is written, so a refused
+Five things refuse it, all asked before anything is written, so a refused
 resume leaves the run exactly as it stopped and asking again once the cause
 has cleared resumes the same run. The run's own record has to say it is one
 of these — an approving verdict standing, no promotion, an integration stop
-recorded — and a run whose record says anything else is refused naming what
-it is and which verb it needs. The primary checkout has to be one a promotion
-can be made from again, because it is what stopped the run once already. The
-preserved worktree has to be as the harness left it and still hold the
+recorded, the branch still there — and a run whose record says anything else
+is refused naming what it is and which verb it needs. The primary checkout has
+to be one a promotion can be made from again, because it is what stopped the
+run once already. The item must not be closed or waiting on other work. And
+the preserved worktree has to be as the harness left it and still hold the
 approved change, on the same two conditions a repair asks and to the same
-person. The item must not be closed or waiting on other work. And your hold on
-intake applies, for the reason it applies to a repair: the harness is choosing
-to carry work on. A full harness waits rather than refusing.
+person — two refusals, asked last. Two more things are waits rather than
+refusals, and write nothing: your hold on intake applies, for the reason it
+applies to a repair, and a full harness waits for a slot.
+
+A worktree the [convergence sweep](operations.md#recovering-interrupted-runs)
+retired while the run stood stopped is neither. The branch still holds the
+reviewed commit, so the resume puts the checkout back from the branch at
+exactly that commit — after the waits, because it is the one write made before
+the re-entry — and records on the run that the checkout is back as it does so,
+so a refusal past it leaves a stopped run whose worktree is there again rather
+than a record that says it is gone. A branch that has moved past the recorded
+commit, or a sweep that captured uncommitted work off the directory, refuses
+to a person: what a restored checkout would promote is not what was reviewed.
 
 One thing leaves the resumed path, and it leaves it exactly as it always did:
 a replay onto a target that moved re-earns the checks and the review like any

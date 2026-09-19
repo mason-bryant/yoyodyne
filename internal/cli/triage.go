@@ -732,12 +732,17 @@ each spend something for it -- a repair grant for a run with no findings, or a
 fresh run and a fresh review for a change nobody disputed. This one resumes the
 run at the promotion it stopped in, with the approval it already has, and
 charges the item nothing: no review round, no repair grant, no re-run. The run's
-record says which stop it was, from the error that ended the run rather than from
-a reading of the prose afterwards, and a run whose record says anything else is
-refused naming what it is. It is refused while the primary checkout is still not
-one a promotion can be made from, refused to a person if the preserved worktree
-is not as the harness left it or holds none of the approved change, and it waits
-rather than refusing when the harness is full. The one thing that leaves the
+record says which stop it was, read from the error that ended the run rather
+than from the prose afterwards -- a dirty checkout by its sentinel, a transport
+that did not answer by the recovery rule's closed reading of the error -- and a
+run whose record says anything else is refused naming what it is. It is refused
+while the primary checkout is still not one a promotion can be made from,
+refused to a person if the preserved worktree is not as the harness left it or
+holds none of the approved change, and it waits rather than refusing when the
+harness is full. A worktree the convergence sweep retired while the run stood
+stopped is put back from the branch at the reviewed commit, and the run resumed
+in it; a branch that moved past that commit, or a sweep that captured
+uncommitted work, refuses to a person. The one thing that leaves the
 resumed path is a replay onto a target that moved: that re-earns the checks and
 the review exactly as any replay does, and a replay that conflicts stops the run
 for a person exactly as it always did. "yoyo status" says "approved, resuming

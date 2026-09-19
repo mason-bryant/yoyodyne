@@ -1296,8 +1296,10 @@ type State struct {
 	// was approved and before that change was promoted: a dirty primary checkout,
 	// a tracker or a forge that did not answer, a network that went away. It is
 	// what says the run is resumable at the step it stopped in with its approval
-	// standing, and it is written where the run fails, from the error's own
-	// sentinel, so nothing decides it from prose afterwards. Absent is every run
+	// standing, and it is written where the run fails, from the error that ended
+	// it — a dirty checkout by its sentinel, a transport that did not answer by
+	// the recovery package's closed reading — so nothing decides it from the
+	// run's prose afterwards. Absent is every run
 	// the environment did not stop there, which is nearly all of them. See
 	// integrationresume.go.
 	IntegrationStop *IntegrationStop `json:"integration_stop,omitempty"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -284,5 +285,71 @@ func TestRetiringAWorktreeThisManagerDoesNotOwnIsRefused(t *testing.T) {
 
 	if _, err := manager.RemovePreservedWorktree(context.Background(), worktree, CaptureUncommittedWork); err == nil {
 		t.Fatal("RemovePreservedWorktree() removed a path this manager does not own")
+	}
+}
+
+// A retired worktree is put back from its branch at the commit the harness
+// recorded, registered, clean, and owned exactly as it was: the reviewed change
+// is on the branch, so a checkout the sweep took is a directory to recreate.
+func TestARetiredWorktreeIsRestoredFromItsBranchAtTheRecordedCommit(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree := preservedWorktree(t, manager, "yoyodyne-restored")
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+	if removal, err := manager.RemovePreservedWorktree(context.Background(), worktree, KeepUncommittedWork); err != nil || !removal.Removed {
+		t.Fatalf("RemovePreservedWorktree() = %#v, error = %v", removal, err)
+	}
+
+	restored, err := manager.RestoreWorktree(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("RestoreWorktree() error = %v", err)
+	}
+	if restored.Path != worktree.Path || restored.Branch != worktree.Branch || restored.HarnessCommit != worktree.HarnessCommit {
+		t.Fatalf("restored = %#v, want the worktree back where it was", restored)
+	}
+	// What is in it is the reviewed commit, and every check the harness makes of
+	// an owned worktree passes on it.
+	if err := manager.VerifyOwnedHead(context.Background(), restored); err != nil {
+		t.Fatalf("VerifyOwnedHead() error = %v", err)
+	}
+	changed, err := manager.ChangedPaths(context.Background(), restored)
+	if err != nil || !reflect.DeepEqual(changed, []string{"feature.txt"}) {
+		t.Fatalf("ChangedPaths() = %#v, error = %v; want the reviewed change back", changed, err)
+	}
+	// Restoring what is already there is refused rather than doubled.
+	if _, err := manager.RestoreWorktree(context.Background(), worktree); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("second RestoreWorktree() error = %v, want the standing worktree refused", err)
+	}
+}
+
+// A branch that has moved past the recorded commit is not the reviewed change,
+// so nothing is restored from it; and a worktree nobody recorded a harness
+// commit for has no commit to restore at.
+func TestRestoringAWorktreeWhoseBranchMovedIsRefused(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree := preservedWorktree(t, manager, "yoyodyne-moved")
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+	writeFile(t, worktree.Path, "later.txt", "somebody kept going\n")
+	harnessCommit(t, worktree.Path, "yoyodyne: a later commit")
+	if removal, err := manager.RemovePreservedWorktree(context.Background(), worktree, KeepUncommittedWork); err != nil || !removal.Removed {
+		t.Fatalf("RemovePreservedWorktree() = %#v, error = %v", removal, err)
+	}
+	if _, err := manager.RestoreWorktree(context.Background(), worktree); err == nil || !strings.Contains(err.Error(), "not at the commit the harness recorded") {
+		t.Fatalf("RestoreWorktree() error = %v, want the moved branch refused", err)
+	}
+	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+		t.Fatalf("a refused restore left a directory behind: %v", err)
+	}
+	unrecorded := worktree
+	unrecorded.HarnessCommit = ""
+	if _, err := manager.RestoreWorktree(context.Background(), unrecorded); err == nil || !strings.Contains(err.Error(), "recorded none") {
+		t.Fatalf("RestoreWorktree() error = %v, want a run with no recorded commit refused", err)
 	}
 }

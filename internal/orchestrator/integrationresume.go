@@ -11,6 +11,15 @@ package orchestrator
 // None of that is a verdict on the work, and none of it is a question a
 // development manager answers.
 //
+// The cause is read off the error that ended the run and never off the run's
+// prose afterwards, and it is read two ways: a dirty checkout by the sentinel
+// the worktree manager declares, and a transport that did not answer by the
+// recovery package's closed reading of the error — the same reading that
+// decides what the harness waits out and asks again at the boundaries that have
+// a window, applied here to a step that has none. A worktree the convergence
+// sweep retires while the run stands stopped is not a cause at all but a
+// condition met at resume, and it is put back from the branch.
+//
 // Every verb that could pick such a run up before this existed spent something
 // for it. A repair needs a failure returned to the developer and there was none,
 // so it was refused; a re-run starts the item over and buys a fresh run and a
@@ -29,11 +38,18 @@ package orchestrator
 // record has to say the run is one of these; the checkout has to be one a
 // promotion can be made from, because the run was refused for exactly that once
 // already and re-entering it into the same refusal would make the run live for
-// nothing; the worktree has to be as the harness left it and still hold the
-// change, because what is promoted is whatever is in it; the item has to be one
-// a run may continue on; and the harness has to have room. Then the item is put
-// back, the run is made live at the integrating phase, and the pipeline is asked
-// to continue exactly that run.
+// nothing; the item has to be one a run may continue on; and the harness has to
+// have room. Then the worktree: as the harness left it and still holding the
+// change, because what is promoted is whatever is in it. A worktree the
+// convergence sweep retired while the run stood stopped is put back first, from
+// the branch at the commit the run recorded — the branch still holds every
+// commit the reviewer approved, so a retired checkout is a directory to
+// recreate rather than a change to re-derive. That restore is the one write
+// made before the re-entry, and it is recorded on the run as it is made, so a
+// refusal after it leaves a stopped run whose checkout is back rather than a
+// record that says the checkout is gone. Then the item is put back, the run is
+// made live at the integrating phase, and the pipeline is asked to continue
+// exactly that run.
 //
 // # What it charges
 //
@@ -52,6 +68,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -63,10 +80,17 @@ import (
 // checkout and made live again into the same checkout would stop again before
 // it promoted anything, with its record saying it was resumed.
 //
+// RestoreWorktree puts a retired worktree back from its branch at the commit the
+// run recorded, which the repair action has no equivalent of: a repair hands a
+// developer whatever the checkout holds, and a checkout that was retired holds
+// nothing to hand; a resumption promotes the reviewed commit, and that commit is
+// on the branch whatever became of the directory.
+//
 // It is satisfied by gitworktree.Manager.
 type ResumeWorktrees interface {
 	RepairWorktrees
 	ValidateReady(ctx context.Context) error
+	RestoreWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Worktree, error)
 }
 
 // ResumeDocket is the docket the resumption reads its stoppage from and settles
@@ -129,6 +153,9 @@ type IntegrationResumeResult struct {
 	// Reason is what the run and the item record as why this resumption exists.
 	Reason  string `json:"reason"`
 	Resumed bool   `json:"resumed"`
+	// WorktreeRestored says the worktree the convergence sweep had retired was
+	// put back from the branch before the run was resumed, at the path named.
+	WorktreeRestored bool `json:"worktree_restored,omitempty"`
 	// SupersededFailure and SupersededBlocker are what the run ended on, in the
 	// words they were recorded in.
 	SupersededFailure string `json:"superseded_failure,omitempty"`
@@ -152,6 +179,11 @@ type IntegrationResumeResult struct {
 // unwraps to: it is not an approved change the environment stopped short of its
 // promotion, so what it needs is one of the other triage verbs or a person.
 var ErrNotResumable = errors.New("the stopped run is not an approved change the environment stopped short of its promotion")
+
+// ErrWorktreeNotRestored is what a resumption refused because a retired worktree
+// could not be put back unwraps to. Nothing was written: the run is still
+// stopped, and the branch still holds the approved change.
+var ErrWorktreeNotRestored = errors.New("the retired worktree could not be restored from its branch")
 
 // ErrCheckoutNotReady is what a resumption refused for the primary checkout
 // unwraps to. Nothing was written: the run is still stopped, the checkout is
@@ -217,15 +249,6 @@ func (r IntegrationResumer) Resume(ctx context.Context, request IntegrationResum
 	if err := r.Worktrees.ValidateReady(ctx); err != nil {
 		return result, CheckoutNotReadyError{RunID: prior.RunID, Cause: err}
 	}
-	// Then the worktree, on both of the repair action's conditions: as the harness
-	// left it, and still holding the change. What is promoted is whatever is in
-	// it, so both are a person's to decide about where they do not hold.
-	if err := r.Worktrees.VerifyOwnedHead(ctx, worktreeOf(prior)); err != nil {
-		return result, WorktreeSurgeryError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
-	}
-	if err := preservedChangeHeld(ctx, r.Worktrees, prior); err != nil {
-		return result, MissingPreservedChangeError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
-	}
 	if err := noRunInFlight(r.Runs, entry.WorkItemID); err != nil {
 		return result, err
 	}
@@ -257,6 +280,28 @@ func (r IntegrationResumer) Resume(ctx context.Context, request IntegrationResum
 		result.CapacityFull = &full
 		return result, nil
 	}
+	// A worktree the sweep retired is put back before it is asked anything. It is
+	// asked after the waits above rather than before them, because it is the one
+	// thing here that writes before the re-entry: a held intake or a full harness
+	// must leave the run exactly as it stopped, and a restore made and then waited
+	// on would not.
+	if prior.WorktreeRemoved {
+		restored, err := r.restoreWorktree(ctx, prior)
+		if err != nil {
+			return result, err
+		}
+		prior = restored
+		result.WorktreeRestored = true
+	}
+	// Then the worktree, on both of the repair action's conditions: as the harness
+	// left it, and still holding the change. What is promoted is whatever is in
+	// it, so both are a person's to decide about where they do not hold.
+	if err := r.Worktrees.VerifyOwnedHead(ctx, worktreeOf(prior)); err != nil {
+		return result, WorktreeSurgeryError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
+	}
+	if err := preservedChangeHeld(ctx, r.Worktrees, prior); err != nil {
+		return result, MissingPreservedChangeError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
+	}
 
 	result.Reason = resumeReason(prior, strings.TrimSpace(request.Reason))
 
@@ -286,6 +331,42 @@ func (r IntegrationResumer) Resume(ctx context.Context, request IntegrationResum
 	return result, runErr
 }
 
+// restoreWorktree puts a retired worktree back from its branch and records on
+// the run that it is there again. The record is written at once, under the
+// run's lease, rather than with the re-entry: a refusal past this point then
+// leaves a stopped run whose checkout is back, which is true, instead of a run
+// whose record says the checkout is gone while the directory stands.
+func (r IntegrationResumer) restoreWorktree(ctx context.Context, prior runstate.State) (runstate.State, error) {
+	if _, err := r.Worktrees.RestoreWorktree(ctx, worktreeOf(prior)); err != nil {
+		return runstate.State{}, WorktreeRestoreError{RunID: prior.RunID, Branch: prior.Branch, Cause: err}
+	}
+	restored := prior
+	restored.WorktreeRemoved = false
+	restored.WorktreeSweptAt = nil
+	restored.UpdatedAt = r.now()
+	if err := r.Runs.Save(restored); err != nil {
+		return runstate.State{}, fmt.Errorf("record that the worktree of run %s was restored at %s: %w", prior.RunID, prior.WorktreePath, err)
+	}
+	return restored, nil
+}
+
+// WorktreeRestoreError refuses a resumption whose retired worktree could not be
+// put back from its branch. Nothing was written: the branch still holds the
+// approved change, and what refused is named for a person.
+type WorktreeRestoreError struct {
+	RunID  string
+	Branch string
+	Cause  error
+}
+
+func (e WorktreeRestoreError) Error() string {
+	return fmt.Sprintf(
+		"the integration of run %s was not resumed, because the worktree the sweep retired could not be put back from %s: %v; nothing was written, and the branch still holds the approved change",
+		e.RunID, e.Branch, e.Cause)
+}
+
+func (e WorktreeRestoreError) Unwrap() error { return ErrWorktreeNotRestored }
+
 // CheckoutNotReadyError refuses a resumption into a primary checkout a promotion
 // cannot be made from, which is what stopped the run in the first place. Nothing
 // was written.
@@ -311,8 +392,16 @@ func resumableStop(prior runstate.State) error {
 	if prior.WorktreePath == "" || prior.Branch == "" || prior.BaseCommit == "" || prior.TargetBranch == "" {
 		return fmt.Errorf("%w: run %s recorded no preserved worktree, so there is no approved change to promote", ErrNotResumable, prior.RunID)
 	}
-	if prior.WorktreeRemoved || prior.BranchRemoved {
-		return fmt.Errorf("%w: what run %s preserved has already been retired, so the approved change is gone from where a promotion would be made from; the branch, where it survives, is what a re-run lifts", ErrNotResumable, prior.RunID)
+	// A retired worktree is put back from the branch, so only the branch going is
+	// the end of it. A sweep that captured uncommitted work off the directory took
+	// something the branch does not hold, and a restore that left it on the ref
+	// would promote a checkout missing what the developer left: that is a
+	// person's to look at rather than something to resume past.
+	if prior.BranchRemoved {
+		return fmt.Errorf("%w: the branch run %s preserved has been deleted, so the approved change is gone from everywhere a promotion could be made from", ErrNotResumable, prior.RunID)
+	}
+	if prior.WorktreeRemoved && strings.TrimSpace(prior.PreservedWorkRef) != "" {
+		return fmt.Errorf("%w: the sweep that retired run %s's worktree captured uncommitted work on %s, which the branch does not hold, so what a restored checkout would promote is not what the developer left; a person decides what becomes of that work", ErrNotResumable, prior.RunID, prior.PreservedWorkRef)
 	}
 	if prior.ProviderSessionID == "" {
 		return fmt.Errorf("%w: run %s recorded no developer session, so its approval cannot be shown to have come from a second invocation", ErrNotResumable, prior.RunID)
@@ -478,6 +567,9 @@ func (result IntegrationResumeResult) Render() string {
 	}
 	fmt.Fprintf(&rendered, "resumed the integration of run %s with its approval standing\n", result.RunID)
 	fmt.Fprintf(&rendered, "the stop it supersedes: %s\n", result.Stopped)
+	if result.WorktreeRestored {
+		fmt.Fprintln(&rendered, "the worktree the sweep had retired was put back from the branch at the reviewed commit")
+	}
 	fmt.Fprintln(&rendered, "charged nothing: no review round, no repair grant, no re-run")
 	if result.SupersededBlocker != "" {
 		fmt.Fprintf(&rendered, "superseded blocker: %s\n", singleLine(result.SupersededBlocker, 240))

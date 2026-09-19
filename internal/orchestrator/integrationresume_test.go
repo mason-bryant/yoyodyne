@@ -13,6 +13,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
@@ -28,6 +29,10 @@ type resumeOwnership struct {
 	fakeOwnership
 	readyErr error
 	asked    int
+	// restored is each retired worktree this was asked to put back, and
+	// restoreErr what stopped it where nothing could be.
+	restored   []gitworktree.Worktree
+	restoreErr error
 }
 
 func (f *resumeOwnership) ValidateReady(context.Context) error {
@@ -35,10 +40,21 @@ func (f *resumeOwnership) ValidateReady(context.Context) error {
 	return f.readyErr
 }
 
+func (f *resumeOwnership) RestoreWorktree(_ context.Context, worktree gitworktree.Worktree) (gitworktree.Worktree, error) {
+	f.restored = append(f.restored, worktree)
+	if f.restoreErr != nil {
+		return gitworktree.Worktree{}, f.restoreErr
+	}
+	return worktree, nil
+}
+
 // resumeHarness is the durable state a resumption acts on, held together so a
 // test can drive one without rebuilding four stores.
 type resumeHarness struct {
-	docket    *memoryDocket
+	// docket is the real store rather than the memory one, because the closure a
+	// resumption writes carries a decision word no role's vocabulary has, and
+	// what accepts it is the store's own validation.
+	docket    *runstate.DocketStore
 	runs      *runstate.Store
 	intake    *runstate.IntakeHoldStore
 	tracker   *fakeTracker
@@ -126,8 +142,16 @@ func newResumeHarness(t *testing.T, state runstate.State) *resumeHarness {
 	if err != nil {
 		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
-	docket := &memoryDocket{}
-	if _, err := docketerOver(nil, docket).RecordStoppedRun(state); err != nil {
+	docket, err := runstate.NewDocketStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	// The docket and the resumption share the one fixed clock, as the two share
+	// the wall clock in the harness: the store refuses a closure made before the
+	// stoppage it settles was docketed.
+	docketer := docketerOverStore(docket, runs, docketConfig())
+	docketer.Clock = docketClock{}
+	if _, err := docketer.RecordStoppedRun(state); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
 	return &resumeHarness{
@@ -157,6 +181,28 @@ func resumeRequest() IntegrationResumeRequest {
 	return IntegrationResumeRequest{Run: docketedRunID}
 }
 
+// docketConfig is the configuration the harness's docket is built against here:
+// the triage thresholds every other docket in these tests uses.
+func docketConfig() config.Config {
+	return config.Config{Execution: config.Execution{IntegrationRetriesBeforeReconciliation: 1}, Triage: docketedTriage}
+}
+
+// closure is the decision the docket now carries about the stopped run, and
+// whether it carries one.
+func (h *resumeHarness) closure(t *testing.T) (triage.Closure, bool) {
+	t.Helper()
+	entries, err := h.docket.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Key == triage.Key(triage.ClassStoppedRun, docketedRunID) && entry.Closed != nil {
+			return *entry.Closed, true
+		}
+	}
+	return triage.Closure{}, false
+}
+
 // assertNothingWritten is what every refusal has to leave: the run exactly as it
 // stopped, the item untouched, and nothing dispatched.
 func (h *resumeHarness) assertNothingWritten(t *testing.T) {
@@ -171,8 +217,11 @@ func (h *resumeHarness) assertNothingWritten(t *testing.T) {
 	if len(h.started) != 0 {
 		t.Fatalf("a refused resumption dispatched something: %#v", h.started)
 	}
-	if _, closed := h.docket.closed[triage.Key(triage.ClassStoppedRun, docketedRunID)]; closed {
+	if _, closed := h.closure(t); closed {
 		t.Fatal("a refused resumption closed the docket entry")
+	}
+	if len(h.ownership.restored) != 0 {
+		t.Fatalf("a refused resumption restored a worktree: %#v", h.ownership.restored)
 	}
 }
 
@@ -189,6 +238,9 @@ func TestAResumptionMakesTheStoppedRunLiveAtItsPromotionChargingNothing(t *testi
 	}
 	if !result.Resumed || len(harness.started) != 1 || harness.started[0] != (continuedRun{workItemID: docketedItem, runID: docketedRunID}) {
 		t.Fatalf("started = %#v, resumed = %t, want the docketed run continued once", harness.started, result.Resumed)
+	}
+	if result.RecordProblem != "" {
+		t.Fatalf("record problem = %q, want every record the resumption makes written", result.RecordProblem)
 	}
 	if result.Cause != runstate.CauseDirtyPrimary || !strings.Contains(result.Stopped, "dirty-primary") {
 		t.Fatalf("result = %#v, want the stop it supersedes named", result)
@@ -234,9 +286,12 @@ func TestAResumptionMakesTheStoppedRunLiveAtItsPromotionChargingNothing(t *testi
 	if !strings.Contains(harness.tracker.notes, "Resumed: the integration of run "+docketedRunID) || !harness.tracker.claimed {
 		t.Fatalf("item notes = %q, claimed = %t; want the resumption recorded and the item put back", harness.tracker.notes, harness.tracker.claimed)
 	}
-	closure, closed := harness.docket.closed[triage.Key(triage.ClassStoppedRun, docketedRunID)]
+	closure, closed := harness.closure(t)
 	if !closed || closure.Decision != resumedDocketDecision || !strings.Contains(closure.DecidedBy, "the harness") {
-		t.Fatalf("docket closure = %#v, want the stoppage settled as resumed by the harness", closure)
+		t.Fatalf("docket closure = %#v, want the stoppage settled as resumed by the harness, through the real store", closure)
+	}
+	if len(harness.ownership.restored) != 0 {
+		t.Fatalf("a worktree the sweep never retired was restored: %#v", harness.ownership.restored)
 	}
 }
 
@@ -281,10 +336,17 @@ func TestAResumptionIsRefusedForARunThatIsNotAnApprovedChangeTheEnvironmentStopp
 			state.Blocker = "Yoyodyne stopped this item: the repair budget was spent."
 			return state
 		},
-		"its worktree was retired": func(state runstate.State) runstate.State {
-			state.WorktreeRemoved = true
+		"its branch was deleted": func(state runstate.State) runstate.State {
 			swept := docketedNow.Add(-30 * time.Minute)
+			state.BranchRemoved = true
+			state.BranchSweptAt = &swept
+			return state
+		},
+		"the sweep captured uncommitted work off its worktree": func(state runstate.State) runstate.State {
+			swept := docketedNow.Add(-30 * time.Minute)
+			state.WorktreeRemoved = true
 			state.WorktreeSweptAt = &swept
+			state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + docketedRunID
 			return state
 		},
 	} {
@@ -297,6 +359,73 @@ func TestAResumptionIsRefusedForARunThatIsNotAnApprovedChangeTheEnvironmentStopp
 			}
 			harness.assertNothingWritten(t)
 		})
+	}
+}
+
+// retiredState is the approved, stopped run after the convergence sweep took
+// its checkout: the directory is gone, the branch still holds the reviewed
+// commit, and nothing uncommitted was captured because there was nothing.
+func retiredState() runstate.State {
+	state := approvedStoppedState()
+	swept := docketedNow.Add(-30 * time.Minute)
+	state.WorktreeRemoved = true
+	state.WorktreeSweptAt = &swept
+	return state
+}
+
+// A worktree the sweep retired while the run stood stopped is put back from
+// the branch at the reviewed commit, and the run is resumed in it. The restore
+// is recorded on the run as it is made.
+func TestAResumptionPutsARetiredWorktreeBackFromItsBranch(t *testing.T) {
+	t.Parallel()
+
+	harness := newResumeHarness(t, retiredState())
+	result, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if !result.Resumed || !result.WorktreeRestored {
+		t.Fatalf("result = %#v, want the run resumed in a restored worktree", result)
+	}
+	if len(harness.ownership.restored) != 1 || harness.ownership.restored[0].Branch != "yoyodyne/task/abc" || harness.ownership.restored[0].HarnessCommit != strings.Repeat("c", 40) {
+		t.Fatalf("restored = %#v, want the worktree put back on its branch at the recorded commit", harness.ownership.restored)
+	}
+	state := harness.reload(t)
+	if state.WorktreeRemoved || state.WorktreeSweptAt != nil || state.Status != runstate.StatusRunning {
+		t.Fatalf("resumed run = removed %t swept %v %s; want the checkout recorded as back and the run live", state.WorktreeRemoved, state.WorktreeSweptAt, state.Status)
+	}
+	if !strings.Contains(result.Render(), "put back from the branch") {
+		t.Fatalf("rendered = %q, want the restore said", result.Render())
+	}
+}
+
+// A retired worktree that cannot be put back refuses before anything else is
+// written, and a restore that succeeded and was then refused for the checkout
+// it produced leaves a stopped run whose record says the checkout is back.
+func TestAResumptionRefusesARetiredWorktreeItCannotRestore(t *testing.T) {
+	t.Parallel()
+
+	harness := newResumeHarness(t, retiredState())
+	harness.ownership.restoreErr = errors.New("branch yoyodyne/task/abc is at deadbeef, not at the commit the harness recorded")
+	_, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if !errors.Is(err, ErrWorktreeNotRestored) || !strings.Contains(err.Error(), "deadbeef") {
+		t.Fatalf("Resume() error = %v, want the restore refused naming what stopped it", err)
+	}
+	state := harness.reload(t)
+	if state.Status != runstate.StatusFailed || !state.WorktreeRemoved || len(state.IntegrationResumptions) != 0 {
+		t.Fatalf("a refused restore changed the run: %#v", state)
+	}
+	if len(harness.tracker.calls) != 0 || len(harness.started) != 0 {
+		t.Fatalf("a refused restore wrote to the item or dispatched something: %v %#v", harness.tracker.calls, harness.started)
+	}
+
+	emptied := newResumeHarness(t, retiredState())
+	emptied.ownership.changed = []string{}
+	if _, err := emptied.resumer().Resume(context.Background(), resumeRequest()); !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Resume() error = %v, want the restored but empty worktree refused", err)
+	}
+	if state := emptied.reload(t); state.Status != runstate.StatusFailed || state.WorktreeRemoved || len(state.IntegrationResumptions) != 0 {
+		t.Fatalf("after a refusal past the restore: %s removed %t resumptions %d; want the run still stopped with its checkout recorded as back", state.Status, state.WorktreeRemoved, len(state.IntegrationResumptions))
 	}
 }
 
@@ -696,5 +825,125 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	}
 	if !reflect.DeepEqual(landed, left) {
 		t.Fatalf("the item's triage record moved across a resumption that conflicted:\nleft   %#v\nlanded %#v", left, landed)
+	}
+}
+
+// The fourth cause the item names: the worktree retired under the run. The
+// change is approved and stopped for the checkout; the convergence sweep then
+// takes the worktree, as it did to yoyodyne-ifd.309's on 2026-09-18; the resume
+// puts the worktree back from the branch at the reviewed commit and promotes
+// it, charging nothing — where before this the only way on was a re-run.
+func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	dirtying := filepath.Join(repository, "AGENTS.md")
+	serve := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+		}
+		return serve(request)
+	}
+	build := func() Pipeline {
+		return publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"test -f feature.txt"}), provider), forge)
+	}
+	outcome, err := build().Run(context.Background(), tracker.item.ID)
+	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
+		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
+	}
+	if err := os.Remove(dirtying); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	left, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	// The sweep takes the checkout, and records on the run that it did, exactly
+	// as the convergence sweep does: the directory is gone and the branch stands.
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	removal, err := worktrees.RemovePreservedWorktree(context.Background(), worktreeOf(stopped), gitworktree.KeepUncommittedWork)
+	if err != nil || !removal.Removed || removal.PreservedWork != "" {
+		t.Fatalf("RemovePreservedWorktree() = %#v, error = %v; want the clean checkout taken with nothing captured", removal, err)
+	}
+	swept := time.Now().UTC()
+	stopped.WorktreeRemoved = true
+	stopped.WorktreeSweptAt = &swept
+	stopped.UpdatedAt = swept
+	if err := store.Save(stopped); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := os.Stat(stopped.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("the worktree is still on disk: %v", err)
+	}
+	if !stopped.ResumableIntegration() {
+		t.Fatalf("a run whose worktree was retired is not resumable on its record: %#v", stopped)
+	}
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	if _, err := docketerOverStore(docket, store, build().Config).RecordStoppedRun(stopped); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	resumer := IntegrationResumer{
+		Docket: docket, Runs: store, Intake: newIntakeHoldStore(t), Items: tracker, Worktrees: worktrees,
+		Capacity: 1,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return build().Continue(ctx, workItemID, runID)
+		},
+	}
+	result, err := resumer.Resume(context.Background(), IntegrationResumeRequest{Run: outcome.RunID})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if !result.Resumed || !result.WorktreeRestored || result.RecordProblem != "" {
+		t.Fatalf("result = %#v, want the run resumed in a restored worktree with every record written", result)
+	}
+	if result.Outcome.Integration == nil || result.Outcome.PullRequest == nil || !result.Outcome.PullRequest.Merged || !tracker.closed {
+		t.Fatalf("outcome = integration %#v, pull request %#v, closed %t; want the approved change promoted, merged, and the item closed", result.Outcome.Integration, result.Outcome.PullRequest, tracker.closed)
+	}
+	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
+		t.Fatalf("integrated feature.txt = %q, want the approved content", integrated)
+	}
+	// One developer attempt and one review, both the first run's; nothing was
+	// re-derived from the branch by anybody.
+	if developer, reviewer := provider.requestsForRole(domain.RoleDeveloper), provider.requestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
+		t.Fatalf("invocations = %d developer, %d reviewer; want the one attempt and the one review the first run made", len(developer), len(reviewer))
+	}
+	landed, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if !reflect.DeepEqual(landed, left) {
+		t.Fatalf("the item's triage record moved across a restore and a resumption:\nleft   %#v\nlanded %#v", left, landed)
+	}
+	// The restored checkout was cleaned up after the promotion exactly as any
+	// integrated run's is.
+	final, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if final.Status != runstate.StatusSucceeded || !final.WorktreeRemoved || final.WorktreeSweptAt != nil || len(final.IntegrationResumptions) != 1 {
+		t.Fatalf("final run = %s, removed %t, swept %v, resumptions %d; want it succeeded with the restored checkout cleaned up by its own integration", final.Status, final.WorktreeRemoved, final.WorktreeSweptAt, len(final.IntegrationResumptions))
 	}
 }

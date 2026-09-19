@@ -216,9 +216,14 @@ the ones that are not spend nothing. A promotion refused because the primary
 checkout carried somebody's uncommitted edit, a tracker read that timed out
 under load on the way to it, a forge or a network that went away — each ends
 the run, and each is recorded on the run as an *integration stop*: which
-environmental cause it was, read from the error's own sentinel rather than
-from its wording, and which step the run was in. Nothing about the change is
-in question, so nothing about it is anybody's to decide. `yoyo triage resume
+environmental cause it was, and which step the run was in. The cause is read
+from the error that ended the run rather than from the run's prose afterwards,
+in two ways: a dirty checkout by the sentinel the worktree manager declares,
+and a tracker, forge, or network that did not answer by the [recovery
+rule](operations.md#waiting-out-a-network-that-dropped)'s closed reading of the
+error — the same reading that decides what the harness waits out at the
+boundaries that have a window, applied to a step that has none. Nothing about
+the change is in question, so nothing about it is anybody's to decide. `yoyo triage resume
 <run-id>` resumes the run at the promotion it stopped short of — replay onto
 where the target now stands, push, merge request — with its approval standing,
 and it charges the item nothing: no review round, no repair grant, no re-run.
@@ -242,7 +247,16 @@ as the harness left it and still hold the approved change, the item must not
 be closed or waiting on other work, and the harness has to have a free slot —
 a full one waits rather than refusing, and so does a held intake. A refused
 resume leaves the run exactly as it stopped, and asking again once the cause
-has cleared resumes the same run. The docket entry for such a stop says all of
+has cleared resumes the same run. A worktree the [convergence
+sweep](operations.md#recovering-interrupted-runs) retired while the run stood
+stopped — the fourth way 309's change was held up — is not a refusal either:
+the branch still holds the reviewed commit, so the resume puts the checkout
+back from the branch at exactly that commit before it asks the two worktree
+questions, and records on the run that the checkout is back as it does so.
+What it will not do is restore past a branch that has moved or a sweep that
+captured uncommitted work off the directory, because what a restored
+checkout would then promote is not what was reviewed; both refuse to a
+person, and only a deleted branch ends the change for good. The docket entry for such a stop says all of
 this itself: it names the harness as the next mover and the verb that resumes
 it, so the development manager is not asked to choose among decisions that
 each spend something for a stop that was never hers to decide.

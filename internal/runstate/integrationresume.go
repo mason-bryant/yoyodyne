@@ -13,10 +13,11 @@ package runstate
 // get one approved change onto the target, none of them for a verdict.
 //
 // So the stop is a durable fact on the run, written where the run fails from
-// the error's own sentinel, and a resumption is a continuation rather than an
-// attempt: the run is made live again at the promotion it stopped short of, with
-// the approval it already had, and the item's counters stay where the review
-// left them. What leaves that path is a replay that conflicts, which is a
+// the error that ended it — a dirty checkout by its sentinel, a transport that
+// did not answer by the recovery package's closed reading of the error — and a
+// resumption is a continuation rather than an attempt: the run is made live
+// again at the promotion it stopped short of, with the approval it already had,
+// and the item's counters stay where the review left them. What leaves that path is a replay that conflicts, which is a
 // person's to settle exactly as it always was.
 
 import (
@@ -176,8 +177,10 @@ func (s State) ApprovedAwaitingIntegration() bool {
 
 // ResumableIntegration reports a stopped run whose integration may be resumed
 // where it stopped: it ended, its approval is standing, the environment is what
-// stopped it, and the branch and worktree that hold the approved change are
-// still there. Everything else about whether it may be resumed now — the
+// stopped it, and the branch that holds the approved change is still there. The
+// worktree need not be: a checkout the convergence sweep retired is put back
+// from the branch at the commit the run recorded, and only the branch going is
+// the end of the change. Everything else about whether it may be resumed now — the
 // checkout being clean again, the worktree being as the harness left it, the
 // item having no run in flight — is the resuming action's to ask, because it is
 // about the moment rather than about the record.
@@ -188,7 +191,7 @@ func (s State) ResumableIntegration() bool {
 	if s.WorktreePath == "" || s.Branch == "" || s.BaseCommit == "" || s.TargetBranch == "" {
 		return false
 	}
-	return !s.WorktreeRemoved && !s.BranchRemoved
+	return !s.BranchRemoved
 }
 
 // ResumingIntegration reports a run that is at its promotion again after an
