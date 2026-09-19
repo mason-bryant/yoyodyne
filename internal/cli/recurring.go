@@ -65,8 +65,12 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 	// through the same client the publication path opens and merges requests
 	// with, so what it lists is the repository runs publish into. The tracker
 	// says which work is closed and the run records say which work each request
-	// was opened for. A project that does not publish has no requests of its own
-	// on any forge, so it is not read for one.
+	// was opened for. The gate is the one the publication path itself opens a
+	// request under — orchestrator.Pipeline.publishes, which is exactly
+	// `approvals.publishing: automatic` and no other value: the only other mode,
+	// `human`, pushes nothing and opens nothing, as the approvals table in
+	// docs/configuration.md says. A project under it has no requests of the
+	// harness's on any forge, and a forge it may not even have is not read.
 	if parts.config.Approvals.Publishing == domain.ApprovalAutomatic {
 		trigger.Forge = forgehygiene.Sweeper{
 			Forge: publish.GitHub{

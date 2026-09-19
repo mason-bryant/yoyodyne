@@ -482,7 +482,20 @@ func (t Trigger) noticeForge(ctx context.Context, task config.RecurringTask, rec
 // reportedRequests reads which pull requests the earlier passes reported, by
 // number, from the durable reports themselves. The reports are the record of
 // what was said, so they are what decides what has been; a second record of
-// the same fact could come to disagree with the first.
+// the same fact could come to disagree with the first. It is the harness's
+// form of the check every role is told to make before filing — against what
+// is already recorded, rather than against what it remembers.
+//
+// It reads the whole log, once per firing of the development manager's task,
+// and that is a cost that grows with the log: the reader decodes every record
+// to find the ones carrying requests, and nothing marks which those are from
+// outside. It is accepted on two facts. The log gains one record per firing —
+// an hourly task writes under nine thousand a year — and `yoyo sweeps --json`
+// already reads all of it on demand. What the reading assumes is that the log
+// is never pruned or rotated: nothing here does either, and a log cut back
+// would forget the requests its lost records reported, so every one of those
+// still open would be stated once more on the next pass. Once more and not
+// hourly — the pass that restates them records them again.
 //
 // A line of the log that would not decode is set aside by the reader and
 // carries nothing here, so a request that pass reported may be reported once

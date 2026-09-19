@@ -4607,9 +4607,12 @@ however many passes find it still open afterwards: the requests a pass reported
 are recorded on its report, and the next pass reads them back before it looks.
 The reading is taken beside the role's turns rather than by the role, so it
 happens whether or not the role could be reached, and a forge that could not be
-read is a problem on the record rather than a lost pass. A project whose
-`approvals.publishing` is not `automatic` publishes nothing and is not read for
-anything.
+read is a problem on the record rather than a lost pass. The reading is taken
+under exactly the setting the harness opens requests under:
+[`approvals.publishing: automatic`](#publishing-without-automatic-integration), which is
+the only value that pushes a branch or opens a pull request. Under `human`, the
+other value, the harness opens no requests and reads no forge, so a request
+somebody opened by hand in such a project is not noticed here.
 
 Every firing ends in a durable report, read with
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
