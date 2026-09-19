@@ -10,6 +10,10 @@ revisions:
       by: architect
       at: 2026-08-23T16:29:09Z
       reason: promoted from the operator's shared-observability-and-reduced-dashboard brief under the 2026-08-22 mandate; the gating input for yoyodyne-ifd.139 and yoyodyne-ifd.141, with deviations recorded in the promotion
+    - action: amended
+      by: architect
+      at: 2026-09-19T00:30:00Z
+      reason: 'approved amendment 608138f6 from yoyodyne-ifd.141.1 (591e0ae5 declined as superseded by the repair round''s rename) - the capacity-blocked state landed as a read-model query; the deviation-to-implement recorded at promotion is discharged'
 ---
 
 # One observability read model, and the read-only dashboard that projects it
@@ -28,7 +32,7 @@ A shared Go package, independent of HTTP and of any rendering, reading only the 
 - pipeline stage counts and recent transitions, and a bounded recent-activity feed sufficient to explain the current picture;
 - integrated-work totals over explicit daily and weekly windows, counting the same events the CLI counts;
 - provider cost with every figure classified: known (provider-reported), unknown, or unattributable, and an `estimated` class reserved for future sources that is never summed silently into known — unknown renders as unknown, never as zero, exactly as the cost surfaces already hold;
-- capacity: per configured account alias, the model, active invocation count, state — healthy, waiting, usage-limited, or **capacity-blocked** — the recorded reset time, and recent capacity events. The capacity-blocked state is required by this design and does not exist yet: a run past its wait budget today stops with a generic blocker, preserving everything; the read model's arrival is when that blocker becomes a queryable capacity state.
+- capacity: per configured account alias, the model, active invocation count, state — healthy, waiting, usage-limited, or **capacity-blocked** — the recorded reset time, and recent capacity events. The capacity-blocked state exists as a read-model query, carried in `yoyo status --json` as `standing.capacity_blocked`, derived from the run records and the usage-limit log, naming each parked or blocked run and each refused conversation with its reset time, the time already waited, and a remedy.
 
 The model also serves what Slack's governed behavior already needs — per-item status for thread reactions, directive lifecycle marks, item titles for thread openers — so the sink presents these derivations instead of computing them.
 
