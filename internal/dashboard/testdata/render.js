@@ -275,7 +275,8 @@ const scenarios = [
   { name: "wrong-token", token: "t", standing: refused(401, "this dashboard requires the token it printed when it started, as a bearer token"), throughput: pending },
   // The second poll fails after a first that succeeded: the page keeps what it
   // had and says it is stale.
-  { name: "stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/standing": unreachable } }
+  { name: "stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/standing": unreachable } },
+  { name: "throughput-stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/throughput": refused(503, "the state root could not be resolved") } }
 ];
 
 function settle() {
@@ -356,7 +357,10 @@ async function run(scenario) {
     }
   });
 
-  const html = document.root.serialize("")
+  const html = document.root.childNodes
+    .map((child) => (child instanceof Text ? child.data.trim() : child.serialize("")))
+    .filter((line) => line !== "")
+    .join("\n")
     .replace('href="/assets/dashboard.css"', 'href="../../assets/dashboard.css"')
     .replace('src="/assets/dashboard.js"', 'src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"');
   return { matrix, html: "<!doctype html>\n" + html + "\n" };

@@ -231,10 +231,20 @@
       observedAt.textContent = clock(standing.observed_at);
       observedAt.setAttribute("datetime", standing.observed_at || "");
     }
+    // A poll that fails after one that succeeded marks the page stale rather
+    // than blanking it, whichever of the two readings failed: the strip says
+    // which, and which reading is still being shown.
+    var failed = [];
     if (model.standingError && standing) {
+      failed.push("the standing — " + model.standingError + " — so this is the reading from " + clock(standing.observed_at) + ", asked again every ten seconds");
+    }
+    if (model.throughputError && model.throughput) {
+      failed.push("the throughput — " + model.throughputError + " — so its figures are from " + clock(model.throughput.observed_at) + ", asked again every minute");
+    }
+    if (failed.length > 0) {
       freshness.textContent = "stale";
       freshness.className = "freshness freshness-stale";
-      stale.textContent = "The last reading failed — " + model.standingError + " — so this is the reading from " + clock(standing.observed_at) + ". The dashboard asks again every ten seconds.";
+      stale.textContent = "The last reading failed for " + failed.join("; and for ") + ".";
       setHidden(stale, false);
     } else {
       freshness.textContent = standing ? "asks again every 10 s" : "";
@@ -461,19 +471,71 @@
       section("pipeline", model.standingError ? "error" : "loading", model.standingError, whatToDoAboutTheStanding());
       return;
     }
-    if (standing.not_startable_problem) {
-      section("pipeline", "error", standing.not_startable_problem, "The admitted work is read from the tracker; yoyo doctor says whether bd answers in this checkout, and yoyo status prints the same refusal.");
+    // The queue and the runs are the two sources the pipeline stands on. With
+    // both unreadable there is nothing to draw and the section says so; with
+    // one unreadable the stages that source fills say they could not be read,
+    // the rest are drawn, and the reason is listed under them.
+    if (standing.not_startable_problem && standing.running_problem) {
+      section("pipeline", "error", standing.not_startable_problem + "; " + standing.running_problem, whatToDoAboutTheQueue());
       return;
     }
     var running = standing.running_problem ? [] : standing.running;
-    if (standing.admitted === 0 && running.length === 0 && !standing.running_problem) {
+    if (standing.admitted === 0 && running.length === 0 && !standing.running_problem && !standing.not_startable_problem) {
       section("pipeline", "empty", "The backlog is empty: nothing is admitted, and nothing is running.");
       return;
     }
 
     var stages = document.getElementById("stages");
     clear(stages);
-    var refused = standing.not_startable;
+    var refused = standing.not_startable_problem ? [] : standing.not_startable;
+    if (standing.not_startable_problem) {
+      stages.appendChild(stage("Admitted", "—", "could not be read", "stage-unreadable"));
+      stages.appendChild(stage("Held back", "—", "could not be read", "stage-unreadable"));
+      stages.appendChild(stage("Startable", "—", "could not be read", "stage-unreadable"));
+    } else {
+      appendQueueStages(stages, standing, refused);
+    }
+
+    var runningStage = stage("Running", standing.running_problem ? "—" : String(running.length), standing.running_problem ? "could not be read" : (running.length === 1 ? "developer run" : "developer runs"), standing.running_problem ? "stage-unreadable" : (running.length > 0 ? "stage-flowing" : "stage-clear"));
+    if (!standing.running_problem && running.length > 0) {
+      var byStage = el("ul", "piles");
+      stageOrder.forEach(function (name) {
+        var number = running.filter(function (run) { return run.stage === name; }).length;
+        if (number === 0) {
+          return;
+        }
+        var entry = el("li", "pile");
+        entry.appendChild(el("span", "pile-figure", String(number)));
+        entry.appendChild(el("span", "pile-label", name));
+        byStage.appendChild(entry);
+      });
+      runningStage.appendChild(byStage);
+    }
+    stages.appendChild(runningStage);
+
+    var throughput = model.throughput;
+    if (throughput && !throughput.runs_problem) {
+      var today = windowNamed(throughput, "today");
+      var week = windowNamed(throughput, "last 7 days");
+      var landed = stage("Landed", String(today.landed), "today", "stage-landed");
+      landed.appendChild(el("span", "stage-detail", count(week.landed, "run") + " in the last 7 days"));
+      stages.appendChild(landed);
+    } else if (throughput || model.throughputError) {
+      stages.appendChild(stage("Landed", "—", "could not be read", "stage-unreadable"));
+    } else {
+      stages.appendChild(stage("Landed", "…", "pricing the week", "stage-waiting"));
+    }
+
+    listProblems("pipeline-problems", [standing.not_startable_problem, standing.running_problem, throughput ? throughput.runs_problem : ""]);
+    var note = document.getElementById("pipeline-note");
+    var attention = standing.needs_human_problem ? "what waits on a person could not be read: " + standing.needs_human_problem : count(standing.needs_human.length, "thing") + " waiting on a person";
+    note.textContent = "Needs a human: " + attention + ".";
+    section("pipeline", "ready");
+  }
+
+  // appendQueueStages draws the three stages the queue fills: what is admitted,
+  // what is held back and in which piles, and what the harness pulls next.
+  function appendQueueStages(stages, standing, refused) {
     stages.appendChild(stage("Admitted", String(standing.admitted), plural(standing.admitted, "item"), "stage-admitted"));
 
     var held = stage("Held back", String(refused.length), refused.length === 1 ? "item nothing will pull" : "items nothing will pull", refused.length > 0 ? "stage-held" : "stage-clear");
@@ -519,41 +581,6 @@
     } else {
       stages.appendChild(stage("Startable", "0", "nothing is waiting to be pulled", "stage-clear"));
     }
-
-    var runningStage = stage("Running", standing.running_problem ? "—" : String(running.length), standing.running_problem ? "could not be read" : (running.length === 1 ? "developer run" : "developer runs"), standing.running_problem ? "stage-unreadable" : (running.length > 0 ? "stage-flowing" : "stage-clear"));
-    if (!standing.running_problem && running.length > 0) {
-      var byStage = el("ul", "piles");
-      stageOrder.forEach(function (name) {
-        var number = running.filter(function (run) { return run.stage === name; }).length;
-        if (number === 0) {
-          return;
-        }
-        var entry = el("li", "pile");
-        entry.appendChild(el("span", "pile-figure", String(number)));
-        entry.appendChild(el("span", "pile-label", name));
-        byStage.appendChild(entry);
-      });
-      runningStage.appendChild(byStage);
-    }
-    stages.appendChild(runningStage);
-
-    var throughput = model.throughput;
-    if (throughput && !throughput.runs_problem) {
-      var today = windowNamed(throughput, "today");
-      var week = windowNamed(throughput, "last 7 days");
-      var landed = stage("Landed", String(today.landed), "today", "stage-landed");
-      landed.appendChild(el("span", "stage-detail", count(week.landed, "run") + " in the last 7 days"));
-      stages.appendChild(landed);
-    } else if (throughput || model.throughputError) {
-      stages.appendChild(stage("Landed", "—", "could not be read", "stage-unreadable"));
-    } else {
-      stages.appendChild(stage("Landed", "…", "pricing the week", "stage-waiting"));
-    }
-
-    var note = document.getElementById("pipeline-note");
-    var attention = standing.needs_human_problem ? "what waits on a person could not be read: " + standing.needs_human_problem : count(standing.needs_human.length, "thing") + " waiting on a person";
-    note.textContent = "Needs a human: " + attention + (standing.running_problem ? ". The runs in flight could not be read: " + standing.running_problem : "") + ".";
-    section("pipeline", "ready");
   }
 
   // ---- section 4: throughput and cost ------------------------------------
@@ -620,6 +647,9 @@
       return;
     }
     listProblems("throughput-problems", [throughput.runs_problem, throughput.spend_problem]);
+    var staleFigures = document.getElementById("throughput-stale");
+    staleFigures.textContent = model.throughputError ? "The last reading failed — " + model.throughputError + " — so these are the figures from " + clock(throughput.observed_at) + ". The dashboard asks again every minute." : "";
+    setHidden(staleFigures, !model.throughputError);
     var windows = document.getElementById("windows");
     clear(windows);
     (throughput.windows || []).forEach(function (period) {
@@ -688,7 +718,7 @@
         ["Refused by", run.refused_by],
         ["Phase", run.phase],
         ["Since", dayAndClock(run.since)],
-        ["Resets", run.resets_at ? dayAndClock(run.resets_at) : "no reset named; it asks again at the probe interval"],
+        ["Resets", run.resets_at ? dayAndClock(run.resets_at) : (run.state === "waiting" ? "no reset named; it asks again at the probe interval" : "no reset named, and nothing probes: the run stopped")],
         ["Waited", age((run.waited_seconds || 0) * 1e9) + " of the pause budget"],
         ["Change", run.preserved ? "preserved" : "not preserved"],
         ["Run", run.run_id]
@@ -713,6 +743,10 @@
 
   function whatToDoAboutTheStanding() {
     return "The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.";
+  }
+
+  function whatToDoAboutTheQueue() {
+    return "The admitted work is read from the tracker and the runs from the state root; yoyo doctor says whether bd answers in this checkout and what cannot be read, and yoyo status prints the same refusals.";
   }
 
   function whatToDoAboutTheThroughput() {

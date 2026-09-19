@@ -54,7 +54,7 @@
     "sections": {
       "band": "ready",
       "live": "ready",
-      "pipeline": "error",
+      "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
     }
@@ -120,6 +120,16 @@
     }
   },
   "stale": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    }
+  },
+  "throughput-stale": {
     "page": "ready",
     "sections": {
       "band": "ready",

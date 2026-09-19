@@ -4,14 +4,19 @@ package readmodel
 //
 // The standing status answers "where does the harness stand right now"; this
 // answers the other question an operator glancing at a page asks, which is
-// whether anything is getting done and what it is costing. It reads the same two
-// records the terminal already reads for those figures — the run records that
-// `yoyo status` derives each run's outcome from, and the event streams that
-// `yoyo status --spend` prices — and it says nothing either of them does not: a
-// run counts as landed here exactly when the terminal prints it as
-// `succeeded` with a promotion recorded, and a day's cost here is the day's
-// total the spend report prints, because two surfaces disagreeing about what
+// whether anything is getting done and what it is costing. It derives nothing
+// of its own about either. The money is (*runstate.StreamStore).Spend's — the
+// one call internal/cli/statusstream.go's reportSpend makes to price
+// `yoyo status --spend` — asked once over the widest window and split here by
+// the local day each row already carries; the endings are runstate.State.Outcome,
+// the word `yoyo status` prints for each run, with a `succeeded` run counted as
+// landed exactly where it carries a promotion; and the days are
+// runstate.LocalDay, the spend report's own. So a day's cost here is the day's
+// total the spend report prints, and a run counts as landed here exactly when
+// the terminal says its work landed, because two surfaces disagreeing about what
 // today cost is a disagreement only the operator can settle.
+// TestThroughputPricesTheSameRecordsTheSpendReportPrices holds the first of
+// those over a real state directory.
 //
 // Every figure names its window, and every total says what it does not cover.
 // A window is local calendar days, today counting as the first of them, because

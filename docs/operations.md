@@ -1634,9 +1634,11 @@ else. Above them, one banner and only one, while it stands: the same sentence
 the terminal prints above the four lines when the harness is paused on the
 provider's usage window, when every role is held by one, or when the provider
 is answering nobody. Beside the product's name the page says when the reading
-was taken and that it asks again; a poll that fails after one that succeeded
-marks the page **stale** and says which reading it is still showing, rather
-than going blank on one dropped request.
+was taken and that it asks again; a poll that fails after one that succeeded —
+of either reading, the standing or the throughput — marks the page **stale**,
+says which reading failed and which it is still showing, and the throughput
+section says the same under its own figures, rather than going blank on one
+dropped request.
 
 1. **Where the harness stands** — a tile for each of the four lines: running
    developer runs, conversations with a turn in flight, admitted items nothing
@@ -1693,8 +1695,10 @@ same thing with more room, and that the page keeps asking. **Ready** is the
 content above. A section whose sources could only partly be read stays ready
 and lists each unreadable source under its content, and a tile or a stage
 whose source could not be read shows a dash and the words `could not be read`
-in the figure's place; nothing on the page ever shows a zero for a line the
-model did not answer.
+in the figure's place — the pipeline with the tracker unreadable still draws
+what is running and what landed, and its first three stages say they could not
+be read; nothing on the page ever shows a zero for a line the model did not
+answer.
 
 Every distinction survives without colour. A state is a word in a badge as
 well as a tint, a problem is `Could not be read` as well as a red rule, a
@@ -1714,9 +1718,9 @@ between them should not have to translate.
 holds the page as its own script renders it from the fixtures under
 `internal/dashboard/testdata/fixtures`, one file per scenario — `quiet`, `busy`,
 `held`, `degraded`, `unreadable`, `loading`, `throughput-pending`,
-`throughput-refused`, `refused`, `unreachable`, `wrong-token`, `stale`, and
-`signin` — which together show every section in each of its four states. They
-are golden files:
+`throughput-refused`, `throughput-stale`, `refused`, `unreachable`,
+`wrong-token`, `stale`, and `signin` — which together show every section in
+each of its four states. They are golden files:
 `TestThePageRendersEverySectionInEveryState` runs the page's script under Node
 against the fixtures, checks that each section reaches each state and that the
 fixtures' words land on the page as text, and fails when a render differs from

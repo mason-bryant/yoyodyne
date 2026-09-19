@@ -25,7 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 var updateRenders = flag.Bool("update-renders", false, "rewrite the rendered pages under testdata/renders from the fixtures")
@@ -166,6 +168,19 @@ func TestServesTheThroughputToTheTokenAlone(t *testing.T) {
 	}
 }
 
+// The vocabularies the page reads are the model's own, held at compile time
+// where the page's evidence is read: a refusal's kind is the queue's HoldKind
+// and not a type of this package's or the model's, a run's stage is the
+// model's Stage, and the ledger the throughput is priced from is the stream
+// store `yoyo status --spend` prices — the same type, satisfying the same
+// interface, so the page cannot be handed a second pricing.
+var (
+	_ backlog.HoldKind = readmodel.Refused{}.Kind
+	_ readmodel.Stage  = readmodel.RunningRun{}.Stage
+	_ readmodel.Ledger = (*runstate.StreamStore)(nil)
+	_ readmodel.Runs   = (*runstate.Store)(nil)
+)
+
 // The pipeline reads the model's own figures: the startable count and each
 // run's stage arrive on the standing, and the script keeps no list of phases
 // and makes no subtraction of one line from another to get either.
@@ -268,14 +283,16 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"1 exchange record could not be read, so the cost is a floor",
 			`<span class="held-state">capacity-blocked</span>`,
 			"What to do: nothing needs doing",
+			"no reset named, and nothing probes: the run stopped",
 		},
-		"quiet":       {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
-		"degraded":    {`<span class="figure">—</span>`, "Could not be read: the runs in flight could not be read", "yoyo doctor says whether bd answers in this checkout"},
-		"unreadable":  {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read"},
-		"held":        {`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z"},
-		"stale":       {`class="freshness freshness-stale">stale<`, "so this is the reading from 14:05:09"},
-		"refused":     {"permission denied", "yoyo doctor says what cannot be read"},
-		"wrong-token": {"that is not the token this dashboard printed when it started"},
+		"quiet":            {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
+		"degraded":         {`<span class="figure">—</span>`, `<li class="stage stage-unreadable">`, "Could not be read: the admitted work could not be read", `<span class="pile-label">developing</span>`},
+		"unreadable":       {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read", "yoyo doctor says whether bd answers in this checkout"},
+		"held":             {`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z"},
+		"stale":            {`class="freshness freshness-stale">stale<`, "so this is the reading from 14:05:09"},
+		"throughput-stale": {`class="freshness freshness-stale">stale<`, "The last reading failed for the throughput", `<p id="throughput-stale" class="stale" role="status">The last reading failed`},
+		"refused":          {"permission denied", "yoyo doctor says what cannot be read"},
+		"wrong-token":      {"that is not the token this dashboard printed when it started"},
 	} {
 		body := page(scenario)
 		for _, expected := range expectations {
@@ -289,6 +306,21 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	}
 	if strings.Contains(page("held"), "the harness pulls next") {
 		t.Errorf("the held render offers items the harness pulls next under a banner saying it is choosing nothing")
+	}
+	// A run the harness stopped is never told it asks again.
+	for _, scenario := range []string{"busy", "held"} {
+		for _, entry := range strings.Split(page(scenario), `<li class="held `)[1:] {
+			if strings.HasPrefix(entry, "held-capacity-blocked") && strings.Contains(entry, "it asks again at the probe interval") {
+				t.Errorf("the %s render tells a capacity-blocked run it asks again", scenario)
+			}
+		}
+	}
+	// Every render is a document a browser opens as the page: the doctype, the
+	// html element, and nothing of the driver's own.
+	for scenario := range matrix {
+		if body := page(scenario); !strings.HasPrefix(body, "<!doctype html>\n<html lang=\"en\">") || strings.Contains(body, "#document") {
+			t.Errorf("the %s render is not a plain document:\n%.200s", scenario, body)
+		}
 	}
 
 	if *updateRenders {

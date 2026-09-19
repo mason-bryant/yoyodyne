@@ -120,10 +120,24 @@ func (r dashboardReader) Standing(ctx context.Context) (readmodel.Standing, erro
 	return readmodel.ReadStanding(ctx, standingSources(r.configPath)), nil
 }
 
-// Throughput is what landed and what it cost over the model's two windows, from
-// the run store `yoyo status` reads outcomes from and the stream store
-// `yoyo status --spend` prices — so a figure on the page is a figure the
-// terminal prints, and the two cannot disagree about what today cost.
+// The two readers the throughput is handed are the terminal's own stores, held
+// here to the model's interfaces so the substitution of a second pricing would
+// not compile: *runstate.StreamStore is what reportSpend prices `yoyo status
+// --spend` from, through its Spend method, and *runstate.Store is what
+// `yoyo status` reads each run's Outcome from.
+var (
+	_ readmodel.Ledger = (*runstate.StreamStore)(nil)
+	_ readmodel.Runs   = (*runstate.Store)(nil)
+)
+
+// Throughput is what landed and what it cost over the model's two windows.
+// readmodel.ReadThroughput derives nothing of its own about money or endings:
+// it calls (*runstate.StreamStore).Spend once, over the widest window, and
+// splits the report's rows by the local day each carries — the derivation
+// `yoyo status --spend 7` prints — and it classifies each run by
+// runstate.State.Outcome, the word `yoyo status` prints for it. So a figure on
+// the page is a figure the terminal prints, and the two cannot disagree about
+// what today cost.
 func (r dashboardReader) Throughput(ctx context.Context) (readmodel.Throughput, error) {
 	if err := r.ready(); err != nil {
 		return readmodel.Throughput{}, err

@@ -17,19 +17,36 @@
       }
     ]
   },
-  "running": null,
-  "running_problem": "the runs in flight could not be read: open runs: permission denied",
-  "working": [
+  "running": [
     {
-      "agent": "product-manager",
-      "role": "product-manager",
+      "run_id": "run-c07d6849e1f55fd7b982600b8f97a303",
+      "work_item_id": "yoyodyne-ifd.141.3",
+      "title": "Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states",
       "backend": "claude-code",
-      "model": "claude-fable-5-1",
-      "turns": 270,
-      "since": "2026-09-19T14:04:29Z",
-      "elapsed": 40000000000
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "developing",
+      "started_at": "2026-09-19T13:53:00Z",
+      "elapsed": 729000000000,
+      "cost_usd": 3.41,
+      "stage": "developing"
+    },
+    {
+      "run_id": "run-49839de311bd6b4d06fbfb41f22abdf1",
+      "work_item_id": "yoyodyne-ifd.201",
+      "title": "The heartbeat names the forge when a merge is queued",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "account": "default",
+      "phase": "reviewing",
+      "started_at": "2026-09-19T14:02:00Z",
+      "elapsed": 189000000000,
+      "cost_usd": 0,
+      "unknown_cost": "its event log is gone",
+      "stage": "reviewing"
     }
   ],
+  "working": null,
   "not_startable": null,
   "admitted": 0,
   "awaiting_decision": 0,
@@ -41,5 +58,6 @@
     "collected": 0,
     "unhandled": 0
   },
-  "startable": 0
+  "startable": 0,
+  "working_problem": "whether a turn is in flight could not be asked of product-manager (open conversations/product-manager.lock: permission denied)"
 }

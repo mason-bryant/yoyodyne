@@ -15,7 +15,7 @@
       <p class="observed">
         observed
         <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
-        <span id="freshness" class="freshness">asks again every 10 s</span>
+        <span id="freshness" class="freshness freshness-stale">stale</span>
       </p>
     </header>
     <main id="page" data-state="ready">
@@ -45,7 +45,7 @@
         <p id="remedy" class="remedy"></p>
       </section>
       <div class="state state-ready">
-        <p id="stale" class="stale" role="status" hidden></p>
+        <p id="stale" class="stale" role="status">The last reading failed for the throughput — the state root could not be resolved — so its figures are from 14:05:09, asked again every minute.</p>
         <p id="banner" class="banner" role="status" hidden></p>
         <section id="band" class="panel band" data-state="ready" aria-labelledby="band-heading">
           <div class="panel-head">
@@ -337,7 +337,7 @@
             <p id="throughput-empty" class="empty"></p>
           </div>
           <div class="section-ready">
-            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <p id="throughput-stale" class="stale" role="status">The last reading failed — the state root could not be resolved — so these are the figures from 14:05:09. The dashboard asks again every minute.</p>
             <ul id="throughput-problems" class="degraded" hidden></ul>
             <div id="windows" class="windows">
               <div class="window">

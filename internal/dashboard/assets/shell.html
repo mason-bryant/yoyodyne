@@ -76,6 +76,7 @@
       <div class="section-empty"><p id="pipeline-empty" class="empty"></p></div>
       <div class="section-ready">
         <ol id="stages" class="stages"></ol>
+        <ul id="pipeline-problems" class="degraded"></ul>
         <p id="pipeline-note" class="footnote"></p>
       </div>
     </section>
@@ -89,6 +90,7 @@
       <div class="section-error" role="alert"><p id="throughput-problem" class="problem"></p><p id="throughput-remedy" class="remedy"></p></div>
       <div class="section-empty"><p id="throughput-empty" class="empty"></p></div>
       <div class="section-ready">
+        <p id="throughput-stale" class="stale" role="status" hidden></p>
         <ul id="throughput-problems" class="degraded"></ul>
         <div id="windows" class="windows"></div>
       </div>

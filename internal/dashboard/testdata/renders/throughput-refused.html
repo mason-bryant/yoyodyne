@@ -1,483 +1,483 @@
 <!doctype html>
-<#document>
-  <html lang="en">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>yoyodyne — yoyo dashboard</title>
-      <link rel="stylesheet" href="../../assets/dashboard.css">
-    </head>
-    <body>
-      <header>
-        <div class="brand">
-          <span class="mark" aria-hidden="true">yoyo</span>
-          <h1>yoyodyne</h1>
-        </div>
-        <p class="observed">
-          observed
-          <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
-          <span id="freshness" class="freshness">asks again every 10 s</span>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark" aria-hidden="true">yoyo</span>
+        <h1>yoyodyne</h1>
+      </div>
+      <p class="observed">
+        observed
+        <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
+        <span id="freshness" class="freshness">asks again every 10 s</span>
+      </p>
+    </header>
+    <main id="page" data-state="ready">
+      <section class="state state-signin" aria-labelledby="signin-heading">
+        <h2 id="signin-heading">This dashboard needs its token</h2>
+        <p>
+          The token was printed once, in the terminal where
+          <code>yoyo dashboard</code>
+          was started. Paste it here; it is kept in this tab's session storage, scoped to this address and port, and is never put in a URL or a cookie.
         </p>
-      </header>
-      <main id="page" data-state="ready">
-        <section class="state state-signin" aria-labelledby="signin-heading">
-          <h2 id="signin-heading">This dashboard needs its token</h2>
-          <p>
-            The token was printed once, in the terminal where
-            <code>yoyo dashboard</code>
-            was started. Paste it here; it is kept in this tab's session storage, scoped to this address and port, and is never put in a URL or a cookie.
-          </p>
-          <p id="signin-note" role="alert" class="note"></p>
-          <form id="signin">
-            <label for="token">Token</label>
-            <input id="token" name="token" type="password" autocomplete="off" required>
-            <button type="submit">Open the dashboard</button>
-          </form>
+        <p id="signin-note" role="alert" class="note"></p>
+        <form id="signin">
+          <label for="token">Token</label>
+          <input id="token" name="token" type="password" autocomplete="off" required>
+          <button type="submit">Open the dashboard</button>
+        </form>
+      </section>
+      <section class="state state-loading" aria-live="polite">
+        <p class="waiting">
+          <span class="pulse" aria-hidden="true"></span>
+          Reading where the harness stands…
+        </p>
+      </section>
+      <section class="state state-error" role="alert">
+        <h2>The read model could not be read</h2>
+        <p id="problem" class="problem"></p>
+        <p id="remedy" class="remedy"></p>
+      </section>
+      <div class="state state-ready">
+        <p id="stale" class="stale" role="status" hidden></p>
+        <p id="banner" class="banner" role="status" hidden></p>
+        <section id="band" class="panel band" data-state="ready" aria-labelledby="band-heading">
+          <div class="panel-head">
+            <h2 id="band-heading">Where the harness stands</h2>
+            <p class="panel-note">
+              the four lines
+              <code>yoyo status</code>
+              prints, and what landed
+            </p>
+          </div>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Reading…
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="band-problem" class="problem"></p>
+            <p id="band-remedy" class="remedy"></p>
+          </div>
+          <div class="section-empty">
+            <p id="band-empty" class="empty"></p>
+          </div>
+          <div class="section-ready">
+            <dl id="tiles" class="tiles">
+              <div class="tile">
+                <dt>Running</dt>
+                <dd>
+                  <span class="figure">4</span>
+                  <span class="unit">developer runs</span>
+                </dd>
+              </div>
+              <div class="tile">
+                <dt>Working</dt>
+                <dd>
+                  <span class="figure">1</span>
+                  <span class="unit">conversation with a turn in flight</span>
+                </dd>
+              </div>
+              <div class="tile">
+                <dt>Not startable</dt>
+                <dd>
+                  <span class="figure">6</span>
+                  <span class="unit">admitted items nothing will pull</span>
+                  <span class="detail">of 9 admitted items; awaiting a decision: 1, awaiting carry-out: 1</span>
+                </dd>
+              </div>
+              <div class="tile tile-attention">
+                <dt>Needs a human</dt>
+                <dd>
+                  <span class="figure">3</span>
+                  <span class="unit">things waiting on a person</span>
+                </dd>
+              </div>
+              <div class="tile tile-unreadable">
+                <dt>Landed</dt>
+                <dd>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
+                </dd>
+              </div>
+              <div class="tile tile-unreadable">
+                <dt>Cost</dt>
+                <dd>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
+                </dd>
+              </div>
+            </dl>
+            <ul id="band-problems" class="degraded" hidden></ul>
+          </div>
         </section>
-        <section class="state state-loading" aria-live="polite">
-          <p class="waiting">
-            <span class="pulse" aria-hidden="true"></span>
-            Reading where the harness stands…
-          </p>
+        <section id="live" class="panel live" data-state="ready" aria-labelledby="live-heading">
+          <div class="panel-head">
+            <h2 id="live-heading">Running now</h2>
+            <p class="panel-note">each developer run and each conversation with a turn in flight</p>
+          </div>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Reading…
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="live-problem" class="problem"></p>
+            <p id="live-remedy" class="remedy"></p>
+          </div>
+          <div class="section-empty">
+            <p id="live-empty" class="empty"></p>
+          </div>
+          <div class="section-ready">
+            <ul id="live-problems" class="degraded" hidden></ul>
+            <ul id="cards" class="cards">
+              <li class="card card-run">
+                <div class="card-head">
+                  <span class="card-kind">developer run</span>
+                  <span class="phase">developing</span>
+                </div>
+                <h3 class="card-title">Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states</h3>
+                <p class="card-meta">
+                  <span class="item-id">yoyodyne-ifd.141.3</span>
+                  <span class="sep"> · </span>
+                  <span class="elapsed">12m elapsed</span>
+                  <span class="sep"> · </span>
+                  <span class="spend">$3.41 so far</span>
+                </p>
+                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
+                <p class="card-id">started 2026-09-19 13:53:00 · run-c07d6849e1f55fd7b982600b8f97a303</p>
+              </li>
+              <li class="card card-run">
+                <div class="card-head">
+                  <span class="card-kind">developer run</span>
+                  <span class="phase">reviewing</span>
+                </div>
+                <h3 class="card-title">The heartbeat names the forge when a merge is queued</h3>
+                <p class="card-meta">
+                  <span class="item-id">yoyodyne-ifd.201</span>
+                  <span class="sep"> · </span>
+                  <span class="elapsed">3m elapsed</span>
+                  <span class="sep"> · </span>
+                  <span class="spend spend-unknown">cost unknown (its event log is gone)</span>
+                </p>
+                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
+                <p class="card-id">started 2026-09-19 14:02:00 · run-49839de311bd6b4d06fbfb41f22abdf1</p>
+              </li>
+              <li class="card card-run">
+                <div class="card-head">
+                  <span class="card-kind">developer run</span>
+                  <span class="phase">approved, resuming integration</span>
+                </div>
+                <h3 class="card-title">Recurring tasks say when a firing was skipped</h3>
+                <p class="card-meta">
+                  <span class="item-id">yoyodyne-ifd.212</span>
+                  <span class="sep"> · </span>
+                  <span class="elapsed">2h45m elapsed</span>
+                  <span class="sep"> · </span>
+                  <span class="spend">$12.80 so far</span>
+                </p>
+                <p class="card-provenance">claude-code · claude-opus-5 · account pool-b</p>
+                <p class="card-id">started 2026-09-19 11:20:00 · run-5035c832b1e04d7fa9c3e2b8d1f06a11</p>
+              </li>
+              <li class="card card-run">
+                <div class="card-head">
+                  <span class="card-kind">developer run</span>
+                  <span class="phase">developing</span>
+                </div>
+                <h3 class="card-title">The sweep names the ref it preserved work on</h3>
+                <p class="card-meta">
+                  <span class="item-id">yoyodyne-ifd.230</span>
+                  <span class="sep"> · </span>
+                  <span class="elapsed">55m elapsed</span>
+                  <span class="sep"> · </span>
+                  <span class="spend">$5.10 so far</span>
+                </p>
+                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
+                <p class="card-id">started 2026-09-19 13:10:00 · run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</p>
+              </li>
+              <li class="card card-turn">
+                <div class="card-head">
+                  <span class="card-kind">conversation</span>
+                  <span class="phase">a turn in flight</span>
+                </div>
+                <h3 class="card-title">product-manager</h3>
+                <p class="card-meta">
+                  <span class="item-id">product-manager</span>
+                  <span class="sep"> · </span>
+                  <span class="elapsed">for 40s after 270 recorded turns</span>
+                </p>
+                <p class="card-provenance">claude-code · claude-fable-5-1</p>
+              </li>
+            </ul>
+            <p id="live-note" class="footnote" hidden></p>
+          </div>
         </section>
-        <section class="state state-error" role="alert">
-          <h2>The read model could not be read</h2>
-          <p id="problem" class="problem"></p>
-          <p id="remedy" class="remedy"></p>
+        <section id="pipeline" class="panel pipeline" data-state="ready" aria-labelledby="pipeline-heading">
+          <div class="panel-head">
+            <h2 id="pipeline-heading">Where the work stands</h2>
+            <p class="panel-note">admitted work, what holds it, what is running, and what landed</p>
+          </div>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Reading…
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="pipeline-problem" class="problem"></p>
+            <p id="pipeline-remedy" class="remedy"></p>
+          </div>
+          <div class="section-empty">
+            <p id="pipeline-empty" class="empty"></p>
+          </div>
+          <div class="section-ready">
+            <ol id="stages" class="stages">
+              <li class="stage stage-admitted">
+                <span class="stage-label">Admitted</span>
+                <span class="stage-figure">9</span>
+                <span class="stage-unit">items</span>
+              </li>
+              <li class="stage stage-held">
+                <span class="stage-label">Held back</span>
+                <span class="stage-figure">6</span>
+                <span class="stage-unit">items nothing will pull</span>
+                <ul class="piles">
+                  <li class="pile pile-largest">
+                    <span class="pile-figure">2</span>
+                    <span class="pile-label">held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)</span>
+                    <span class="pile-whose">whose move: the development manager's, or the harness carrying her decision out</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">paused by a directive</span>
+                    <span class="pile-whose">whose move: the operator's, through yoyo directive resolve</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">parked</span>
+                    <span class="pile-whose">whose move: whoever parked it</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">waiting on other work</span>
+                    <span class="pile-whose">whose move: nobody's; it clears as that work lands</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">carried by a conversation, not a run</span>
+                    <span class="pile-whose">whose move: the role the item names</span>
+                  </li>
+                </ul>
+              </li>
+              <li class="stage stage-flowing">
+                <span class="stage-label">Startable</span>
+                <span class="stage-figure">3</span>
+                <span class="stage-unit">items the harness pulls next</span>
+              </li>
+              <li class="stage stage-flowing">
+                <span class="stage-label">Running</span>
+                <span class="stage-figure">4</span>
+                <span class="stage-unit">developer runs</span>
+                <ul class="piles">
+                  <li class="pile">
+                    <span class="pile-figure">2</span>
+                    <span class="pile-label">developing</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">reviewing</span>
+                  </li>
+                  <li class="pile">
+                    <span class="pile-figure">1</span>
+                    <span class="pile-label">integrating</span>
+                  </li>
+                </ul>
+              </li>
+              <li class="stage stage-unreadable">
+                <span class="stage-label">Landed</span>
+                <span class="stage-figure">—</span>
+                <span class="stage-unit">could not be read</span>
+              </li>
+            </ol>
+            <ul id="pipeline-problems" class="degraded" hidden></ul>
+            <p id="pipeline-note" class="footnote">Needs a human: 3 things waiting on a person.</p>
+          </div>
         </section>
-        <div class="state state-ready">
-          <p id="stale" class="stale" role="status" hidden></p>
-          <p id="banner" class="banner" role="status" hidden></p>
-          <section id="band" class="panel band" data-state="ready" aria-labelledby="band-heading">
-            <div class="panel-head">
-              <h2 id="band-heading">Where the harness stands</h2>
-              <p class="panel-note">
-                the four lines
-                <code>yoyo status</code>
-                prints, and what landed
-              </p>
-            </div>
-            <div class="section-loading">
-              <p class="waiting">
-                <span class="pulse" aria-hidden="true"></span>
-                Reading…
-              </p>
-            </div>
-            <div class="section-error" role="alert">
-              <p id="band-problem" class="problem"></p>
-              <p id="band-remedy" class="remedy"></p>
-            </div>
-            <div class="section-empty">
-              <p id="band-empty" class="empty"></p>
-            </div>
-            <div class="section-ready">
-              <dl id="tiles" class="tiles">
-                <div class="tile">
-                  <dt>Running</dt>
-                  <dd>
-                    <span class="figure">4</span>
-                    <span class="unit">developer runs</span>
-                  </dd>
+        <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
+          <div class="panel-head">
+            <h2 id="throughput-heading">Throughput and cost</h2>
+            <p class="panel-note">
+              local calendar days, today counting as the first; the figures
+              <code>yoyo status --spend</code>
+              prints
+            </p>
+          </div>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Pricing the last seven days…
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="throughput-problem" class="problem">Could not be read: the state root could not be resolved</p>
+            <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
+          </div>
+          <div class="section-empty">
+            <p id="throughput-empty" class="empty"></p>
+          </div>
+          <div class="section-ready">
+            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <ul id="throughput-problems" class="degraded"></ul>
+            <div id="windows" class="windows"></div>
+          </div>
+        </section>
+        <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">
+          <div class="panel-head">
+            <h2 id="capacity-heading">Provider capacity</h2>
+            <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
+          </div>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Reading…
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="capacity-problem" class="problem"></p>
+            <p id="capacity-remedy" class="remedy"></p>
+          </div>
+          <div class="section-empty">
+            <p id="capacity-empty" class="empty"></p>
+          </div>
+          <div class="section-ready">
+            <p id="capacity-hold" class="hold" hidden></p>
+            <ul id="capacity-problems" class="degraded" hidden></ul>
+            <ul id="capacity-runs" class="held-list">
+              <li class="held held-waiting">
+                <div class="held-head">
+                  <span class="held-kind">run</span>
+                  <span class="held-state">waiting</span>
                 </div>
-                <div class="tile">
-                  <dt>Working</dt>
-                  <dd>
-                    <span class="figure">1</span>
-                    <span class="unit">conversation with a turn in flight</span>
-                  </dd>
+                <h3 class="held-title">yoyodyne-ifd.230</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Refused by</dt>
+                    <dd>an exhausted usage limit (seven_day)</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Phase</dt>
+                    <dd>developing</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Since</dt>
+                    <dd>2026-09-19 13:40:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Resets</dt>
+                    <dd>2026-09-19 18:50:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Waited</dt>
+                    <dd>25m of the pause budget</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Change</dt>
+                    <dd>preserved</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Run</dt>
+                    <dd>run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</dd>
+                  </div>
+                </dl>
+                <p class="held-remedy">What to do: nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; `yoyo resume` with the work item named asks now instead of at the probe</p>
+              </li>
+              <li class="held held-capacity-blocked">
+                <div class="held-head">
+                  <span class="held-kind">run</span>
+                  <span class="held-state">capacity-blocked</span>
                 </div>
-                <div class="tile">
-                  <dt>Not startable</dt>
-                  <dd>
-                    <span class="figure">6</span>
-                    <span class="unit">admitted items nothing will pull</span>
-                    <span class="detail">of 9 admitted items; awaiting a decision: 1, awaiting carry-out: 1</span>
-                  </dd>
+                <h3 class="held-title">yoyodyne-ifd.150</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Refused by</dt>
+                    <dd>an exhausted usage limit (five_hour)</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Phase</dt>
+                    <dd>reviewing</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Since</dt>
+                    <dd>2026-09-18 22:12:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Resets</dt>
+                    <dd>no reset named, and nothing probes: the run stopped</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Waited</dt>
+                    <dd>4h00m of the pause budget</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Change</dt>
+                    <dd>preserved</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Run</dt>
+                    <dd>run-a17c9b40e6f24c1d8b3a5f0e9d2c7b44</dd>
+                  </div>
+                </dl>
+                <p class="held-remedy">What to do: the run stopped and its item is back with the development manager; what lets it run again is more provider capacity, a longer execution.usage_limit_max_pause, or a replan</p>
+              </li>
+            </ul>
+            <ul id="capacity-conversations" class="held-list">
+              <li class="held held-capacity-blocked">
+                <div class="held-head">
+                  <span class="held-kind">conversation</span>
+                  <span class="held-state">capacity-blocked</span>
                 </div>
-                <div class="tile tile-attention">
-                  <dt>Needs a human</dt>
-                  <dd>
-                    <span class="figure">3</span>
-                    <span class="unit">things waiting on a person</span>
-                  </dd>
-                </div>
-                <div class="tile tile-unreadable">
-                  <dt>Landed</dt>
-                  <dd>
-                    <span class="figure">—</span>
-                    <span class="unit">could not be read</span>
-                  </dd>
-                </div>
-                <div class="tile tile-unreadable">
-                  <dt>Cost</dt>
-                  <dd>
-                    <span class="figure">—</span>
-                    <span class="unit">could not be read</span>
-                  </dd>
-                </div>
-              </dl>
-              <ul id="band-problems" class="degraded" hidden></ul>
-            </div>
-          </section>
-          <section id="live" class="panel live" data-state="ready" aria-labelledby="live-heading">
-            <div class="panel-head">
-              <h2 id="live-heading">Running now</h2>
-              <p class="panel-note">each developer run and each conversation with a turn in flight</p>
-            </div>
-            <div class="section-loading">
-              <p class="waiting">
-                <span class="pulse" aria-hidden="true"></span>
-                Reading…
-              </p>
-            </div>
-            <div class="section-error" role="alert">
-              <p id="live-problem" class="problem"></p>
-              <p id="live-remedy" class="remedy"></p>
-            </div>
-            <div class="section-empty">
-              <p id="live-empty" class="empty"></p>
-            </div>
-            <div class="section-ready">
-              <ul id="live-problems" class="degraded" hidden></ul>
-              <ul id="cards" class="cards">
-                <li class="card card-run">
-                  <div class="card-head">
-                    <span class="card-kind">developer run</span>
-                    <span class="phase">developing</span>
+                <h3 class="held-title">the product manager's conversation, chat-91253e0e, is waiting on the provider</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Refused by</dt>
+                    <dd>an exhausted usage limit (seven_day)</dd>
                   </div>
-                  <h3 class="card-title">Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states</h3>
-                  <p class="card-meta">
-                    <span class="item-id">yoyodyne-ifd.141.3</span>
-                    <span class="sep"> · </span>
-                    <span class="elapsed">12m elapsed</span>
-                    <span class="sep"> · </span>
-                    <span class="spend">$3.41 so far</span>
-                  </p>
-                  <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                  <p class="card-id">started 2026-09-19 13:53:00 · run-c07d6849e1f55fd7b982600b8f97a303</p>
-                </li>
-                <li class="card card-run">
-                  <div class="card-head">
-                    <span class="card-kind">developer run</span>
-                    <span class="phase">reviewing</span>
+                  <div class="figure-row">
+                    <dt>Model</dt>
+                    <dd>claude-opus-5</dd>
                   </div>
-                  <h3 class="card-title">The heartbeat names the forge when a merge is queued</h3>
-                  <p class="card-meta">
-                    <span class="item-id">yoyodyne-ifd.201</span>
-                    <span class="sep"> · </span>
-                    <span class="elapsed">3m elapsed</span>
-                    <span class="sep"> · </span>
-                    <span class="spend spend-unknown">cost unknown (its event log is gone)</span>
-                  </p>
-                  <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                  <p class="card-id">started 2026-09-19 14:02:00 · run-49839de311bd6b4d06fbfb41f22abdf1</p>
-                </li>
-                <li class="card card-run">
-                  <div class="card-head">
-                    <span class="card-kind">developer run</span>
-                    <span class="phase">approved, resuming integration</span>
+                  <div class="figure-row">
+                    <dt>Since</dt>
+                    <dd>2026-09-19 12:02:00</dd>
                   </div>
-                  <h3 class="card-title">Recurring tasks say when a firing was skipped</h3>
-                  <p class="card-meta">
-                    <span class="item-id">yoyodyne-ifd.212</span>
-                    <span class="sep"> · </span>
-                    <span class="elapsed">2h45m elapsed</span>
-                    <span class="sep"> · </span>
-                    <span class="spend">$12.80 so far</span>
-                  </p>
-                  <p class="card-provenance">claude-code · claude-opus-5 · account pool-b</p>
-                  <p class="card-id">started 2026-09-19 11:20:00 · run-5035c832b1e04d7fa9c3e2b8d1f06a11</p>
-                </li>
-                <li class="card card-run">
-                  <div class="card-head">
-                    <span class="card-kind">developer run</span>
-                    <span class="phase">developing</span>
+                  <div class="figure-row">
+                    <dt>Resets</dt>
+                    <dd>2026-09-19 18:50:00</dd>
                   </div>
-                  <h3 class="card-title">The sweep names the ref it preserved work on</h3>
-                  <p class="card-meta">
-                    <span class="item-id">yoyodyne-ifd.230</span>
-                    <span class="sep"> · </span>
-                    <span class="elapsed">55m elapsed</span>
-                    <span class="sep"> · </span>
-                    <span class="spend">$5.10 so far</span>
-                  </p>
-                  <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                  <p class="card-id">started 2026-09-19 13:10:00 · run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</p>
-                </li>
-                <li class="card card-turn">
-                  <div class="card-head">
-                    <span class="card-kind">conversation</span>
-                    <span class="phase">a turn in flight</span>
+                  <div class="figure-row">
+                    <dt>Refusals</dt>
+                    <dd>3 turns stopped and still refused</dd>
                   </div>
-                  <h3 class="card-title">product-manager</h3>
-                  <p class="card-meta">
-                    <span class="item-id">product-manager</span>
-                    <span class="sep"> · </span>
-                    <span class="elapsed">for 40s after 270 recorded turns</span>
-                  </p>
-                  <p class="card-provenance">claude-code · claude-fable-5-1</p>
-                </li>
-              </ul>
-              <p id="live-note" class="footnote" hidden></p>
-            </div>
-          </section>
-          <section id="pipeline" class="panel pipeline" data-state="ready" aria-labelledby="pipeline-heading">
-            <div class="panel-head">
-              <h2 id="pipeline-heading">Where the work stands</h2>
-              <p class="panel-note">admitted work, what holds it, what is running, and what landed</p>
-            </div>
-            <div class="section-loading">
-              <p class="waiting">
-                <span class="pulse" aria-hidden="true"></span>
-                Reading…
-              </p>
-            </div>
-            <div class="section-error" role="alert">
-              <p id="pipeline-problem" class="problem"></p>
-              <p id="pipeline-remedy" class="remedy"></p>
-            </div>
-            <div class="section-empty">
-              <p id="pipeline-empty" class="empty"></p>
-            </div>
-            <div class="section-ready">
-              <ol id="stages" class="stages">
-                <li class="stage stage-admitted">
-                  <span class="stage-label">Admitted</span>
-                  <span class="stage-figure">9</span>
-                  <span class="stage-unit">items</span>
-                </li>
-                <li class="stage stage-held">
-                  <span class="stage-label">Held back</span>
-                  <span class="stage-figure">6</span>
-                  <span class="stage-unit">items nothing will pull</span>
-                  <ul class="piles">
-                    <li class="pile pile-largest">
-                      <span class="pile-figure">2</span>
-                      <span class="pile-label">held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)</span>
-                      <span class="pile-whose">whose move: the development manager's, or the harness carrying her decision out</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">paused by a directive</span>
-                      <span class="pile-whose">whose move: the operator's, through yoyo directive resolve</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">parked</span>
-                      <span class="pile-whose">whose move: whoever parked it</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">waiting on other work</span>
-                      <span class="pile-whose">whose move: nobody's; it clears as that work lands</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">carried by a conversation, not a run</span>
-                      <span class="pile-whose">whose move: the role the item names</span>
-                    </li>
-                  </ul>
-                </li>
-                <li class="stage stage-flowing">
-                  <span class="stage-label">Startable</span>
-                  <span class="stage-figure">3</span>
-                  <span class="stage-unit">items the harness pulls next</span>
-                </li>
-                <li class="stage stage-flowing">
-                  <span class="stage-label">Running</span>
-                  <span class="stage-figure">4</span>
-                  <span class="stage-unit">developer runs</span>
-                  <ul class="piles">
-                    <li class="pile">
-                      <span class="pile-figure">2</span>
-                      <span class="pile-label">developing</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">reviewing</span>
-                    </li>
-                    <li class="pile">
-                      <span class="pile-figure">1</span>
-                      <span class="pile-label">integrating</span>
-                    </li>
-                  </ul>
-                </li>
-                <li class="stage stage-unreadable">
-                  <span class="stage-label">Landed</span>
-                  <span class="stage-figure">—</span>
-                  <span class="stage-unit">could not be read</span>
-                </li>
-              </ol>
-              <p id="pipeline-note" class="footnote">Needs a human: 3 things waiting on a person.</p>
-            </div>
-          </section>
-          <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
-            <div class="panel-head">
-              <h2 id="throughput-heading">Throughput and cost</h2>
-              <p class="panel-note">
-                local calendar days, today counting as the first; the figures
-                <code>yoyo status --spend</code>
-                prints
-              </p>
-            </div>
-            <div class="section-loading">
-              <p class="waiting">
-                <span class="pulse" aria-hidden="true"></span>
-                Pricing the last seven days…
-              </p>
-            </div>
-            <div class="section-error" role="alert">
-              <p id="throughput-problem" class="problem">Could not be read: the state root could not be resolved</p>
-              <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
-            </div>
-            <div class="section-empty">
-              <p id="throughput-empty" class="empty"></p>
-            </div>
-            <div class="section-ready">
-              <ul id="throughput-problems" class="degraded"></ul>
-              <div id="windows" class="windows"></div>
-            </div>
-          </section>
-          <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">
-            <div class="panel-head">
-              <h2 id="capacity-heading">Provider capacity</h2>
-              <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
-            </div>
-            <div class="section-loading">
-              <p class="waiting">
-                <span class="pulse" aria-hidden="true"></span>
-                Reading…
-              </p>
-            </div>
-            <div class="section-error" role="alert">
-              <p id="capacity-problem" class="problem"></p>
-              <p id="capacity-remedy" class="remedy"></p>
-            </div>
-            <div class="section-empty">
-              <p id="capacity-empty" class="empty"></p>
-            </div>
-            <div class="section-ready">
-              <p id="capacity-hold" class="hold" hidden></p>
-              <ul id="capacity-problems" class="degraded" hidden></ul>
-              <ul id="capacity-runs" class="held-list">
-                <li class="held held-waiting">
-                  <div class="held-head">
-                    <span class="held-kind">run</span>
-                    <span class="held-state">waiting</span>
+                  <div class="figure-row">
+                    <dt>Conversation</dt>
+                    <dd>chat-91253e0e070c17b0663651cc48602122</dd>
                   </div>
-                  <h3 class="held-title">yoyodyne-ifd.230</h3>
-                  <dl class="held-facts">
-                    <div class="figure-row">
-                      <dt>Refused by</dt>
-                      <dd>an exhausted usage limit (seven_day)</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Phase</dt>
-                      <dd>developing</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Since</dt>
-                      <dd>2026-09-19 13:40:00</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Resets</dt>
-                      <dd>2026-09-19 18:50:00</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Waited</dt>
-                      <dd>25m of the pause budget</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Change</dt>
-                      <dd>preserved</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Run</dt>
-                      <dd>run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</dd>
-                    </div>
-                  </dl>
-                  <p class="held-remedy">What to do: nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; `yoyo resume` with the work item named asks now instead of at the probe</p>
-                </li>
-                <li class="held held-capacity-blocked">
-                  <div class="held-head">
-                    <span class="held-kind">run</span>
-                    <span class="held-state">capacity-blocked</span>
-                  </div>
-                  <h3 class="held-title">yoyodyne-ifd.150</h3>
-                  <dl class="held-facts">
-                    <div class="figure-row">
-                      <dt>Refused by</dt>
-                      <dd>an exhausted usage limit (five_hour)</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Phase</dt>
-                      <dd>reviewing</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Since</dt>
-                      <dd>2026-09-18 22:12:00</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Resets</dt>
-                      <dd>no reset named; it asks again at the probe interval</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Waited</dt>
-                      <dd>4h00m of the pause budget</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Change</dt>
-                      <dd>preserved</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Run</dt>
-                      <dd>run-a17c9b40e6f24c1d8b3a5f0e9d2c7b44</dd>
-                    </div>
-                  </dl>
-                  <p class="held-remedy">What to do: the run stopped and its item is back with the development manager; what lets it run again is more provider capacity, a longer execution.usage_limit_max_pause, or a replan</p>
-                </li>
-              </ul>
-              <ul id="capacity-conversations" class="held-list">
-                <li class="held held-capacity-blocked">
-                  <div class="held-head">
-                    <span class="held-kind">conversation</span>
-                    <span class="held-state">capacity-blocked</span>
-                  </div>
-                  <h3 class="held-title">the product manager's conversation, chat-91253e0e, is waiting on the provider</h3>
-                  <dl class="held-facts">
-                    <div class="figure-row">
-                      <dt>Refused by</dt>
-                      <dd>an exhausted usage limit (seven_day)</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Model</dt>
-                      <dd>claude-opus-5</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Since</dt>
-                      <dd>2026-09-19 12:02:00</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Resets</dt>
-                      <dd>2026-09-19 18:50:00</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Refusals</dt>
-                      <dd>3 turns stopped and still refused</dd>
-                    </div>
-                    <div class="figure-row">
-                      <dt>Conversation</dt>
-                      <dd>chat-91253e0e070c17b0663651cc48602122</dd>
-                    </div>
-                  </dl>
-                  <p class="held-remedy">What to do: nothing waits on it: the turn failed where it was asked for, and asking again once the window lifts is what serves it; enabling failover on the agent is what would move the next turn onto another model before then</p>
-                </li>
-              </ul>
-            </div>
-          </section>
-        </div>
-      </main>
-      <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>
-    </body>
-  </html>
-</#document>
+                </dl>
+                <p class="held-remedy">What to do: nothing waits on it: the turn failed where it was asked for, and asking again once the window lifts is what serves it; enabling failover on the agent is what would move the next turn onto another model before then</p>
+              </li>
+            </ul>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>
+  </body>
+</html>
