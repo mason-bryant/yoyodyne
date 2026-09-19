@@ -1,0 +1,182 @@
+<!doctype html>
+<#document>
+  <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>yoyodyne — yoyo dashboard</title>
+      <link rel="stylesheet" href="../../assets/dashboard.css">
+    </head>
+    <body>
+      <header>
+        <div class="brand">
+          <span class="mark" aria-hidden="true">yoyo</span>
+          <h1>yoyodyne</h1>
+        </div>
+        <p class="observed">
+          observed
+          <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
+          <span id="freshness" class="freshness">asks again every 10 s</span>
+        </p>
+      </header>
+      <main id="page" data-state="ready">
+        <section class="state state-signin" aria-labelledby="signin-heading">
+          <h2 id="signin-heading">This dashboard needs its token</h2>
+          <p>
+            The token was printed once, in the terminal where
+            <code>yoyo dashboard</code>
+            was started. Paste it here; it is kept in this tab's session storage, scoped to this address and port, and is never put in a URL or a cookie.
+          </p>
+          <p id="signin-note" role="alert" class="note"></p>
+          <form id="signin">
+            <label for="token">Token</label>
+            <input id="token" name="token" type="password" autocomplete="off" required>
+            <button type="submit">Open the dashboard</button>
+          </form>
+        </section>
+        <section class="state state-loading" aria-live="polite">
+          <p class="waiting">
+            <span class="pulse" aria-hidden="true"></span>
+            Reading where the harness stands…
+          </p>
+        </section>
+        <section class="state state-error" role="alert">
+          <h2>The read model could not be read</h2>
+          <p id="problem" class="problem"></p>
+          <p id="remedy" class="remedy"></p>
+        </section>
+        <div class="state state-ready">
+          <p id="stale" class="stale" role="status" hidden></p>
+          <p id="banner" class="banner" role="status" hidden></p>
+          <section id="band" class="panel band" data-state="error" aria-labelledby="band-heading">
+            <div class="panel-head">
+              <h2 id="band-heading">Where the harness stands</h2>
+              <p class="panel-note">
+                the four lines
+                <code>yoyo status</code>
+                prints, and what landed
+              </p>
+            </div>
+            <div class="section-loading">
+              <p class="waiting">
+                <span class="pulse" aria-hidden="true"></span>
+                Reading…
+              </p>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="band-problem" class="problem">Could not be read: the runs in flight could not be read: open runs: input/output error; the conversations could not be read: open conversations: input/output error; the admitted work could not be read: bd list: signal: killed; the operator's hold could not be read: open pause.json: input/output error</p>
+              <p id="band-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+            </div>
+            <div class="section-empty">
+              <p id="band-empty" class="empty"></p>
+            </div>
+            <div class="section-ready">
+              <dl id="tiles" class="tiles"></dl>
+              <ul id="band-problems" class="degraded"></ul>
+            </div>
+          </section>
+          <section id="live" class="panel live" data-state="error" aria-labelledby="live-heading">
+            <div class="panel-head">
+              <h2 id="live-heading">Running now</h2>
+              <p class="panel-note">each developer run and each conversation with a turn in flight</p>
+            </div>
+            <div class="section-loading">
+              <p class="waiting">
+                <span class="pulse" aria-hidden="true"></span>
+                Reading…
+              </p>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="live-problem" class="problem">Could not be read: the runs in flight could not be read: open runs: input/output error; the conversations could not be read: open conversations: input/output error</p>
+              <p id="live-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+            </div>
+            <div class="section-empty">
+              <p id="live-empty" class="empty"></p>
+            </div>
+            <div class="section-ready">
+              <ul id="live-problems" class="degraded"></ul>
+              <ul id="cards" class="cards"></ul>
+              <p id="live-note" class="footnote" hidden></p>
+            </div>
+          </section>
+          <section id="pipeline" class="panel pipeline" data-state="error" aria-labelledby="pipeline-heading">
+            <div class="panel-head">
+              <h2 id="pipeline-heading">Where the work stands</h2>
+              <p class="panel-note">admitted work, what holds it, what is running, and what landed</p>
+            </div>
+            <div class="section-loading">
+              <p class="waiting">
+                <span class="pulse" aria-hidden="true"></span>
+                Reading…
+              </p>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="pipeline-problem" class="problem">Could not be read: the admitted work could not be read: bd list: signal: killed</p>
+              <p id="pipeline-remedy" class="remedy">The admitted work is read from the tracker; yoyo doctor says whether bd answers in this checkout, and yoyo status prints the same refusal.</p>
+            </div>
+            <div class="section-empty">
+              <p id="pipeline-empty" class="empty"></p>
+            </div>
+            <div class="section-ready">
+              <ol id="stages" class="stages"></ol>
+              <p id="pipeline-note" class="footnote"></p>
+            </div>
+          </section>
+          <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
+            <div class="panel-head">
+              <h2 id="throughput-heading">Throughput and cost</h2>
+              <p class="panel-note">
+                local calendar days, today counting as the first; the figures
+                <code>yoyo status --spend</code>
+                prints
+              </p>
+            </div>
+            <div class="section-loading">
+              <p class="waiting">
+                <span class="pulse" aria-hidden="true"></span>
+                Pricing the last seven days…
+              </p>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="throughput-problem" class="problem">Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read: open streams: input/output error</p>
+              <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
+            </div>
+            <div class="section-empty">
+              <p id="throughput-empty" class="empty"></p>
+            </div>
+            <div class="section-ready">
+              <ul id="throughput-problems" class="degraded"></ul>
+              <div id="windows" class="windows"></div>
+            </div>
+          </section>
+          <section id="capacity" class="panel capacity" data-state="error" aria-labelledby="capacity-heading">
+            <div class="panel-head">
+              <h2 id="capacity-heading">Provider capacity</h2>
+              <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
+            </div>
+            <div class="section-loading">
+              <p class="waiting">
+                <span class="pulse" aria-hidden="true"></span>
+                Reading…
+              </p>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="capacity-problem" class="problem">Could not be read: the run records could not be read: open runs: input/output error; the refusal log could not be read: open usage-limits.jsonl: input/output error</p>
+              <p id="capacity-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+            </div>
+            <div class="section-empty">
+              <p id="capacity-empty" class="empty"></p>
+            </div>
+            <div class="section-ready">
+              <p id="capacity-hold" class="hold" hidden></p>
+              <ul id="capacity-problems" class="degraded"></ul>
+              <ul id="capacity-runs" class="held-list"></ul>
+              <ul id="capacity-conversations" class="held-list"></ul>
+            </div>
+          </section>
+        </div>
+      </main>
+      <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>
+    </body>
+  </html>
+</#document>

@@ -1,0 +1,132 @@
+{
+  "signin": {
+    "page": "signin",
+    "sections": {
+      "band": "loading",
+      "live": "loading",
+      "pipeline": "loading",
+      "throughput": "loading",
+      "capacity": "loading"
+    }
+  },
+  "loading": {
+    "page": "loading",
+    "sections": {
+      "band": "loading",
+      "live": "loading",
+      "pipeline": "loading",
+      "throughput": "loading",
+      "capacity": "loading"
+    }
+  },
+  "quiet": {
+    "page": "ready",
+    "sections": {
+      "band": "empty",
+      "live": "empty",
+      "pipeline": "empty",
+      "throughput": "empty",
+      "capacity": "empty"
+    }
+  },
+  "busy": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    }
+  },
+  "held": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    }
+  },
+  "degraded": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "error",
+      "throughput": "ready",
+      "capacity": "ready"
+    }
+  },
+  "unreadable": {
+    "page": "ready",
+    "sections": {
+      "band": "error",
+      "live": "error",
+      "pipeline": "error",
+      "throughput": "error",
+      "capacity": "error"
+    }
+  },
+  "throughput-pending": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "loading",
+      "capacity": "ready"
+    }
+  },
+  "throughput-refused": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "error",
+      "capacity": "ready"
+    }
+  },
+  "refused": {
+    "page": "error",
+    "sections": {
+      "band": "loading",
+      "live": "loading",
+      "pipeline": "loading",
+      "throughput": "loading",
+      "capacity": "loading"
+    }
+  },
+  "unreachable": {
+    "page": "error",
+    "sections": {
+      "band": "loading",
+      "live": "loading",
+      "pipeline": "loading",
+      "throughput": "loading",
+      "capacity": "loading"
+    }
+  },
+  "wrong-token": {
+    "page": "signin",
+    "sections": {
+      "band": "loading",
+      "live": "loading",
+      "pipeline": "loading",
+      "throughput": "loading",
+      "capacity": "loading"
+    }
+  },
+  "stale": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    }
+  }
+}

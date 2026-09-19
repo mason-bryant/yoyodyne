@@ -479,23 +479,74 @@ func (q Queue) Render() string {
 // read, and the standing status names it per item: a second surface wording the
 // same refusal differently is the disagreement one derivation exists to prevent.
 func (e Entry) Hold() string {
+	_, reason := e.hold()
+	return reason
+}
+
+// HoldKind is which of the refusals Hold explains this entry carries, in a
+// closed vocabulary a surface can group by. It exists for the surface that
+// shows where admitted work accumulates: the sentence says what holds one
+// item, and the kind says which pile it is in, so a pipeline is counted from
+// the same reading the refusals are worded from rather than from a second
+// parse of the sentences.
+//
+// It is owned here, by the queue, so that no surface redeclares it. Two of its
+// values are refusals the queue itself never makes — a directive pausing the
+// item, and the harness choosing nothing at all — and they are here all the
+// same, because a vocabulary for why an admitted item is not pulled that left
+// two of the reasons to another package would be two vocabularies.
+type HoldKind string
+
+const (
+	// HeldForAPerson is a stoppage somebody has to release: a decision still
+	// to be made, or one recorded and not yet carried out.
+	HeldForAPerson HoldKind = "held"
+	// HeldParked is an item somebody deliberately took out of reach.
+	HeldParked HoldKind = "parked"
+	// HeldWaitingOn is an item waiting on other unfinished work, which clears on
+	// its own as that work lands.
+	HeldWaitingOn HoldKind = "waiting"
+	// HeldByConversation is work no run carries out; a conversation does.
+	HeldByConversation HoldKind = "conversation"
+	// HeldUnread is an item the tracker does not offer and nothing here can
+	// say why: blocked work whose holds could not be read, or a dependency the
+	// listing did not carry.
+	HeldUnread HoldKind = "unread"
+	// HeldByDirective is an item an unresolved directive pauses. The queue does
+	// not make this refusal; the pipeline does, and the standing status names it.
+	HeldByDirective HoldKind = "directive"
+	// HeldByStall is a pullable item nothing is choosing: a switch, a full
+	// machine, or no session pulling. The queue does not make this refusal
+	// either; it is the pass-level stall said once against each item it stops.
+	HeldByStall HoldKind = "stalled"
+)
+
+// HoldKind is the kind of the refusal Hold returns, from the same reading.
+func (e Entry) HoldKind() HoldKind {
+	kind, _ := e.hold()
+	return kind
+}
+
+// hold is the one derivation behind Hold and HoldKind, so the sentence and the
+// pile it is counted in cannot come apart.
+func (e Entry) hold() (HoldKind, string) {
 	switch {
 	case !e.Executor.DeveloperRun():
-		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
+		return HeldByConversation, fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
 	case e.Parking.Parked():
-		return "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
+		return HeldParked, "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
 	case e.Awaiting != "":
-		return e.Awaiting
+		return HeldForAPerson, e.Awaiting
 	case len(e.WaitingOn) > 0:
-		return "waiting on " + strings.Join(e.WaitingOn, ", ")
+		return HeldWaitingOn, "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:
 		// Blocked work with nothing waiting and no hold is pullable, so this is only
 		// reached where nothing could read the holds. Saying the tracker did not
 		// offer it would be true and useless: the tracker never offers blocked work,
 		// and what actually held it is the reading that did not happen.
-		return unreadHold
+		return HeldUnread, unreadHold
 	default:
-		return "the tracker does not report it as ready to pull"
+		return HeldUnread, "the tracker does not report it as ready to pull"
 	}
 }
 

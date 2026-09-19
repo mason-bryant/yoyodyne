@@ -1591,9 +1591,10 @@ against the answer.
 
 ## Watching from a browser: the dashboard
 
-`yoyo dashboard` serves what `yoyo status` reads — the four lines, and the
-capacity state carried under them — to a browser on this machine, and keeps
-serving it until you stop it:
+`yoyo dashboard` serves what `yoyo status` reads — the four lines, the
+capacity state carried under them, and what landed and what it cost — to a
+browser on this machine, as one page of five sections, and keeps serving it
+until you stop it:
 
 ```sh
 ./bin/yoyo dashboard              # a port the operating system chooses
@@ -1605,15 +1606,119 @@ It prints two things when it starts, and the second of them once:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
 token: 9f2c41ab7e05…
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing and /api/throughput
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
 
 Open the URL, paste the token into the page, and the page shows where the
-harness stands and asks again every ten seconds. The same answer is served as
-JSON at `/api/standing` to anything that sends the token as a bearer header —
-the `standing` object `yoyo status --json` carries, from the same derivation, so
-the page and the terminal cannot disagree about a number.
+harness stands and asks again every ten seconds. The same answers are served as
+JSON to anything that sends the token as a bearer header: at `/api/standing`,
+the `standing` object `yoyo status --json` carries, from the same derivation,
+so the page and the terminal cannot disagree about a number; and at
+`/api/throughput`, what landed and what it cost over today and the last seven
+days, counted from the run records `yoyo status` derives each run's outcome
+from and priced by the same reading `yoyo status --spend 7` prints. The second
+reading prices every event log a week holds, which is seconds of work, so the
+page asks for it once a minute rather than every ten seconds.
+
+### What the page presents
+
+Five sections, top to bottom, each drawn from the read model and from nothing
+else. Above them, one banner and only one, while it stands: the same sentence
+the terminal prints above the four lines when the harness is paused on the
+provider's usage window, when every role is held by one, or when the provider
+is answering nobody. Beside the product's name the page says when the reading
+was taken and that it asks again; a poll that fails after one that succeeded
+marks the page **stale** and says which reading it is still showing, rather
+than going blank on one dropped request.
+
+1. **Where the harness stands** — a tile for each of the four lines: running
+   developer runs, conversations with a turn in flight, admitted items nothing
+   will pull (out of how many are admitted, and how many await a decision or
+   the carrying out of one), and what waits on a person, which says `nothing`
+   in words when it is nothing. Two more tiles carry what landed today and in
+   the last seven days, and what it cost, the latter prefixed `≥` or `at least`
+   where a record that should be in it could not be read.
+2. **Running now** — a card for each developer run and each conversation with a
+   turn in flight: the work item's title and id, the phase (or `approved,
+   resuming integration` where that is what the run is doing), how long it has
+   been going, what it has spent so far or `cost unknown` and why, and the
+   provider, model, and account alias it is spending. A conversation card says
+   the agent, its role, how long the turn has been in flight, and how many turns
+   are recorded before it.
+3. **Where the work stands** — the pipeline, read left to right: admitted items;
+   how many are held back, split into the piles the queue itself names — held
+   for a person (awaiting a decision or awaiting carry-out), paused by a
+   directive, pullable with nothing choosing, parked, waiting on other work,
+   carried by a conversation rather than a run, and not offered for a reason
+   nothing here can read — each with whose move it is, and the largest marked
+   `(most)`; how many are startable and next to be pulled; how many are running,
+   by phase; and how many landed today and this week. Under it, in words, how
+   many things wait on a person.
+4. **Throughput and cost** — two columns, today and the last seven days, each
+   labeled with the local days it covers: how many runs landed their work on
+   the target branch; the other endings, in the run history's own words
+   (stopped for a person, cancelled, timed out, failed, and succeeded without
+   promoting anything); how many runs started; and what every priced invocation
+   cost, split into runs, conversations, branch reviews, and exchanges, with the
+   count of records that could not be priced named beside the figure whenever
+   there is one, because a cost with a hole in it is a floor rather than a
+   total.
+5. **Provider capacity** — the capacity-blocked state under
+   `standing.capacity_blocked`: each run parked or held on provider capacity,
+   with what refused it, since when, the reset it is waiting out or that none
+   was named, how much of its pause budget it has spent, whether its change is
+   preserved, and what to do about it — `nothing needs doing` for a run that is
+   only asleep, and the remedy for one that stopped; each conversation the
+   provider is still refusing, with its model, its refusals, and its reset; and,
+   when every role is held at once, a line saying so with the agents, the
+   models, the alternates or the lack of them, the refusals, and the reset.
+
+Every section has four states and shows exactly one. **Loading** says it is
+reading, and for the throughput section that it is pricing the week, with one
+slow pulse that stops for a reader who asked for reduced motion. **Empty** says
+in a sentence that there is nothing — the harness is idle, nothing is running,
+the backlog is empty, nothing ran and nothing was spent in the last seven days,
+no run or conversation is waiting on capacity — because a panel with nothing in
+it and a panel nobody filled look the same. **Error** says what could not be
+read, in the read model's own words, and what to do: which command says the
+same thing with more room, and that the page keeps asking. **Ready** is the
+content above. A section whose sources could only partly be read stays ready
+and lists each unreadable source under its content, and a tile or a stage
+whose source could not be read shows a dash and the words `could not be read`
+in the figure's place; nothing on the page ever shows a zero for a line the
+model did not answer.
+
+Every distinction survives without colour. A state is a word in a badge as
+well as a tint, a problem is `Could not be read` as well as a red rule, a
+waiting run and a blocked one differ in the word and in a solid against a
+dashed rule, the largest pile says `(most)` as well as being bold, and the
+stages are joined by an arrow character rather than by a coloured bar. The page
+follows the reader's light or dark setting and their reduced-motion setting,
+and holds its badges' edges under forced colours.
+
+The words are the terminal's wherever the terminal has them — `no developer
+runs`, `12m elapsed`, `$3.41 so far`, `cost unknown (its event log is gone)`,
+the refusal each item carries, the remedy each parked run carries — because the
+page and `yoyo status` are two projections of one model and a reader moving
+between them should not have to translate.
+
+**Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
+holds the page as its own script renders it from the fixtures under
+`internal/dashboard/testdata/fixtures`, one file per scenario — `quiet`, `busy`,
+`held`, `degraded`, `unreadable`, `loading`, `throughput-pending`,
+`throughput-refused`, `refused`, `unreachable`, `wrong-token`, `stale`, and
+`signin` — which together show every section in each of its four states. They
+are golden files:
+`TestThePageRendersEverySectionInEveryState` runs the page's script under Node
+against the fixtures, checks that each section reaches each state and that the
+fixtures' words land on the page as text, and fails when a render differs from
+what is recorded; `go test ./internal/dashboard -run TestThePageRendersEverySectionInEveryState -update-renders`
+rewrites them after a deliberate change. Each render opens in a browser beside
+the real stylesheet. To look at the live page in each state, with the real
+server and the real policy in front of it, `go run ./internal/dashboard/fixtureserver`
+serves one dashboard per scenario on a loopback port of its own and prints each
+URL with its token.
 
 **It is a projection and nothing else.** It reads the same durable records the
 terminal reads and writes none of them; there is no button, no form but the one
@@ -1667,9 +1772,11 @@ plane, and work is still directed from the conversation and the commands above.
 are the evidence a reviewer is handed for the conventions; the
 [observability-and-dashboard design](designs/observability-and-dashboard.md)
 is where they are established, as the repository's first web-service
-conventions. The page's content — the five sections the design describes — is
-still to come; what is served today is the page's shell with its sign-in,
-loading, error, and ready states, and the JSON underneath it.
+conventions. The same tests hold the page to them: the shell, the script, and
+the stylesheet carry no inline script, no inline style, and nothing loaded from
+anywhere but this origin, and the renders above are made by a driver that
+refuses a render in which the script set a style or sent the token anywhere but
+as a bearer to this origin.
 
 ## Following a run, a conversation, or a branch review
 

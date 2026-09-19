@@ -1,71 +1,164 @@
-/* The shell's own style: enough for its states to be legible, and no more. The
-   page's content and its look are the third child of the dashboard work item;
-   what is here is the frame that child fills in. Everything is served from
-   this origin, because the policy allows nothing else. */
+/* The page's own style, served from this origin because the policy allows
+   style from nowhere else, and the only style there is: nothing in the shell or
+   the script sets one inline.
+
+   Two rules run through it. Every distinction survives without colour — a
+   state is a word as well as a tint, a problem is "Could not be read" as well
+   as a red rule, the largest pile says "(most)" as well as being bold — so the
+   page reads the same in greyscale, in forced-colours mode, and to a reader who
+   cannot tell the tints apart. And polish never implies precision the model did
+   not claim: a figure that is a floor says "at least", a figure nobody could
+   read is a dash and the words, never a zero.
+
+   Light and dark are two sets of the same tokens, chosen by the reader's own
+   setting. Motion is one slow pulse on the loading states and nothing else, and
+   it stops for a reader who asked for reduced motion. */
 
 :root {
   color-scheme: light dark;
   --ink: #1b1f24;
-  --paper: #fbfbfa;
+  --ink-soft: #3d444d;
   --muted: #5c6470;
+  --paper: #f6f6f3;
+  --panel: #ffffff;
+  --panel-inset: #f1f2ee;
   --rule: #d9dde3;
-  --alert: #a12f2f;
-  --alert-paper: #fbeeee;
+  --rule-strong: #aab1ba;
+  --accent: #1f5f8b;
+  --accent-ink: #174a6d;
+  --accent-paper: #e6f0f7;
+  --attention: #a12f2f;
+  --attention-paper: #fbeeee;
+  --landed: #1f6f43;
+  --landed-paper: #e7f4ec;
+  --held: #7a5a00;
+  --held-paper: #fbf3dc;
+  --shadow: 0 1px 2px rgba(20, 24, 30, 0.06), 0 6px 18px -12px rgba(20, 24, 30, 0.18);
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --ink: #e8eaed;
-    --paper: #16191d;
+    --ink-soft: #c5cad1;
     --muted: #9aa3ad;
-    --rule: #2c3138;
-    --alert: #ff8a8a;
-    --alert-paper: #2b1a1a;
+    --paper: #131619;
+    --panel: #1b1f24;
+    --panel-inset: #22272d;
+    --rule: #2f353d;
+    --rule-strong: #4a525c;
+    --accent: #7db6e0;
+    --accent-ink: #a9cfec;
+    --accent-paper: #1c2a36;
+    --attention: #ff8a8a;
+    --attention-paper: #2f1c1c;
+    --landed: #7dcf9a;
+    --landed-paper: #1a2d22;
+    --held: #e6c46a;
+    --held-paper: #2f2915;
+    --shadow: none;
   }
 }
 
+/* ---- the frame ---------------------------------------------------------- */
+
 html {
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
   background: var(--paper);
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  margin: 0;
-  padding: 2rem clamp(1rem, 4vw, 3rem);
-  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1.5rem clamp(1rem, 4vw, 3rem) 4rem;
+  max-width: 76rem;
 }
 
 header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
   border-bottom: 1px solid var(--rule);
   padding-bottom: 0.75rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.mark {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--panel);
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
 }
 
 h1 {
-  font-size: 1.25rem;
+  font-size: 1.35rem;
+  font-weight: 600;
   margin: 0;
+  letter-spacing: -0.01em;
 }
 
 h2 {
   font-size: 1.05rem;
-  margin: 0 0 0.5rem;
+  font-weight: 600;
+  margin: 0;
 }
 
-.observed,
-.hint {
-  color: var(--muted);
+h3 {
+  font-size: 1rem;
+  font-weight: 600;
   margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.observed {
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
-/* One state is shown at a time, chosen by the script through data-state on
-   main. The markup opens asking for the token, and nothing of the read model
-   is in it to begin with. */
+.observed time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+.freshness {
+  margin-left: 0.5rem;
+}
+
+.freshness-stale {
+  color: var(--attention);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.75rem;
+}
+
+/* ---- the page's own states ------------------------------------------------ */
+
+/* One state is shown at a time, chosen by the script through data-state on the
+   page. The markup opens asking for the token, and nothing of the read model is
+   in it to begin with. */
 .state {
   display: none;
 }
@@ -77,48 +170,723 @@ main[data-state="ready"] .state-ready {
   display: block;
 }
 
+.state-signin p,
+.state-error p {
+  margin: 0.5rem 0;
+  max-width: 44rem;
+}
+
 .state-error {
-  border: 1px solid var(--alert);
-  background: var(--alert-paper);
-  border-radius: 6px;
+  border: 1px solid var(--attention);
+  border-left-width: 6px;
+  background: var(--attention-paper);
+  border-radius: var(--radius);
   padding: 1rem 1.25rem;
 }
 
 .state-error h2 {
-  color: var(--alert);
+  color: var(--attention);
+}
+
+.problem {
+  color: var(--ink);
+}
+
+.remedy {
+  color: var(--ink-soft);
+  font-size: 0.95rem;
 }
 
 .note {
-  color: var(--alert);
-}
-
-.problems {
-  color: var(--muted);
-  padding-left: 1.25rem;
+  color: var(--attention);
+  font-weight: 600;
 }
 
 form {
   display: grid;
   gap: 0.5rem;
   max-width: 28rem;
+  margin-top: 0.75rem;
+}
+
+label {
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 
 input,
 button {
   font: inherit;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--rule);
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--rule-strong);
   border-radius: 6px;
-  background: var(--paper);
+  background: var(--panel);
   color: var(--ink);
 }
 
 button {
   cursor: pointer;
   justify-self: start;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--paper);
+  font-weight: 600;
 }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.95em;
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- the strips above the sections ---------------------------------------- */
+
+.stale,
+.banner {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.stale {
+  border: 1px dashed var(--attention);
+  color: var(--ink);
+  background: var(--attention-paper);
+}
+
+.banner {
+  border: 1px solid var(--held);
+  border-left-width: 6px;
+  background: var(--held-paper);
+  color: var(--ink);
+}
+
+.banner::before {
+  content: "Paused — ";
+  font-weight: 700;
+  color: var(--held);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- the panels and their four states ------------------------------------- */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem 1.25rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Each panel shows exactly one of four children, chosen by its data-state:
+   loading, error, empty, ready. The default in the markup is loading, so a
+   panel the script has not reached yet says it is reading rather than being
+   blank. */
+.section-loading,
+.section-error,
+.section-empty,
+.section-ready {
+  display: none;
+}
+
+.panel[data-state="loading"] .section-loading,
+.panel[data-state="error"] .section-error,
+.panel[data-state="empty"] .section-empty,
+.panel[data-state="ready"] .section-ready {
+  display: block;
+}
+
+.panel[data-state="error"] {
+  border-color: var(--attention);
+  border-left-width: 6px;
+}
+
+.section-error .problem {
+  font-weight: 600;
+  color: var(--attention);
+}
+
+.section-error .remedy {
+  margin-top: 0.35rem;
+}
+
+.section-empty .empty {
+  color: var(--ink-soft);
+  padding: 0.75rem 1rem;
+  border: 1px dashed var(--rule-strong);
+  border-radius: 8px;
+  background: var(--panel-inset);
+}
+
+.waiting {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.pulse {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* A source the model could not read, listed under a panel that is otherwise
+   readable: the prominent indicator the design asks for, with the page still
+   usable around it. */
+.degraded {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.degraded li {
+  border-left: 4px solid var(--attention);
+  background: var(--attention-paper);
+  color: var(--ink);
+  padding: 0.4rem 0.75rem;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 0.35rem;
+  font-size: 0.92rem;
+}
+
+/* ---- section 1: the band ---------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.tile {
+  background: var(--panel-inset);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.75rem 0.9rem 0.8rem;
+  min-width: 0;
+}
+
+.tile dt {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.tile dd {
+  margin: 0.15rem 0 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.figure {
+  font-size: 2rem;
+  line-height: 1.15;
+  font-weight: 600;
+  color: var(--accent-ink);
+  letter-spacing: -0.02em;
+}
+
+.unit {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.2rem;
+}
+
+.tile-attention {
+  border-color: var(--attention);
+  border-left-width: 4px;
+}
+
+.tile-attention .figure {
+  color: var(--attention);
+}
+
+.tile-quiet .figure {
+  font-size: 1.35rem;
+  color: var(--landed);
+  padding-top: 0.35rem;
+}
+
+.tile-unreadable {
+  border-style: dashed;
+  border-color: var(--attention);
+}
+
+.tile-unreadable .figure,
+.tile-unreadable .unit {
+  color: var(--attention);
+}
+
+.tile-waiting .figure {
+  color: var(--muted);
+}
+
+/* ---- section 2: the cards ------------------------------------------------- */
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.75rem;
+}
+
+.card {
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem 0.8rem;
+  background: var(--panel-inset);
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.card-turn {
+  border-left-style: double;
+  border-left-width: 6px;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.card-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.phase {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--accent-ink);
+  background: var(--accent-paper);
+  border: 1px solid var(--accent-paper);
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  white-space: nowrap;
+}
+
+.card-title {
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.card-meta {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.item-id,
+.card-id,
+.card-provenance {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+.card-provenance {
+  color: var(--ink-soft);
+}
+
+.card-id {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.spend-unknown {
+  color: var(--attention);
+  font-weight: 600;
+}
+
+/* ---- section 3: the pipeline ------------------------------------------------ */
+
+.stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.stage {
+  position: relative;
+  flex: 1 1 11rem;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem 0.8rem;
+  background: var(--panel-inset);
+}
+
+/* The flow reads left to right, and says so with an arrow between stages —
+   a character, so it is there in every mode the border colour is not. */
+.stage + .stage::before {
+  content: "→";
+  position: absolute;
+  left: -0.85rem;
+  top: 1.1rem;
+  color: var(--rule-strong);
+  font-size: 1.1rem;
+}
+
+.stage-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.stage-figure {
+  font-size: 1.8rem;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.stage-unit,
+.stage-detail {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+.stage-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.stage-flowing .stage-figure {
+  color: var(--accent-ink);
+}
+
+.stage-held {
+  border-color: var(--held);
+  border-top-width: 4px;
+  background: var(--held-paper);
+}
+
+.stage-held .stage-figure {
+  color: var(--held);
+}
+
+.stage-landed {
+  border-color: var(--landed);
+  border-top-width: 4px;
+  background: var(--landed-paper);
+}
+
+.stage-landed .stage-figure {
+  color: var(--landed);
+}
+
+.stage-clear .stage-figure {
+  color: var(--muted);
+}
+
+.stage-unreadable {
+  border-style: dashed;
+  border-color: var(--attention);
+}
+
+.stage-unreadable .stage-figure,
+.stage-unreadable .stage-unit {
+  color: var(--attention);
+}
+
+.stage-waiting .stage-figure {
+  color: var(--muted);
+}
+
+.piles {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0 0;
+  border-top: 1px solid var(--rule);
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.pile {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  column-gap: 0.4rem;
+  align-items: baseline;
+}
+
+.pile-figure {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pile-largest .pile-figure,
+.pile-largest .pile-label {
+  font-weight: 700;
+}
+
+.pile-whose {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.footnote {
+  margin-top: 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+/* ---- section 4: throughput and cost ------------------------------------------ */
+
+.windows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.75rem;
+}
+
+.window {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem 0.8rem;
+  background: var(--panel-inset);
+}
+
+.window-label {
+  text-transform: capitalize;
+}
+
+.window-span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 0.5rem;
+}
+
+.figures,
+.held-facts {
+  margin: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.figure-row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.92rem;
+}
+
+.figure-row dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.figure-row dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.figure-landed dd {
+  font-weight: 600;
+  color: var(--landed);
+}
+
+.figure-cost dd {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--accent-ink);
+}
+
+.figure-unreadable dd {
+  color: var(--attention);
+  font-weight: 600;
+}
+
+/* ---- section 5: capacity ------------------------------------------------------ */
+
+.hold {
+  border: 1px solid var(--held);
+  border-left-width: 6px;
+  background: var(--held-paper);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 0.75rem;
+  font-weight: 500;
+}
+
+.held-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
+  gap: 0.75rem;
+}
+
+.held-list + .held-list {
+  margin-top: 0.75rem;
+}
+
+.held {
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--held);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem 0.8rem;
+  background: var(--panel-inset);
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* A waiting run carries on by itself; a blocked one does not. The two are told
+   apart by the word in the badge, and beside it by the rule: solid for a run
+   that is asleep, dashed for one that has stopped. */
+.held-capacity-blocked {
+  border-left-style: dashed;
+  border-left-color: var(--attention);
+}
+
+.held-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.held-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.held-state {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  border: 1px solid var(--held);
+  color: var(--held);
+  white-space: nowrap;
+}
+
+.held-capacity-blocked .held-state {
+  border-color: var(--attention);
+  color: var(--attention);
+  border-style: dashed;
+}
+
+.held-title {
+  font-size: 0.98rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.held-remedy {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  border-top: 1px solid var(--rule);
+  padding-top: 0.4rem;
+}
+
+/* ---- narrow screens ------------------------------------------------------------ */
+
+@media (max-width: 40rem) {
+  body {
+    padding-top: 1rem;
+  }
+
+  .panel {
+    padding: 0.85rem 0.9rem 1rem;
+  }
+
+  .figure {
+    font-size: 1.6rem;
+  }
+
+  .stage + .stage::before {
+    content: none;
+  }
+
+  .figure-row {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+}
+
+/* ---- forced colours ------------------------------------------------------------- */
+
+/* Under a forced palette the tints go and the words, weights, and border styles
+   stay; the badges keep a visible edge so a state is still boxed. */
+@media (forced-colors: active) {
+  .phase,
+  .held-state,
+  .mark {
+    border: 1px solid CanvasText;
+  }
+
+  .pulse {
+    background: CanvasText;
+  }
 }

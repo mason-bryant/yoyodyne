@@ -514,3 +514,31 @@ func TestHeldEntriesCountApartByWhoseMoveTheyAreWaitingOn(t *testing.T) {
 		t.Fatalf("a pullable item was counted as held: %#v", queue.Entries[2])
 	}
 }
+
+// The kind of a hold and the sentence that explains it come from one reading,
+// so a surface counting piles by kind counts the piles the sentences describe:
+// the executor answers first, then the parking, then the hold, then the wait,
+// and the tracker not offering an item is the one kind nothing here explains.
+func TestHoldKindNamesThePileTheHoldSentenceDescribes(t *testing.T) {
+	t.Parallel()
+
+	for _, held := range []struct {
+		entry Entry
+		kind  HoldKind
+		says  string
+	}{
+		{Entry{Executor: domain.ConversationWith(domain.RoleArchitect), Parking: "parked"}, HeldByConversation, "its executor is"},
+		{Entry{Parking: "the design is being reworked", Awaiting: "a decision"}, HeldParked, "parked, so no pull selects it"},
+		{Entry{Awaiting: "run run-b stopped on it", WaitingOn: []string{"x"}}, HeldForAPerson, "run run-b stopped on it"},
+		{Entry{WaitingOn: []string{"yoyodyne-ifd.1", "yoyodyne-ifd.2"}}, HeldWaitingOn, "waiting on yoyodyne-ifd.1, yoyodyne-ifd.2"},
+		{Entry{Status: statusBlocked}, HeldUnread, unreadHold},
+		{Entry{Status: statusOpen}, HeldUnread, "the tracker does not report it as ready to pull"},
+	} {
+		if kind := held.entry.HoldKind(); kind != held.kind {
+			t.Errorf("%+v: kind %q, want %q", held.entry, kind, held.kind)
+		}
+		if says := held.entry.Hold(); !strings.Contains(says, held.says) {
+			t.Errorf("%+v: says %q, want it to contain %q", held.entry, says, held.says)
+		}
+	}
+}

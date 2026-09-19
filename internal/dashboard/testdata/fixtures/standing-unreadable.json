@@ -1,0 +1,25 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "capacity_blocked": {
+    "runs": null,
+    "runs_problem": "the run records could not be read: open runs: input/output error",
+    "conversations": null,
+    "conversations_problem": "the refusal log could not be read: open usage-limits.jsonl: input/output error"
+  },
+  "running": null,
+  "running_problem": "the runs in flight could not be read: open runs: input/output error",
+  "working": null,
+  "working_problem": "the conversations could not be read: open conversations: input/output error",
+  "not_startable": null,
+  "admitted": 0,
+  "awaiting_decision": 0,
+  "awaiting_carry_out": 0,
+  "not_startable_problem": "the admitted work could not be read: bd list: signal: killed",
+  "needs_human": null,
+  "needs_human_problem": "the operator's hold could not be read: open pause.json: input/output error",
+  "reports": {
+    "collected": 0,
+    "unhandled": 0
+  },
+  "reports_problem": "the report pile could not be read: open reports: input/output error"
+}

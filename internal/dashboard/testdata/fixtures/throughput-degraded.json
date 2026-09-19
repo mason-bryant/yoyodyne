@@ -1,0 +1,40 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "today",
+      "days": 1,
+      "since": "2026-09-19",
+      "started": 6,
+      "landed": 3,
+      "succeeded": 0,
+      "stopped": 1,
+      "cancelled": 0,
+      "timed_out": 0,
+      "failed": 0,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    },
+    {
+      "label": "last 7 days",
+      "days": 7,
+      "since": "2026-09-13",
+      "started": 41,
+      "landed": 22,
+      "succeeded": 2,
+      "stopped": 9,
+      "cancelled": 3,
+      "timed_out": 1,
+      "failed": 2,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    }
+  ],
+  "spend_problem": "the spend could not be read: open streams: permission denied"
+}

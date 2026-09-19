@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -294,11 +295,16 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	sources := quietSources()
 	sources.Runs = fakeRuns{
 		incomplete: []runstate.State{{
-			RunID:      "run-a",
-			WorkItemID: "yoyodyne-ifd.194",
-			Status:     runstate.StatusRunning,
-			Phase:      runstate.PhaseDeveloping,
-			StartedAt:  moment.Add(-12 * time.Minute),
+			RunID:                 "run-a",
+			WorkItemID:            "yoyodyne-ifd.194",
+			WorkItemTitle:         "the four-line status",
+			Backend:               "claude-code",
+			ProviderModel:         "opus",
+			ProviderResolvedModel: "claude-opus-5",
+			AccountAlias:          "default",
+			Status:                runstate.StatusRunning,
+			Phase:                 runstate.PhaseDeveloping,
+			StartedAt:             moment.Add(-12 * time.Minute),
 		}},
 		prices: map[string]runstate.ItemPrice{
 			"yoyodyne-ifd.194": {Runs: []runstate.RunPrice{{RunID: "run-a", CostUSD: 3.41}}},
@@ -309,6 +315,8 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 			ConversationID: "chat-1",
 			Agent:          "product-manager",
 			Role:           domain.RoleProductManager,
+			Backend:        "claude-code",
+			ProviderModel:  "fable",
 			Turns:          270,
 			UpdatedAt:      moment.Add(-40 * time.Second),
 		}},
@@ -368,6 +376,26 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	// The item a run is already carrying is on the running line and nowhere else.
 	if strings.Count(rendered, "yoyodyne-ifd.194") != 1 {
 		t.Fatalf("the running item is named more than once:\n%s", rendered)
+	}
+
+	// The same reading carries what a card shows and a line does not: the title
+	// and what the run is spending, with the resolved model preferred over the
+	// selector; and each refusal's kind, so a pipeline is counted from the
+	// reading that worded it.
+	standing := ReadStanding(context.Background(), sources)
+	run := standing.Running[0]
+	if run.Title != "the four-line status" || run.Backend != "claude-code" || run.Model != "claude-opus-5" || run.Account != "default" {
+		t.Fatalf("running run carries %+v", run)
+	}
+	if turn := standing.Working[0]; turn.Backend != "claude-code" || turn.Model != "fable" {
+		t.Fatalf("working turn carries %+v", turn)
+	}
+	kinds := map[string]backlog.HoldKind{}
+	for _, refused := range standing.NotStartable {
+		kinds[refused.WorkItemID] = refused.Kind
+	}
+	if kinds["yoyodyne-ifd.200"] != backlog.HeldByStall || kinds["yoyodyne-ifd.201"] != backlog.HeldForAPerson {
+		t.Fatalf("refusal kinds = %v", kinds)
 	}
 }
 
@@ -760,8 +788,8 @@ func TestADirectivePauseIsTheItemsOwnRefusal(t *testing.T) {
 	if len(standing.NotStartable) != 1 {
 		t.Fatalf("not startable = %+v, want only the paused item", standing.NotStartable)
 	}
-	if !strings.Contains(standing.NotStartable[0].Reason, "paused for unresolved directive dir-1") {
-		t.Fatalf("reason = %q", standing.NotStartable[0].Reason)
+	if !strings.Contains(standing.NotStartable[0].Reason, "paused for unresolved directive dir-1") || standing.NotStartable[0].Kind != backlog.HeldByDirective {
+		t.Fatalf("refusal = %+v", standing.NotStartable[0])
 	}
 	// The same directive is a thing waiting on a person, with whose move it is.
 	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "the operator's") {
@@ -944,7 +972,7 @@ func TestParkedWorkIsRefusedAndNeedsNobody(t *testing.T) {
 		ready: []beads.WorkItem{{ID: "item-1"}},
 	}}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "parked") {
+	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "parked") || standing.NotStartable[0].Kind != backlog.HeldParked {
 		t.Fatalf("not startable = %+v", standing.NotStartable)
 	}
 	if len(standing.NeedsHuman) != 0 {
