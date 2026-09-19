@@ -188,6 +188,43 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"" + strings.Repeat("x", MaxTrackerBlockBytes) + "\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
 			want:  "limit is " + strconv.Itoa(MaxTrackerBlockBytes),
 		},
+		{
+			// A label is an identifier: a sentence in the labels list is a note
+			// wearing a label's clothes, and bd would store it as written.
+			name:  "creation labelled with a sentence",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"d\",\"goal\":\"g\",\"labels\":[\"reliability\",\"fix this week\"],\"reason\":\"r\"}]}\n```",
+			want:  `label "fix this week" is not an identifier`,
+		},
+		{
+			name:  "labels on an action that is not a creation",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"update\",\"id\":\"yoyodyne-1\",\"note\":\"n\",\"labels\":[\"reliability\"],\"reason\":\"r\"}]}\n```",
+			want:  "update does not take \"labels\"",
+		},
+		{
+			name:  "label naming nothing to add or remove",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"label\",\"id\":\"yoyodyne-1\",\"reason\":\"r\"}]}\n```",
+			want:  "label requires \"add\" or \"remove\"",
+		},
+		{
+			name:  "label adding and removing at once",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"label\",\"id\":\"yoyodyne-1\",\"add\":\"reliability\",\"remove\":\"bug\",\"reason\":\"r\"}]}\n```",
+			want:  "not both",
+		},
+		{
+			name:  "label that is not an identifier",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"label\",\"id\":\"yoyodyne-1\",\"add\":\"needs a look\",\"reason\":\"r\"}]}\n```",
+			want:  `add: label "needs a look" is not an identifier`,
+		},
+		{
+			name:  "label with no reason",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"label\",\"id\":\"yoyodyne-1\",\"add\":\"reliability\"}]}\n```",
+			want:  "reason is required",
+		},
+		{
+			name:  "label with no item",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"label\",\"add\":\"reliability\",\"reason\":\"r\"}]}\n```",
+			want:  "label requires the id",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

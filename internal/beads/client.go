@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +70,11 @@ type WorkItem struct {
 	// and it is a different question from the executor: this one says the work is
 	// not to be started now, not that no run could start it.
 	Parking domain.WorkItemParking
+	// Labels are the tracker's own labels on the item, in the order bd lists
+	// them, and nil for an item carrying none. They are bd's native field rather
+	// than harness metadata, so whatever else reads the tracker — bd's own
+	// listing filters first among it — reads the same labels the harness wrote.
+	Labels []string
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -315,6 +321,11 @@ type NewWorkItem struct {
 	// one, and because admitting work without saying where it goes is a real
 	// request: the tracker's own default is then what places it.
 	Priority *int
+	// Labels are applied in the same write as the admission, so an item admitted
+	// under a labelling practice never exists unlabelled: a label added by a
+	// later call is a gap in which whatever reads the label — a filter, a seat
+	// watching for it — sees the item without it.
+	Labels []string
 }
 
 // WorkItemChange is a bounded edit to an item that already exists. Each field is
@@ -345,6 +356,14 @@ type WorkItemChange struct {
 	// requests: a nil parent leaves the item where it is, and an empty one
 	// removes the parent bd currently records.
 	Parent *string
+	// AddLabels and RemoveLabels change the item's labels one at a time, leaving
+	// every label they do not name alone. They are two lists rather than one
+	// replacement because bd also offers replacement, and a replacement is the
+	// label-shaped version of the notes rewrite this package refuses: it takes
+	// off whatever somebody else put on. Adding a label the item carries and
+	// removing one it does not are both no-ops bd accepts.
+	AddLabels    []string
+	RemoveLabels []string
 }
 
 type Client struct {
@@ -358,7 +377,17 @@ var (
 	issueIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	statusPattern    = regexp.MustCompile(`^[a-z][a-z_]*$`)
 	issueTypePattern = regexp.MustCompile(`^[a-z][a-z_]*$`)
+	// labelPattern is what a label the harness writes is held to. bd itself
+	// stores any string, spaces and all, and the narrowing is deliberate: a label
+	// is a word things are filtered on, so it is an identifier — one token, no
+	// whitespace, nothing bd's comma-separated flag spelling would split — and a
+	// label that is a sentence is a note wearing a label's clothes.
+	labelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
+
+// MaxLabelBytes bounds one label. It is exported beside ValidateLabel so a
+// caller can state the bound it refuses on rather than only that it refused.
+const MaxLabelBytes = 64
 
 func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
@@ -481,6 +510,13 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if item.Priority != nil {
 		args = append(args, "--priority="+strconv.Itoa(*item.Priority))
 	}
+	// One flag per label rather than bd's comma-joined spelling, so the command
+	// line never depends on a label being free of the separator; validation
+	// already holds a label to an identifier, and this is what makes that
+	// redundancy rather than the thing the write rests on.
+	for _, label := range item.Labels {
+		args = append(args, "--labels="+strings.TrimSpace(label))
+	}
 	args = append(args, "--json")
 	data, err := c.run(ctx, args...)
 	if err != nil {
@@ -518,6 +554,12 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	// the item a draining queue is free to take.
 	if parking := item.Parking.Reason(); parking != "" && created.Parking.Reason() != parking {
 		return WorkItem{}, fmt.Errorf("bd created work item %s parked %q, want %q", created.ID, created.Parking, parking)
+	}
+	// The labels are read back for the same reason: the item is in the queue the
+	// moment this returns, and a caller told it was admitted labelled would have
+	// admitted exactly the item nothing filtering on the label sees.
+	if missing := labelsMissing(created, item.Labels); len(missing) > 0 {
+		return WorkItem{}, fmt.Errorf("bd created work item %s without the label(s) %s it was given", created.ID, strings.Join(missing, ", "))
 	}
 	// The requested priority is deliberately not read back, for the reason the
 	// parent is not read back after an update: an unset field and a field bd's
@@ -565,6 +607,12 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	if change.Parent != nil {
 		args = append(args, "--parent="+strings.TrimSpace(*change.Parent))
 	}
+	for _, label := range change.AddLabels {
+		args = append(args, "--add-label="+strings.TrimSpace(label))
+	}
+	for _, label := range change.RemoveLabels {
+		args = append(args, "--remove-label="+strings.TrimSpace(label))
+	}
 	args = append(args, "--json")
 	data, err := c.run(ctx, args...)
 	if err != nil {
@@ -601,6 +649,17 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 			return WorkItem{}, fmt.Errorf("work item %s is parked %q after being updated, want %q", item.ID, item.Parking, change.Parking.Reason())
 		}
 		return WorkItem{}, fmt.Errorf("work item %s is still parked %q after being released", item.ID, item.Parking)
+	}
+	// The labels are read back in both directions. What rests on a label is
+	// whatever filters on it — the seat that watches for one, bd's own listing
+	// filters — so a label reported as added and not stored is an item that seat
+	// never sees, and one reported as removed and still there is an item it keeps
+	// seeing.
+	if missing := labelsMissing(item, change.AddLabels); len(missing) > 0 {
+		return WorkItem{}, fmt.Errorf("work item %s does not carry the label(s) %s after they were added", item.ID, strings.Join(missing, ", "))
+	}
+	if kept := labelsCarried(item, change.RemoveLabels); len(kept) > 0 {
+		return WorkItem{}, fmt.Errorf("work item %s still carries the label(s) %s after they were removed", item.ID, strings.Join(kept, ", "))
 	}
 	return c.confirmWritten(ctx, item, appendedNote(change.AppendNotes),
 		writtenText{field: "description", want: change.Description, stored: func(w WorkItem) string { return w.Description }})
@@ -1140,6 +1199,7 @@ type rawWorkItem struct {
 	Assignee           string          `json:"assignee"`
 	Parent             string          `json:"parent"`
 	Dependencies       []rawDependency `json:"dependencies"`
+	Labels             []string        `json:"labels"`
 	// CreatedAt is read as text and parsed here rather than decoded as a time,
 	// because it is one field of an item and not the item: a tracker that wrote a
 	// timestamp this cannot read must leave the admission time unknown, not fail
@@ -1230,11 +1290,48 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 			})
 		}
 	}
+	// Labels are carried as bd lists them, blanks dropped: an empty label is
+	// nothing the harness writes and nothing a reader could act on.
+	for _, label := range raw.Labels {
+		if trimmed := strings.TrimSpace(label); trimmed != "" {
+			item.Labels = append(item.Labels, trimmed)
+		}
+	}
 	item.Cost = costFromMetadata(raw.Metadata)
 	item.GoalWitness = goalWitnessIn(raw.Metadata)
 	item.Executor = executorIn(raw.Metadata)
 	item.Parking = parkingIn(raw.Metadata)
 	return item, nil
+}
+
+// HasLabel reports whether the item carries one label, compared exactly: bd
+// stores a label as it was written, so "Reliability" and "reliability" are two
+// labels, and a reader that folded them would report a label nobody applied.
+func (w WorkItem) HasLabel(label string) bool {
+	return slices.Contains(w.Labels, strings.TrimSpace(label))
+}
+
+// labelsMissing names the labels a write was told to put on an item that the
+// item does not carry, and labelsCarried names the ones it was told to take off
+// that it still does. Both are empty for a write that named none.
+func labelsMissing(item WorkItem, wanted []string) []string {
+	var missing []string
+	for _, label := range wanted {
+		if !item.HasLabel(label) {
+			missing = append(missing, strings.TrimSpace(label))
+		}
+	}
+	return missing
+}
+
+func labelsCarried(item WorkItem, unwanted []string) []string {
+	var kept []string
+	for _, label := range unwanted {
+		if item.HasLabel(label) {
+			kept = append(kept, strings.TrimSpace(label))
+		}
+	}
+	return kept
 }
 
 // parkingIn reads why the tracker records an item as parked. An absent key and
@@ -1409,6 +1506,7 @@ func (n NewWorkItem) validate() error {
 	}
 	problems = append(problems, executorProblem(n.Executor)...)
 	problems = append(problems, parkingProblem(n.Parking)...)
+	problems = append(problems, labelProblems(n.Labels)...)
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))
 	}
@@ -1421,12 +1519,23 @@ func (c WorkItemChange) validate() error {
 		strings.TrimSpace(c.Description) == "" &&
 		strings.TrimSpace(c.AppendNotes) == "" &&
 		strings.TrimSpace(string(c.Executor)) == "" &&
-		c.Priority == nil && c.Parent == nil && c.Parking == nil {
+		c.Priority == nil && c.Parent == nil && c.Parking == nil &&
+		len(c.AddLabels) == 0 && len(c.RemoveLabels) == 0 {
 		problems = append(problems, errors.New("an update must change something"))
 	}
 	problems = append(problems, executorProblem(c.Executor)...)
 	if c.Parking != nil {
 		problems = append(problems, parkingProblem(*c.Parking)...)
+	}
+	problems = append(problems, labelProblems(c.AddLabels)...)
+	problems = append(problems, labelProblems(c.RemoveLabels)...)
+	// A label both added and removed in one write is a write bd would carry out
+	// in whichever order it pleases, and the item afterwards says nothing about
+	// which was meant.
+	for _, label := range c.AddLabels {
+		if slices.Contains(c.RemoveLabels, label) {
+			problems = append(problems, fmt.Errorf("label %q is both added and removed", label))
+		}
 	}
 	if strings.ContainsAny(c.Title, "\r\n") {
 		problems = append(problems, errors.New("title cannot span lines"))
@@ -1502,6 +1611,44 @@ func parkingProblem(parking domain.WorkItemParking) []error {
 // command around it, rather than discovering the problem as a bd failure.
 func ValidateIssueID(id string) error {
 	return validateIssueID(id)
+}
+
+// ValidateLabel refuses a label the harness will not write: anything that is
+// not one identifier-shaped token within MaxLabelBytes. It is exported for the
+// reason ValidateIssueID is, and for one more — bd would accept what this
+// refuses, so a caller that did not ask would find out from nobody.
+func ValidateLabel(label string) error {
+	trimmed := strings.TrimSpace(label)
+	if trimmed == "" {
+		return errors.New("a label cannot be empty")
+	}
+	if len(trimmed) > MaxLabelBytes {
+		return fmt.Errorf("label %q is %d bytes, limit is %d", trimmed, len(trimmed), MaxLabelBytes)
+	}
+	if !labelPattern.MatchString(trimmed) {
+		return fmt.Errorf("label %q is not an identifier: one word of letters, digits, dots, underscores, and hyphens, starting with a letter or digit", trimmed)
+	}
+	return nil
+}
+
+// labelProblems refuses every label in a list that ValidateLabel would, and a
+// list that names one label twice: bd would store it once, and the caller was
+// asking for something it had already asked for.
+func labelProblems(labels []string) []error {
+	var problems []error
+	seen := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		if err := ValidateLabel(label); err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		trimmed := strings.TrimSpace(label)
+		if _, repeated := seen[trimmed]; repeated {
+			problems = append(problems, fmt.Errorf("label %q is named twice", trimmed))
+		}
+		seen[trimmed] = struct{}{}
+	}
+	return problems
 }
 
 func validateIssueID(id string) error {

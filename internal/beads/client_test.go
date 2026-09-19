@@ -1203,6 +1203,101 @@ func TestAParkingBdDidNotStoreIsAFailureInBothDirections(t *testing.T) {
 	}
 }
 
+// A label is written with bd's own label flags rather than as harness metadata,
+// one flag per label, and read back from bd's own field — on a creation, where
+// the labels ride in the same write as the admission, and on an update in each
+// direction.
+func TestLabelsAreWrittenWithBdsOwnFlagsAndReadBack(t *testing.T) {
+	t.Parallel()
+
+	created := `{"id":"yoyodyne-ifd.419","title":"t","description":"d","status":"open","priority":2,"issue_type":"task","labels":["bug","reliability"]}`
+	runner := &fakeRunner{responses: []string{created}}
+	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).Create(context.Background(), NewWorkItem{
+		Title: "t", Description: "d", Type: "task", Labels: []string{"reliability", "bug"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, flag := range []string{"--labels=reliability", "--labels=bug"} {
+		if !slices.Contains(runner.args[0], flag) {
+			t.Fatalf("the creation did not carry %s: %#v", flag, runner.args[0])
+		}
+	}
+	if !item.HasLabel("reliability") || !item.HasLabel("bug") {
+		t.Fatalf("Create() labels = %v, want both read back", item.Labels)
+	}
+
+	adding := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.419","title":"t","status":"open","priority":2,"issue_type":"task","labels":["reliability"]}]`,
+	}}
+	labelled, err := (Client{Runner: adding}).Update(context.Background(), "yoyodyne-ifd.419", WorkItemChange{AddLabels: []string{"reliability"}})
+	if err != nil {
+		t.Fatalf("Update() adding a label error = %v", err)
+	}
+	if !slices.Contains(adding.args[0], "--add-label=reliability") || !labelled.HasLabel("reliability") {
+		t.Fatalf("the update did not add the label and read it back: %#v, %v", adding.args[0], labelled.Labels)
+	}
+
+	removing := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.419","title":"t","status":"open","priority":2,"issue_type":"task"}]`,
+	}}
+	bare, err := (Client{Runner: removing}).Update(context.Background(), "yoyodyne-ifd.419", WorkItemChange{RemoveLabels: []string{"reliability"}})
+	if err != nil {
+		t.Fatalf("Update() removing a label error = %v", err)
+	}
+	if !slices.Contains(removing.args[0], "--remove-label=reliability") || bare.HasLabel("reliability") {
+		t.Fatalf("the update did not remove the label: %#v, %v", removing.args[0], bare.Labels)
+	}
+}
+
+// A label bd did not store is a failure in both directions, for the reason a
+// parking is: what rests on a label is whatever filters on it, and an item told
+// it was labelled and not is one that filter never sees.
+func TestALabelBdDidNotStoreIsAFailureInBothDirections(t *testing.T) {
+	t.Parallel()
+
+	unlabelled := &fakeRunner{responses: []string{`{"id":"yoyodyne-ifd.419","title":"t","status":"open","priority":2,"issue_type":"task"}`}}
+	if _, err := (Client{Runner: unlabelled}).Create(context.Background(), NewWorkItem{
+		Title: "t", Description: "d", Type: "task", Labels: []string{"reliability"},
+	}); err == nil || !strings.Contains(err.Error(), "without the label(s) reliability") {
+		t.Fatalf("Create() with a label bd did not store = %v, want a failure naming the label", err)
+	}
+	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.419","title":"t","status":"open","priority":2,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unstored}).Update(context.Background(), "yoyodyne-ifd.419", WorkItemChange{AddLabels: []string{"reliability"}}); err == nil ||
+		!strings.Contains(err.Error(), "does not carry the label(s) reliability") {
+		t.Fatalf("Update() adding a label bd did not store = %v, want a failure", err)
+	}
+	stuck := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.419","title":"t","status":"open","priority":2,"issue_type":"task","labels":["reliability"]}]`}}
+	if _, err := (Client{Runner: stuck}).Update(context.Background(), "yoyodyne-ifd.419", WorkItemChange{RemoveLabels: []string{"reliability"}}); err == nil ||
+		!strings.Contains(err.Error(), "still carries the label(s) reliability") {
+		t.Fatalf("Update() removing a label bd kept = %v, want a failure", err)
+	}
+
+	// A label that is not an identifier is refused before anything is written.
+	// bd would store it, which is exactly why the refusal is here.
+	client := Client{Runner: &fakeRunner{}}
+	for _, label := range []string{"", "  ", "fix this week", "-leading", strings.Repeat("a", MaxLabelBytes+1)} {
+		if _, err := client.Create(context.Background(), NewWorkItem{Title: "t", Description: "d", Type: "task", Labels: []string{label}}); err == nil {
+			t.Fatalf("Create() with the label %q was accepted", label)
+		}
+		if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{AddLabels: []string{label}}); err == nil {
+			t.Fatalf("Update() adding the label %q was accepted", label)
+		}
+	}
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{AddLabels: []string{"reliability"}, RemoveLabels: []string{"reliability"}}); err == nil ||
+		!strings.Contains(err.Error(), "both added and removed") {
+		t.Fatalf("Update() adding and removing one label = %v, want it refused", err)
+	}
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{AddLabels: []string{"reliability", "reliability"}}); err == nil ||
+		!strings.Contains(err.Error(), "named twice") {
+		t.Fatalf("Update() naming one label twice = %v, want it refused", err)
+	}
+	// An update that only labels is an update: it changes something.
+	if err := (WorkItemChange{RemoveLabels: []string{"reliability"}}).validate(); err != nil {
+		t.Fatalf("an update that only removes a label was refused as empty: %v", err)
+	}
+}
+
 // An update that only releases a parking is an update: it changes something, and
 // refusing it as empty would leave parked work with no way back into the queue.
 func TestReleasingAParkingIsAChangeAnUpdateAccepts(t *testing.T) {

@@ -1292,8 +1292,20 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 		if item.Parking.Parked() {
 			parked = ", parked"
 		}
-		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d%s, %s%s] %s\n",
-			item.ID, item.Status, item.Priority, parked, item.IssueType, executor,
+		// Labels sit beside the executor, in the same words a survey uses, so the
+		// listing the queue's owner opens with and the one it takes mid-conversation
+		// say the same thing about which items carry the label an admission
+		// practice puts on them.
+		labels := ""
+		switch len(item.Labels) {
+		case 0:
+		case 1:
+			labels = ", label " + item.Labels[0]
+		default:
+			labels = ", labels " + strings.Join(item.Labels, " ")
+		}
+		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d%s, %s%s%s] %s\n",
+			item.ID, item.Status, item.Priority, parked, item.IssueType, executor, labels,
 			singleLine(item.Title, maxWorkItemTitleBytes)))
 	}
 	if len(items) > len(listed) {

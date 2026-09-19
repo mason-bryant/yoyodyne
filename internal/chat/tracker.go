@@ -142,8 +142,17 @@ const (
 	// admitted and is never rewritten afterwards, so work admitted before goals
 	// were checked has no other way to acquire one: the attribution is appended,
 	// and the newest is the item's current claim.
-	actionAttribute    = "attribute"
-	actionUpdate       = "update"
+	actionAttribute = "attribute"
+	actionUpdate    = "update"
+	// actionLabel adds one label to an item or takes one off. It is its own
+	// action rather than two more arguments on "update" because it is what an
+	// admission practice runs on: the operator's rule is that every item admitted
+	// under a directive, every bug, and every stall fix carries a label, and a
+	// seat watches for that label. A label is applied at admission by "labels" on
+	// a creation; this is how work admitted before the practice, or admitted
+	// without it, acquires or loses one afterwards, with the reason recorded on
+	// the item.
+	actionLabel        = "label"
 	actionReparent     = "reparent"
 	actionReprioritize = "reprioritize"
 	// actionPark takes admitted work out of reach without taking it out of the
@@ -204,9 +213,10 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "parked", "directive", "report"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "parked", "directive", "report", "labels"},
 	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note", "executor"},
+	actionLabel:        {"add", "remove"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
 	actionPark:         {},
@@ -237,13 +247,16 @@ var trackerActionArguments = map[string][]string{
 // names, added to work that was admitted before goals were checked. Handling a
 // report is what takes one out of the pile the queue is fed from, which is the
 // same authority as deciding what goes into it. Triage's subject is a stopped run
-// rather than an item, which is why it is its own name and not an update.
+// rather than an item, which is why it is its own name and not an update. A label
+// is one of the item's own fields, so labelling is the same authority as updating
+// it, which is what gives it to the development manager as well.
 var trackerCapabilities = map[string]capability.Capability{
 	actionRead:         capability.WorkItemRead,
 	actionSurvey:       capability.WorkItemRead,
 	actionCreate:       capability.WorkDecompose,
 	actionAttribute:    capability.BacklogAdmit,
 	actionUpdate:       capability.WorkItemMutate,
+	actionLabel:        capability.WorkItemMutate,
 	actionReparent:     capability.WorkDecompose,
 	actionReprioritize: capability.BacklogOrder,
 	actionPark:         capability.BacklogOrder,
@@ -263,7 +276,7 @@ var trackerCapabilities = map[string]capability.Capability{
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
-	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
+	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionLabel, actionReparent,
 	actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink, actionRepair,
 	actionClose, actionRetire, actionTriage, actionHandle, actionBrake,
 }
@@ -341,6 +354,18 @@ type TrackerAction struct {
 	// directive's own outcome, which is what the thread it was said in is finally
 	// told.
 	Directive string `json:"directive,omitempty"`
+	// Labels are the labels a creation applies in the same write as the
+	// admission, and are taken by a creation and by nothing else. They are set
+	// there rather than by a label action on the next turn for the reason the
+	// executor and the parking are: the identifier a creation assigns comes back
+	// on the turn after, and an item admitted now and labelled then is one that
+	// whatever watches for the label does not see across the whole gap.
+	Labels []string `json:"labels,omitempty"`
+	// Add and Remove name the one label a label action puts on an item or takes
+	// off it. Exactly one of them is given: an action that named both would be
+	// two decisions in one record, and one that named neither has nothing to do.
+	Add    string `json:"add,omitempty"`
+	Remove string `json:"remove,omitempty"`
 	// Note is text appended to the item's notes, which is how the product
 	// manager writes on an item without replacing what is already there.
 	Note string `json:"note,omitempty"`
@@ -870,8 +895,19 @@ func (a TrackerAction) validateArguments() []error {
 			problems = append(problems, fmt.Errorf("report %q is not a report identifier; name a report exactly as it was listed to you", reported))
 		}
 		problems = append(problems, parkingProblem("parked", a.Parked))
+		// Every label an admission carries is held to what the tracker adapter
+		// would refuse, here where nothing has been created yet: a creation refused
+		// for one bad label admits nothing, where one the adapter refused would be
+		// reported the same way but only after the duplicate check had run.
+		for _, label := range a.Labels {
+			if err := beads.ValidateLabel(label); err != nil {
+				problems = append(problems, fmt.Errorf("labels: %w", err))
+			}
+		}
 	case actionAttribute:
 		problems = append(problems, a.goalProblems()...)
+	case actionLabel:
+		problems = append(problems, a.labelProblems()...)
 	case actionUpdate:
 		if strings.TrimSpace(a.Title) == "" && strings.TrimSpace(a.Description) == "" &&
 			strings.TrimSpace(a.Note) == "" && strings.TrimSpace(string(a.Executor)) == "" {
@@ -998,6 +1034,29 @@ func (a TrackerAction) goalProblems() []error {
 	return problems
 }
 
+// labelProblems checks a label action names exactly one label and one
+// direction. Both directions at once would be two decisions in one record, and
+// neither is an action with nothing to do; either is refused rather than run as
+// whichever half parsed.
+func (a TrackerAction) labelProblems() []error {
+	add, remove := strings.TrimSpace(a.Add), strings.TrimSpace(a.Remove)
+	switch {
+	case add == "" && remove == "":
+		return []error{errors.New("label requires \"add\" or \"remove\", naming the one label to put on the item or take off it")}
+	case add != "" && remove != "":
+		return []error{errors.New("label takes \"add\" or \"remove\", not both; adding one label and removing another is two actions")}
+	case add != "":
+		if err := beads.ValidateLabel(add); err != nil {
+			return []error{fmt.Errorf("add: %w", err)}
+		}
+	default:
+		if err := beads.ValidateLabel(remove); err != nil {
+			return []error{fmt.Errorf("remove: %w", err)}
+		}
+	}
+	return nil
+}
+
 // arguments names the optional arguments this action actually carries, so an
 // action can be refused for naming one its operation has no use for.
 func (a TrackerAction) arguments() []string {
@@ -1031,6 +1090,15 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Directive) != "" {
 		carried = append(carried, "directive")
+	}
+	if len(a.Labels) > 0 {
+		carried = append(carried, "labels")
+	}
+	if strings.TrimSpace(a.Add) != "" {
+		carried = append(carried, "add")
+	}
+	if strings.TrimSpace(a.Remove) != "" {
+		carried = append(carried, "remove")
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
@@ -1470,6 +1538,11 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// exists to close.
 			Parking:  domain.WorkItemParking(strings.TrimSpace(action.Parked.Reason())),
 			Priority: action.Priority,
+			// The labels go on in the same write for the reason the executor and the
+			// parking do: an item is in the queue the moment this returns, and a seat
+			// that watches for a label sees an item labelled on the next turn only
+			// from the next turn.
+			Labels: trimmedLabels(action.Labels),
 		})
 		if err != nil {
 			outcome.fail(err)
@@ -1505,13 +1578,17 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// nobody checked for is caught by whoever reads the queue.
 		checked := uncheckedClause(unchecked)
 		from := citedClause(cited)
+		// Labels applied at admission are said where the admission is reported, in
+		// the words the survey uses, because the label is what a seat watches for
+		// and the operator reads this line rather than the item.
+		labelled := labelsLabel(created.Labels)
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s%s%s%s%s%s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), parked, from, answering, gating, checked)
+			outcome.applied("%s at priority %d: %s%s%s%s%s%s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating, checked)
 			return
 		}
-		outcome.applied("%s: %s%s%s%s%s%s",
-			creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), parked, from, answering, gating, checked)
+		outcome.applied("%s: %s%s%s%s%s%s%s",
+			creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating, checked)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -1541,6 +1618,32 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.applied("updated %s: %s", id, strings.Join(action.arguments(), ", "))
+	case actionLabel:
+		// The label and the reason are written together, for the reason a parking's
+		// are: the label is what a filter reads and the note is what somebody
+		// reading the item finds, and a label whose reason exists only in a
+		// conversation transcript is a label nobody can account for. Adding a label
+		// the item carries, or removing one it does not, is a write bd accepts and
+		// leaves the labels as they were; the note still records the decision.
+		change := beads.WorkItemChange{}
+		if add := strings.TrimSpace(action.Add); add != "" {
+			change.AddLabels = []string{add}
+			change.AppendNotes = s.trackerProvenance("Labelled "+add, action.Reason)
+		} else {
+			remove := strings.TrimSpace(action.Remove)
+			change.RemoveLabels = []string{remove}
+			change.AppendNotes = s.trackerProvenance("Label "+remove+" removed", action.Reason)
+		}
+		labelled, err := s.options.Tracker.Update(ctx, id, change)
+		if err != nil {
+			outcome.fail(err)
+			return
+		}
+		if len(change.AddLabels) > 0 {
+			outcome.applied("labelled %s %s; it now carries%s", id, change.AddLabels[0], labelsClause(labelled.Labels))
+			return
+		}
+		outcome.applied("removed the label %s from %s; it now carries%s", change.RemoveLabels[0], id, labelsClause(labelled.Labels))
 	case actionReparent:
 		parent := action.parent()
 		if _, err := s.options.Tracker.Update(ctx, id, beads.WorkItemChange{Parent: &parent}); err != nil {
@@ -2033,8 +2136,8 @@ func renderOpenQueueEvidence(items []beads.WorkItem, goals goal.Set) string {
 		listed = listed[:maxTrackerSurveyItems]
 	}
 	for _, item := range listed {
-		fmt.Fprintf(&rendered, "- %s [%s, p%d, %s%s] %s\n",
-			item.ID, item.Status, item.Priority, item.IssueType, executorLabel(item.Executor),
+		fmt.Fprintf(&rendered, "- %s [%s, p%d, %s%s%s] %s\n",
+			item.ID, item.Status, item.Priority, item.IssueType, executorLabel(item.Executor), labelsLabel(item.Labels),
 			singleLine(item.Title, maxTrackerTitleBytes))
 	}
 	if len(items) > len(listed) {
@@ -2053,6 +2156,47 @@ func executorLabel(executor domain.WorkItemExecutor) string {
 		return ""
 	}
 	return ", executor " + string(executor)
+}
+
+// labelsLabel is what a queue listing says about an item's labels, beside its
+// executor, and is nothing at all for an item carrying none. It is in the
+// listing because a label is what an admission practice is checked against: the
+// operator's rule is that every item of certain kinds carries one, and a listing
+// that did not show them would have the product manager reading each item to
+// find out which do.
+func labelsLabel(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	return "," + labelsClause(labels)
+}
+
+// labelsClause is the labels in the words an action's summary uses after "it
+// now carries": " no label" for none, and otherwise the word and the labels
+// themselves, space-separated because they are identifiers and the listing's
+// own separator is the comma.
+func labelsClause(labels []string) string {
+	switch len(labels) {
+	case 0:
+		return " no label"
+	case 1:
+		return " label " + labels[0]
+	default:
+		return " labels " + strings.Join(labels, " ")
+	}
+}
+
+// trimmedLabels is the labels an action carries as the tracker is asked for
+// them, whitespace stripped and blanks dropped. Validation has already refused a
+// blank, so the drop is belt beside braces rather than a second policy.
+func trimmedLabels(labels []string) []string {
+	var trimmed []string
+	for _, label := range labels {
+		if label := strings.TrimSpace(label); label != "" {
+			trimmed = append(trimmed, label)
+		}
+	}
+	return trimmed
 }
 
 // renderQueueAttribution says what the queue's traceability to the goals
@@ -2160,6 +2304,11 @@ func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 	if item.Parking.Parked() {
 		fmt.Fprintf(&rendered, "parked: %s — no pull selects it however far the queue drains, until it is released\n",
 			singleLine(item.Parking.Reason(), domain.MaxWorkItemParkingBytes))
+	}
+	// The labels, said only where there are any: an item that says nothing here
+	// carries none, and printing that on every item would bury the ones that do.
+	if len(item.Labels) > 0 {
+		fmt.Fprintf(&rendered, "labels: %s\n", strings.Join(item.Labels, " "))
 	}
 	if item.Assignee != "" {
 		fmt.Fprintf(&rendered, "assignee: %s\n", singleLine(item.Assignee, maxSurveyTitleBytes))

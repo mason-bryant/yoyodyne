@@ -208,6 +208,99 @@ func TestParkingMetadataConformance(t *testing.T) {
 	}
 }
 
+// TestLabelConformance checks what the label writes rest on and a scripted
+// runner can only restate: that bd takes labels on a creation and gives them
+// back, that an update adds and removes one, that both survive a separate read
+// and appear in a listing — which is what a survey reads — and that a child
+// created under a labelled parent carries the parent's labels, which is what
+// the development manager's contract tells her to expect of a decomposition.
+//
+// It is the test the admission practice rests on: an item admitted with the
+// label is read back through bd carrying it, in each of the three ways the
+// harness reads items.
+func TestLabelConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	// Admitted with the label, in the one write that admits it.
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "The sweep never clears a preserved-branch stoppage",
+		Description: "A stall fix under the reliability directive.",
+		Type:        "task",
+		Labels:      []string{"reliability"},
+	})
+	if err != nil {
+		t.Fatalf("Create() with a label error = %v", err)
+	}
+	if !created.HasLabel("reliability") {
+		t.Fatalf("Create() labels = %v, want bd to echo the label it stored", created.Labels)
+	}
+	shown, err := client.Show(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if !shown.HasLabel("reliability") {
+		t.Fatalf("Show() labels = %v, want the stored label", shown.Labels)
+	}
+	listed, err := client.List(ctx, "open")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	index := slices.IndexFunc(listed, func(item WorkItem) bool { return item.ID == created.ID })
+	if index < 0 || !listed[index].HasLabel("reliability") {
+		t.Fatalf("List() = %#v, want the created item listed with its label", listed)
+	}
+
+	// Work admitted before the practice acquires the label afterwards, one write
+	// each way, and loses it the same way.
+	ordinary, err := client.Create(ctx, NewWorkItem{Title: "Ordinary work", Description: "A run carries it.", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(ordinary.Labels) != 0 {
+		t.Fatalf("Create() labels = %v, want ordinary work to carry none", ordinary.Labels)
+	}
+	labelled, err := client.Update(ctx, ordinary.ID, WorkItemChange{AddLabels: []string{"reliability"}, AppendNotes: "Labelled reliability: a stall fix."})
+	if err != nil {
+		t.Fatalf("Update() adding a label error = %v", err)
+	}
+	if !labelled.HasLabel("reliability") {
+		t.Fatalf("Update() labels = %v, want bd to echo the label it added", labelled.Labels)
+	}
+	// Adding a label the item carries is a write bd accepts and leaves as it was.
+	if again, err := client.Update(ctx, ordinary.ID, WorkItemChange{AddLabels: []string{"reliability"}}); err != nil || !slices.Equal(again.Labels, labelled.Labels) {
+		t.Fatalf("Update() adding a label the item carries = %v, %v; want it accepted and unchanged", again.Labels, err)
+	}
+	bare, err := client.Update(ctx, ordinary.ID, WorkItemChange{RemoveLabels: []string{"reliability"}})
+	if err != nil {
+		t.Fatalf("Update() removing a label error = %v", err)
+	}
+	if bare.HasLabel("reliability") {
+		t.Fatalf("Update() labels = %v after a removal, want bd to have taken it off", bare.Labels)
+	}
+	reread, err := client.Show(ctx, ordinary.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if reread.HasLabel("reliability") {
+		t.Fatalf("Show() labels = %v after a removal, want none", reread.Labels)
+	}
+
+	// A child of a labelled parent inherits the label, merged with its own.
+	child, err := client.Create(ctx, NewWorkItem{
+		Title: "Carve out the repair half", Description: "d", Type: "task", Parent: created.ID, Labels: []string{"bug"},
+	})
+	if err != nil {
+		t.Fatalf("Create() under a labelled parent error = %v", err)
+	}
+	if !child.HasLabel("reliability") || !child.HasLabel("bug") {
+		t.Fatalf("Create() under a labelled parent labels = %v, want the parent's label beside its own", child.Labels)
+	}
+}
+
 // TestGoalWitnessConformance pins the bd behaviours the goal-attribution
 // hardening rests on, and which every other check covering it can only restate:
 // the client's tests drive a scripted runner, so all of them pass identically

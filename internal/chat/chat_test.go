@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1514,6 +1515,9 @@ func (f *fakeTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.W
 		ID:     fmt.Sprintf("yoyodyne-%d", len(f.created)),
 		Title:  item.Title,
 		Parent: item.Parent,
+		// Echoed as bd echoes them, so what an admission reports about its labels
+		// is read off the created item rather than off the request.
+		Labels: item.Labels,
 	}, nil
 }
 
@@ -1526,7 +1530,22 @@ func (f *fakeTracker) Update(_ context.Context, id string, change beads.WorkItem
 		f.append(id, change.AppendNotes)
 		return beads.WorkItem{}, f.durableErr
 	}
-	return beads.WorkItem{ID: id, Title: change.Title}, nil
+	// Labels are applied to the held item and echoed back as bd echoes them, so
+	// what a label action reports the item now carries is read off the answer
+	// rather than off the request.
+	item := f.items[id]
+	for _, label := range change.RemoveLabels {
+		item.Labels = slices.DeleteFunc(item.Labels, func(held string) bool { return held == label })
+	}
+	for _, label := range change.AddLabels {
+		if !slices.Contains(item.Labels, label) {
+			item.Labels = append(item.Labels, label)
+		}
+	}
+	if f.items != nil {
+		f.items[id] = item
+	}
+	return beads.WorkItem{ID: id, Title: change.Title, Labels: item.Labels}, nil
 }
 
 func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkItem, error) {
