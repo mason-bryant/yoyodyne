@@ -63,11 +63,17 @@ execution:
   # idle session costs one local tracker read per interval and no provider call.
   work_poll: 60s
   # The failure-storm brake for a session left running unattended: this many runs
-  # blocking in a row, with nothing landing between them, holds intake and leaves
-  # it held for the operator to lift. It is aimed at a broken machine rather than
-  # a broken item -- an item that keeps failing is left alone until something
-  # about it changes -- and 0 turns it off entirely.
+  # blocking in a row, with nothing landing between them, holds intake and
+  # summons the development manager at once to decide what happens to it. It is
+  # aimed at a broken machine rather than a broken item -- an item that keeps
+  # failing is left alone until something about it changes, and a stop the
+  # environment made counts toward nothing -- and 0 turns it off entirely.
   blocked_runs_before_intake_hold: 3
+  # How long a tripped brake waits for her decision before it probes the line by
+  # itself: one run under the hold, whose landing reopens intake and whose
+  # blocking keeps it held and asks her again. A hold she escalates to the
+  # operator is the only one that waits on a person.
+  brake_cooldown: 30m
 
 # What the operator approves, and what runs without asking.
 #

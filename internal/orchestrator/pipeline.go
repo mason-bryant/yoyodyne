@@ -3844,6 +3844,13 @@ func (p Pipeline) holdWorkItem(workItemID string, hold runstate.OperatorHold) (O
 // they then name is them deciding that this piece of work is the exception —
 // which is the distinction between holding what the harness chooses and pausing
 // everything, and the reason both switches exist.
+//
+// It stops one harness selection short of every other: the brake's own probe,
+// and only where the hold's own record names this item as the probe it has in
+// flight. The selection saying so is not enough — the record is what is read,
+// because the brake writes it under its lock and a selection is words any
+// caller could supply — and a hold that is not the brake's lets nothing
+// through however the selection is named.
 func (p Pipeline) holdIntake(workItemID string) (Outcome, bool, error) {
 	if !p.Selection.SelectedByHarness() {
 		return Outcome{}, false, nil
@@ -3853,6 +3860,9 @@ func (p Pipeline) holdIntake(workItemID string) (Outcome, bool, error) {
 		return Outcome{}, false, fmt.Errorf("read whether intake is held: %w", err)
 	}
 	if !held {
+		return Outcome{}, false, nil
+	}
+	if strings.TrimSpace(p.Selection.By) == runstate.SelectedByBrake && hold.Probing(workItemID) {
 		return Outcome{}, false, nil
 	}
 	return Outcome{

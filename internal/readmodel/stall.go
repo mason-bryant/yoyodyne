@@ -121,7 +121,11 @@ func (r Reason) Whose() string {
 	case ReasonOperatorHold:
 		return "the operator's — nothing runs until `yoyo resume` lifts it"
 	case ReasonIntakeHold:
-		return "the operator's — nothing new is chosen until `yoyo release` lifts it"
+		// The vocabulary cannot see the hold, so it says what holds for both
+		// holders: the operator's own hold is theirs, and the brake's is the
+		// development manager's or the harness's until she escalates it. The
+		// attention line reads the hold itself and says which.
+		return "the operator's for a hold they placed, and the development manager's or the harness's for one the brake placed — nothing new is chosen until it is released, and `yoyo release` lifts either"
 	case ReasonProviderAway:
 		return "the operator's — log in to the provider, or wait for the network; the harness resumes on its own once it answers, and nothing is released or restarted"
 	case ReasonNoCapacity:
@@ -206,6 +210,13 @@ type Stall struct {
 // Stopped reports whether anything at all is stopping the choosing.
 func (s Stall) Stopped() bool { return s.Reason != "" }
 
+// intakeClause is the one clause every surface here says about a held intake,
+// which is the hold's own account of itself: who placed it and why, and — for
+// a hold the brake is working itself — what the harness does about it next.
+func intakeClause(hold runstate.IntakeHold) string {
+	return hold.Account()
+}
+
 // Refusal is the stall as the one line a status prints against an item nothing
 // will pull: what stopped it, and what lifts it.
 //
@@ -287,7 +298,7 @@ func WhyNothingStarts(conditions Conditions) Stall {
 		// wrong every time it was said.
 		return Stall{
 			Reason: ReasonIntakeHold,
-			Says:   "intake is held, and " + singleLine(conditions.IntakeHold.Says(), maxRefusalBytes),
+			Says:   "intake is held, and " + singleLine(intakeClause(conditions.IntakeHold), maxRefusalBytes),
 			Clears: "`yoyo release` lifts it",
 			Since:  conditions.IntakeHold.HeldAt,
 		}

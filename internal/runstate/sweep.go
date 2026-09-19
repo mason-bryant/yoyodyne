@@ -186,6 +186,11 @@ type Sweep struct {
 	// reported once, and this is the key a later pass reads to know which ones
 	// already were. The findings say it in words; this says it in numbers.
 	PullRequests []ForgeNotice `json:"pull_requests,omitempty"`
+	// Summoned is what fired this pass out of its cadence, where something did:
+	// the intake brake, naming what tripped it. It is absent on a pass the
+	// cadence fired, which is nearly every pass, and it is on the record so a
+	// reader of the log can tell a summoned pass from the hourly one beside it.
+	Summoned string `json:"summoned,omitempty"`
 }
 
 // ForgeNotice is one open pull request the harness noticed a reason to report:
@@ -308,6 +313,9 @@ func (s Sweep) Validate() error {
 	}
 	if len(s.Problem) > MaxSweepTextBytes {
 		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(s.Problem), MaxSweepTextBytes))
+	}
+	if len(s.Summoned) > MaxSweepTextBytes {
+		problems = append(problems, fmt.Errorf("summoned is %d bytes, limit is %d", len(s.Summoned), MaxSweepTextBytes))
 	}
 	// A noticed request is stated as a finding, so a record naming requests and
 	// carrying no account would be one whose findings are nowhere to be read.
@@ -436,6 +444,52 @@ func (s *SweepStore) Claim(ctx context.Context, task string, every time.Duration
 	// Cleared as the firing starts rather than as it ends, so a claim carrying a
 	// problem is always the most recent firing's and never one left behind by a
 	// firing two cadences ago.
+	claimed.Problem = ""
+	if err := claimed.Validate(); err != nil {
+		return SweepClaim{}, err
+	}
+	if err := s.save(name, claimed); err != nil {
+		return SweepClaim{}, err
+	}
+	return claimed, nil
+}
+
+// Summon records that a task is firing now whether or not its interval has
+// passed. It is what the intake brake takes when it trips: the development
+// manager's sweep at once rather than at her next scheduled pass. It is a
+// firing like any other — counted, stamped, and settled the same way — so the
+// cadence runs on from the summons, and a summoned pass is never followed a
+// minute later by the scheduled one over the same ground.
+func (s *SweepStore) Summon(ctx context.Context, task string, now time.Time) (SweepClaim, error) {
+	name := strings.TrimSpace(task)
+	if err := domain.ValidateIdentifier("recurring task name", name); err != nil {
+		return SweepClaim{}, err
+	}
+	at := now
+	if at.IsZero() {
+		at = time.Now()
+	}
+	at = at.UTC()
+
+	release, err := s.lock(ctx, name)
+	if err != nil {
+		return SweepClaim{}, err
+	}
+	defer release()
+
+	claimed, found, err := s.load(name)
+	if err != nil {
+		return SweepClaim{}, err
+	}
+	if !found {
+		claimed = SweepClaim{Task: name}
+	}
+	claimed.SchemaVersion = SweepSchemaVersion
+	claimed.ProductID = s.productID
+	claimed.Task = name
+	claimed.Firings++
+	claimed.FiredAt = at
+	claimed.UpdatedAt = at
 	claimed.Problem = ""
 	if err := claimed.Validate(); err != nil {
 		return SweepClaim{}, err

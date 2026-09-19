@@ -1188,3 +1188,76 @@ func heldRun(runID, workItemID string, stopped time.Time) runstate.State {
 		Blocker:      "Yoyodyne stopped this item: a configured check still failed after every permitted attempt.",
 	}
 }
+
+// A hold the brake placed names, on the attention line, who is deciding it and
+// what the harness does next: the development manager while she decides, the
+// harness while a probe runs — with the probe named — and the operator only
+// once she has escalated it. The operator's own hold is theirs as it always
+// was, and says nothing about a probe.
+func TestABrakeHoldNamesWhoIsDecidingAndTheProbe(t *testing.T) {
+	t.Parallel()
+
+	trippedAt := moment.Add(-20 * time.Minute)
+	summonedAt := trippedAt.Add(time.Minute)
+	brake := func(revise func(*runstate.IntakeBrake)) fakeIntakeHolds {
+		trip := runstate.IntakeBrake{
+			Blocked:        []runstate.BrakeBlockedRun{{RunID: "run-1", WorkItemID: "yoyodyne-ifd.398", Reason: "review required repair"}},
+			SummonedAt:     &summonedAt,
+			CooldownEndsAt: trippedAt.Add(30 * time.Minute),
+		}
+		revise(&trip)
+		return fakeIntakeHolds{held: true, hold: runstate.IntakeHold{
+			HeldAt: trippedAt, HeldBy: runstate.IntakeHolderBrake,
+			Reason: "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+			Brake:  &trip,
+		}}
+	}
+	for _, scenario := range []struct {
+		name  string
+		holds fakeIntakeHolds
+		want  []string
+	}{
+		{
+			name:  "deciding",
+			holds: brake(func(*runstate.IntakeBrake) {}),
+			// The line is bounded, so what has to fit is the clause that names the
+			// mover: who is deciding, and when the probe starts if nobody does.
+			want: []string{
+				"intake is held, since " + trippedAt.UTC().Format(time.RFC3339) + ": the harness's own brake placed it after 3 run(s) blocked in a row",
+				"— the development manager's — she decides what happens to it, and a probe run starts by itself at " + trippedAt.Add(30*time.Minute).UTC().Format(time.RFC3339) + " if she has not",
+			},
+		},
+		{
+			name: "probing",
+			holds: brake(func(trip *runstate.IntakeBrake) {
+				trip.Probe = &runstate.IntakeProbe{WorkItemID: "yoyodyne-ifd.410", StartedAt: moment.Add(-time.Minute)}
+				trip.Probes = 1
+			}),
+			want: []string{
+				"— the harness's — a probe run of yoyodyne-ifd.410 is in flight; intake reopens if it lands",
+			},
+		},
+		{
+			name: "escalated",
+			holds: brake(func(trip *runstate.IntakeBrake) {
+				decidedAt := summonedAt.Add(time.Minute)
+				trip.Decision, trip.DecidedAt, trip.DecisionReason = runstate.BrakeDecisionEscalate, &decidedAt, "the same check fails everywhere"
+			}),
+			want: []string{
+				"— the operator's — the development manager escalated it, and nothing new is chosen until `yoyo release` lifts it",
+			},
+		},
+	} {
+		sources := quietSources()
+		sources.IntakeHolds = scenario.holds
+		rendered := ReadStanding(context.Background(), sources).Render()
+		for _, want := range scenario.want {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%s: rendered:\n%s\nmissing: %q", scenario.name, rendered, want)
+			}
+		}
+		if scenario.name != "escalated" && strings.Contains(rendered, "the operator's") {
+			t.Fatalf("%s: rendered:\n%s\nwant a brake hold nobody escalated never reported as the operator's", scenario.name, rendered)
+		}
+	}
+}

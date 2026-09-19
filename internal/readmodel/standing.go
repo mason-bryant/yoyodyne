@@ -1029,11 +1029,16 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		// Who placed it is on the record and is said with it: the same switch is
 		// placed by the operator and by the harness's own failure-storm brake,
 		// and an operator told this hold is theirs when the brake placed it goes
-		// looking for a decision they never made.
+		// looking for a decision they never made. Whose move it is comes from
+		// the same record: the operator's hold is theirs, and the brake's is the
+		// development manager's while she decides, the harness's while a probe
+		// runs, and the operator's only once she has escalated it — with the
+		// probe named where one is in flight, so the line says what is being
+		// tried rather than only that something is.
 		attention = append(attention, Attention{
 			What: fmt.Sprintf("intake is held, since %s: %s",
-				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(held.intake.Says(), maxRefusalBytes)),
-			Whose: "the operator's — nothing new is chosen until `yoyo release` lifts it",
+				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(intakeClause(held.intake), maxRefusalBytes)),
+			Whose: held.intake.Whose(),
 		})
 	}
 	for _, paused := range held.pausing {

@@ -178,13 +178,21 @@ var conversationAuthorities = map[domain.AgentRole]conversationAuthority{
 // conversion had to preserve exactly, and this is what somebody decided to change
 // afterwards and can be read as a list of such decisions.
 //
-// The one entry is the product manager's `repair`, which corrects backlog state
-// the records have made stale. It is the product-manager half of the operator's
-// 2026-09-07 broad-authority direction, recorded as a capability addition in the
+// The product manager's `repair` corrects backlog state the records have made
+// stale. It is the product-manager half of the operator's 2026-09-07
+// broad-authority direction, recorded as a capability addition in the
 // configurable-workflows design's authority-model section, and it is a widening
 // of the role rather than drift in the conversion.
+//
+// The development manager's `brake` records what becomes of a hold the intake
+// brake placed: release it, probe the line, or escalate it to the operator. It
+// is the operator's 2026-09-19 decision that the brake summons her at once and
+// waits on nobody unless she escalates it (yoyodyne-ifd.427), and it is the
+// same authority as triage — deciding what becomes of work that stopped moving
+// — one level up, held under the same capability.
 var grantedSinceTheConversion = map[domain.AgentRole][]string{
-	domain.RoleProductManager: {"repair"},
+	domain.RoleProductManager:     {"repair"},
+	domain.RoleDevelopmentManager: {"brake"},
 }
 
 func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing.T) {

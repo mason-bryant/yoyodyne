@@ -1408,3 +1408,78 @@ func TestAReplySaysWhichStoppageItDecided(t *testing.T) {
 		t.Fatalf("TriageDecision() found a decision in a reply that recorded none")
 	}
 }
+
+// The brake's hold is decided from this conversation and acted on by the
+// watching session: the decision lands on the hold's own record, names this
+// conversation and turn as what decided it, and lifts nothing here. A decision
+// aimed at the operator's hold, or at no hold, is refused rather than recorded
+// onto a switch she does not hold.
+func TestABrakeDecisionIsRecordedOnTheBrakesOwnHold(t *testing.T) {
+	t.Parallel()
+
+	trippedAt := fixedClock{}.Now().Add(-5 * time.Minute)
+	intake := &fakeIntake{
+		held: true, heldAt: trippedAt, heldBy: runstate.IntakeHolderBrake,
+		reason: "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+		brake: &runstate.IntakeBrake{
+			Blocked:        []runstate.BrakeBlockedRun{{RunID: stoppedRun, WorkItemID: "yoyodyne-ifd.311", Reason: "review required repair"}},
+			CooldownEndsAt: trippedAt.Add(30 * time.Minute),
+		},
+	}
+	answer := trackerReply("Three verdicts on three different changes; the line is fine.",
+		`{"action":"brake","decision":"release","reason":"three verdicts on three changes, none of them about the machine"}`)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{}}
+	options := triageOptions(t, tracker, nil, answer)
+	options.Reports = &fakeReports{}
+	options.Intake = intake
+	reply := triageSend(t, options)
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the brake decision applied", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Summary, "release the brake's hold") {
+		t.Fatalf("summary = %q, want the release said as recorded rather than made", reply.Actions[0].Summary)
+	}
+	if len(intake.decisions) != 1 || intake.decisions[0].Decision != runstate.BrakeDecisionRelease {
+		t.Fatalf("decisions = %#v, want the release recorded on the hold", intake.decisions)
+	}
+	if by := intake.decisions[0].DecidedBy; !strings.Contains(by, "development-manager conversation") {
+		t.Fatalf("decided by %q, want this conversation named", by)
+	}
+	if !intake.held {
+		t.Fatal("the conversation lifted the hold itself, want the watching session to lift it on the recorded decision")
+	}
+
+	// The operator's hold takes no brake decision.
+	theirs := &fakeIntake{held: true, heldAt: trippedAt, heldBy: runstate.IntakeHolderOperator, reason: "reordering"}
+	options = triageOptions(t, tracker, nil, trackerReply("Releasing.",
+		`{"action":"brake","decision":"release","reason":"the queue looks fine"}`))
+	options.Reports = &fakeReports{}
+	options.Intake = theirs
+	reply = triageSend(t, options)
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want a decision about the operator's hold refused", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "not held by the harness's own brake") {
+		t.Fatalf("failure = %q, want the refusal to say whose hold it is", reply.Actions[0].Failure)
+	}
+	if !theirs.held || len(theirs.decisions) != 0 {
+		t.Fatalf("the operator's hold = held %t with %d decision(s), want it untouched", theirs.held, len(theirs.decisions))
+	}
+
+	// A decision outside the vocabulary, or one naming an item, is refused before
+	// anything is run.
+	for _, block := range []string{
+		`{"action":"brake","decision":"ignore","reason":"no"}`,
+		`{"action":"brake","id":"yoyodyne-ifd.311","decision":"release","reason":"no"}`,
+	} {
+		options = triageOptions(t, tracker, nil, trackerReply("Deciding.", block))
+		options.Reports = &fakeReports{}
+		options.Intake = intake
+		if _, err := openTestSession(t, options).Send(context.Background(), "Work the docket."); err == nil {
+			t.Fatalf("block %s: Send() error = nil, want the malformed decision refused whole", block)
+		}
+	}
+	if len(intake.decisions) != 1 {
+		t.Fatalf("decisions = %d, want the refused blocks to have recorded nothing", len(intake.decisions))
+	}
+}

@@ -183,7 +183,7 @@ func announceHolds(writer io.Writer, holds statusHolds) {
 	}
 	if holds.Intake != nil {
 		fmt.Fprintf(writer, "INTAKE HELD since %s: %s\n",
-			holds.Intake.HeldAt.UTC().Format(time.RFC3339), holds.Intake.Says())
+			holds.Intake.HeldAt.UTC().Format(time.RFC3339), holds.Intake.Account())
 		fmt.Fprintln(writer, "the harness starts nothing more on its own; work already running carries on, and `yoyo release` lets it choose work again, as does /release in a conversation")
 	}
 	if holds.Error != "" {
