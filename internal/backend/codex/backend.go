@@ -385,6 +385,20 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 			return backend.RunResult{}, fmt.Errorf("record Codex output truncation: %w", truncationErr)
 		}
 	}
+	// A process that failed without writing a terminal has said whatever it had
+	// to say as prose — on stderr, or on stdout in place of the events it was
+	// asked for — so that is what the dialect is handed, and only then. A
+	// terminal the provider did write is the provider's own account of the
+	// ending and is not second-guessed by its diagnostics; a process the harness
+	// stopped on time is a stop the harness already names; and a stream that
+	// reported a limit and then died has been answered by the limit. What is
+	// left is the CLI that refused before it wrote anything structured — an
+	// expired login, an API nothing reaches — which until yoyodyne-ifd.400 ended
+	// the attempt as a process failure nobody classified, on this adapter by
+	// decision pending a recorded occurrence.
+	if processResult.Status == execution.ProcessFailed && !parser.SawTerminal() && !parser.SawUsageLimit() {
+		parser.ObservePlainOutput()
+	}
 	// The normalized result and events are the durable provider output. Do not
 	// return the raw JSON stream as a second, potentially escape-obfuscated copy.
 	processResult.Stdout = ""

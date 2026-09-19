@@ -83,14 +83,25 @@ func claudeCodeAdapter() Adapter {
 				},
 				{
 					// The shape yoyodyne-ifd.377 could not see: a CLI that refuses the
-					// login before it writes any envelope has only stderr to say so
-					// on, and a stream with nothing in it. Read from documentation
-					// rather than a recording — the recorded refusal above arrived on
-					// a terminal — because the cost of missing it is the 2026-09-17
-					// stall replayed: a process failure nobody classified is
-					// relaunched into the same login until the budget is spent.
+					// login before it writes any envelope has only prose to say so
+					// with, here on stderr with a stream that has nothing in it.
+					// Read from documentation rather than a recording — the recorded
+					// refusal above arrived on a terminal — because the cost of
+					// missing it is the 2026-09-17 stall replayed: a process failure
+					// nobody classified is relaunched into the same login until the
+					// budget is spent.
 					Name:     "a login refused on stderr before any envelope was written",
 					Stderr:   "Not logged in · Please run /login\n",
+					ExitCode: 1,
+				},
+				{
+					// The same refusal written to stdout as plain text, where the
+					// stream should have been: the gap yoyodyne-ifd.393 reported
+					// after closing the stderr one. Until yoyodyne-ifd.400 this was
+					// a stream the adapter could not read at all, which failed the
+					// invocation before stderr was consulted.
+					Name:     "a login refused as plain text on stdout before any envelope was written",
+					Stream:   "Not logged in · Please run /login\n",
 					ExitCode: 1,
 				},
 			},
@@ -119,6 +130,11 @@ func claudeCodeAdapter() Adapter {
 					Stderr:   "API Error: Can't reach the API server\n",
 					ExitCode: 1,
 				},
+				{
+					Name:     "nothing answering, said as plain text on stdout before any envelope was written",
+					Stream:   "API Error: Can't reach the API server\n",
+					ExitCode: 1,
+				},
 			},
 			NetworkFailure: {{
 				// Byte for byte what the provider CLI wrote on the run that died
@@ -142,9 +158,11 @@ func claudeCodeAdapter() Adapter {
 }
 
 // codexAdapter is Codex's side of the suite. This provider has one error channel
-// and says everything on it, which is why every sample below is the same
-// envelope carrying different words — and why the words are the whole of what
-// its dialect has to read.
+// in its stream and says everything on it, which is why nearly every sample
+// below is the same envelope carrying different words — and why the words are
+// the whole of what its dialect has to read. The exceptions are the refusals a
+// CLI can make before it writes any event, which arrive as prose on stderr or
+// on stdout and are sampled on both.
 func codexAdapter() Adapter {
 	descriptor, _ := backend.BuiltInDescriptor(domain.BackendCodex)
 	return Adapter{
@@ -171,20 +189,52 @@ func codexAdapter() Adapter {
 				Stream:   lines(codexSessionConfigured, codexError(`404 {"error":{"code":"model_not_found","message":"model: gpt-5-2026-01-01"}}`)),
 				ExitCode: 1,
 			}},
-			AuthenticationRejected: {{
-				Name:     "an account the API would not accept",
-				Stream:   lines(codexSessionConfigured, codexError("401 Unauthorized: check your credentials")),
-				ExitCode: 1,
-			}},
-			ProviderUnreachable: {{
-				// This provider has one error channel, so the transport's own words
-				// arrive on it exactly as an API's do. No recorded Codex stream carries
-				// one; the shape is the transport's documented answer for a name that
-				// does not resolve.
-				Name:     "a name that does not resolve",
-				Stream:   lines(codexSessionConfigured, codexError("error sending request: dns error: failed to lookup address information")),
-				ExitCode: 1,
-			}},
+			AuthenticationRejected: {
+				{
+					Name:     "an account the API would not accept",
+					Stream:   lines(codexSessionConfigured, codexError("401 Unauthorized: check your credentials")),
+					ExitCode: 1,
+				},
+				{
+					// A CLI that refuses the login before it writes any event has
+					// only prose to say so with. No recorded Codex process has done
+					// so; the words are the CLI's title for the condition and the
+					// remedy it names, and the cost of not sampling them is the
+					// 2026-09-17 stall replayed on this provider.
+					Name:     "a login refused on stderr before any event was written",
+					Stderr:   "Not logged in. Run `codex login` to authenticate.\n",
+					ExitCode: 1,
+				},
+				{
+					Name:     "a login refused as plain text on stdout before any event was written",
+					Stream:   "Not logged in. Run `codex login` to authenticate.\n",
+					ExitCode: 1,
+				},
+			},
+			ProviderUnreachable: {
+				{
+					// This provider has one error channel, so the transport's own words
+					// arrive on it exactly as an API's do. No recorded Codex stream carries
+					// one; the shape is the transport's documented answer for a name that
+					// does not resolve.
+					Name:     "a name that does not resolve",
+					Stream:   lines(codexSessionConfigured, codexError("error sending request: dns error: failed to lookup address information")),
+					ExitCode: 1,
+				},
+				{
+					// The same words as prose on either plain channel, for the
+					// reason the login has them: a process that died before writing
+					// an event has said what it had to say there.
+					Name:     "nothing answering, said on stderr before any event was written",
+					Stderr:   "error sending request: dns error: failed to lookup address information\n",
+					ExitCode: 1,
+				},
+				{
+					Name:     "nothing answering, said as plain text on stdout before any event was written",
+					Stream:   "error sending request: dns error: failed to lookup address information\n",
+					ExitCode: 1,
+				},
+			},
 			NetworkFailure: {{
 				Name:     "a stream that stopped before the response completed",
 				Stream:   lines(codexSessionConfigured, codexError("connection closed before the response completed")),

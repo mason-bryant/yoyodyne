@@ -1789,6 +1789,124 @@ func TestRunClassifiesARefusalMadeOnStderrBeforeAnyEnvelope(t *testing.T) {
 	}
 }
 
+// A CLI that refuses an expired login as plain text on stdout — where its
+// stream should have been — has written a line the parser cannot decode, and
+// until yoyodyne-ifd.400 that failed the invocation as an unreadable stream
+// before stderr was ever read: the gap yoyodyne-ifd.393 reported after closing
+// the stderr one. The refusal is read off the held stdout the way stderr is,
+// it earns the same wait, the decode errors it arrived as are not the
+// invocation's failure, and the record says it came off stdout.
+func TestRunClassifiesARefusalMadeAsPlainTextOnStdoutBeforeAnyEnvelope(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stdout string
+		cause  domain.ProviderOutageCause
+		words  string
+	}{
+		{name: "a login the CLI will not accept", stdout: loginRefusedOnStderr + "\n", cause: domain.ProviderUnauthenticated, words: loginRefusedOnStderr},
+		{
+			// A banner ahead of the refusal is more plain text, and the refusal
+			// has to be found behind it.
+			name:   "a refusal behind a banner",
+			stdout: "Claude Code v2.1.276\nOAuth token revoked · Please run /login\n",
+			cause:  domain.ProviderUnauthenticated,
+			words:  "OAuth token revoked",
+		},
+		{name: "nothing answering at the API", stdout: "API Error: Can't reach the API server\n", cause: domain.ProviderUnreachable, words: "Can't reach the API server"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, events := runProcessFailure(t, testCase.stdout, "")
+			if result.ProviderOutage == nil {
+				t.Fatalf("Run() reported no provider outage: %#v", result)
+			}
+			if result.ProviderOutage.Cause != testCase.cause {
+				t.Fatalf("outage cause = %q, want %q", result.ProviderOutage.Cause, testCase.cause)
+			}
+			if result.ProviderOutage.Channel != domain.ProviderChannelStdout {
+				t.Fatalf("outage channel = %q, want %q: the record has to say the CLI wrote prose where its stream should have been", result.ProviderOutage.Channel, domain.ProviderChannelStdout)
+			}
+			if !strings.Contains(result.ProviderOutage.Detail, testCase.words) {
+				t.Fatalf("outage detail = %q, want the CLI's own words %q", result.ProviderOutage.Detail, testCase.words)
+			}
+			if !result.IsError || result.StopReason != "process_exit_1" {
+				t.Fatalf("Run() = IsError %t, StopReason %q, want the process failure kept beside the wait", result.IsError, result.StopReason)
+			}
+			if result.TransientFailure != nil || result.ServerOverload != nil || result.UsageLimit != nil {
+				t.Fatalf("a refusal read off stdout also became something to relaunch or wait on a clock for: %#v", result)
+			}
+			// What the process wrote to stdout is in the record as the plain
+			// output it was, not lost with the decode error it earned.
+			var recorded bool
+			for _, event := range events {
+				if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), `"stream":"stdout"`) && strings.Contains(string(event.Payload), testCase.words) {
+					recorded = true
+				}
+			}
+			if !recorded {
+				t.Fatalf("plain stdout was read and not recorded: %#v", events)
+			}
+		})
+	}
+}
+
+// Reading plain stdout changes nothing about a stream the parser genuinely
+// cannot read: a line that is not an envelope and not a refusal still fails the
+// invocation with the decode error it always did, whether it came before any
+// envelope or after one. The same holds for a refusal that arrives after an
+// envelope, which is a stream that broke rather than a CLI that refused before
+// writing one.
+func TestAPlainStdoutLineThatIsNotARefusalStillFailsTheStream(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "a banner and nothing else", stream: "Claude Code v2.1.276\n"},
+		{name: "a line broken after an envelope", stream: `{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}` + "\n{not json\n"},
+		{name: "a refusal after an envelope", stream: `{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}` + "\n" + loginRefusedOnStderr + "\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := (Backend{
+				Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: testCase.stream}}},
+				Clock:  fixedClock{},
+			}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             domain.RoleDeveloper,
+				WorkingDirectory: "/worktree",
+				Prompt:           "implement",
+			})
+			if err == nil || !strings.Contains(err.Error(), "decode stream event") {
+				t.Fatalf("Run() error = %v, want the stream's decode error", err)
+			}
+		})
+	}
+}
+
+// When a CLI says the same thing on both plain channels the record names one of
+// them, and it is stderr: the channel a refusal conventionally goes to, and the
+// one the first classified refusal was read off. Stdout is read only when
+// stderr answered nothing — including when stderr had plenty to say that the
+// dialect does not read for.
+func TestRunReadsStderrBeforePlainStdout(t *testing.T) {
+	t.Parallel()
+
+	both, _ := runProcessFailure(t, loginRefusedOnStderr+"\n", loginRefusedOnStderr+"\n")
+	if both.ProviderOutage == nil || both.ProviderOutage.Channel != domain.ProviderChannelStderr {
+		t.Fatalf("ProviderOutage = %#v, want the refusal read off stderr when both channels carried it", both.ProviderOutage)
+	}
+	noisy, _ := runProcessFailure(t, loginRefusedOnStderr+"\n", "(node:4242) ExperimentalWarning: something is experimental\n")
+	if noisy.ProviderOutage == nil || noisy.ProviderOutage.Channel != domain.ProviderChannelStdout {
+		t.Fatalf("ProviderOutage = %#v, want the refusal read off stdout when stderr said nothing the dialect reads", noisy.ProviderOutage)
+	}
+}
+
 // Stderr is read narrowly and only when nothing else answered. A process that
 // died with a terminal has been answered by the terminal, whatever its
 // diagnostics say; one that reported a limit has been answered by the limit;

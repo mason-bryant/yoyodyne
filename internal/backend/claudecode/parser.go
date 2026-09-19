@@ -35,11 +35,18 @@ type streamParser struct {
 	reply     func(string)
 	result    backend.RunResult
 	sawResult bool
-	// stderr is what the process wrote to its error stream, kept bounded so it
-	// can be handed to the dialect once the stream has ended. It is read only
-	// when no terminal arrived — see ObserveStderr — so for every invocation
-	// that ended the way the provider ends one it is held and never consulted.
+	// stderr is what the process wrote to its error stream, and stdout is what
+	// it wrote to its output stream before any envelope without its being one,
+	// each kept bounded so it can be handed to the dialect once the stream has
+	// ended. Both are read only when no terminal arrived — see
+	// ObservePlainOutput — so for every invocation that ended the way the
+	// provider ends one they are held and never consulted.
 	stderr strings.Builder
+	stdout strings.Builder
+	// sawEnvelope says the stream has carried at least one line this parser
+	// could read as an envelope. A plain line before that is held as stdout
+	// above; a plain line after it is the decode error it always was.
+	sawEnvelope bool
 	// duplicateTerminal is what to say about an invocation the provider ended
 	// more than once, and empty when it ended once. It is held rather than
 	// applied because what a duplicate asks the caller for depends on the whole
@@ -127,11 +134,12 @@ func (p *streamParser) ParseLine(line string) error {
 	}
 	var envelope streamEnvelope
 	if err := json.Unmarshal([]byte(line), &envelope); err != nil {
-		return fmt.Errorf("decode stream event: %w", err)
+		return p.plainLine(line, fmt.Errorf("decode stream event: %w", err))
 	}
 	if envelope.Type == "" {
-		return errors.New("decode stream event: type is required")
+		return p.plainLine(line, errors.New("decode stream event: type is required"))
 	}
+	p.sawEnvelope = true
 	if err := p.redactEnvelope(&envelope); err != nil {
 		return err
 	}
@@ -179,7 +187,7 @@ func (p *streamParser) ParseLine(line string) error {
 func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 	text := p.redactor.Redact(output.Text)
 	if output.Stream == execution.StreamStderr {
-		p.keepStderr(text)
+		keepPlain(&p.stderr, text)
 	}
 	return p.emit(execution.EventProcessOutput, map[string]any{
 		"stream": output.Stream,
@@ -187,35 +195,90 @@ func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 	})
 }
 
-// keepStderr holds one redacted stderr line for ObserveStderr, up to the same
-// bound an event's text is held to. A refusal the CLI makes before it writes
-// anything structured is one short line at the front of stderr, so what the
-// bound cuts is the tail of a process that had a great deal else to say.
-func (p *streamParser) keepStderr(text string) {
-	if p.stderr.Len() >= maxEventTextBytes {
-		return
+// plainLine is a stdout line that is not an envelope, and the decode error it
+// earned. Before any envelope it is held as plain stdout for ObservePlainOutput
+// and recorded, because a CLI that refuses before it writes anything
+// structured may say so there as readily as on stderr — and until
+// yoyodyne-ifd.400 such a refusal failed the invocation as a stream decode
+// error before stderr was ever read, which is 2026-09-17 replayed through a
+// different gap. The error is still returned: whether it fails the invocation
+// is decided once the process has ended, by whether the held text was the
+// refusal, so a stream this parser genuinely cannot read still fails the run
+// with the parse error it always did. After an envelope nothing is held: the
+// provider was writing its stream, and a line in it that cannot be read is the
+// decode error it always was.
+func (p *streamParser) plainLine(line string, decodeErr error) error {
+	if p.sawEnvelope {
+		return decodeErr
 	}
-	if p.stderr.Len() > 0 {
-		p.stderr.WriteByte('\n')
+	text := p.redactor.Redact(line)
+	keepPlain(&p.stdout, text)
+	if err := p.emit(execution.EventProcessOutput, map[string]any{
+		"stream": execution.StreamStdout,
+		"text":   truncate(text),
+	}); err != nil {
+		return err
 	}
-	p.stderr.WriteString(text)
+	return decodeErr
 }
 
-// ObserveStderr hands the dialect what the process wrote to stderr, as the one
-// event on that channel, and records whatever it answers. It is for the stream
-// that ended without a terminal of its own: a CLI that refuses an expired login
-// before it writes a single envelope says so on stderr and exits, and a
+// keepPlain holds one redacted line of a plain channel for ObservePlainOutput,
+// up to the same bound an event's text is held to. A refusal the CLI makes
+// before it writes anything structured is one short line at the front, so what
+// the bound cuts is the tail of a process that had a great deal else to say.
+func keepPlain(held *strings.Builder, text string) {
+	if held.Len() >= maxEventTextBytes {
+		return
+	}
+	if held.Len() > 0 {
+		held.WriteByte('\n')
+	}
+	held.WriteString(text)
+}
+
+// ObservePlainOutput hands the dialect what the process wrote as prose — its
+// stderr, and then the plain stdout it wrote before any envelope — as one event
+// per channel, and records whatever it answers. It is for the stream that
+// ended without a terminal of its own: a CLI that refuses an expired login
+// before it writes a single envelope says so on one of the two and exits, and a
 // dialect that read only envelopes left that invocation an unclassified process
 // failure — which relaunches into the same login, spends the budget, and
 // blocks, exactly as 2026-09-17 did. The caller asks this only in that case,
 // so a terminal the provider did write is never second-guessed by its
 // diagnostics, and a process that wrote nothing is asked nothing.
-func (p *streamParser) ObserveStderr() {
-	text := strings.TrimSpace(p.stderr.String())
-	if text == "" {
+//
+// Stderr is read first, and stdout only when stderr answered nothing, so that
+// a CLI which said the same thing on both leaves one channel on the record
+// rather than whichever was recorded last. Stderr goes first because it is
+// where a CLI's refusal conventionally goes and where the first classified one
+// was read; a refusal on stdout is the CLI writing prose where its stream
+// should have been.
+func (p *streamParser) ObservePlainOutput() {
+	if p.observePlain(domain.ProviderChannelStderr, p.stderr.String()) {
 		return
 	}
-	p.observe(backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: text})
+	p.observePlain(domain.ProviderChannelStdout, p.stdout.String())
+}
+
+// observePlain hands one plain channel to the dialect and reports whether it
+// answered with a wait. Text is redacted as it was held and trimmed here, so a
+// channel that carried only whitespace is one the dialect is never asked about.
+func (p *streamParser) observePlain(channel domain.ProviderChannel, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	before := p.result.ProviderOutage
+	p.observe(backend.ProviderEvent{Channel: channel, Text: text})
+	return p.result.ProviderOutage != before
+}
+
+// ReadRefusalOffPlainOutput reports a wait the dialect read off one of the two
+// plain channels. It is what lets the adapter tell a stream it could not
+// decode from a refusal the CLI wrote in place of one: the lines that failed
+// to decode were the refusal, and the invocation has been answered by it.
+func (p *streamParser) ReadRefusalOffPlainOutput() bool {
+	return p.result.ProviderOutage != nil && p.result.ProviderOutage.Channel.Plain()
 }
 
 // truncatedStreamLine is the harness's own name for a provider line the process

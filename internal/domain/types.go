@@ -117,18 +117,24 @@ func (c ProviderOutageCause) Valid() bool {
 }
 
 // ProviderChannel is where a provider said something: on an envelope of the
-// event stream it was asked for, or on its process's stderr. It is the
-// vocabulary the adapter contract hands a dialect an event with and the durable
-// record says a classification by, and it lives here so that neither redeclares
-// it.
+// event stream it was asked for, on its process's stderr, or as plain text on
+// its stdout in place of the envelopes it was asked for. It is the vocabulary
+// the adapter contract hands a dialect an event with and the durable record
+// says a classification by, and it lives here so that neither redeclares it.
 //
-// It is closed at two. A provider process has exactly those two places to say
-// anything, and which one a refusal arrived on is kept because the two are read
-// under different rules: an envelope names the event and the ending, and stderr
-// is prose with neither, read only when the stream ended without an ending of
-// its own. A run waiting on a refusal read off stderr is a run whose provider
-// died before it wrote a single envelope, which is what a reader of the record
-// has to know before deciding whether the dialect read it right.
+// It is closed at three. A provider process has exactly two descriptors to say
+// anything on, and the stream it was asked for is one of them, so the channels
+// are the envelope and the two kinds of prose: what went to stderr, and what
+// went to stdout without being an envelope at all. Which one a refusal arrived
+// on is kept because they are read under different rules: an envelope names
+// the event and the ending, and the two plain channels are prose with neither,
+// read only when the stream ended without an ending of its own. A run waiting
+// on a refusal read off either plain channel is a run whose provider died
+// before it wrote a single envelope, which is what a reader of the record has
+// to know before deciding whether the dialect read it right — and the plain
+// stdout one says further that the CLI put its refusal where its stream should
+// have been, which is the shape that used to fail the invocation as a stream
+// the parser could not decode.
 type ProviderChannel string
 
 const (
@@ -138,11 +144,23 @@ const (
 	// ProviderChannelStderr is the provider process's stderr, read whole once
 	// the process has ended without a terminal of its own.
 	ProviderChannelStderr ProviderChannel = "stderr"
+	// ProviderChannelStdout is plain text the provider process wrote to stdout
+	// before any envelope — lines that were not envelopes on the stream that
+	// was asked for — read whole, under the same rule as stderr, once the
+	// process has ended without a terminal of its own.
+	ProviderChannelStdout ProviderChannel = "stdout"
 )
 
 // ProviderChannels is every channel, in the order they are documented.
 func ProviderChannels() []ProviderChannel {
-	return []ProviderChannel{ProviderChannelEnvelope, ProviderChannelStderr}
+	return []ProviderChannel{ProviderChannelEnvelope, ProviderChannelStderr, ProviderChannelStdout}
+}
+
+// Plain reports a channel that is prose rather than an envelope: the two the
+// adapter reads only once the process has ended without a terminal, and only
+// for the refusals a CLI can make before it writes anything structured.
+func (c ProviderChannel) Plain() bool {
+	return c == ProviderChannelStderr || c == ProviderChannelStdout
 }
 
 // Valid reports a channel this harness names.

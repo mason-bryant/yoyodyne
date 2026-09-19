@@ -181,18 +181,19 @@ type ProviderEvent struct {
 	// every event the adapters built before stderr was read at all, so a dialect
 	// written against envelopes alone keeps reading exactly what it did.
 	//
-	// The stderr channel is the one event that is not an envelope: the whole of
-	// what the process wrote to stderr, handed over once — after the process has
-	// ended, and only when the stream ended without a terminal of its own. It is
-	// there for the refusal a provider CLI makes before it writes anything
-	// structured, which is a login it will not accept or an API it cannot reach,
-	// and it carries no Type, no Subtype, and no Payload because stderr names
-	// none, and is neither Terminal nor Failed because it is not an envelope:
-	// the channel is the whole of its condition, so a dialect written against
-	// envelopes says nothing about it unless it asks. What a dialect may read
-	// off it is deliberately narrow — see the two built-in dialects — because
-	// stderr is a wider surface than a terminal and most of what a process
-	// writes there is diagnostics.
+	// The two plain channels are the events that are not envelopes: the whole of
+	// what the process wrote to stderr, and the whole of what it wrote to stdout
+	// before any envelope without its being one, each handed over once — after
+	// the process has ended, and only when the stream ended without a terminal
+	// of its own. They are there for the refusal a provider CLI makes before it
+	// writes anything structured, which is a login it will not accept or an API
+	// it cannot reach, and each carries no Type, no Subtype, and no Payload
+	// because prose names none, and is neither Terminal nor Failed because it is
+	// not an envelope: the channel is the whole of its condition, so a dialect
+	// written against envelopes says nothing about it unless it asks. What a
+	// dialect may read off either is deliberately narrow — see the two built-in
+	// dialects — because a process's prose is a wider surface than a terminal
+	// and most of it is diagnostics.
 	Channel domain.ProviderChannel
 }
 
