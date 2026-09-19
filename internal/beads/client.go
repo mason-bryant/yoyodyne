@@ -383,19 +383,39 @@ const unboundedListing = "--limit=0"
 // List reports the work items Beads currently holds, optionally narrowed to one
 // status. It is read-only: nothing about listing work claims, changes, or
 // closes any of it. It reads the whole set: see unboundedListing.
+//
+// The flag was checked against one bd release, and a bd without it refuses
+// every listing before it opens the store — the scheduler's selection among
+// them, which is every run the harness would make. So a listing bd refuses for
+// the flag is asked again without it, and what that reading loses is the lift:
+// it is bd's own page, whole where bd lifts its cap for a pipe and the first
+// fifty rows where it does not. A refusal for anything else is the error it was.
 func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
-	args := []string{"list", "--json", unboundedListing}
+	var filter []string
 	if trimmed := strings.TrimSpace(status); trimmed != "" {
 		if !statusPattern.MatchString(trimmed) {
 			return nil, fmt.Errorf("invalid Beads status %q", status)
 		}
-		args = append(args, "--status="+trimmed)
+		filter = append(filter, "--status="+trimmed)
 	}
-	data, err := c.run(ctx, args...)
+	data, err := c.run(ctx, append([]string{"list", "--json", unboundedListing}, filter...)...)
+	if err != nil && refusedFlag(err, unboundedListing) {
+		data, err = c.run(ctx, append([]string{"list", "--json"}, filter...)...)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return decodeWorkItems(data)
+}
+
+// refusedFlag reports whether a bd failure is bd not knowing the flag, as
+// distinct from bd failing at what the flag asked. bd parses its command line
+// with cobra, whose refusal names the flag without its value — `unknown flag:
+// --limit` for `--limit=0` — and is issued before any store is opened, so the
+// wording is the whole of what tells the two apart.
+func refusedFlag(err error, flag string) bool {
+	name, _, _ := strings.Cut(flag, "=")
+	return strings.Contains(err.Error(), "unknown flag: "+name)
 }
 
 // Ready reports the work items the tracker itself considers ready to be worked

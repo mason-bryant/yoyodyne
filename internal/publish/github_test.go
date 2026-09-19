@@ -591,6 +591,22 @@ func contains(values []string, want string) bool {
 	return false
 }
 
+// apiRepositoryScope reads the GH_REPO the API verb was given, or "" when no
+// API verb ran or none carried one.
+func apiRepositoryScope(runner *scriptedRunner) string {
+	for index, command := range runner.commands {
+		if !contains(command, "api") {
+			continue
+		}
+		for _, entry := range runner.environments[index] {
+			if value, found := strings.CutPrefix(entry, "GH_REPO="); found {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
 // TestGitHubScopesCommandsToTheConfiguredRemote pins the forge to the remote the
 // project named. Without it the CLI infers a repository from the working
 // directory, which is wrong rather than merely redundant in a checkout with
@@ -725,6 +741,43 @@ func TestRepositoryOwnerReadsEveryRemoteURLForm(t *testing.T) {
 	for _, url := range []string{"", "   ", "https://github.com", "github.com:thing.git"} {
 		if owner, err := repositoryOwner(url); err == nil {
 			t.Errorf("repositoryOwner(%q) = %q, want a refusal", url, owner)
+		}
+	}
+}
+
+// The repository GH_REPO is given is OWNER/REPO whichever way the remote was
+// written — the https and ssh forms git reports, with or without the .git
+// suffix — because that is the form gh documents for the variable. A remote on
+// any host but github.com keeps its host in front, so an enterprise remote is
+// not resolved against the public forge; a URL that names no repository is
+// refused rather than sent to gh to fail in the placeholder step.
+func TestRemoteRepositoryIsOwnerAndNameInTheFormGHRepoTakes(t *testing.T) {
+	t.Parallel()
+
+	for url, want := range map[string]string{
+		"git@github.com:mason-bryant/yoyodyne.git":         "mason-bryant/yoyodyne",
+		"git@github.com:mason-bryant/yoyodyne":             "mason-bryant/yoyodyne",
+		"ssh://git@github.com/mason-bryant/yoyodyne.git":   "mason-bryant/yoyodyne",
+		"ssh://git@github.com:22/mason-bryant/yoyodyne":    "mason-bryant/yoyodyne",
+		"https://github.com/mason-bryant/yoyodyne.git":     "mason-bryant/yoyodyne",
+		"https://github.com/mason-bryant/yoyodyne":         "mason-bryant/yoyodyne",
+		"https://github.com/mason-bryant/yoyodyne/":        "mason-bryant/yoyodyne",
+		"https://GitHub.com/mason-bryant/yoyodyne":         "mason-bryant/yoyodyne",
+		"https://token@github.com/mason-bryant/yoyodyne":   "mason-bryant/yoyodyne",
+		"git@ghe.example.com:acme/thing.git":               "ghe.example.com/acme/thing",
+		"https://ghe.example.com/acme/thing.git":           "ghe.example.com/acme/thing",
+		"https://example.invalid/acme/thing":               "example.invalid/acme/thing",
+		"https://ghe.example.com:8443/acme/thing":          "ghe.example.com/acme/thing",
+		"https://ghe.example.com/team/subgroup/acme/thing": "ghe.example.com/acme/thing",
+	} {
+		got, err := remoteRepository(url)
+		if err != nil || got != want {
+			t.Errorf("remoteRepository(%q) = %q, %v, want %q", url, got, err, want)
+		}
+	}
+	for _, url := range []string{"", "   ", "https://github.com", "github.com:thing.git", "/srv/git/thing.git", "https://github.com/-owner/thing", "https://github.com/owner/na me"} {
+		if got, err := remoteRepository(url); err == nil {
+			t.Errorf("remoteRepository(%q) = %q, want a refusal", url, got)
 		}
 	}
 }
@@ -941,19 +994,10 @@ func TestGitHubContainsAsksTheForgeHowFarAheadTheCommitIs(t *testing.T) {
 	if !contains(calls[0], "api") || !contains(calls[0], "--method") || !contains(calls[0], "GET") {
 		t.Errorf("compare args = %v, want the API verb asked as a GET", calls[0])
 	}
-	scoped := false
-	for index, command := range runner.commands {
-		if !contains(command, "api") {
-			continue
-		}
-		for _, entry := range runner.environments[index] {
-			if entry == "GH_REPO=https://example.invalid/acme/thing" {
-				scoped = true
-			}
-		}
-	}
-	if !scoped {
-		t.Error("the API verb was not given the configured repository in its environment")
+	// The repository reaches the API verb as the `[HOST/]OWNER/REPO` gh
+	// documents for GH_REPO, derived from the remote's URL, not as the URL.
+	if scope := apiRepositoryScope(runner); scope != "example.invalid/acme/thing" {
+		t.Errorf("GH_REPO = %q, want the repository derived from the remote's URL", scope)
 	}
 
 	// A comparison that says nothing about how far ahead the commit is cannot be

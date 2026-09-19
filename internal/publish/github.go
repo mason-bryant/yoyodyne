@@ -651,16 +651,21 @@ func (g GitHub) Contains(ctx context.Context, base, commit string) (bool, error)
 	}
 	// The API verb takes no --repo flag; the repository it addresses is the one
 	// the environment names, so the configured remote is put there, and the
-	// placeholders in the endpoint are filled from it. The remote's URL goes in
-	// as git reports it: gh reads GH_REPO through the parser --repo uses, which
-	// takes the ssh and https forms alike, and the placeholders come out as
-	// OWNER and REPO — shown against gh itself in
-	// docs/diagnoses/yoyodyne-ifd-283-2-forge-hygiene-reads.md.
+	// placeholders in the endpoint are filled from it. It goes in as the
+	// `[HOST/]OWNER/REPO` gh documents for GH_REPO rather than as the URL git
+	// reports: gh's parser was seen to take the URL too
+	// (docs/diagnoses/yoyodyne-ifd-283-2-forge-hygiene-reads.md), but that is
+	// gh's leniency rather than its contract, and the documented form is the
+	// one a later gh keeps.
+	repository, err := remoteRepository(url)
+	if err != nil {
+		return false, fmt.Errorf("resolve the repository of remote %s: %w", g.remoteName(), err)
+	}
 	result, err := g.Runner.Run(ctx, execution.Command{
 		Name:     g.binary(),
 		Args:     []string{"api", "--method", "GET", "-F", "per_page=1", "repos/{owner}/{repo}/compare/" + base + "..." + commit},
 		Dir:      g.Dir,
-		Env:      append(os.Environ(), "GH_REPO="+url),
+		Env:      append(os.Environ(), "GH_REPO="+repository),
 		Timeout:  g.timeout(),
 		Redactor: execution.NewRedactor(g.RedactValues...),
 	}, nil)
@@ -920,34 +925,78 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 var ownerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // repositoryOwner reads the account a remote's repository belongs to out of the
-// remote's URL. Every form Git accepts names the repository as the last two path
+// remote's URL. A URL that names no such account is refused: publishing from a
+// fork nobody can identify would open the request against the wrong head or
+// none at all.
+func repositoryOwner(url string) (string, error) {
+	_, owner, _, err := parseRemoteURL(url)
+	return owner, err
+}
+
+// defaultForgeHost is the host gh addresses when GH_REPO names none. A remote
+// there is named to gh as `OWNER/REPO`; a remote anywhere else carries its host.
+const defaultForgeHost = "github.com"
+
+// remoteRepository reads the repository a remote's URL names, in the
+// `[HOST/]OWNER/REPO` form gh's GH_REPO variable is documented to take. The
+// host is left off for the forge's own, which is the documented plain form, and
+// kept for any other so an enterprise remote is not silently resolved against
+// github.com.
+func remoteRepository(url string) (string, error) {
+	host, owner, name, err := parseRemoteURL(url)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(host, defaultForgeHost) {
+		return owner + "/" + name, nil
+	}
+	return host + "/" + owner + "/" + name, nil
+}
+
+// parseRemoteURL reads the host, account, and repository name out of a remote's
+// URL. Every form Git accepts names the repository as the last two path
 // segments — `owner/name` — whether it arrived over SSH, over HTTPS, or in the
 // scp-like syntax, so that is what is read rather than the shape of any one of
-// them. A URL that names no such pair is refused: publishing from a fork nobody
-// can identify would open the request against the wrong head or none at all.
-func repositoryOwner(url string) (string, error) {
+// them. The host is whatever stands before the path, less any user and port. A
+// URL that names no such pair is refused rather than guessed at.
+func parseRemoteURL(url string) (host, owner, name string, err error) {
 	path := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(url), "/"), ".git")
 	if scheme := strings.Index(path, "://"); scheme >= 0 {
 		authority := path[scheme+len("://"):]
 		slash := strings.Index(authority, "/")
 		if slash < 0 {
-			return "", fmt.Errorf("remote URL %q names no repository", url)
+			return "", "", "", fmt.Errorf("remote URL %q names no repository", url)
 		}
+		host = authority[:slash]
 		path = authority[slash+1:]
 	} else if colon := strings.LastIndex(path, ":"); colon >= 0 {
 		// The scp-like form, `[user@]host:owner/name`, which has no scheme and
 		// separates the path with a colon rather than a slash.
+		host = path[:colon]
 		path = path[colon+1:]
+	}
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	if port := strings.LastIndex(host, ":"); port >= 0 {
+		host = host[:port]
 	}
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) < 2 {
-		return "", fmt.Errorf("remote URL %q names no repository owner", url)
+		return "", "", "", fmt.Errorf("remote URL %q names no repository owner", url)
 	}
-	owner := segments[len(segments)-2]
+	owner = segments[len(segments)-2]
+	name = segments[len(segments)-1]
 	if !ownerPattern.MatchString(owner) {
-		return "", fmt.Errorf("remote URL %q names %q as its owner, which is not an account name", url, owner)
+		return "", "", "", fmt.Errorf("remote URL %q names %q as its owner, which is not an account name", url, owner)
 	}
-	return owner, nil
+	if !ownerPattern.MatchString(name) {
+		return "", "", "", fmt.Errorf("remote URL %q names %q as its repository, which is not a repository name", url, name)
+	}
+	if host == "" {
+		return "", "", "", fmt.Errorf("remote URL %q names no host", url)
+	}
+	return host, owner, name, nil
 }
 
 // validateArgument keeps a branch name a branch name. These values reach a
