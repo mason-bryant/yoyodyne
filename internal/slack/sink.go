@@ -356,6 +356,18 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 	defer release()
 
+	// A sink handed a context that has already ended was stopped before it
+	// started, and it goes no further than the lease it has just let go of. It
+	// does not ask the workspace who it is, say it is reporting, or record
+	// itself as running: a presence written and removed again is a record of a
+	// sink that never was, and the write behind it is fsynced — on a machine
+	// whose disk is busy that alone can hold a stop for seconds, at exactly the
+	// moment somebody has decided to intervene. The delivery loop below reads
+	// the context the same way before its first pass; this is startup agreeing.
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	presence := s.identity
 	presence.PID = os.Getpid()
 	presence.Channel = s.channel

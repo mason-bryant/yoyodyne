@@ -950,7 +950,9 @@ func TestReportingSaysSoWhenItStartsWorkingAgain(t *testing.T) {
 func TestStoppingTheSinkStopsIt(t *testing.T) {
 	t.Parallel()
 
-	sink := newTestSink(t, t.TempDir(), &fixedFeed{}, &recordedPosts{})
+	root := t.TempDir()
+	posts := &recordedPosts{}
+	sink := newTestSink(t, root, &fixedFeed{}, posts)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -963,6 +965,20 @@ func TestStoppingTheSinkStopsIt(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after its context ended")
+	}
+	// A sink stopped before it started never was, so it records nothing about
+	// itself: no presence to write and fsync on the way in, and none to forget
+	// on the way out. The write is the one thing on the startup path that waits
+	// on the disk, and a stop that waits on the disk is the hang this guards.
+	store, err := NewStore(root, testProduct)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if _, found, err := store.LoadPresence(); err != nil || found {
+		t.Fatalf("LoadPresence() = %t, %v, want a sink stopped before it started to have recorded nothing", found, err)
+	}
+	if len(posts.requests) != 0 {
+		t.Fatalf("a sink stopped before it started posted %d message(s)", len(posts.requests))
 	}
 }
 

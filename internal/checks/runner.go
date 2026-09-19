@@ -83,11 +83,13 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			Dir:  directory,
 			// The checks are the project's own commands, so a toolchain that
 			// cannot write its build cache fails them at setup with nothing
-			// about the change to show for it. The environment is this
-			// process's own with the cache pointed inside the repository being
-			// checked -- the same redirect the run's own probe was given, so
-			// the two share what has already been compiled.
-			Env:     execution.WithGoBuildCache(nil, directory),
+			// about the change to show for it. The environment is built from
+			// the allowlist every run's process is built from -- nothing the
+			// harness's own environment happened to carry reaches a check --
+			// with the cache pointed inside the repository being checked, the
+			// same redirect the run's own probe was given, so the two share
+			// what has already been compiled.
+			Env:     execution.WithGoBuildCache(execution.ExplicitEnvironment(nil), directory),
 			Timeout: timeout,
 			// Every line this check writes is emitted below, so the run's own
 			// event log holds the whole of a suite too verbose to retain, and

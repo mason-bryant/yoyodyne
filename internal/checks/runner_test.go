@@ -233,6 +233,48 @@ func TestEveryCheckIsGivenABuildCacheTheRunMayWrite(t *testing.T) {
 	}
 }
 
+// A check is a process the harness launches for a run, so it is given the same
+// explicit environment a provider invocation is: a Slack token exported where
+// the harness would inherit it never reaches the project's own commands. Asked
+// of a real child rather than of the recorded command, because what matters is
+// what the check's subprocess tree can see.
+func TestACheckDoesNotSeeTheSlackTokensExportedInTheParent(t *testing.T) {
+	// t.Setenv is this process's environment, so this cannot run in parallel.
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-exported-in-the-parent")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-exported-in-the-parent")
+
+	results, _, err := (Runner{Process: execution.OSProcessRunner{}}).Run(
+		context.Background(),
+		"run-0123456789abcdef0123456789abcdef",
+		t.TempDir(),
+		[]string{"env"},
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 1 || !results[0].Passed {
+		t.Fatalf("results = %#v", results)
+	}
+	names := make(map[string]struct{})
+	for _, line := range strings.Split(results[0].Process.Stdout, "\n") {
+		if name, _, named := strings.Cut(line, "="); named {
+			names[name] = struct{}{}
+		}
+	}
+	for _, name := range []string{"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"} {
+		if _, present := names[name]; present {
+			t.Errorf("the check sees %s, which was exported in the parent and must not reach it", name)
+		}
+	}
+	for _, name := range []string{"PATH", "HOME"} {
+		if _, present := names[name]; !present {
+			t.Errorf("the check does not see %s, without which it cannot run at all: %s", name, results[0].Process.Stdout)
+		}
+	}
+}
+
 // A check verbose enough to outrun what the runner retains still passes on its
 // own exit, and the run's record says the retained copy is cut rather than
 // leaving a short one to be read as everything the check said. The whole of it

@@ -42,7 +42,9 @@ harness's own durable records and posts from them, so:
   *Coming back from a long gap* below.
 - No run and no agent ever holds a Slack token. The tokens live in this one
   process's environment and nowhere else — never in `.yoyodyne`, never in a
-  prompt, never in a run.
+  prompt, never in a run — and the harness builds every run's environment from
+  an allowlist rather than handing down its own, so a token exported in the
+  shell that started it stops at the harness. See *Where the tokens go* below.
 
 Replies go the other way, and only for the people you say. A reply in a work
 item's thread, from somebody this project granted `direct-work`, is recorded as a
@@ -1303,28 +1305,50 @@ yoyo doctor
 | `the running sink holds <other>'s secrets, not <this>'s` | It was launched from a shell carrying another project's pair, and is posting this project's work through that project's Slack app. The workspace it actually authenticated into is named beside it. |
 | `the running sink was started from a shell rather than from this project's launcher` | It may well be right; nothing recorded whose tokens it holds, so nothing can say. Restart it through the launcher in step 6. |
 
-## Where the tokens must not go
+## Where the tokens go, and what the harness guarantees about where they do not
 
-Never put either token in `.yoyodyne/config.yaml`, in a work item, in a prompt,
-or in a shell profile that every process on your machine inherits. The sink is a
-separate process precisely so that the credential boundary is structural: the
-harness posts, and agents have no path to a token because no run process ever
-has one in its environment. Exporting the tokens globally would hand them to
-every subprocess the harness starts, which is the one thing this arrangement
-exists to prevent.
+The sink is a separate process so that the credential boundary is structural,
+and the harness holds the other half of that boundary itself: **no agent, no
+check, and nothing either of them starts is ever given a Slack token, whatever
+the shell that launched the harness happened to carry.** Every process the
+harness launches for a run or a conversation — the provider's own binary, and
+the project's checks — receives an environment the harness builds from an
+allowlist rather than one it inherits: what a program needs to run at all
+(`PATH`, `HOME`, `USER`, `TMPDIR`, the locale, the proxy and certificate
+settings), the provider's own variables (`CLAUDE_*` and `ANTHROPIC_*` for Claude
+Code, `CODEX_*` and `OPENAI_*` for Codex), what the toolchains a check runs read
+(`GO*`, `XDG_*`, Git's environment configuration), the harness's own
+`YOYODYNE_*`, and the two things the harness sets for itself — the build cache
+and the Git maintenance fence. Everything else stays with the harness, and
+whatever the allowlist admits, a name that reads as a credential — anything
+`yoyo` would redact from a process's output: `*TOKEN*`, `*PASSWORD*`,
+`*API_KEY*`, `*_SECRET`, and the rest — is dropped as well. So
+`SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are kept out twice over, and a test
+launches a child with both exported and holds it to not seeing them.
 
-Steps 5 and 6 above are where they should go instead: a store only the sink's own
-launch reads, under names that carry the product. The launcher form matters as
-much as the store — the assignments are on the `exec` line, and the environment
-file is sourced inside a subshell, so the tokens exist in the sink's environment
-and never in the shell you started it from. Your shells stay clean, runs stay
-clean, and exactly one process ever sees the credentials.
+The same rule reaches a provider's own key: `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` exported in the shell does not reach an invocation either. The
+provider authenticates from its own login, held in its provider home, which is
+what an [account](../configuration.md#provider-accounts) names — a key in the
+environment was never the supported way in, and now it is not a way in at all.
+
+What the harness cannot do is keep a token out of *its own* environment: a
+harness started from a shell that exported the pair holds the pair, and so does
+any other process that shell starts. That is why the tokens still go where steps
+5 and 6 put them rather than in `.yoyodyne/config.yaml`, in a work item, in a
+prompt, or in a shell profile: a store only the sink's own launch reads, under
+names that carry the product. The launcher form matters as much as the store —
+the assignments are on the `exec` line, and the environment file is sourced
+inside a subshell, so the tokens exist in the sink's environment and never in
+the shell you started it from. Your shells stay clean and exactly one process
+ever sees the credentials.
 
 The plain `export SLACK_BOT_TOKEN=…` form works and is the wrong thing to leave
-running. What it costs is not only the exposure: everything started from that
-shell inherits the pair, so the second harness on the same machine gets whichever
-project's tokens that shell happened to have, and posts one project's work into
-another project's channel while looking entirely healthy.
+running, for a reason the allowlist does not remove: everything started from
+that shell inherits the pair, so the second harness on the same machine gets
+whichever project's tokens that shell happened to have, and posts one project's
+work into another project's channel while looking entirely healthy. Its agents
+still see nothing; its sink is the one that is wrong.
 
 Nothing else on your machine ever reads these secrets. `yoyo doctor` asks whether
 they are *stored*, in the form that answers without producing the value — the
