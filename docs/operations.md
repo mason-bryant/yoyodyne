@@ -1629,7 +1629,13 @@ asked what the runs cost is asking about the runs.
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
 actually asking: `answering` while an agent is working on a turn, `waiting`
-between turns, and `ended` once the role has moved on to a later conversation. A
+between turns, and `ended` once the role has moved on to a later conversation.
+Whether a turn is in flight is read from the same observed hold the four lines'
+Working line reads — the process holding the conversation writes down which
+process it is, and the listing checks that it is still there — rather than from
+the event log, which cannot tell a turn in flight from one whose process died
+before it wrote a terminal; so `yoyo status` and `yoyo status --list` cannot
+disagree about the same conversation. A
 branch review has no state file either — its verdicts share one log rather than
 having a record each — so its status comes from its own events: `reviewing`
 while the verdict is being made, and `reviewed` once it has been.
@@ -1643,8 +1649,12 @@ go to standard error, so `--json` on standard output stays machine-readable and
 carries both holds as fields instead. The recorded mode carries the same two
 switches on its "Needs a human" line.
 
-It resolves the state directory the same way every other verb does, so it keeps
-working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`, and an empty answer
+A listing chooses from the directory and opens only the logs it prints — the
+newest twenty by default, one for `--follow --latest`'s look every few seconds —
+so a state directory holding hundreds of streams is not read through to print
+a screenful. It resolves the state directory the same way every other verb
+does, so it keeps working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`, and
+an empty answer
 names the directory it read and the kinds it was asked about — a machine with
 fifty runs and no branch reviews is told no branch reviews are recorded, never
 that nothing is. `yoyo status --help` lists the rest of the options. What

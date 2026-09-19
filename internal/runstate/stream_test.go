@@ -126,10 +126,53 @@ func TestStreamStoreListsAllThreeKindsNewestFirst(t *testing.T) {
 	}
 }
 
+// Whether a conversation is being answered is asked of the observed hold — the
+// same question the four lines' Working line asks, of the same store — rather
+// than read off the event log. The log cannot tell a turn in flight from a turn
+// whose process was killed before it wrote a terminal, and two halves of one
+// verb must not disagree about whether an agent is working.
+func TestStreamStoreAsksTheObservedHoldWhetherAConversationIsAnswering(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	_, conversations, _ := streamStores(t, root)
+	store := newStreamStore(t, root)
+
+	current := testConversation(t)
+	if err := conversations.Save(current); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	identity := current.Identity()
+	// The log says a turn opened and never closed, which is what a process
+	// killed mid-turn leaves behind. Nobody holds the conversation, so it is
+	// waiting, exactly as the Working line would report it.
+	appendConversationEvent(t, conversations, current.ConversationID, 1, execution.EventRunStarted, streamMoment, nil)
+	listed, err := store.List(StreamQuery{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].Status != ConversationWaiting {
+		t.Fatalf("listed %+v, want the unheld conversation waiting whatever its log says", listed)
+	}
+	// Held, it is being answered — whatever the log says.
+	held, err := conversations.Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	defer held.Release()
+	appendConversationEvent(t, conversations, current.ConversationID, 2, execution.EventRunCompleted, streamMoment, nil)
+	if listed, err = store.List(StreamQuery{}); err != nil || len(listed) != 1 || listed[0].Status != ConversationAnswering {
+		t.Fatalf("listed %+v, %v; want the held conversation answering", listed, err)
+	}
+	if inFlight, err := conversations.InFlight(identity); err != nil || !inFlight {
+		t.Fatalf("InFlight() = %v, %v; the listing and the read model read the same stamp", inFlight, err)
+	}
+}
+
 // A conversation whose record will not load is exactly the state an operator is
 // reaching for this listing to diagnose, so it must not be the thing that makes
-// the listing refuse to answer. Which conversation a role is in is read as the
-// one field that says so.
+// the listing refuse to answer. Which conversation a role is in, and under which
+// identity it is held, are read as the few fields that say so.
 func TestStreamStoreListsPastAnUnloadableConversationRecord(t *testing.T) {
 	t.Parallel()
 
@@ -140,11 +183,16 @@ func TestStreamStoreListsPastAnUnloadableConversationRecord(t *testing.T) {
 	id := mustConversationID(t)
 	appendConversationEvent(t, conversations, id, 1, execution.EventRunStarted, streamMoment, nil)
 	// A record from a harness this one does not understand: it names its
-	// conversation and nothing else here can be trusted.
+	// conversation and its role, and nothing else here can be trusted.
 	record := filepath.Join(conversations.Root(), "product-manager.json")
-	if err := os.WriteFile(record, []byte(`{"schema_version":99,"conversation_id":"`+id+`"}`), 0o600); err != nil {
+	if err := os.WriteFile(record, []byte(`{"schema_version":99,"conversation_id":"`+id+`","role":"product-manager"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+	held, err := conversations.Hold(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	defer held.Release()
 
 	listed, err := store.List(StreamQuery{})
 	if err != nil {
@@ -152,6 +200,48 @@ func TestStreamStoreListsPastAnUnloadableConversationRecord(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].Status != ConversationAnswering {
 		t.Fatalf("listed %+v, want the conversation still reported as being answered", listed)
+	}
+}
+
+// A listing chooses from the directory and opens only the logs it prints. An
+// operator's state directory holds hundreds of streams with logs that reach
+// megabytes, and `--follow --latest` asks for the newest one every few seconds,
+// so a listing that read every log to print one row would read the whole
+// directory on a timer.
+func TestStreamStoreOpensOnlyTheLogsItLists(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, _, _ := streamStores(t, root)
+	store := newStreamStore(t, root)
+
+	older := testState(t, StatusSucceeded)
+	if err := runs.Create(older); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendStreamEvent(t, runs, older.RunID, 1, execution.EventRunStarted, streamMoment, nil)
+	newer := testState(t, StatusRunning)
+	if err := runs.Create(newer); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendStreamEvent(t, runs, newer.RunID, 1, execution.EventRunStarted, streamMoment, nil)
+	touch(t, runs.Root(), older.RunID, streamMoment)
+	touch(t, runs.Root(), newer.RunID, streamMoment.Add(time.Hour))
+	// The older log is made unreadable. A listing that opened it would fail;
+	// one that chooses first never touches it.
+	if err := os.Chmod(filepath.Join(runs.Root(), older.RunID+eventLogSuffix), 0o000); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root reads a file whatever its mode, so the unopened log cannot be told from an opened one")
+	}
+
+	found, matched, err := store.Find(StreamQuery{})
+	if err != nil || !matched || found.ID != newer.RunID {
+		t.Fatalf("Find() = %+v, %v, %v; want the newest run without the older log being opened", found, matched, err)
+	}
+	if _, err := store.List(StreamQuery{}); err == nil {
+		t.Fatal("List() of everything read the unreadable log and reported nothing wrong")
 	}
 }
 

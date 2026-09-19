@@ -183,35 +183,65 @@ func (q StreamQuery) kinds() []StreamKind {
 // conversations directory, and one whose branches have never been reviewed has
 // no branch-reviews directory; any one of those on its own is a product with
 // streams rather than an error, so an absent directory contributes nothing.
+//
+// It reads the directory, not the logs: every entry is stat'd, the newest are
+// chosen, and only those are described. A listing that opened every event log
+// to print twenty rows would read the whole state directory — over a hundred
+// runs, logs that reach megabytes — and `--follow --latest` asks for the newest
+// stream every few seconds, which is what the script's `ls -t | head` avoided
+// and this has to avoid too.
 func (s *StreamStore) List(query StreamQuery) ([]Stream, error) {
-	var current map[string]bool
-	var streams []Stream
-	for _, kind := range query.kinds() {
-		if kind == StreamConversation && current == nil {
-			// Which conversations are still the role's is one fact about the whole
-			// directory rather than one per stream, so it is read once here.
-			found, err := s.currentConversations()
-			if err != nil {
-				return nil, err
-			}
-			current = found
+	found, err := s.choose(query)
+	if err != nil {
+		return nil, err
+	}
+	var current map[string]ConversationIdentity
+	streams := make([]Stream, 0, len(found))
+	for _, entry := range found {
+		if current, err = s.currentFor(entry, current); err != nil {
+			return nil, err
 		}
-		found, err := s.listKind(kind, query.Match, current)
+		stream, _, err := s.describe(entry, current, false)
 		if err != nil {
 			return nil, err
 		}
-		streams = append(streams, found...)
-	}
-	sort.Slice(streams, func(i, j int) bool {
-		if !streams[i].Updated.Equal(streams[j].Updated) {
-			return streams[i].Updated.After(streams[j].Updated)
-		}
-		return streams[i].ID < streams[j].ID
-	})
-	if query.Limit > 0 && len(streams) > query.Limit {
-		streams = streams[:query.Limit]
+		streams = append(streams, stream)
 	}
 	return streams, nil
+}
+
+// choose is the directory half of a listing: every selected entry stat'd,
+// sorted newest first, and cut to the limit, with no log opened.
+func (s *StreamStore) choose(query StreamQuery) ([]streamEntry, error) {
+	var found []streamEntry
+	for _, kind := range query.kinds() {
+		entries, err := s.entries(kind, query.Match)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, entries...)
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if !found[i].updated.Equal(found[j].updated) {
+			return found[i].updated.After(found[j].updated)
+		}
+		return found[i].id < found[j].id
+	})
+	if query.Limit > 0 && len(found) > query.Limit {
+		found = found[:query.Limit]
+	}
+	return found, nil
+}
+
+// currentFor reads which conversations are still the roles' the first time a
+// conversation is about to be described, and not before: it is one fact about
+// the whole directory rather than one per stream, and a listing that chose no
+// conversation never needs it.
+func (s *StreamStore) currentFor(entry streamEntry, current map[string]ConversationIdentity) (map[string]ConversationIdentity, error) {
+	if entry.kind != StreamConversation || current != nil {
+		return current, nil
+	}
+	return s.currentConversations()
 }
 
 // Find is the one stream a query names, newest first so an ambiguous prefix
@@ -238,17 +268,26 @@ func (s *StreamStore) root(kind StreamKind) string {
 	}
 }
 
-func (s *StreamStore) listKind(kind StreamKind, match string, current map[string]bool) ([]Stream, error) {
+// streamEntry is what a directory listing says about one stream before its log
+// is opened: enough to choose the newest, and nothing that costs a read.
+type streamEntry struct {
+	kind    StreamKind
+	id      string
+	path    string
+	updated time.Time
+}
+
+func (s *StreamStore) entries(kind StreamKind, match string) ([]streamEntry, error) {
 	root := s.root(kind)
-	entries, err := os.ReadDir(root)
+	listed, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read %s records: %w", kind, err)
 	}
-	var streams []Stream
-	for _, entry := range entries {
+	var found []streamEntry
+	for _, entry := range listed {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, eventLogSuffix) {
 			continue
@@ -257,85 +296,95 @@ func (s *StreamStore) listKind(kind StreamKind, match string, current map[string
 		if match != "" && !strings.Contains(id, match) {
 			continue
 		}
-		stream, err := s.describe(kind, id, filepath.Join(root, name), current)
-		if err != nil {
-			return nil, err
+		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			// Removed between the listing and the stat: a race with cleanup rather
+			// than a failure of the answer.
+			continue
 		}
-		streams = append(streams, stream)
+		if err != nil {
+			return nil, fmt.Errorf("inspect event log: %w", err)
+		}
+		found = append(found, streamEntry{kind: kind, id: id, path: filepath.Join(root, name), updated: info.ModTime()})
 	}
-	return streams, nil
+	return found, nil
 }
 
 // describe reads what a listing says about one stream. The log is read once for
 // everything that comes out of it — how many events it holds, when the first one
-// was, and for the two kinds that keep no status of their own, what the stream
-// is doing — because a listing asks all of that of every row.
-func (s *StreamStore) describe(kind StreamKind, id, path string, current map[string]bool) (Stream, error) {
-	stream := Stream{ID: id, Kind: kind, Path: path, Status: StreamStatusUnknown}
-	info, err := os.Stat(path)
-	if err == nil {
-		stream.Updated = info.ModTime()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Stream{}, fmt.Errorf("inspect event log: %w", err)
-	}
-	scanned, err := scanStreamLog(path)
+// was, and for a review, whether its verdict has been made — because a listing
+// asks all of that of every row it prints.
+func (s *StreamStore) describe(entry streamEntry, current map[string]ConversationIdentity, priced bool) (Stream, streamScan, error) {
+	stream := Stream{ID: entry.id, Kind: entry.kind, Path: entry.path, Status: StreamStatusUnknown, Updated: entry.updated}
+	scanned, err := scanStreamLog(entry.path, priced)
 	if err != nil {
-		return Stream{}, err
+		return Stream{}, streamScan{}, fmt.Errorf("%s %s: %w", entry.kind, entry.id, err)
 	}
 	stream.Events = scanned.events
 	stream.StartedAt = scanned.first
-	switch kind {
+	switch entry.kind {
 	case StreamRun:
 		// A run keeps its own status and its own opening moment, and both are
 		// authoritative over anything the log could be read to imply.
-		state, err := s.runs.Load(id)
+		state, err := s.runs.Load(entry.id)
 		if err == nil {
 			stream.Status = string(state.Status)
 			stream.StartedAt = state.StartedAt
 		}
 	case StreamConversation:
-		stream.Status = conversationStatus(id, scanned, current)
+		stream.Status = s.conversationStatus(entry.id, current)
 	case StreamReview:
 		stream.Status = ReviewInProgress
 		if scanned.reviewed {
 			stream.Status = ReviewFinished
 		}
 	}
-	return stream, nil
+	return stream, scanned, nil
 }
 
 // conversationStatus says what a conversation is doing. A conversation has no
 // state file of its own: the role's record names the conversation that role is
 // in now, so every other log in the directory belonged to one that has since
-// been replaced and nothing will happen in it again. One that is still the
-// role's is being answered when its last turn opened without closing, and is
-// waiting for the operator otherwise.
-func conversationStatus(id string, scanned streamScan, current map[string]bool) string {
-	if !current[id] {
+// been replaced and nothing will happen in it again. Whether one that is still
+// the role's is being answered is asked of the observed hold — the same
+// question the four lines' Working line asks, of the same store — rather than
+// read off the event log, because the log cannot tell a turn in flight from a
+// turn whose process was killed before it wrote a terminal, and two halves of
+// one verb must not disagree about whether an agent is working. A hold that
+// could not be asked about is stated as unknown rather than guessed at.
+func (s *StreamStore) conversationStatus(id string, current map[string]ConversationIdentity) string {
+	identity, held := current[id]
+	if !held {
 		return ConversationEnded
 	}
-	if scanned.answering {
+	inFlight, err := s.conversations.InFlight(identity)
+	if err != nil {
+		return StreamStatusUnknown
+	}
+	if inFlight {
 		return ConversationAnswering
 	}
 	return ConversationWaiting
 }
 
-// currentConversations is which conversations the roles are in now, read as the
-// one field that answers it rather than through the whole record. Loading the
-// records would refuse the question over a conversation that fails to validate
-// — a record written by a newer harness, or one a half-finished write left
-// behind — and a listing is the surface an operator reaches for when something
-// is already wrong, so it must not be the thing that goes silent first. A record
-// names its conversation whether or not the rest of it is loadable.
-func (s *StreamStore) currentConversations() (map[string]bool, error) {
+// currentConversations is which conversations the roles are in now, and under
+// which identity each is held, read as the few fields that answer it rather
+// than through the whole record. Loading the records would refuse the question
+// over a conversation that fails to validate — a record written by a newer
+// harness, or one a half-finished write left behind — and a listing is the
+// surface an operator reaches for when something is already wrong, so it must
+// not be the thing that goes silent first. A record names its conversation and
+// its role whether or not the rest of it is loadable, and it is filed under the
+// agent's own name, which is what the hold is keyed by.
+func (s *StreamStore) currentConversations() (map[string]ConversationIdentity, error) {
 	entries, err := os.ReadDir(s.conversations.Root())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return map[string]ConversationIdentity{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read conversation records: %w", err)
 	}
-	current := make(map[string]bool, len(entries))
+	current := make(map[string]ConversationIdentity, len(entries))
 	for _, entry := range entries {
 		// The leases, the event logs, and the temporary files of a save in flight
 		// all live in this directory; only a file named for an agent holds a
@@ -349,30 +398,40 @@ func (s *StreamStore) currentConversations() (map[string]bool, error) {
 			return nil, fmt.Errorf("read conversation record %s: %w", name, err)
 		}
 		var read struct {
-			ConversationID string `json:"conversation_id"`
+			ConversationID string           `json:"conversation_id"`
+			Agent          string           `json:"agent"`
+			Role           domain.AgentRole `json:"role"`
 		}
 		if err := json.Unmarshal(recorded, &read); err != nil || read.ConversationID == "" {
 			continue
 		}
-		current[read.ConversationID] = true
+		if read.Agent == "" {
+			read.Agent = strings.TrimSuffix(name, ".json")
+		}
+		current[read.ConversationID] = ConversationIdentity{Agent: read.Agent, Role: read.Role}
 	}
 	return current, nil
 }
 
-// streamScan is what one pass over an event log yields a listing.
+// streamScan is what one pass over an event log yields: what a listing says of
+// the stream, and — when the pass was asked to price it — every provider call it
+// recorded. One pass serves both so that a spend report, which has to read every
+// log it covers, reads each of them once.
 type streamScan struct {
-	events int
-	first  time.Time
-	// answering says the last turn the log recorded opened and has not ended.
-	// Each turn is a provider invocation bracketed by the same two events a run's
-	// is, and a turn the provider failed is over rather than still being made —
-	// so a conversation whose last turn died reads as waiting rather than as
-	// answering forever.
-	answering bool
-	reviewed  bool
+	events   int
+	first    time.Time
+	reviewed bool
+	// invocations is every priced terminal the log holds, collected only when
+	// the scan was asked to price the stream: a listing never needs them, and
+	// decoding every terminal's usage to print twenty rows would be a read nobody
+	// asked for.
+	invocations []Invocation
 }
 
-func scanStreamLog(path string) (streamScan, error) {
+// scanStreamLog reads an event log once. A log that is gone is empty rather than
+// unreadable: a stream removed between being listed and being read is a race
+// with cleanup, not a failure of the answer.
+func scanStreamLog(path string, priced bool) (streamScan, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return streamScan{}, nil
@@ -386,6 +445,7 @@ func scanStreamLog(path string) (streamScan, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
 	for scanner.Scan() {
+		line := scanner.Bytes()
 		scanned.events++
 		var read struct {
 			Type      execution.EventType `json:"type"`
@@ -393,20 +453,32 @@ func scanStreamLog(path string) (streamScan, error) {
 		}
 		// A line that will not decode still happened, so it is counted; what it
 		// cannot do is say anything about when or what.
-		if err := json.Unmarshal(scanner.Bytes(), &read); err != nil {
+		if err := json.Unmarshal(line, &read); err != nil {
 			continue
 		}
 		if scanned.first.IsZero() {
 			scanned.first = read.Timestamp
 		}
-		switch read.Type {
-		case execution.EventRunStarted:
-			scanned.answering = true
-		case execution.EventRunCompleted, execution.EventRunFailed:
-			scanned.answering = false
-		case execution.EventReviewCompleted:
+		if read.Type == execution.EventReviewCompleted {
 			scanned.reviewed = true
 		}
+		// The cheap test over-matches and the decoded type rejects the rest, which
+		// is what keeps pricing a stream from decoding all of its own chatter.
+		if !priced || !carriesSpendEvidence(line) {
+			continue
+		}
+		var terminal invocationEvent
+		if err := json.Unmarshal(line, &terminal); err != nil {
+			return streamScan{}, fmt.Errorf("decode event log to price it: %w", err)
+		}
+		if !terminal.priced() {
+			continue
+		}
+		scanned.invocations = append(scanned.invocations, Invocation{
+			At:      terminal.Timestamp,
+			CostUSD: terminal.Payload.TotalCostUSD,
+			Usage:   terminal.tokens(),
+		})
 	}
 	if err := scanner.Err(); err != nil {
 		return streamScan{}, fmt.Errorf("read event log: %w", err)
@@ -425,49 +497,6 @@ type Invocation struct {
 	At      time.Time  `json:"at,omitzero"`
 	CostUSD float64    `json:"cost_usd"`
 	Usage   TokenUsage `json:"usage"`
-}
-
-// Invocations reads every provider call one stream recorded. A log that is gone
-// has no invocations rather than an unreadable one: a stream removed between
-// being listed and being priced is a race with cleanup, not a failure of the
-// report.
-func (s *StreamStore) Invocations(stream Stream) ([]Invocation, error) {
-	file, err := os.Open(stream.Path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open event log to price %s: %w", stream.ID, err)
-	}
-	defer file.Close()
-
-	var invocations []Invocation
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// The cheap test over-matches and the decoded type rejects the rest, which
-		// is what keeps pricing a stream from decoding all of its own chatter.
-		if !carriesSpendEvidence(line) {
-			continue
-		}
-		var read invocationEvent
-		if err := json.Unmarshal(line, &read); err != nil {
-			return nil, fmt.Errorf("decode event log to price %s: %w", stream.ID, err)
-		}
-		if !read.priced() {
-			continue
-		}
-		invocations = append(invocations, Invocation{
-			At:      read.Timestamp,
-			CostUSD: read.Payload.TotalCostUSD,
-			Usage:   read.tokens(),
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read event log to price %s: %w", stream.ID, err)
-	}
-	return invocations, nil
 }
 
 // invocationEvent is the little of an event a spend row needs: which event it
@@ -615,21 +644,27 @@ func (r SpendReport) Floor() bool { return len(r.UnreadableExchanges) > 0 }
 // have spent inside it. Only the rows a stream yields are held against the
 // window.
 func (s *StreamStore) Spend(query SpendQuery) (SpendReport, error) {
-	streams, err := s.List(StreamQuery{Kinds: query.kinds(), Match: query.Match})
+	found, err := s.choose(StreamQuery{Kinds: query.kinds(), Match: query.Match})
 	if err != nil {
 		return SpendReport{}, err
 	}
-	report := SpendReport{Streams: len(streams)}
+	report := SpendReport{Streams: len(found)}
 	if query.Days > 0 {
 		report.Days = query.Days
 		report.Oldest = oldestLocalDay(query.Now, query.Days)
 	}
-	for _, stream := range streams {
-		invocations, err := s.Invocations(stream)
+	var current map[string]ConversationIdentity
+	for _, entry := range found {
+		if current, err = s.currentFor(entry, current); err != nil {
+			return SpendReport{}, err
+		}
+		// One pass over each log: what the row says about the stream and every
+		// terminal it holds come out of the same read.
+		stream, scanned, err := s.describe(entry, current, true)
 		if err != nil {
 			return SpendReport{}, err
 		}
-		report.take(spendByDay(stream, invocations))
+		report.take(spendByDay(stream, scanned.invocations))
 	}
 	if query.covers(StreamExchange) {
 		if err := s.spendOnExchanges(query.Match, &report); err != nil {
