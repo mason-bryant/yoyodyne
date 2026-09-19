@@ -15,6 +15,7 @@ package notify
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -99,6 +100,28 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		say(KindChecksFailed, report.SeverityWarning, Harness(), Detail{
 			Command:  after.CheckFailure.Command,
 			ExitCode: after.CheckFailure.ExitCode,
+		})
+	}
+	// A refusal by the gate in front of the checks is said once per refusal. Two
+	// readings that carry the same refusal on the same round are one refusal read
+	// twice; the same paths refused again on a later round are a second round
+	// spent for the same stated cause, which under the communication rule is a
+	// second thread line rather than silence. The round is read from the repair
+	// count because the record writes the refusal and the round it buys in one
+	// save, and a refusal that spent no round — the one that found the budget
+	// already gone — is the blocker line's to say.
+	//
+	// The developer speaks it, and that is deliberate where the harness speaks
+	// the failing check beside it. The gate is a string comparison rather than a
+	// judgement, and what the line is about is the developer's own change reaching
+	// outside its item and the developer taking it back out — an account the
+	// developer can give of its own act, where a persona narrating a check's
+	// verdict would be claiming one it never reached.
+	if refused(after) && refusalNews(before, after) {
+		say(KindPathRefused, report.SeverityWarning, Persona(domain.RoleDeveloper, ""), Detail{
+			RefusedPaths: after.PathRefusal.Paths,
+			OmittedPaths: after.PathRefusal.Omitted,
+			Grants:       after.PathRefusal.Grants,
 		})
 	}
 	// A verdict is keyed on the invocation that gave it rather than on the words
@@ -940,6 +963,35 @@ func checksBehind(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// refused reports a record carrying the protected-path gate's refusal: the
+// change in the worktree touches a path the item did not grant, and the
+// developer has been, or is about to be, handed it back.
+func refused(state runstate.State) bool {
+	return state.PathRefusal != nil
+}
+
+// refusalNews reports whether the refusal the later reading carries is one the
+// earlier reading had not already said. A reading with no refusal, or a
+// different one, is the plain case. The same refusal on a later repair round is
+// news too: the record clears a refusal at the next gate that passes and writes
+// it again beside the round it buys, so the same paths under a moved count are
+// the same mistake made twice rather than one refusal read twice.
+func refusalNews(before, after runstate.State) bool {
+	if !refused(before) {
+		return true
+	}
+	if before.RepairAttempts != after.RepairAttempts {
+		return true
+	}
+	return !sameRefusal(*before.PathRefusal, *after.PathRefusal)
+}
+
+func sameRefusal(earlier, later runstate.PathRefusal) bool {
+	return earlier.Omitted == later.Omitted &&
+		slices.Equal(earlier.Paths, later.Paths) &&
+		slices.Equal(earlier.Grants, later.Grants)
 }
 
 // verdictGiven reports a record that holds a reviewer's verdict at all. The
