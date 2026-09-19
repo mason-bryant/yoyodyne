@@ -238,35 +238,46 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	// file in, so an omission's size is read from the blob at the head commit —
 	// the same "size at the tip" a worktree's omission carries — and it is zero
 	// where the range deleted the file, which is what zero means there too.
+	//
+	// It is spent in the same class order too — source, then tests, then test
+	// data — so a range whose fixtures sort ahead of its code presents the code
+	// whole and lets the bound fall on the fixtures.
 	changes := ChangeDiff{
 		Status:   renderChangedNames(names.Stdout, nil),
 		DiffStat: strings.TrimSpace(diffStat.Stdout),
 	}
+	candidates := make([]patchCandidate, 0, len(sections))
+	for _, section := range sections {
+		candidates = append(candidates, patchCandidate{
+			path: section.path, class: classifySection(section.path, section.patch), tracked: true, patch: section.patch,
+		})
+	}
+	orderForPresentation(candidates)
 	var patch strings.Builder
 	remaining := maxTotalBytes
-	omit := func(section trackedSection, reason OmissionReason, bound int64) error {
-		size, err := m.blobSize(ctx, headCommit, section.path)
+	omit := func(candidate patchCandidate, reason OmissionReason, bound int64) error {
+		size, err := m.blobSize(ctx, headCommit, candidate.path)
 		if err != nil {
 			return err
 		}
 		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
-			Path: section.path, Bytes: size, Reason: reason, Bound: bound, DiffBytes: int64(len(section.patch)),
+			Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class, Bound: bound, DiffBytes: int64(len(candidate.patch)),
 		})
 		changes.Truncated = true
 		return nil
 	}
-	for _, section := range sections {
+	for _, candidate := range candidates {
 		var err error
 		switch {
-		case containsBinaryDiff(section.patch):
-			err = omit(section, OmittedBinary, 0)
-		case len(section.patch) > maxTotalBytes:
-			err = omit(section, OmittedTooLarge, int64(maxTotalBytes))
-		case len(section.patch) > remaining:
-			err = omit(section, OmittedPatchFull, int64(maxTotalBytes))
+		case containsBinaryDiff(candidate.patch):
+			err = omit(candidate, OmittedBinary, 0)
+		case len(candidate.patch) > maxTotalBytes:
+			err = omit(candidate, OmittedTooLarge, int64(maxTotalBytes))
+		case len(candidate.patch) > remaining:
+			err = omit(candidate, OmittedPatchFull, int64(maxTotalBytes))
 		default:
-			patch.WriteString(section.patch)
-			remaining -= len(section.patch)
+			patch.WriteString(candidate.patch)
+			remaining -= len(candidate.patch)
 		}
 		if err != nil {
 			return ChangeDiff{}, err
