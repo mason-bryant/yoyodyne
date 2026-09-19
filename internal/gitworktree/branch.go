@@ -228,20 +228,89 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	if diffStat.Status != execution.ProcessSucceeded {
 		return ChangeDiff{}, fmt.Errorf("summarize accumulated diff failed with exit code %d: %s", diffStat.ExitCode, strings.TrimSpace(diffStat.Stderr))
 	}
-	patch, err := m.run(ctx, "-C", m.repositoryRoot, "diff", "--no-ext-diff", "--patch", baseCommit, headCommit, "--")
+	sections, err := m.trackedSections(ctx, m.repositoryRoot, baseCommit, headCommit)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
-	if patch.Status != execution.ProcessSucceeded {
-		return ChangeDiff{}, fmt.Errorf("diff accumulated changes failed with exit code %d: %s", patch.ExitCode, strings.TrimSpace(patch.Stderr))
+	// The bound is spent whole file by whole file, as a worktree's is, so a
+	// range too large to show in full names the files it could not show rather
+	// than ending part-way through one. The branch has no worktree to measure a
+	// file in, so an omission's size is read from the blob at the head commit —
+	// the same "size at the tip" a worktree's omission carries — and it is zero
+	// where the range deleted the file, which is what zero means there too.
+	changes := ChangeDiff{
+		Status:   renderChangedNames(names.Stdout, nil),
+		DiffStat: strings.TrimSpace(diffStat.Stdout),
 	}
-	clamped, truncated := clampToWholeLines(patch.Stdout, maxTotalBytes)
-	return ChangeDiff{
-		Status:    renderChangedNames(names.Stdout, nil),
-		DiffStat:  strings.TrimSpace(diffStat.Stdout),
-		Patch:     clamped,
-		Truncated: truncated || containsBinaryDiff(patch.Stdout),
-	}, nil
+	var patch strings.Builder
+	remaining := maxTotalBytes
+	omit := func(section trackedSection, reason OmissionReason, bound int64) error {
+		size, err := m.blobSize(ctx, headCommit, section.path)
+		if err != nil {
+			return err
+		}
+		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
+			Path: section.path, Bytes: size, Reason: reason, Bound: bound, DiffBytes: int64(len(section.patch)),
+		})
+		changes.Truncated = true
+		return nil
+	}
+	for _, section := range sections {
+		var err error
+		switch {
+		case containsBinaryDiff(section.patch):
+			err = omit(section, OmittedBinary, 0)
+		case len(section.patch) > maxTotalBytes:
+			err = omit(section, OmittedTooLarge, int64(maxTotalBytes))
+		case len(section.patch) > remaining:
+			err = omit(section, OmittedPatchFull, int64(maxTotalBytes))
+		default:
+			patch.WriteString(section.patch)
+			remaining -= len(section.patch)
+		}
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+	}
+	changes.Patch = patch.String()
+	return changes, nil
+}
+
+// blobSize measures one path as it is at a commit. A path the commit does not
+// carry — one the range deleted — measures zero rather than failing, because a
+// deletion is an ordinary thing for a range to hold and zero is its size at
+// that tip. `ls-tree` is asked rather than `cat-file -s` because it tells the
+// two apart: it succeeds with no entry for a path the commit lacks, where
+// `cat-file` fails the same way for that and for a repository that cannot be
+// read. A submodule is not a blob and has no size to report, so it measures
+// zero too.
+func (m *Manager) blobSize(ctx context.Context, commit, path string) (int64, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "ls-tree", "-l", "-z", commit, "--", path)
+	if err != nil {
+		return 0, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return 0, fmt.Errorf("measure %s at %s failed with exit code %d: %s", path, commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	entry, _, _ := strings.Cut(result.Stdout, "\x00")
+	if entry == "" {
+		return 0, nil
+	}
+	// The entry is "<mode> <type> <object> <size>\t<path>", with the size
+	// right-aligned and "-" for anything that is not a blob.
+	meta, _, _ := strings.Cut(entry, "\t")
+	fields := strings.Fields(meta)
+	if len(fields) != 4 {
+		return 0, fmt.Errorf("measure %s at %s returned an unreadable entry %q", path, commit, entry)
+	}
+	if fields[3] == "-" {
+		return 0, nil
+	}
+	size, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse size of %s at %s: %w", path, commit, err)
+	}
+	return size, nil
 }
 
 func validateBranchRequest(request BranchRequest) error {

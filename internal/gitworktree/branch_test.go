@@ -78,13 +78,14 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	repository := newRepository(t)
 	accumulate(t, repository, "accumulated",
 		[2]string{"first.txt", strings.Repeat("one\n", 400)},
-		[2]string{"second.txt", strings.Repeat("two\n", 400)},
+		[2]string{"second.txt", "two\n"},
 	)
 	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
 
 	// The bound holds over the whole multi-commit patch exactly as it does over
 	// one worktree's, and what it cut is reported rather than passed off as the
-	// complete change.
+	// complete change: file by file, so the file that did not fit is named with
+	// the size of its diff and the file that did is shown whole.
 	change, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: "accumulated", BaseRef: "main"}, DiffLimits{MaxTotalBytes: 200})
 	if err != nil {
 		t.Fatalf("BranchChanges() error = %v", err)
@@ -95,8 +96,53 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	if len(change.Changes.Patch) > 200 {
 		t.Fatalf("patch is %d bytes, want no more than 200", len(change.Changes.Patch))
 	}
-	if !strings.HasSuffix(change.Changes.Patch, "\n") {
-		t.Fatalf("clamped patch does not end on a whole line: %q", change.Changes.Patch)
+	if !strings.Contains(change.Changes.Patch, "diff --git a/second.txt b/second.txt") || !strings.Contains(change.Changes.Patch, "+two") {
+		t.Fatalf("the file that fits the bound is not shown whole:\n%s", change.Changes.Patch)
+	}
+	if strings.Contains(change.Changes.Patch, "first.txt") {
+		t.Fatalf("the file the bound dropped is still in the patch:\n%s", change.Changes.Patch)
+	}
+	if len(change.Changes.OmittedFiles) != 1 || change.Changes.OmittedFiles[0].Path != "first.txt" ||
+		change.Changes.OmittedFiles[0].Reason != OmittedTooLarge || change.Changes.OmittedFiles[0].DiffBytes == 0 {
+		t.Fatalf("omitted files = %#v, want first.txt named with the size of its diff", change.Changes.OmittedFiles)
+	}
+	// The file's own size is measured at the branch's tip rather than left at
+	// zero: a reviewer told "(0 bytes)" of a 1,600-byte file is told a size
+	// nobody measured.
+	if got := change.Changes.OmittedFiles[0].Bytes; got != int64(len(strings.Repeat("one\n", 400))) {
+		t.Fatalf("omitted file size = %d, want the blob's size at the tip", got)
+	}
+}
+
+// A range that deletes a file it could not show names the deletion at zero
+// bytes, which is the file's size at that tip, rather than failing to measure
+// a path the tip no longer has.
+func TestBranchChangesMeasuresADeletedFileAtZero(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	accumulate(t, repository, "accumulated",
+		[2]string{"first.txt", strings.Repeat("one\n", 400)},
+	)
+	runGit(t, repository, "checkout", "-q", "accumulated")
+	runGit(t, repository, "rm", "-q", "README.txt")
+	runGit(t, repository, "commit", "-q", "-m", "remove the README")
+	runGit(t, repository, "checkout", "-q", "main")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	change, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: "accumulated", BaseRef: "main"}, DiffLimits{MaxTotalBytes: 100})
+	if err != nil {
+		t.Fatalf("BranchChanges() error = %v", err)
+	}
+	omitted := map[string]OmittedFile{}
+	for _, file := range change.Changes.OmittedFiles {
+		omitted[file.Path] = file
+	}
+	if got, ok := omitted["README.txt"]; !ok || got.Bytes != 0 || got.DiffBytes == 0 {
+		t.Fatalf("omitted README = %#v, want the deletion named at zero bytes with its diff measured", got)
+	}
+	if got := omitted["first.txt"].Bytes; got != 1600 {
+		t.Fatalf("omitted first.txt = %#v, want it measured at the tip", omitted["first.txt"])
 	}
 }
 

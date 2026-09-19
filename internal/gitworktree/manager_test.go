@@ -1419,14 +1419,352 @@ func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	if !changes.Truncated {
 		t.Fatalf("binary changes were reported as complete: %#v", changes)
 	}
-	if !reflect.DeepEqual(changes.OmittedFiles, []OmittedFile{{Path: "new.bin", Bytes: 11, Reason: OmittedBinary}}) {
-		t.Fatalf("omitted files = %#v, want new.bin", changes.OmittedFiles)
+	// The tracked binary and the new one are named the same way: a file with no
+	// reviewable diff is in the omission record, with its size, rather than a
+	// "Binary files differ" stub in the patch a reader has to notice. The tracked
+	// one carries the size of the stub Git rendered for it as well.
+	if len(changes.OmittedFiles) != 2 {
+		t.Fatalf("omitted files = %#v, want README.txt and new.bin", changes.OmittedFiles)
 	}
-	if !strings.Contains(changes.Patch, "Binary files a/README.txt and b/README.txt differ") {
-		t.Fatalf("tracked binary change is not disclosed in patch:\n%s", changes.Patch)
+	if tracked := changes.OmittedFiles[0]; tracked.Path != "README.txt" || tracked.Bytes != 15 || tracked.Reason != OmittedBinary || tracked.DiffBytes == 0 {
+		t.Fatalf("tracked binary omission = %#v, want README.txt named as binary with its diff measured", tracked)
 	}
-	if strings.Contains(changes.Patch, "new.bin") {
-		t.Fatalf("unreviewable untracked binary was included in patch:\n%s", changes.Patch)
+	if changes.OmittedFiles[1] != (OmittedFile{Path: "new.bin", Bytes: 11, Reason: OmittedBinary}) {
+		t.Fatalf("untracked binary omission = %#v, want new.bin", changes.OmittedFiles[1])
+	}
+	for _, unreviewable := range []string{"Binary files", "new.bin"} {
+		if strings.Contains(changes.Patch, unreviewable) {
+			t.Fatalf("unreviewable binary content was included in patch:\n%s", changes.Patch)
+		}
+	}
+	// The listing is where a binary is seen: named, sized, and marked as what it
+	// is, so a reviewer told the patch cannot show it can still hold the change
+	// to delivering it.
+	if len(changes.Files) != 2 {
+		t.Fatalf("files = %#v, want both files of the change listed", changes.Files)
+	}
+	if changes.Files[0] != (ChangedFile{Path: "README.txt", Status: "M", Bytes: 15, Binary: true}) ||
+		changes.Files[1] != (ChangedFile{Path: "new.bin", Status: "??", Bytes: 11, Binary: true}) {
+		t.Fatalf("files = %#v, want each named as binary with its size", changes.Files)
+	}
+}
+
+// The tracked half of a change is bounded a whole file at a time. Until this
+// was written the patch was cut at the byte count, which kept whichever files
+// Git rendered first and lost the rest without naming them; a reviewer handed
+// that could not say which files its verdict covered, and one shown the first
+// half of a hunk read it as a different change.
+func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-whole", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "a-large.txt", strings.Repeat("a line of committed content\n", 200))
+	writeFile(t, worktree.Path, "b-small.txt", "small\n")
+	writeFile(t, worktree.Path, "c-medium.txt", strings.Repeat("medium\n", 40))
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+
+	whole, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if whole.Truncated || len(whole.OmittedFiles) != 0 {
+		t.Fatalf("an unbounded change was reported as cut: %#v", whole.OmittedFiles)
+	}
+
+	// A bound the large file exceeds on its own and the two smaller ones fit
+	// inside together. The scan does not stop at the first file that does not
+	// fit: what is shown is every file that can be, each of them whole.
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 600})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if !bounded.Truncated {
+		t.Fatalf("a bounded change was reported as complete: %#v", bounded)
+	}
+	if len(bounded.Patch) > 600 {
+		t.Fatalf("patch is %d bytes, want at most 600", len(bounded.Patch))
+	}
+	for _, want := range []string{"diff --git a/b-small.txt b/b-small.txt", "+small", "diff --git a/c-medium.txt b/c-medium.txt"} {
+		if !strings.Contains(bounded.Patch, want) {
+			t.Errorf("a file that fits the bound is missing %q:\n%s", want, bounded.Patch)
+		}
+	}
+	if strings.Count(bounded.Patch, "+medium") != 40 {
+		t.Errorf("a file inside the bound is not shown whole:\n%s", bounded.Patch)
+	}
+	if strings.Contains(bounded.Patch, "a-large.txt") || strings.Contains(bounded.Patch, "committed content") {
+		t.Errorf("the file the bound dropped is partly in the patch:\n%s", bounded.Patch)
+	}
+	want := []OmittedFile{{Path: "a-large.txt", Bytes: 5600, Reason: OmittedTooLarge, Bound: 600, DiffBytes: int64(len(whole.Patch) - len(bounded.Patch))}}
+	if !reflect.DeepEqual(bounded.OmittedFiles, want) {
+		t.Fatalf("omitted files = %#v, want %#v", bounded.OmittedFiles, want)
+	}
+	if described := want[0].Describe(); !strings.Contains(described, "a-large.txt (5600 bytes)") ||
+		!strings.Contains(described, "too large to show") || !strings.Contains(described, "600 bytes") {
+		t.Errorf("described omission = %q, want the file, its size, and the bound", described)
+	}
+
+	// A file that would have fit on its own but reached the bound after another
+	// spent it is named for that reason, which is a different fact about the
+	// change: it could be shown, and this patch had no room left for it.
+	spent, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: int(want[0].DiffBytes) + 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() spent error = %v", err)
+	}
+	if len(spent.OmittedFiles) != 1 || spent.OmittedFiles[0].Path != "c-medium.txt" || spent.OmittedFiles[0].Reason != OmittedPatchFull {
+		t.Fatalf("omitted files = %#v, want c-medium.txt dropped for a spent bound", spent.OmittedFiles)
+	}
+	if !strings.Contains(spent.Patch, "committed content") || !strings.Contains(spent.Patch, "+small") {
+		t.Errorf("files inside the bound are missing from the patch:\n%s", spent.Patch)
+	}
+}
+
+// A change that deletes a file the base tracks is the most ordinary change
+// there is, and the path it deletes is one the worktree no longer has. The
+// deletion is in the patch whole, it is listed with Git's own status at zero
+// bytes, and when the bound cannot show it the omission carries the size of
+// the deletion's diff rather than a size read from a path that is gone.
+func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	writeFile(t, repository, "obsolete.txt", strings.Repeat("an obsolete line\n", 50))
+	runGit(t, repository, "add", "obsolete.txt")
+	runGit(t, repository, "commit", "-m", "the file before its removal")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-deletion", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// One deletion an earlier attempt committed, one still uncommitted: both
+	// are paths the worktree no longer holds.
+	if err := os.Remove(filepath.Join(worktree.Path, "obsolete.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: remove the obsolete file")
+	if err := os.Remove(filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Fatalf("a deleting change was reported as cut: %#v", changes.OmittedFiles)
+	}
+	if strings.Count(changes.Patch, "\n-an obsolete line") != 50 || !strings.Contains(changes.Patch, "deleted file mode") || !strings.Contains(changes.Patch, "-test\n") {
+		t.Fatalf("patch does not carry both deletions whole:\n%s", changes.Patch)
+	}
+	want := []ChangedFile{
+		{Path: "README.txt", Status: "D", Bytes: 0},
+		{Path: "obsolete.txt", Status: "D", Bytes: 0, Committed: true},
+	}
+	if !reflect.DeepEqual(changes.Files, want) {
+		t.Fatalf("files = %#v, want %#v", changes.Files, want)
+	}
+
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "obsolete.txt" ||
+		bounded.OmittedFiles[0].Bytes != 0 || bounded.OmittedFiles[0].DiffBytes == 0 {
+		t.Fatalf("omitted files = %#v, want the committed deletion named at zero bytes with its diff measured", bounded.OmittedFiles)
+	}
+	if !strings.Contains(bounded.Patch, "-test\n") {
+		t.Fatalf("the deletion that fits the bound is not shown:\n%s", bounded.Patch)
+	}
+}
+
+// A type change — a tracked file that became a symlink — is one entry in Git's
+// listing and two blocks in its patch, a deletion and a creation of the same
+// path. It is one file's change and is carried as one section, so a legal
+// change containing one is rendered and listed rather than refused as a patch
+// that could not be paired with its listing.
+func TestManagerUnifiedChangesCarriesAFileThatBecameASymlink(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	writeFile(t, repository, "target.txt", "the target\n")
+	runGit(t, repository, "add", "target.txt")
+	runGit(t, repository, "commit", "-m", "the link's target")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-typechange", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "other.txt", "beside it\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: link the README")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	// Both halves of the type change are in the patch, and so is the file
+	// beside it, which the pairing would have misnamed had it taken the two
+	// blocks for two files.
+	for _, want := range []string{"deleted file mode 100644", "-test\n", "new file mode 120000", "+target.txt", "diff --git a/other.txt b/other.txt", "+beside it"} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch is missing %q:\n%s", want, changes.Patch)
+		}
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Errorf("a type change was reported as cut: %#v", changes.OmittedFiles)
+	}
+	// Listed once, with Git's own status for it. A symlink is not a regular
+	// file the harness measures, so it is listed at zero bytes.
+	want := []ChangedFile{
+		{Path: "README.txt", Status: "T", Bytes: 0, Committed: true},
+		{Path: "other.txt", Status: "A", Bytes: 10, Committed: true},
+	}
+	if !reflect.DeepEqual(changes.Files, want) {
+		t.Fatalf("files = %#v, want %#v", changes.Files, want)
+	}
+
+	// Under a bound the type change is kept or dropped as one file, never as a
+	// deletion shown without its creation.
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "README.txt" || bounded.OmittedFiles[0].Reason != OmittedTooLarge {
+		t.Fatalf("omitted files = %#v, want the type change dropped whole", bounded.OmittedFiles)
+	}
+	if strings.Contains(bounded.Patch, "README.txt") || !strings.Contains(bounded.Patch, "+beside it") {
+		t.Fatalf("bounded patch = %q, want the file beside the dropped type change and nothing of the type change", bounded.Patch)
+	}
+}
+
+// The tree listing: every file the change touches, with its size at the tip,
+// whether it is binary, and whether an earlier attempt already committed it.
+// The patch shows none of a binary and nothing distinguishes a committed file
+// in it, and a reviewer not told a file is there infers it from whatever else
+// passed — which is how a binary asset's approval came to rest on a link
+// checker.
+func TestManagerUnifiedChangesListsEveryFileOfTheChangeWithItsSize(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-listing", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	icon := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+	writeFile(t, worktree.Path, filepath.Join("docs", "icon.png"), icon)
+	writeFile(t, worktree.Path, "feature.go", "package feature\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+	writeFile(t, worktree.Path, "README.txt", "test\nedited later\n")
+	if err := os.Remove(filepath.Join(worktree.Path, "feature.go")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "later.bin", "new\x00binary\n")
+	writeFile(t, worktree.Path, "later.txt", "still working\n")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	// feature.go was committed and then deleted again, so against the base it
+	// is no change at all and is rightly absent; README.txt is changed only in
+	// the worktree; the icon is on the branch and binary; the two new files are
+	// the worktree's own, one of them binary.
+	want := []ChangedFile{
+		{Path: "README.txt", Status: "M", Bytes: 18},
+		{Path: "docs/icon.png", Status: "A", Bytes: int64(len(icon)), Binary: true, Committed: true},
+		{Path: "later.bin", Status: "??", Bytes: 11, Binary: true},
+		{Path: "later.txt", Status: "??", Bytes: 14},
+	}
+	if !reflect.DeepEqual(changes.Files, want) {
+		t.Fatalf("files = %#v, want %#v", changes.Files, want)
+	}
+	if changes.FilesOmitted != 0 {
+		t.Errorf("files omitted = %d, want none", changes.FilesOmitted)
+	}
+	if described := want[1].Describe(); described != "A docs/icon.png (16 bytes) — binary, already committed on this branch" {
+		t.Errorf("described file = %q", described)
+	}
+	if changes.HeadCommit != worktree.HarnessCommit {
+		t.Errorf("head commit = %q, want the tip the change was read at, %q", changes.HeadCommit, worktree.HarnessCommit)
+	}
+
+	// The listing is bounded on its own count, and the bound cuts the listing
+	// alone: the patch is what it was.
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxListedFiles: 2})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if len(bounded.Files) != 2 || bounded.FilesOmitted != 2 || bounded.Patch != changes.Patch {
+		t.Fatalf("bounded listing = %#v, omitted = %d", bounded.Files, bounded.FilesOmitted)
+	}
+}
+
+// The handoff yoyodyne-ifd.121.5 was reported on, replayed: a first attempt
+// commits a reduction that takes three thousand lines out of a README, and the
+// round after it is a small uncommitted repair. The change a reviewer is handed
+// on that round is the branch's whole diff against its base, so the reduction —
+// the change the item is about — is in front of it, whole, beside the repair.
+func TestManagerUnifiedChangesPresentsAReductionAnEarlierAttemptCommitted(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	var readme strings.Builder
+	for i := 0; i < 3500; i++ {
+		fmt.Fprintf(&readme, "line %d of the README nobody reads to the end\n", i)
+	}
+	writeFile(t, repository, "README.md", readme.String())
+	runGit(t, repository, "add", "README.md")
+	runGit(t, repository, "commit", "-m", "the README before the reduction")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-121-5", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	reduced := strings.Join(strings.SplitAfter(readme.String(), "\n")[:400], "")
+	writeFile(t, worktree.Path, "README.md", reduced)
+	reduction := harnessCommit(t, worktree.Path, "yoyodyne: the README reduction")
+	writeFile(t, worktree.Path, "widened.go", "package widened\n")
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: the widening")
+	writeFile(t, worktree.Path, "repair.go", "package repair\n")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Fatalf("the reduction is inside the default bounds and was cut anyway: %#v", changes.OmittedFiles)
+	}
+	if deleted := strings.Count(changes.Patch, "\n-line "); deleted != 3100 {
+		t.Fatalf("patch removes %d README lines, want the whole 3100-line reduction", deleted)
+	}
+	for _, want := range []string{"diff --git a/README.md b/README.md", "+package widened", "+package repair"} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch is missing %q", want)
+		}
+	}
+	if !strings.Contains(changes.DiffStat, "3100 deletions") {
+		t.Errorf("diff stat = %q, want it to count the reduction", changes.DiffStat)
+	}
+	if changes.BaseCommit != worktree.BaseCommit || changes.HeadCommit != worktree.HarnessCommit {
+		t.Errorf("span = %s..%s, want the recorded base %s to the tip %s", changes.BaseCommit, changes.HeadCommit, worktree.BaseCommit, worktree.HarnessCommit)
+	}
+	if len(changes.Commits) != 2 || changes.Commits[0].Commit != reduction {
+		t.Errorf("commits = %#v, want the reduction named first", changes.Commits)
+	}
+	if len(changes.Files) != 3 || changes.Files[0] != (ChangedFile{Path: "README.md", Status: "M", Bytes: int64(len(reduced)), Committed: true}) {
+		t.Errorf("files = %#v, want the README listed as committed with its reduced size", changes.Files)
 	}
 }
 

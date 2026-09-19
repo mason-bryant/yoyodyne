@@ -635,12 +635,17 @@ type Outcome struct {
 	// invariants directory that could not be read as one, or an invariant that
 	// matched and did not fit the prompt's bound. Both mean the set the agents saw
 	// was incomplete, which is a fact for the operator rather than a run failure.
-	Invariants          []string        `json:"invariants,omitempty"`
-	InvariantProblems   []string        `json:"invariant_problems,omitempty"`
-	ReviewSessionID     string          `json:"review_session_id,omitempty"`
-	ReviewModel         string          `json:"review_model,omitempty"`
-	ReviewResolvedModel string          `json:"review_resolved_model,omitempty"`
-	ReviewDecision      review.Decision `json:"review_decision,omitempty"`
+	Invariants          []string `json:"invariants,omitempty"`
+	InvariantProblems   []string `json:"invariant_problems,omitempty"`
+	ReviewSessionID     string   `json:"review_session_id,omitempty"`
+	ReviewModel         string   `json:"review_model,omitempty"`
+	ReviewResolvedModel string   `json:"review_resolved_model,omitempty"`
+	// ReviewBaseCommit and ReviewHeadCommit are the commits the reviewed change
+	// was measured between — the run's base and the branch's tip at the review —
+	// so the record of a verdict names what it was judged against.
+	ReviewBaseCommit string          `json:"review_base_commit,omitempty"`
+	ReviewHeadCommit string          `json:"review_head_commit,omitempty"`
+	ReviewDecision   review.Decision `json:"review_decision,omitempty"`
 	// ReviewApproves is what the reviewer said its approval approves. It decides
 	// the closure alongside the developer's claim above: an approval of evidence
 	// leaves the item open exactly as an evidence landing does, whatever the
@@ -5442,6 +5447,14 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if err != nil {
 		return "", providerEvidence{}, fmt.Errorf("assemble reviewed change: %w", err)
 	}
+	// What the reviewer is about to be shown is recorded before it is shown,
+	// beside the verdict it will produce: the base the change is measured
+	// against and the tip it was read at. A review that fails past this point
+	// still says what it was judging.
+	a.state.ReviewBaseCommit = changes.BaseCommit
+	a.state.ReviewHeadCommit = changes.HeadCommit
+	a.outcome.ReviewBaseCommit = changes.BaseCommit
+	a.outcome.ReviewHeadCommit = changes.HeadCommit
 	account := a.account()
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
 		RunID:      a.state.RunID,
@@ -5550,6 +5563,8 @@ func (a *activeRun) clearReviewEvidence() {
 	a.state.ReviewSessionID = ""
 	a.state.ReviewModel = ""
 	a.state.ReviewResolvedModel = ""
+	a.state.ReviewBaseCommit = ""
+	a.state.ReviewHeadCommit = ""
 	a.state.ReviewDecision = ""
 	a.state.ReviewApproves = ""
 	a.state.ReviewSummary = ""
@@ -5558,6 +5573,8 @@ func (a *activeRun) clearReviewEvidence() {
 	a.outcome.ReviewSessionID = ""
 	a.outcome.ReviewModel = ""
 	a.outcome.ReviewResolvedModel = ""
+	a.outcome.ReviewBaseCommit = ""
+	a.outcome.ReviewHeadCommit = ""
 	a.outcome.ReviewDecision = ""
 	a.outcome.ReviewApproves = ""
 	a.outcome.ReviewSummary = ""
@@ -5644,6 +5661,8 @@ func (a *activeRun) carryReviewEvidence() {
 	a.outcome.ReviewSessionID = state.ReviewSessionID
 	a.outcome.ReviewModel = state.ReviewModel
 	a.outcome.ReviewResolvedModel = state.ReviewResolvedModel
+	a.outcome.ReviewBaseCommit = state.ReviewBaseCommit
+	a.outcome.ReviewHeadCommit = state.ReviewHeadCommit
 	a.outcome.ReviewDecision = review.Decision(state.ReviewDecision)
 	a.outcome.ReviewApproves = review.Approval(state.ReviewApproves)
 	a.outcome.ReviewSummary = state.ReviewSummary
@@ -6824,6 +6843,12 @@ func renderReviewNotes(outcome Outcome) []string {
 	}
 	if outcome.ReviewModel != "" {
 		lines = append(lines, "Reviewer model: "+renderModel(outcome.ReviewModel, outcome.ReviewResolvedModel))
+	}
+	// What the verdict was judged against, as two commits: a reader of the item
+	// can tell from this alone whether a review saw the branch's earlier
+	// attempts, rather than inferring it from the verdict's own hedging.
+	if outcome.ReviewBaseCommit != "" && outcome.ReviewHeadCommit != "" {
+		lines = append(lines, "Reviewed against: base "+outcome.ReviewBaseCommit+", tip "+outcome.ReviewHeadCommit)
 	}
 	if outcome.ReviewDecision != "" {
 		lines = append(lines, "Review decision: "+string(outcome.ReviewDecision))

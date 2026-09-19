@@ -1246,7 +1246,18 @@ type State struct {
 	ReviewSessionID     string `json:"review_session_id,omitempty"`
 	ReviewModel         string `json:"review_model,omitempty"`
 	ReviewResolvedModel string `json:"review_resolved_model,omitempty"`
-	ReviewDecision      string `json:"review_decision,omitempty"`
+	// ReviewBaseCommit and ReviewHeadCommit are the two commits the change the
+	// reviewer was shown was measured between: the base it was cut from, and
+	// the branch's tip at the moment of the review, with the uncommitted
+	// worktree above it. They are recorded so what a verdict was judged against
+	// can be read back as two commits, rather than reconstructed from the branch
+	// and a patch byte count — which is how nine hedged verdicts had to be
+	// reconstructed once. They are cleared with the rest of the review evidence
+	// when the next attempt is judged, and they are empty on every record
+	// written before they were carried.
+	ReviewBaseCommit string `json:"review_base_commit,omitempty"`
+	ReviewHeadCommit string `json:"review_head_commit,omitempty"`
+	ReviewDecision   string `json:"review_decision,omitempty"`
 	// ReviewApproves is what the reviewer said its approval approves: the work the
 	// item asked for, or evidence that does not discharge it. It is durable for the
 	// reason the landing claim below is — the closure is not always made by the
@@ -1691,6 +1702,18 @@ func (s State) Validate() error {
 		if s.HarnessCommit == s.BaseCommit {
 			problems = append(problems, errors.New("harness_commit cannot be the base commit, which proves no commit was made"))
 		}
+	}
+	// The two commits a review was judged between are recorded together or not
+	// at all: a review that names a base and no tip says less than one naming
+	// neither, because it reads as a record of what was shown.
+	if (s.ReviewBaseCommit == "") != (s.ReviewHeadCommit == "") {
+		problems = append(problems, errors.New("review_base_commit and review_head_commit must be recorded together"))
+	}
+	if s.ReviewBaseCommit != "" && !commitPattern.MatchString(s.ReviewBaseCommit) {
+		problems = append(problems, errors.New("review_base_commit is invalid"))
+	}
+	if s.ReviewHeadCommit != "" && !commitPattern.MatchString(s.ReviewHeadCommit) {
+		problems = append(problems, errors.New("review_head_commit is invalid"))
 	}
 	if s.Selection != nil {
 		if err := s.Selection.Validate(); err != nil {

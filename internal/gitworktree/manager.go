@@ -1,9 +1,11 @@
 package gitworktree
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -289,19 +291,34 @@ const (
 	DefaultMaxDiffBytes     = 256 << 10
 	DefaultMaxDiffFileBytes = 64 << 10
 	DefaultMaxDiffFiles     = 200
+	// DefaultMaxListedFiles bounds the listing of every file a change touches.
+	// It is separate from the file bound above, which is for files rendered one
+	// by one into the patch: a listing line is a hundred bytes where a rendered
+	// file can be sixty thousand, so the listing can afford to name far more
+	// than the patch can show.
+	DefaultMaxListedFiles = 1000
 )
 
 // DiffLimits bounds how much of a worktree's change a caller is willing to
 // carry. Zero fields fall back to the defaults above.
 type DiffLimits struct {
-	// MaxTotalBytes bounds the complete tracked-and-untracked patch.
+	// MaxTotalBytes bounds the complete tracked-and-untracked patch. It is
+	// spent file by file: a file's diff is in the patch whole or it is named as
+	// omitted, and no file is cut part-way through.
 	MaxTotalBytes int
 	// MaxFileBytes bounds each untracked file before Git renders its patch.
-	// Tracked changes remain bounded by MaxTotalBytes.
+	// Tracked changes remain bounded by MaxTotalBytes alone, because a tracked
+	// file's diff is often far smaller than the file — and where it is not, a
+	// reduction that deletes three thousand lines is exactly the change a
+	// reviewer has to be shown, not the one a per-file ceiling should drop.
 	MaxFileBytes int
 	// MaxFiles bounds separately rendered untracked files. Tracked changes are
-	// already rendered together and remain bounded by MaxTotalBytes.
+	// not counted against it; each of them is one Git rendering, and they
+	// remain bounded by MaxTotalBytes.
 	MaxFiles int
+	// MaxListedFiles bounds the listing of every file the change touches, which
+	// is carried beside the patch rather than inside it.
+	MaxListedFiles int
 	// MaxCommits bounds how many commits of a change are described. It bounds a
 	// branch-scope change and the listing that says what a worktree's patch
 	// spans; neither patch is bounded by it, because a worktree's change is
@@ -314,6 +331,14 @@ type DiffLimits struct {
 // same patch as tracked edits without staging them or otherwise mutating the
 // worktree. Truncated reports that the bounds dropped part of the change, so a
 // caller never mistakes a clamped patch for the whole story.
+//
+// The bounds are applied whole file by whole file, never to the tail of the
+// patch. A patch cut at a byte count keeps whichever files Git happened to
+// render first and loses the rest without a name, so a reviewer handed one
+// could not say which files it had judged; every file this carries is either
+// shown in full or listed in OmittedFiles with its size and the bound that
+// dropped it, and Files names every file the change touches whether or not the
+// patch could show it.
 type ChangeDiff struct {
 	Status         string        `json:"status"`
 	DiffStat       string        `json:"diff_stat,omitempty"`
@@ -321,18 +346,32 @@ type ChangeDiff struct {
 	UntrackedFiles []string      `json:"untracked_files,omitempty"`
 	OmittedFiles   []OmittedFile `json:"omitted_files,omitempty"`
 	Truncated      bool          `json:"truncated"`
-	// BaseCommit is the commit the change is measured against, and Commits are
+	// Files is the tree listing of the change: every path it touches against
+	// the base, with the file's size at the tip, whether it is binary, and
+	// whether it is already committed on the branch. It is carried beside the
+	// patch because the patch cannot show everything the change delivers — a
+	// binary has no textual diff at all — and a reviewer that is not told a file
+	// is there infers it from whatever else passed. FilesOmitted counts the
+	// entries the listing bound dropped; the patch is not bounded by it.
+	Files        []ChangedFile `json:"files,omitempty"`
+	FilesOmitted int           `json:"files_omitted,omitempty"`
+	// BaseCommit is the commit the change is measured against, HeadCommit is
+	// the branch's tip the change was read at — the base itself where nothing
+	// has been committed, and the last harness commit otherwise — and Commits are
 	// the commits already made for it over that base, oldest first. They are
 	// carried because a patch says what changed and nothing says what it spans:
 	// a run that continues on a branch its earlier attempts already committed to
 	// hands over a patch that covers those commits, and a reader told only
 	// "worktree changes" reads it as the uncommitted tail of one. That reading
 	// cost nine review filings across two work items, each discounting a verdict
-	// over committed work the reviewer had in fact been shown.
+	// over committed work the reviewer had in fact been shown. The tip is what a
+	// review record names beside the base so what a verdict was judged against
+	// can be read back as two commits rather than reconstructed from the branch.
 	//
 	// They are empty on a branch-scope change, which names its own base and
 	// history in the fields beside this one.
 	BaseCommit string   `json:"base_commit,omitempty"`
+	HeadCommit string   `json:"head_commit,omitempty"`
 	Commits    []Commit `json:"commits,omitempty"`
 	// CommitsOmitted counts the commits the bound dropped from that listing,
 	// oldest first. It does not truncate the change: the patch is the whole
@@ -387,6 +426,13 @@ type OmittedFile struct {
 	// It is recorded beside the size so a reader sees the comparison that was
 	// made rather than being asked to know the harness's defaults.
 	Bound int64 `json:"bound,omitempty"`
+	// DiffBytes is how big the file's rendered diff was, for a tracked file the
+	// patch bound kept out. It is the number the bound was actually compared
+	// against — a tracked file's diff can be far smaller than the file, or, for
+	// a deletion, far larger than the nothing left at the tip — and it is zero
+	// for an untracked file, which is measured by its size before it is
+	// rendered at all.
+	DiffBytes int64 `json:"diff_bytes,omitempty"`
 }
 
 // Describe is the one sentence a reader is given about a file that is in the
@@ -396,17 +442,65 @@ type OmittedFile struct {
 func (f OmittedFile) Describe() string {
 	switch f.Reason {
 	case OmittedTooLarge:
-		return fmt.Sprintf("%s (%d bytes): delivered but too large to show; the per-file bound is %d bytes.", f.Path, f.Bytes, f.Bound)
+		if f.DiffBytes > 0 {
+			return fmt.Sprintf("%s: delivered but too large to show; its diff alone is %d bytes and the patch bound is %d bytes.", f.sized(), f.DiffBytes, f.Bound)
+		}
+		return fmt.Sprintf("%s: delivered but too large to show; the per-file bound is %d bytes.", f.sized(), f.Bound)
 	case OmittedBinary:
-		return fmt.Sprintf("%s (%d bytes): delivered but binary, so it has no reviewable diff.", f.Path, f.Bytes)
+		return fmt.Sprintf("%s: delivered but binary, so it has no reviewable diff.", f.sized())
 	case OmittedPatchFull:
-		return fmt.Sprintf("%s (%d bytes): delivered but not shown; the %d-byte patch bound was already spent.", f.Path, f.Bytes, f.Bound)
+		if f.DiffBytes > 0 {
+			return fmt.Sprintf("%s: delivered but not shown; its diff is %d bytes and the %d-byte patch bound had no room left for it.", f.sized(), f.DiffBytes, f.Bound)
+		}
+		return fmt.Sprintf("%s: delivered but not shown; the %d-byte patch bound was already spent.", f.sized(), f.Bound)
 	case OmittedTooManyFiles:
-		return fmt.Sprintf("%s (%d bytes): delivered but not shown; the change adds more new files than the bound of %d.", f.Path, f.Bytes, f.Bound)
+		return fmt.Sprintf("%s: delivered but not shown; the change adds more new files than the bound of %d.", f.sized(), f.Bound)
 	case OmittedUnreadable:
 		return fmt.Sprintf("%s: delivered but not a readable regular file, so there is nothing to diff.", f.Path)
 	}
-	return fmt.Sprintf("%s (%d bytes): delivered but not shown.", f.Path, f.Bytes)
+	return fmt.Sprintf("%s: delivered but not shown.", f.sized())
+}
+
+// sized is the path with the file's size at the tip beside it.
+func (f OmittedFile) sized() string {
+	return fmt.Sprintf("%s (%d bytes)", f.Path, f.Bytes)
+}
+
+// ChangedFile is one entry of a change's tree listing: a path the change
+// touches, and the facts about it a patch does not carry. It exists because a
+// reviewer shown a text diff is shown nothing of a binary, and a listing that
+// names the file and its size is the evidence that the file is there — which,
+// until this was recorded, a reviewer inferred from a link checker passing.
+type ChangedFile struct {
+	Path string `json:"path"`
+	// Status is Git's own letter for the change — A, M, D, T — or "??" for a
+	// file the worktree holds that nothing has added yet.
+	Status string `json:"status"`
+	// Bytes is the file's size at the tip of the change, as it is in the
+	// worktree. It is zero for a deleted file.
+	Bytes int64 `json:"bytes"`
+	// Binary reports content Git will not render as a textual diff.
+	Binary bool `json:"binary,omitempty"`
+	// Committed reports that the path is changed by a commit already on the
+	// branch — work an earlier attempt published — rather than only by what
+	// is still uncommitted in the worktree.
+	Committed bool `json:"committed,omitempty"`
+}
+
+// Describe is the one line a reader is given about a file in the listing.
+func (f ChangedFile) Describe() string {
+	var qualities []string
+	if f.Binary {
+		qualities = append(qualities, "binary")
+	}
+	if f.Committed {
+		qualities = append(qualities, "already committed on this branch")
+	}
+	line := fmt.Sprintf("%s %s (%d bytes)", f.Status, f.Path, f.Bytes)
+	if len(qualities) > 0 {
+		line += " — " + strings.Join(qualities, ", ")
+	}
+	return line
 }
 
 var (
@@ -740,43 +834,68 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	}
 	changes := ChangeDiff{Status: summary.Status, DiffStat: summary.DiffStat}
 
-	tracked, err := m.run(ctx, "-C", path, "diff", "--no-ext-diff", "--patch", worktree.BaseCommit, "--")
+	sections, err := m.trackedSections(ctx, path, worktree.BaseCommit, "")
 	if err != nil {
 		return ChangeDiff{}, err
-	}
-	if tracked.Status != execution.ProcessSucceeded {
-		return ChangeDiff{}, fmt.Errorf("diff tracked worktree changes failed with exit code %d: %s", tracked.ExitCode, strings.TrimSpace(tracked.Stderr))
 	}
 	untracked, err := m.untrackedFiles(ctx, path)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
 
-	var patch strings.Builder
-	remaining := limits.MaxTotalBytes
-	clamped, truncated := clampToWholeLines(tracked.Stdout, remaining)
-	patch.WriteString(clamped)
-	remaining -= len(clamped)
-	changes.Truncated = truncated || containsBinaryDiff(tracked.Stdout)
-
-	// Every untracked file leaves this loop one of two ways: written into the
-	// patch, or recorded as an omission that names it, its size, and the bound
-	// that dropped it. There is no third way out, and the accounting below
+	// Every file leaves the two loops below one of two ways: written into the
+	// patch whole, or recorded as an omission that names it, its size, and the
+	// bound that dropped it. There is no third way out, and the accounting below
 	// refuses a change where one appears — a file that is neither shown nor named
 	// is exactly what a reviewer cannot know it is missing.
+	var patch strings.Builder
+	remaining := limits.MaxTotalBytes
 	omit := func(relative string, size int64, reason OmissionReason, bound int64) {
 		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
 			Path: relative, Bytes: size, Reason: reason, Bound: bound,
 		})
 		changes.Truncated = true
 	}
+	// The tracked half is spent file by file rather than cut at the bound. A
+	// patch cut at a byte count keeps whichever files Git rendered first and
+	// loses the rest with nothing naming them, so a reviewer handed one could
+	// not say which files its verdict covered. Here a file's diff is in the
+	// patch whole or it is named, and the scan carries on past a diff that does
+	// not fit so a smaller file after it is still shown.
+	for _, section := range sections {
+		size, _, err := m.untrackedSize(path, section.path)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		record := func(reason OmissionReason, bound int64) {
+			changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
+				Path: section.path, Bytes: size, Reason: reason, Bound: bound, DiffBytes: int64(len(section.patch)),
+			})
+			changes.Truncated = true
+		}
+		switch {
+		case containsBinaryDiff(section.patch):
+			record(OmittedBinary, 0)
+		case len(section.patch) > limits.MaxTotalBytes:
+			record(OmittedTooLarge, int64(limits.MaxTotalBytes))
+		case len(section.patch) > remaining:
+			record(OmittedPatchFull, int64(limits.MaxTotalBytes))
+		default:
+			patch.WriteString(section.patch)
+			remaining -= len(section.patch)
+		}
+	}
+	// The file-count bound and the accounting below are over new files alone: a
+	// tracked file the bound named above is not one the untracked half owes.
+	trackedOmissions := len(changes.OmittedFiles)
+	newFiles := func() int { return len(changes.UntrackedFiles) + len(changes.OmittedFiles) - trackedOmissions }
 	for _, relative := range untracked {
 		size, regular, err := m.untrackedSize(path, relative)
 		if err != nil {
 			return ChangeDiff{}, err
 		}
 		switch {
-		case len(changes.UntrackedFiles)+len(changes.OmittedFiles) >= limits.MaxFiles:
+		case newFiles() >= limits.MaxFiles:
 			omit(relative, size, OmittedTooManyFiles, int64(limits.MaxFiles))
 			continue
 		case !regular:
@@ -801,17 +920,28 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 			changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
 		}
 	}
-	if len(changes.UntrackedFiles)+len(changes.OmittedFiles) != len(untracked) {
+	if newFiles() != len(untracked) {
 		return ChangeDiff{}, fmt.Errorf("assembled change accounts for %d of %d new files; a file dropped without being named is not reviewable",
-			len(changes.UntrackedFiles)+len(changes.OmittedFiles), len(untracked))
+			newFiles(), len(untracked))
 	}
 	changes.Patch = patch.String()
 
+	// The tree listing: every file the change touches, whether or not the patch
+	// could show it. It is built after the patch so it can say what the patch
+	// cannot — a binary's size, a file that is already committed — and it is
+	// bounded on its own count rather than on the patch's bytes.
+	changes.Files, changes.FilesOmitted, err = m.listChangedFiles(ctx, path, worktree.BaseCommit, head, untracked, limits.MaxListedFiles)
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+
 	// What the patch spans, said rather than left to be inferred. The base is
-	// what every part of the change above was measured against, and the commits
-	// are the attempts already published for it: together they say the patch
-	// covers the branch and not the tail of it.
+	// what every part of the change above was measured against, the tip is the
+	// HEAD it was read at, and the commits are the attempts already published
+	// for it: together they say the patch covers the branch and not the tail of
+	// it.
 	changes.BaseCommit = worktree.BaseCommit
+	changes.HeadCommit = head
 	if head != worktree.BaseCommit {
 		total, err := m.countCommits(ctx, worktree.BaseCommit, head)
 		if err != nil {
@@ -1062,6 +1192,228 @@ func (m *Manager) untrackedPatch(ctx context.Context, path, relative string) (st
 	return result.Stdout, nil
 }
 
+// trackedSection is one file's part of a tracked patch: the path Git listed
+// for it and the bytes of its own `diff --git` block, header included.
+type trackedSection struct {
+	path  string
+	patch string
+}
+
+// trackedSections renders the tracked change as one section per file, so the
+// bounds can be spent a whole file at a time. An empty head is the working
+// tree, which is what a worktree's change is measured to; a commit is the
+// range a branch accumulated.
+//
+// The paths come from a second listing in the same order rather than from the
+// `diff --git` headers, because Git quotes a header path that carries a tab, a
+// newline, or a byte outside ASCII and leaves one with a space bare, and parsing
+// that back is a second copy of Git's quoting rules. The listing and the patch
+// are two renderings of the same diff under the same options, so they name the
+// same files in the same order, with one shape to allow for: a type change — a
+// file that became a symlink, or the reverse — is one `T` entry in the listing
+// and two blocks in the patch, a deletion and a creation of the same path,
+// which are one section here because they are one file's change. The pairing
+// is checked rather than trusted, and a patch it cannot pair is refused.
+func (m *Manager) trackedSections(ctx context.Context, dir, baseCommit, headCommit string) ([]trackedSection, error) {
+	patchArgs := []string{"-C", dir, "diff", "--no-ext-diff", "--patch", baseCommit}
+	namesArgs := []string{"-C", dir, "diff", "--no-ext-diff", "--name-status", "-z", baseCommit}
+	if headCommit != "" {
+		patchArgs = append(patchArgs, headCommit)
+		namesArgs = append(namesArgs, headCommit)
+	}
+	patch, err := m.run(ctx, append(patchArgs, "--")...)
+	if err != nil {
+		return nil, err
+	}
+	if patch.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("diff tracked changes failed with exit code %d: %s", patch.ExitCode, strings.TrimSpace(patch.Stderr))
+	}
+	names, err := m.run(ctx, append(namesArgs, "--")...)
+	if err != nil {
+		return nil, err
+	}
+	if names.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list tracked changes failed with exit code %d: %s", names.ExitCode, strings.TrimSpace(names.Stderr))
+	}
+	entries := parseNameStatus(names.Stdout)
+	blocks := splitPatchSections(patch.Stdout)
+	sections := make([]trackedSection, 0, len(entries))
+	next := 0
+	for _, entry := range entries {
+		take := 1
+		if strings.HasPrefix(entry.status, "T") {
+			take = 2
+		}
+		if next+take > len(blocks) {
+			return nil, fmt.Errorf("tracked patch renders %d block(s) where the listing names %d file(s); a section that cannot be named is not reviewable", len(blocks), len(entries))
+		}
+		sections = append(sections, trackedSection{path: entry.path, patch: strings.Join(blocks[next:next+take], "")})
+		next += take
+	}
+	if next != len(blocks) {
+		return nil, fmt.Errorf("tracked patch renders %d block(s) where the listing names %d file(s); a section that cannot be named is not reviewable", len(blocks), len(entries))
+	}
+	return sections, nil
+}
+
+// nameStatus is one entry of Git's NUL-separated name-status listing. A rename
+// or copy names both paths; path is the one the file arrived at, which is the
+// one a patch section is headed by.
+type nameStatus struct {
+	status string
+	path   string
+}
+
+// parseNameStatus reads `git diff --name-status -z`. Each entry is a status
+// field, then one path, or two for a rename or copy, each NUL-terminated.
+func parseNameStatus(output string) []nameStatus {
+	fields := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
+	var entries []nameStatus
+	for i := 0; i+1 < len(fields); {
+		status := fields[i]
+		path := fields[i+1]
+		i += 2
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			if i < len(fields) {
+				path = fields[i]
+				i++
+			}
+		}
+		if status == "" {
+			continue
+		}
+		entries = append(entries, nameStatus{status: status, path: path})
+	}
+	return entries
+}
+
+// splitPatchSections cuts a `git diff --patch` rendering at each file's
+// header. A content line is prefixed by a space, a plus, or a minus, so nothing
+// inside a file's body can open a section.
+func splitPatchSections(patch string) []string {
+	var sections []string
+	start := -1
+	for offset := 0; offset < len(patch); {
+		end := strings.IndexByte(patch[offset:], '\n')
+		if end < 0 {
+			end = len(patch)
+		} else {
+			end += offset + 1
+		}
+		if strings.HasPrefix(patch[offset:end], "diff --git ") {
+			if start >= 0 {
+				sections = append(sections, patch[start:offset])
+			}
+			start = offset
+		}
+		offset = end
+	}
+	if start >= 0 {
+		sections = append(sections, patch[start:])
+	}
+	return sections
+}
+
+// listChangedFiles builds the tree listing of a change: every tracked path
+// changed against the base, with Git's own status and binary reading, then
+// every untracked file, each measured in the worktree at the tip. Rename
+// detection is off for the reason it is off in ChangedPaths: a listing of what
+// the change touches has to name both sides of a move.
+func (m *Manager) listChangedFiles(ctx context.Context, path, baseCommit, headCommit string, untracked []string, limit int) ([]ChangedFile, int, error) {
+	names, err := m.run(ctx, "-C", path, "diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", baseCommit, "--")
+	if err != nil {
+		return nil, 0, err
+	}
+	if names.Status != execution.ProcessSucceeded {
+		return nil, 0, fmt.Errorf("list changed files failed with exit code %d: %s", names.ExitCode, strings.TrimSpace(names.Stderr))
+	}
+	// Git's numstat reports a binary file as "-\t-", which is its own reading of
+	// the content rather than a guess made here from the name.
+	numstat, err := m.run(ctx, "-C", path, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", baseCommit, "--")
+	if err != nil {
+		return nil, 0, err
+	}
+	if numstat.Status != execution.ProcessSucceeded {
+		return nil, 0, fmt.Errorf("measure changed files failed with exit code %d: %s", numstat.ExitCode, strings.TrimSpace(numstat.Stderr))
+	}
+	binary := map[string]bool{}
+	for _, entry := range strings.Split(strings.TrimSuffix(numstat.Stdout, "\x00"), "\x00") {
+		fields := strings.SplitN(entry, "\t", 3)
+		if len(fields) == 3 && fields[0] == "-" && fields[1] == "-" {
+			binary[fields[2]] = true
+		}
+	}
+	// What the branch's commits already carry, so a file an earlier attempt
+	// published is told apart from one only the worktree holds.
+	committed := map[string]bool{}
+	if headCommit != baseCommit {
+		published, err := m.run(ctx, "-C", path, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", baseCommit, headCommit, "--")
+		if err != nil {
+			return nil, 0, err
+		}
+		if published.Status != execution.ProcessSucceeded {
+			return nil, 0, fmt.Errorf("list committed files failed with exit code %d: %s", published.ExitCode, strings.TrimSpace(published.Stderr))
+		}
+		for _, entry := range strings.Split(strings.TrimSuffix(published.Stdout, "\x00"), "\x00") {
+			if entry != "" {
+				committed[entry] = true
+			}
+		}
+	}
+	var files []ChangedFile
+	for _, entry := range parseNameStatus(names.Stdout) {
+		size, _, err := m.untrackedSize(path, entry.path)
+		if err != nil {
+			return nil, 0, err
+		}
+		files = append(files, ChangedFile{
+			Path: entry.path, Status: entry.status, Bytes: size,
+			Binary: binary[entry.path], Committed: committed[entry.path],
+		})
+	}
+	for _, relative := range untracked {
+		size, regular, err := m.untrackedSize(path, relative)
+		if err != nil {
+			return nil, 0, err
+		}
+		file := ChangedFile{Path: relative, Status: "??", Bytes: size}
+		if regular {
+			file.Binary, err = sniffBinary(filepath.Join(path, filepath.FromSlash(filepath.Clean(relative))))
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		files = append(files, file)
+	}
+	omitted := 0
+	if len(files) > limit {
+		omitted = len(files) - limit
+		files = files[:limit]
+	}
+	return files, omitted, nil
+}
+
+// binarySniffBytes is how far into a file Git looks for a NUL before calling
+// it binary, and so how far this looks too.
+const binarySniffBytes = 8000
+
+// sniffBinary reads a file the way Git decides a path with no attribute is
+// binary: a NUL in its first eight thousand bytes. It is for untracked files,
+// which Git has not measured; a tracked file's reading comes from Git itself.
+func sniffBinary(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, fmt.Errorf("inspect untracked file: %w", err)
+	}
+	defer file.Close()
+	head := make([]byte, binarySniffBytes)
+	n, err := file.Read(head)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("inspect untracked file: %w", err)
+	}
+	return bytes.IndexByte(head[:n], 0) >= 0, nil
+}
+
 func (l DiffLimits) resolve() (DiffLimits, error) {
 	if l.MaxTotalBytes == 0 {
 		l.MaxTotalBytes = DefaultMaxDiffBytes
@@ -1075,23 +1427,13 @@ func (l DiffLimits) resolve() (DiffLimits, error) {
 	if l.MaxCommits == 0 {
 		l.MaxCommits = DefaultMaxDiffCommits
 	}
-	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 || l.MaxCommits < 0 {
+	if l.MaxListedFiles == 0 {
+		l.MaxListedFiles = DefaultMaxListedFiles
+	}
+	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 || l.MaxCommits < 0 || l.MaxListedFiles < 0 {
 		return DiffLimits{}, errors.New("diff limits cannot be negative")
 	}
 	return l, nil
-}
-
-// clampToWholeLines keeps the longest whole-line prefix that fits in limit so a
-// bounded patch never ends mid-line and read as a different change.
-func clampToWholeLines(text string, limit int) (string, bool) {
-	if len(text) <= limit {
-		return text, false
-	}
-	cut := strings.LastIndexByte(text[:limit], '\n')
-	if cut < 0 {
-		return "", true
-	}
-	return text[:cut+1], true
 }
 
 // containsBinaryDiff detects Git's metadata-only representation of a binary

@@ -883,12 +883,18 @@ func TestReviewTellsTheReviewerWhenCommittedWorkWasUndone(t *testing.T) {
 func TestReviewSaysThePatchSpansTheBranchsCommittedWork(t *testing.T) {
 	t.Parallel()
 
+	var events []execution.Event
+	sink := func(event execution.Event) error {
+		events = append(events, event)
+		return nil
+	}
 	provider := &fakeBackend{finalText: `{"decision":"approve","approves":"implementation","summary":"the whole change is here"}`}
-	request := newRequest(nil)
+	request := newRequest(sink)
 	request.Changes = gitworktree.ChangeDiff{
 		Status:     "M README.md\nM internal/contextbundle/product.go",
 		Patch:      "diff --git a/README.md b/README.md\n-a removed line\n",
 		BaseCommit: "f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		HeadCommit: "3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3",
 		Commits: []gitworktree.Commit{
 			{Commit: "11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d", Subject: "yoyodyne: the reduction"},
 			{Commit: "3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3", Subject: "yoyodyne: the repair"},
@@ -901,6 +907,7 @@ func TestReviewSaysThePatchSpansTheBranchsCommittedWork(t *testing.T) {
 	for _, want := range []string{
 		"## What this patch covers",
 		"measured against base commit f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		"read at tip commit 3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3",
 		"the 2 commit(s) already made for it on this branch",
 		"No committed work of this change is missing from it",
 		"11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d yoyodyne: the reduction",
@@ -915,11 +922,76 @@ func TestReviewSaysThePatchSpansTheBranchsCommittedWork(t *testing.T) {
 	// show: the work that was already in that base.
 	for _, want := range []string{
 		"spans the attempts already committed for this item",
+		"the tip commit the change was read at",
+		"cut whole file by whole file",
 		"already in the base commit is not part of this change",
 	} {
 		if !strings.Contains(provider.request.SystemPrompt, want) {
 			t.Errorf("review contract is missing %q", want)
 		}
+	}
+	// The review record names both commits, so what this verdict was judged
+	// against is read back rather than reconstructed from the branch.
+	if len(events) == 0 || events[0].Type != execution.EventReviewStarted {
+		t.Fatalf("events = %#v, want review.started first", events)
+	}
+	for _, want := range []string{
+		`"base_commit":"f5fa080c32ab8805ffea11566f11a2049f03f44a"`,
+		`"head_commit":"3a236e2c1d0b9a8f7e6d5c4b3a2918f7e6d5c4b3"`,
+		`"commits":2`,
+	} {
+		if !strings.Contains(string(events[0].Payload), want) {
+			t.Errorf("review.started payload is missing %q: %s", want, events[0].Payload)
+		}
+	}
+}
+
+// The tree listing is rendered above the patch: every file the change touches,
+// with its size at the tip, marked binary or already committed where it is.
+// It is what a reviewer sees of a binary asset, which a text diff never shows,
+// and it is how a file an earlier attempt committed is told from one only the
+// worktree holds.
+func TestReviewListsEveryFileOfTheChangeWithItsSize(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the icon is delivered but unreviewable","findings":[{"severity":"major","message":"look at the icon"}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:      "diff --git a/docs/slack.md b/docs/slack.md\n+the icon\n",
+		BaseCommit: "f5fa080c32ab8805ffea11566f11a2049f03f44a",
+		HeadCommit: "11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d",
+		Commits:    []gitworktree.Commit{{Commit: "11c45d2b0f4e6a1d9c3b8a7f5e2d1c0b9a8f7e6d", Subject: "yoyodyne: the icon"}},
+		Files: []gitworktree.ChangedFile{
+			{Path: "docs/slack.md", Status: "M", Bytes: 2048},
+			{Path: "docs/slack/app-icon-v1.png", Status: "A", Bytes: 48210, Binary: true, Committed: true},
+		},
+		FilesOmitted: 1,
+		OmittedFiles: []gitworktree.OmittedFile{{Path: "docs/slack/app-icon-v1.png", Bytes: 48210, Reason: gitworktree.OmittedBinary, DiffBytes: 120}},
+		Truncated:    true,
+	}
+
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"## Files in this change",
+		"- M docs/slack.md (2048 bytes)\n",
+		"- A docs/slack/app-icon-v1.png (48210 bytes) — binary, already committed on this branch\n",
+		"1 further file(s) of this change are not listed",
+		"docs/slack/app-icon-v1.png (48210 bytes): delivered but binary, so it has no reviewable diff.",
+		"whole file by whole file",
+	} {
+		if !strings.Contains(provider.request.Prompt, want) {
+			t.Errorf("evidence is missing %q:\n%s", want, provider.request.Prompt)
+		}
+	}
+	// The listing sits above the patch, where it is read before the patch is
+	// judged, and the omissions sit below it as the text says they do.
+	listing := strings.Index(provider.request.Prompt, "## Files in this change")
+	omissions := strings.Index(provider.request.Prompt, "## Files this change delivers that are not shown below")
+	patch := strings.Index(provider.request.Prompt, "## Patch")
+	if !(listing < omissions && omissions < patch) {
+		t.Errorf("sections are out of order: listing at %d, omissions at %d, patch at %d", listing, omissions, patch)
 	}
 }
 
