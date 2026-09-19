@@ -180,6 +180,87 @@ type Sweep struct {
 	// spent a turn and told nobody anything, which must never be indistinguishable
 	// from a quiet pass that found nothing.
 	Problem string `json:"problem,omitempty"`
+	// PullRequests are the open pull requests the harness itself noticed on this
+	// pass, each also stated as a finding in the account. They are kept beside
+	// the account as the harness's own record for one reason: a request is
+	// reported once, and this is the key a later pass reads to know which ones
+	// already were. The findings say it in words; this says it in numbers.
+	PullRequests []ForgeNotice `json:"pull_requests,omitempty"`
+}
+
+// ForgeNotice is one open pull request the harness noticed a reason to report:
+// the work it was opened for is closed, or its branch is already carried by the
+// branch it targets. Either is a request the forge holds open for nothing, and
+// noticing is the whole of what the harness does about it — closing one is a
+// decision, and this records none.
+type ForgeNotice struct {
+	Number int    `json:"number"`
+	URL    string `json:"url,omitempty"`
+	// HeadBranch and BaseBranch are the request's own, as the forge names them.
+	HeadBranch string `json:"head_branch"`
+	BaseBranch string `json:"base_branch,omitempty"`
+	// WorkItemID is the work the request was opened for, where the harness could
+	// say: from its own record of the run that opened it, or failing that from
+	// the branch's name. It is empty for a request nothing here opened.
+	WorkItemID string `json:"work_item_id,omitempty"`
+	// ItemClosed and Contained are the two conditions, and a notice carries at
+	// least one of them. A request can meet both.
+	ItemClosed bool `json:"item_closed,omitempty"`
+	Contained  bool `json:"contained,omitempty"`
+}
+
+// Validate refuses a notice that reports no request or no reason.
+func (n ForgeNotice) Validate() error {
+	var problems []error
+	if n.Number <= 0 {
+		problems = append(problems, errors.New("pull request number must be positive"))
+	}
+	if strings.TrimSpace(n.HeadBranch) == "" {
+		problems = append(problems, errors.New("head branch is required"))
+	}
+	if !n.ItemClosed && !n.Contained {
+		problems = append(problems, errors.New("a noticed pull request names at least one of its two conditions"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid pull request notice: %w", err)
+	}
+	return nil
+}
+
+// Finding is the notice as the account states it: which request, which item,
+// and which of the two conditions holds. Its disposition is "left", because
+// noticing is all the pass did about it — closing an open request is
+// yoyodyne-ifd.69's — and the detail says so, so a reader does not go looking
+// for a fix that was never made.
+func (n ForgeNotice) Finding() sweep.Finding {
+	request := fmt.Sprintf("pull request #%d", n.Number)
+	if strings.TrimSpace(n.URL) != "" {
+		request += " (" + strings.TrimSpace(n.URL) + ")"
+	}
+	item := "no work item the harness can name"
+	if strings.TrimSpace(n.WorkItemID) != "" {
+		item = "work item " + strings.TrimSpace(n.WorkItemID)
+	}
+	var conditions []string
+	if n.ItemClosed {
+		conditions = append(conditions, "its "+item+" is closed")
+	}
+	if n.Contained {
+		base := n.BaseBranch
+		if strings.TrimSpace(base) == "" {
+			base = "its target branch"
+		}
+		conditions = append(conditions, fmt.Sprintf("its head branch %s is already contained in %s", n.HeadBranch, base))
+	}
+	issue := request + " is open and " + strings.Join(conditions, ", and ")
+	if !n.ItemClosed {
+		issue += " (" + item + ")"
+	}
+	return sweep.Finding{
+		Issue:       issue,
+		Disposition: sweep.DispositionLeft,
+		Detail:      "noticed by the harness's own reading of the forge on this pass; it closes nothing, and the request is reported this once",
+	}
 }
 
 // FoundNothing reports the quiet pass: an account that was given and carried no
@@ -227,6 +308,19 @@ func (s Sweep) Validate() error {
 	}
 	if len(s.Problem) > MaxSweepTextBytes {
 		problems = append(problems, fmt.Errorf("problem is %d bytes, limit is %d", len(s.Problem), MaxSweepTextBytes))
+	}
+	// A noticed request is stated as a finding, so a record naming requests and
+	// carrying no account would be one whose findings are nowhere to be read.
+	if len(s.PullRequests) > 0 && s.Result == nil {
+		problems = append(problems, errors.New("a sweep that noticed pull requests carries the account that states them"))
+	}
+	if len(s.PullRequests) > sweep.MaxPassFindings {
+		problems = append(problems, fmt.Errorf("%d pull requests noticed in one pass, limit is %d", len(s.PullRequests), sweep.MaxPassFindings))
+	}
+	for i, noticed := range s.PullRequests {
+		if err := noticed.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("pull_requests[%d]: %w", i, err))
+		}
 	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid sweep: %w", err)

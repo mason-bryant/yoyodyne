@@ -4594,6 +4594,23 @@ would spend turns against whatever was already failing. What stopped it is
 recorded against the task, so a schedule that is running and producing nothing is
 something you can find.
 
+**A development manager's pass also reads the forge.** On every firing of a
+task whose role is `development-manager`, and only that role's, the harness
+itself lists the open pull requests of the repository the project publishes into
+and adds a finding for each one the forge is holding open for nothing: a request
+whose work item is closed, and a request whose head branch is already contained
+in the branch it targets. The finding names the request, the work item, and which
+of the two holds, and it is `left` rather than `fixed` — the harness closes
+nothing, and neither does the role on its account; the request is there for
+somebody to decide about. Each request is reported once, keyed on its number,
+however many passes find it still open afterwards: the requests a pass reported
+are recorded on its report, and the next pass reads them back before it looks.
+The reading is taken beside the role's turns rather than by the role, so it
+happens whether or not the role could be reached, and a forge that could not be
+read is a problem on the record rather than a lost pass. A project whose
+`approvals.publishing` is not `automatic` publishes nothing and is not read for
+anything.
+
 Every firing ends in a durable report, read with
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found). The reports
 outlive the session that produced them and are written once and never revised.

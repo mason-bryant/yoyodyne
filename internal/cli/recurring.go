@@ -21,7 +21,9 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/forgehygiene"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -40,7 +42,7 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 	if len(parts.config.RecurringTasks) == 0 {
 		return nil
 	}
-	return &orchestrator.Trigger{
+	trigger := &orchestrator.Trigger{
 		// The schedule as this pull read the configuration, so a cadence changed
 		// under a running session takes effect at the next pull like every other
 		// configured value.
@@ -59,6 +61,26 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		Outages:     parts.outages,
 		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
 	}
+	// The harness's own reading of the forge on the development manager's pass,
+	// through the same client the publication path opens and merges requests
+	// with, so what it lists is the repository runs publish into. The tracker
+	// says which work is closed and the run records say which work each request
+	// was opened for. A project that does not publish has no requests of its own
+	// on any forge, so it is not read for one.
+	if parts.config.Approvals.Publishing == domain.ApprovalAutomatic {
+		trigger.Forge = forgehygiene.Sweeper{
+			Forge: publish.GitHub{
+				Runner:       parts.runner,
+				Dir:          parts.repository,
+				Remote:       parts.config.Execution.Remote,
+				PushRemote:   parts.config.Execution.PushRemote,
+				RedactValues: parts.redactValues,
+			},
+			Tracker: parts.tracker(),
+			Runs:    parts.store,
+		}
+	}
+	return trigger
 }
 
 // roleConversation is a role's own conversation, reached the way an operator
@@ -366,6 +388,11 @@ needs no attention. Below them come the pass's summary and what it found, each
 finding with what the role did about it -- fixed, filed, consulted, or left --
 and the work it filed for the root cause. A fix that filed nothing is named as
 one, which is the whole of what a run of these reports is read for.
+
+On a development manager's pass some findings are the harness's own: the open
+pull requests the forge is holding for work that is closed, or for a branch the
+target already carries. Each is stated once, as left, and closing it is
+somebody's decision rather than the harness's.
 
 Three outcomes look alike and are not: a pass that found nothing shows its own
 summary and no findings, which on a healthy harness is most of them; a pass that

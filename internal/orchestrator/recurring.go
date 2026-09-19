@@ -86,9 +86,24 @@ type RecurringClaims interface {
 // is a turn spent in private, and the operator reading these at leisure is the
 // entire point of running them.
 //
+// It is read back as well as written, for one thing: which pull requests the
+// earlier passes already reported, so the forge reading says each once.
+//
 // It is satisfied by runstate.SweepStore.
 type RecurringReports interface {
 	Append(recorded runstate.Sweep) error
+	List() ([]runstate.Sweep, []runstate.UnreadableSweep, error)
+}
+
+// RecurringForge is the harness's own reading of the forge, taken on the
+// development manager's pass beside the role's turns: which pull requests the
+// forge holds open for work that is closed or for a branch its target already
+// carries. It is given the requests earlier passes reported and reports the
+// rest.
+//
+// It is satisfied by forgehygiene.Sweeper.
+type RecurringForge interface {
+	Notice(ctx context.Context, reported map[int]bool) ([]runstate.ForgeNotice, error)
 }
 
 // RecurringRole is a role's conversation as the harness reaches it: one message
@@ -138,6 +153,10 @@ type Fired struct {
 	// is the line a session prints; the whole account is in the durable report.
 	Findings      int `json:"findings"`
 	SilentRepairs int `json:"silent_repairs,omitempty"`
+	// PullRequests is how many of the findings are the harness's own reading of
+	// the forge rather than the role's, so the line a session prints does not
+	// credit the role with what the harness noticed.
+	PullRequests int `json:"pull_requests,omitempty"`
 	// Truncated marks a pass that still had more to do when its turn bound ran
 	// out. It is the one thing a reader cannot infer from a short report, and
 	// leaving it unsaid would make a bounded pass look like a finished one.
@@ -155,9 +174,11 @@ type RecurringSweep struct {
 	Paused *runstate.OperatorHold `json:"paused,omitempty"`
 }
 
-// Trigger fires the configured recurring tasks. It has no tracker, no worktree
-// access, and no forge access, and it starts nothing: what it does is wake a role
-// on a cadence and write down what the role said it did.
+// Trigger fires the configured recurring tasks. It has no tracker and no
+// worktree access, and it starts nothing: what it does is wake a role on a
+// cadence and write down what the role said it did. The one reading it takes
+// itself is of the forge, on the development manager's pass, and that reading
+// changes nothing on the forge either.
 type Trigger struct {
 	// Tasks is the schedule as this pull read the configuration, keyed by the
 	// name each task is recorded under. It is passed in rather than read here for
@@ -189,7 +210,12 @@ type Trigger struct {
 	// running still finds the network back on its own. Zero fires into every
 	// due firing, which is what a trigger did before the wait was named.
 	OutageProbe time.Duration
-	Clock       execution.Clock
+	// Forge is the harness's own reading of the forge's open pull requests,
+	// taken on every pass of a development manager's task. Optional: a trigger
+	// wired without one records what the role said and reads the forge for
+	// nothing, which is what every pass did until the requests were counted.
+	Forge RecurringForge
+	Clock execution.Clock
 }
 
 // RecurringOutages is the outage record as a firing reads it. It is satisfied
@@ -287,10 +313,18 @@ func (t Trigger) refuse(ctx context.Context, name string, task config.RecurringT
 		StartedAt: t.now(),
 	}
 	recorded.EndedAt = recorded.StartedAt
-	recorded.Problem = boundedProblem([]string{fmt.Sprintf(
+	problems := []string{fmt.Sprintf(
 		"the recurring task %s was not put to the %s: %s; nothing was asked, and its next firing is at its next cadence",
-		name, task.Role, outage.Says())})
+		name, task.Role, outage.Says())}
+	// The forge is not the provider, so a pass the provider could not serve still
+	// reads it: a request held open for nothing is not made less so by an outage.
+	problems = append(problems, t.noticeForge(ctx, task, &recorded))
+	recorded.Problem = boundedProblem(problems)
 	fired.Problem = recorded.Problem
+	if recorded.Result != nil {
+		fired.Findings = len(recorded.Result.Findings)
+	}
+	fired.PullRequests = len(recorded.PullRequests)
 	t.settle(ctx, &fired, recorded)
 	return fired
 }
@@ -365,6 +399,10 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	}
 	recorded.EndedAt = t.now()
 	recorded.Result = merged
+	// The harness's own reading of the forge joins the account after the role's
+	// turns, so what the role said is intact and what the harness noticed is
+	// stated beside it.
+	problems = append(problems, t.noticeForge(ctx, task, &recorded))
 	// Bounded, because the record's own bound on this prose refuses a record that
 	// carries too much of it — and every one of these sentences ends with a
 	// provider's error message, whose length nothing here controls. Losing a whole
@@ -372,12 +410,96 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	// exact trade this must not make.
 	recorded.Problem = boundedProblem(problems)
 	fired.Problem = recorded.Problem
-	if merged != nil {
-		fired.Findings = len(merged.Findings)
-		fired.SilentRepairs = merged.SilentRepairs()
+	if recorded.Result != nil {
+		fired.Findings = len(recorded.Result.Findings)
+		fired.SilentRepairs = recorded.Result.SilentRepairs()
 	}
+	fired.PullRequests = len(recorded.PullRequests)
 	t.settle(ctx, &fired, recorded)
 	return fired
+}
+
+// noticeForge adds the harness's own reading of the forge to a development
+// manager's pass: every open pull request whose work item is closed or whose
+// branch its target already carries, stated as a finding and recorded by number
+// so no later pass says it again. It reports what stopped the reading, or
+// nothing, as a problem for the record; it never fails the firing, because the
+// role's account is already in hand and a forge that could not be read must not
+// cost it.
+//
+// A task of any other role is left alone: the forge is the development
+// manager's domain, and the reading is taken on its pass whether or not the
+// role itself was reached — the forge is not the provider.
+func (t Trigger) noticeForge(ctx context.Context, task config.RecurringTask, recorded *runstate.Sweep) string {
+	if t.Forge == nil || task.Role != domain.RoleDevelopmentManager {
+		return ""
+	}
+	reported, err := t.reportedRequests()
+	if err != nil {
+		// Without the earlier passes there is no saying which requests were already
+		// reported, and reporting them all again every hour is the thing this
+		// exists to not do; the reading waits for a pass that can read the log.
+		return fmt.Sprintf("the forge was not read on this pass because the earlier passes' reports could not be read: %v", err)
+	}
+	notices, err := t.Forge.Notice(ctx, reported)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the forge could not be fully read on this pass: %v", err))
+	}
+	if len(notices) == 0 {
+		return strings.Join(problems, "; ")
+	}
+	if recorded.Result == nil {
+		// The role gave no account, and the notices still have to be stated
+		// somewhere a reader looks. The account is the harness's then, and says so;
+		// the problem beside it still says the role's own account is missing.
+		recorded.Result = &sweep.Result{
+			Status:  sweep.StatusComplete,
+			Summary: fmt.Sprintf("No account of this pass came from the %s; the findings are the harness's own reading of the forge.", task.Role),
+		}
+	}
+	// What fits is bounded by the account's own cap. The requests that do not fit
+	// are not recorded as reported, so the next pass states them; a shortened list
+	// that said nothing would leave them reported nowhere.
+	room := sweep.MaxPassFindings - len(recorded.Result.Findings)
+	if room < 0 {
+		room = 0
+	}
+	kept := notices
+	if len(kept) > room {
+		kept = kept[:room]
+		problems = append(problems, fmt.Sprintf(
+			"%d open pull request(s) noticed on the forge are not listed because the pass's account is at its bound of %d findings; they are stated on the next pass",
+			len(notices)-room, sweep.MaxPassFindings))
+	}
+	for _, noticed := range kept {
+		recorded.Result.Findings = append(recorded.Result.Findings, noticed.Finding())
+	}
+	recorded.PullRequests = append(recorded.PullRequests, kept...)
+	return strings.Join(problems, "; ")
+}
+
+// reportedRequests reads which pull requests the earlier passes reported, by
+// number, from the durable reports themselves. The reports are the record of
+// what was said, so they are what decides what has been; a second record of
+// the same fact could come to disagree with the first.
+//
+// A line of the log that would not decode is set aside by the reader and
+// carries nothing here, so a request that pass reported may be reported once
+// more; that is one repeat for one torn write, and the alternative — reading
+// nothing when one line is torn — would repeat every request instead.
+func (t Trigger) reportedRequests() (map[int]bool, error) {
+	recorded, _, err := t.Reports.List()
+	if err != nil {
+		return nil, err
+	}
+	reported := map[int]bool{}
+	for _, entry := range recorded {
+		for _, noticed := range entry.PullRequests {
+			reported[noticed.Number] = true
+		}
+	}
+	return reported, nil
 }
 
 // settle writes the firing's durable report and records what became of it against
@@ -417,6 +539,9 @@ func (t Trigger) recordWithoutTheAccount(recorded runstate.Sweep, refused error)
 		recorded.Task, refused)
 	reduced := recorded
 	reduced.Result = nil
+	// The requests the account stated go with it, so a later pass states them
+	// again rather than finding them reported in a record that shows nothing.
+	reduced.PullRequests = nil
 	reduced.Problem = boundedProblem([]string{lost, recorded.Problem})
 	if err := t.Reports.Append(reduced); err != nil {
 		return fmt.Sprintf("the pass of the recurring task %s could not be recorded at all, so what it found reaches nobody: %v; and again without its account: %v",
@@ -581,6 +706,9 @@ func (s RecurringSweep) Render() string {
 		}
 		if fired.SilentRepairs > 0 {
 			fmt.Fprintf(&rendered, "  %d of its fixes filed nothing for their root cause\n", fired.SilentRepairs)
+		}
+		if fired.PullRequests > 0 {
+			fmt.Fprintf(&rendered, "  %d of the findings are open pull requests the harness noticed on the forge, held open for work that is over\n", fired.PullRequests)
 		}
 		if fired.Problem != "" {
 			fmt.Fprintf(&rendered, "  %s\n", fired.Problem)

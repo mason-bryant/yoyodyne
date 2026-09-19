@@ -511,11 +511,14 @@ func TestGitHubRefusesArgumentsThatCouldReadAsOptions(t *testing.T) {
 // contain, so a test states what the CLI reports rather than how it is invoked.
 type scriptedRunner struct {
 	commands [][]string
-	replies  map[string]execution.ProcessResult
-	later    map[string]execution.ProcessResult
-	after    map[string]int
-	failures map[string]error
-	seen     map[string]int
+	// environments is what each command was given beside its arguments, for the
+	// one verb whose repository is named there rather than on the command line.
+	environments [][]string
+	replies      map[string]execution.ProcessResult
+	later        map[string]execution.ProcessResult
+	after        map[string]int
+	failures     map[string]error
+	seen         map[string]int
 }
 
 func (r *scriptedRunner) reply(match string, result execution.ProcessResult) {
@@ -546,6 +549,7 @@ func (r *scriptedRunner) fail(match string, err error) {
 
 func (r *scriptedRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
 	r.commands = append(r.commands, append([]string(nil), command.Args...))
+	r.environments = append(r.environments, append([]string(nil), command.Env...))
 	joined := strings.Join(command.Args, " ")
 	for match, err := range r.failures {
 		if strings.Contains(joined, match) {
@@ -853,5 +857,114 @@ func TestMergeStateReportsWhatItCouldNotRead(t *testing.T) {
 	}
 	if requirement := MergeRequirement(status); !strings.Contains(requirement, "protection rules") {
 		t.Fatalf("MergeRequirement(%q) = %q, want the rule stated in words", status, requirement)
+	}
+}
+
+// The listing of open requests is the forge-hygiene pass's whole view of the
+// forge, so it has to be scoped to the configured repository, bounded above the
+// forge's own default, and carry the branches and head each request is judged
+// by.
+func TestGitHubListOpenReadsEveryOpenRequestWithItsBranches(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":445,"url":"https://example.invalid/pull/445","headRefName":"yoyodyne/yoyodyne-ifd-283/aaaaaaaa","baseRefName":"main","headRefOid":"3333333333333333333333333333333333333333"},
+		         {"number":470,"url":"https://example.invalid/pull/470","headRefName":"feature/by-hand","baseRefName":"main","headRefOid":"2222222222222222222222222222222222222222"}]`,
+	})
+	forge := GitHub{Runner: runner, Remote: "upstream"}
+	open, err := forge.ListOpen(context.Background())
+	if err != nil {
+		t.Fatalf("ListOpen() error = %v", err)
+	}
+	if len(open) != 2 {
+		t.Fatalf("ListOpen() = %+v, want both open requests", open)
+	}
+	if open[0].Number != 445 || open[0].HeadBranch != "yoyodyne/yoyodyne-ifd-283/aaaaaaaa" || open[0].BaseBranch != "main" || open[0].HeadCommit != "3333333333333333333333333333333333333333" {
+		t.Errorf("ListOpen()[0] = %+v, want the request's branches and head carried", open[0])
+	}
+	calls := runner.matching("pr list")
+	if len(calls) != 1 {
+		t.Fatalf("pr list was called %d times, want once", len(calls))
+	}
+	call := calls[0]
+	if !contains(call, "--repo") || !contains(call, "https://example.invalid/acme/thing") {
+		t.Errorf("pr list args = %v, want scoping to the configured repository", call)
+	}
+	if !contains(call, "--state") || !contains(call, "open") {
+		t.Errorf("pr list args = %v, want only open requests", call)
+	}
+	if !contains(call, "--limit") || !contains(call, "200") {
+		t.Errorf("pr list args = %v, want a bound above the forge's default of thirty", call)
+	}
+}
+
+// Whether a base already carries a commit is asked of the forge's comparison,
+// which says how far ahead the commit is; contained is ahead by nothing. The
+// API verb takes no repository flag, so the configured remote is named in the
+// environment instead.
+func TestGitHubContainsAsksTheForgeHowFarAheadTheCommitIs(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("compare/main...1111111111111111111111111111111111111111", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `{"status":"behind","ahead_by":0,"behind_by":12,"commits":[]}`,
+	})
+	runner.reply("compare/main...2222222222222222222222222222222222222222", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `{"status":"ahead","ahead_by":3,"behind_by":0,"commits":[{"sha":"2222222222222222222222222222222222222222"}]}`,
+	})
+	forge := GitHub{Runner: runner, Remote: "upstream"}
+
+	contained, err := forge.Contains(context.Background(), "main", "1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatalf("Contains() error = %v", err)
+	}
+	if !contained {
+		t.Error("Contains() = false for a commit the base is ahead of, want true")
+	}
+	ahead, err := forge.Contains(context.Background(), "main", "2222222222222222222222222222222222222222")
+	if err != nil {
+		t.Fatalf("Contains() error = %v", err)
+	}
+	if ahead {
+		t.Error("Contains() = true for a commit three ahead of the base, want false")
+	}
+	calls := runner.matching("compare/")
+	if len(calls) != 2 {
+		t.Fatalf("the comparison was asked %d times, want twice", len(calls))
+	}
+	if !contains(calls[0], "api") || !contains(calls[0], "--method") || !contains(calls[0], "GET") {
+		t.Errorf("compare args = %v, want the API verb asked as a GET", calls[0])
+	}
+	scoped := false
+	for index, command := range runner.commands {
+		if !contains(command, "api") {
+			continue
+		}
+		for _, entry := range runner.environments[index] {
+			if entry == "GH_REPO=https://example.invalid/acme/thing" {
+				scoped = true
+			}
+		}
+	}
+	if !scoped {
+		t.Error("the API verb was not given the configured repository in its environment")
+	}
+
+	// A comparison that says nothing about how far ahead the commit is cannot be
+	// read as contained.
+	silent := &scriptedRunner{}
+	silent.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	silent.reply("compare/", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"status":"unknown"}`})
+	if _, err := (GitHub{Runner: silent}).Contains(context.Background(), "main", "1111111111111111111111111111111111111111"); err == nil {
+		t.Error("Contains() over a comparison naming no distance returned no error")
+	}
+	if _, err := (GitHub{Runner: silent}).Contains(context.Background(), "--main", "1111111111111111111111111111111111111111"); err == nil {
+		t.Error("Contains() accepted a base that reads as an option")
 	}
 }

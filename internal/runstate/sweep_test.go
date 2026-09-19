@@ -436,3 +436,70 @@ func TestARecordFromAnotherProductIsNamedRatherThanFatal(t *testing.T) {
 		t.Errorf("unreadable = %+v, want the foreign record named", unreadable)
 	}
 }
+
+// The pull requests a pass noticed are the harness's own record on the sweep,
+// and a later pass reads them back to know which requests were already
+// reported. They are written and read with the account that states them, and a
+// record cannot carry one without the other.
+func TestNoticedPullRequestsAreRecordedWithTheAccountThatStatesThem(t *testing.T) {
+	t.Parallel()
+
+	store := newSweepStore(t)
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	noticed := ForgeNotice{Number: 445, URL: "https://forge.invalid/pull/445", HeadBranch: "yoyodyne/yoyodyne-ifd-283/aaaaaaaa", BaseBranch: "main", WorkItemID: "yoyodyne-ifd.283", ItemClosed: true}
+	if err := store.Append(Sweep{
+		Task: "a-sweep", Role: "development-manager",
+		StartedAt: at, EndedAt: at.Add(time.Minute), Turns: 1,
+		Result:       &sweep.Result{Status: sweep.StatusComplete, Summary: "one request held open", Findings: []sweep.Finding{noticed.Finding()}},
+		PullRequests: []ForgeNotice{noticed},
+	}); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	listed, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 || len(listed[0].PullRequests) != 1 || listed[0].PullRequests[0] != noticed {
+		t.Fatalf("listed = %+v, want the noticed request read back as written", listed)
+	}
+
+	// Without the account the notice would be reported nowhere a reader looks.
+	err = store.Append(Sweep{
+		Task: "a-sweep", Role: "development-manager",
+		StartedAt: at, EndedAt: at.Add(time.Minute), Turns: 0,
+		Problem:      "the role could not be reached",
+		PullRequests: []ForgeNotice{noticed},
+	})
+	if err == nil || !strings.Contains(err.Error(), "carries the account") {
+		t.Errorf("Append() of notices without an account error = %v, want the refusal", err)
+	}
+	// And a notice naming no condition reports nothing.
+	if err := (ForgeNotice{Number: 1, HeadBranch: "x"}).Validate(); err == nil {
+		t.Error("a notice with neither condition validated")
+	}
+}
+
+// The finding a notice becomes names the request, the item, and which of the two
+// conditions holds, and is left rather than fixed: noticing is the whole of what
+// the pass did.
+func TestANoticeStatesItselfAsAFindingLeftForSomebody(t *testing.T) {
+	t.Parallel()
+
+	both := ForgeNotice{Number: 460, URL: "https://forge.invalid/pull/460", HeadBranch: "yoyodyne/yoyodyne-ifd-300/bbbbbbbb", BaseBranch: "main", WorkItemID: "yoyodyne-ifd.300", ItemClosed: true, Contained: true}
+	finding := both.Finding()
+	if finding.Disposition != sweep.DispositionLeft {
+		t.Errorf("disposition = %q, want left", finding.Disposition)
+	}
+	for _, want := range []string{"pull request #460", "https://forge.invalid/pull/460", "work item yoyodyne-ifd.300 is closed", "yoyodyne/yoyodyne-ifd-300/bbbbbbbb is already contained in main"} {
+		if !strings.Contains(finding.Issue, want) {
+			t.Errorf("issue = %q, want it to carry %q", finding.Issue, want)
+		}
+	}
+	if err := finding.Validate(); err != nil {
+		t.Errorf("the finding does not meet the sweep contract: %v", err)
+	}
+	unowned := ForgeNotice{Number: 9, HeadBranch: "feature/by-hand", BaseBranch: "main", Contained: true}.Finding()
+	if !strings.Contains(unowned.Issue, "no work item") {
+		t.Errorf("issue = %q, want it to say no item could be named", unowned.Issue)
+	}
+}
