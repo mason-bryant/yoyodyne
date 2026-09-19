@@ -1128,7 +1128,15 @@ var (
 	// budget it ran against is behavior and is left alone, which is why this
 	// matches the pair rather than any duration.
 	baselineElapsedPattern = regexp.MustCompile(`(exit=-?\d+, )\S+( of )`)
+	// What the whole stage spent is the machine for the same reason, and its
+	// bound is behavior for the same reason.
+	baselineStageElapsedPattern = regexp.MustCompile(`(Check stage: )\S+( of the )`)
 )
+
+// baselineElapsedKeys are the recorded numbers that measure how long something
+// ran rather than what it did: a stage's spend as each check ended, and a
+// stage's or a landing check's spend once it ended.
+var baselineElapsedKeys = map[string]struct{}{"stage_elapsed": {}, "elapsed_seconds": {}}
 
 func (f *baselineFixture) normalizer(t *testing.T) *baselineNormalizer {
 	t.Helper()
@@ -1190,6 +1198,10 @@ func (n *baselineNormalizer) walk(subject any) any {
 		sort.Strings(keys)
 		walked := make(map[string]any, len(typed))
 		for _, key := range keys {
+			if _, elapsed := baselineElapsedKeys[key]; elapsed {
+				walked[key] = "<elapsed>"
+				continue
+			}
 			walked[key] = n.walk(typed[key])
 		}
 		return walked
@@ -1214,6 +1226,7 @@ func (n *baselineNormalizer) text(value string) string {
 	value = baselineTimePattern.ReplaceAllString(value, "<time>")
 	value = baselineRevisionPattern.ReplaceAllString(value, "<config-revision>")
 	value = baselineElapsedPattern.ReplaceAllString(value, "${1}<elapsed>${2}")
+	value = baselineStageElapsedPattern.ReplaceAllString(value, "${1}<elapsed>${2}")
 	return baselineCommitPattern.ReplaceAllStringFunc(value, n.commit)
 }
 

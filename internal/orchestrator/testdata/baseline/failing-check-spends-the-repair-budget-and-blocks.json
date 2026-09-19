@@ -14,6 +14,14 @@
         "changes": {
           "status": "?? feature.txt"
         },
+        "check_stage": {
+          "bound_seconds": 1800,
+          "command": "exit 1",
+          "elapsed_seconds": "\u003celapsed\u003e",
+          "finished_at": "\u003ctime\u003e",
+          "narrowed": "the whole module (the repository root is not a Go module)",
+          "started_at": "\u003ctime\u003e"
+        },
         "checks": [
           {
             "command": "exit 1",
@@ -26,6 +34,8 @@
               "Stderr": "",
               "Stdout": ""
             },
+            "stage_elapsed": "\u003celapsed\u003e",
+            "stage_timeout": 1800000000000,
             "timeout": 1800000000000
           }
         ],
@@ -63,6 +73,14 @@
     "check_failure": {
       "command": "exit 1",
       "exit_code": 1
+    },
+    "check_stage": {
+      "bound_seconds": 1800,
+      "command": "exit 1",
+      "elapsed_seconds": "\u003celapsed\u003e",
+      "finished_at": "\u003ctime\u003e",
+      "narrowed": "the whole module (the repository root is not a Go module)",
+      "started_at": "\u003ctime\u003e"
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
@@ -117,7 +135,9 @@
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
         "Changes when the run ended:",
-        "?? feature.txt"
+        "?? feature.txt",
+        "Check stage: \u003celapsed\u003e of the 30m0s execution.check_stage_timeout bound (gate narrowed to: the whole module (the repository root is not a Go module))",
+        "Check: exit 1 (passed=false, exit=1, \u003celapsed\u003e of 30m0s)"
       ]
     ],
     "blocker": [

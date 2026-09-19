@@ -44,8 +44,33 @@ build: cachecheck
 test: cachecheck
 	$(GO) test ./...
 
+# The race suite is the expensive one -- several times the plain suite, and
+# under two concurrent runs the check that took a run's check stage past two
+# hours on 2026-09-19 -- so it takes the packages it covers as a variable. Left
+# alone it is the whole module, which is what a person's `make race` and the
+# landing check over an integrated commit want. A run's per-run gate passes it
+# the packages its change touches, which the harness works out and hands every
+# check as YOYODYNE_CHANGED_GO_PACKAGES:
+#
+#   checks:
+#     - make race RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"
+#   landing_checks:
+#     - make race
+#
+# An explicitly empty RACE_PACKAGES is a change that touches no Go package, and
+# the target says so and passes rather than testing the module root, which
+# holds no Go files and would fail on that alone. `check` below keeps the whole
+# module: it is what a person runs before handing work over, and it does not
+# know what the change touches.
+RACE_PACKAGES ?= ./...
+
 race: cachecheck
-	$(GO) test -race ./...
+	@if [ -z "$(RACE_PACKAGES)" ]; then \
+		echo "race: the change touches no Go package, so there is nothing to run the race detector over"; \
+	else \
+		echo "$(GO) test -race $(RACE_PACKAGES)"; \
+		$(GO) test -race $(RACE_PACKAGES); \
+	fi
 
 vet: cachecheck
 	$(GO) vet ./...

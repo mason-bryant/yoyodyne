@@ -543,7 +543,8 @@ is unmeasured. Most of these are asserted somewhere in
 **Outcomes and fields.**
 
 - The `timed_out` terminal, reached by a check stopped at
-  `execution.check_timeout` or by a context deadline. A check that timed out is
+  `execution.check_timeout`, by a stage stopped at
+  `execution.check_stage_timeout`, or by a context deadline. A check that timed out is
   also the branch of the repair loop that ends a run rather than spending an
   attempt, so both are untraced together. It is left untraced deliberately: what
   such a run records includes how long the check ran, which is the machine rather

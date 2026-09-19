@@ -443,7 +443,8 @@ Into the work item's thread, as they happen:
 - work you approved from a proposal, admitted with the goal it was proposed under
 - a goal recorded on an item already in the queue, and an item's priority changed
 - the run starting, **carrying the reason that work item was selected**
-- the checks passing or failing
+- the checks passing or failing — passing said with what the check stage spent
+  of its bound, so a slow stage is visible before the run the bound stops
 - the reviewer's verdict, approved or sent back for repairs
 - the promotion onto the target branch
 - the pull request, a merge the forge queued, and the merge itself
@@ -452,6 +453,14 @@ Into the work item's thread, as they happen:
   as a `warning`, because nobody chose it and nothing else in the record says it:
   the change is promoted, the thread reads as landed, and what is left is a
   publication waiting on a person
+- what the landing checks made of the commit the run landed, once the run is
+  over: a green landing is an ordinary fact in the thread; a red one is a
+  `warning` naming the check that failed and the item the harness filed for it,
+  because it is the target branch broken by a change every gate passed, which
+  nobody finds out about on their own; and one the checks could not run over
+  is a `warning` too, because a landing nobody verified reads as green to
+  anybody who was not told. See
+  [where the whole suite runs](../configuration.md#where-the-whole-suite-runs)
 - the run waiting — an exhausted usage limit, an overloaded provider, an
   operator hold, an unresolved directive — and the run carrying on afterwards. A
   run waiting out an exhausted usage limit is said as a `warning`, because it

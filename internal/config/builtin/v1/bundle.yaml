@@ -57,6 +57,11 @@ execution:
   # raise it again for concurrency -- N runs at once multiply the wall clock of
   # every suite without multiplying the cores it runs on.
   check_timeout: 30m
+  # The total budget the whole check stage of one run gets: every check together,
+  # from the first starting to the last ending. A stage that reaches it ends as
+  # a stoppage naming the bound and the check it stopped. It is in minutes on
+  # purpose -- a stage that can take hours holds a developer seat for hours.
+  check_stage_timeout: 30m
   # "yoyo work --watch" does not return when the queue empties: it waits this
   # long and reads the queue again. Nothing is cached between readings, so this
   # is also how long work admitted or reordered waits to be picked up, and an

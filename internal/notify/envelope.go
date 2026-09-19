@@ -102,6 +102,17 @@ const (
 	// person with nothing saying so. It said nothing at all until the moment it
 	// happens became part of the record.
 	KindMergeDropped Kind = "merge.dropped"
+	// What the landing checks made of the commit a run landed, said once the run
+	// is over: the suite the per-run gate ran narrowed, run whole over what
+	// actually landed. Green is the ordinary case and stays in the thread. Red is
+	// the target branch being broken by a change every gate passed, which nobody
+	// finds out about on their own — every run after it is cut from that commit
+	// — so it reaches the channel, and the item it filed is named in it. An
+	// unverified landing is the checks not having run at all, which is neither
+	// and is said as itself rather than folded into either.
+	KindLandingGreen      Kind = "landing.green"
+	KindLandingRed        Kind = "landing.red"
+	KindLandingUnverified Kind = "landing.unverified"
 	// A run that stopped and one that carried on. Both are said because a queue
 	// that goes quiet at night is indistinguishable from a broken one until
 	// something says which it is.
@@ -339,6 +350,9 @@ func Kinds() []Kind {
 		KindMergeQueued,
 		KindMergeCompleted,
 		KindMergeDropped,
+		KindLandingGreen,
+		KindLandingRed,
+		KindLandingUnverified,
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
@@ -388,6 +402,7 @@ func (k Kind) Valid() bool {
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
+		KindLandingGreen, KindLandingRed, KindLandingUnverified,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
@@ -668,6 +683,16 @@ type Detail struct {
 	// them.
 	Command  string `json:"command,omitempty"`
 	ExitCode int    `json:"exit_code,omitempty"`
+	// Checks is where the check stage stood when it passed, read by
+	// KindChecksPassed: what it spent of its bound, in the record's own words —
+	// "14m of the 30m bound". It is carried already worded for the reason the
+	// four lines are, and it is said at all because the bound is the number a
+	// reader has to have to know whether a stage is slow.
+	Checks string `json:"checks,omitempty"`
+	// Landing is what the landing checks made of the commit a run landed, read
+	// by the three landing kinds and carried already worded by the record: the
+	// check that failed, the commit, and the item a red landing filed.
+	Landing string `json:"landing,omitempty"`
 	// Findings is how many the reviewer raised, read by KindReviewRepairs.
 	Findings int `json:"findings,omitempty"`
 	// Requested is what each of those findings asked for, one entry per finding

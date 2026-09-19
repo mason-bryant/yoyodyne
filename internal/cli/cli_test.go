@@ -830,6 +830,44 @@ func TestPipelineGivesChecksTheConfiguredBudget(t *testing.T) {
 	if runner.Timeout <= 0 {
 		t.Fatalf("wired check timeout = %s, which bounds nothing", runner.Timeout)
 	}
+	// The stage bound reaches the runner the same way, and for the same reason:
+	// a bound on the whole list that stayed on the configuration would leave
+	// every stage bounded at the sum of its checks.
+	if want := cfg.Execution.CheckStageTimeout.Duration(); runner.StageTimeout != want || want <= 0 {
+		t.Fatalf("wired check stage timeout = %s, want the configured %s", runner.StageTimeout, want)
+	}
+}
+
+// The landing checks need a checkout of the integrated commit and a way to
+// file the item a red landing is, and both are the harness's own access rather
+// than anything an agent is handed: the pipeline is wired with the worktree
+// manager and the tracker for them.
+func TestPipelineIsWiredToLandAndToFileARedLanding(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load(filepath.Join("..", "..", config.DirectoryName, config.FileName))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	store, err := runstate.NewStore(t.TempDir(), cfg.Product.ID)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: filepath.Join("..", ".."),
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	pipeline := pipelineFrom(components{config: cfg, store: store, worktrees: worktrees})
+	if pipeline.Landings == nil {
+		t.Fatal("the pipeline has nothing wired to cut a landing checkout")
+	}
+	if pipeline.Filer == nil {
+		t.Fatal("the pipeline has nothing wired to file a red landing")
+	}
 }
 
 func TestReportRunResultIsTruthfulAboutRemovedArtifacts(t *testing.T) {

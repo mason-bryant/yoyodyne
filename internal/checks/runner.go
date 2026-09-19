@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +17,13 @@ import (
 // default so the two never describe different behavior.
 const defaultTimeout = 30 * time.Minute
 
+// DefaultStageTimeout is what a runner built without a stage bound gives the
+// whole list, for the same reason and matching execution.check_stage_timeout's
+// default the same way. It is exported so the record a pipeline writes of a
+// stage names the bound the runner actually used where the configuration named
+// none.
+const DefaultStageTimeout = 30 * time.Minute
+
 type Result struct {
 	Command string                  `json:"command"`
 	Process execution.ProcessResult `json:"process"`
@@ -26,11 +34,42 @@ type Result struct {
 	// budget kills work that was passing, and the only warning is the two
 	// numbers side by side before it happens.
 	Timeout time.Duration `json:"timeout"`
+	// StageTimeout is the bound on the whole stage this check ran in, and
+	// StageElapsed is what the stage had spent when this check ended. They are
+	// recorded on every check for the reason the per-check pair is: a stage
+	// walking toward its bound is visible check by check before the check that
+	// reaches it.
+	StageTimeout time.Duration `json:"stage_timeout"`
+	StageElapsed time.Duration `json:"stage_elapsed"`
+	// StoppedByStage reports a check stopped because the stage reached its bound
+	// rather than because the check reached its own. The two are the same
+	// process status and different facts: raising the per-check budget does
+	// nothing for a check the stage stopped, and a check the stage never let
+	// start has no elapsed time to read a budget from.
+	StoppedByStage bool `json:"stopped_by_stage,omitempty"`
 }
 
 // Elapsed is how long the check actually ran.
 func (r Result) Elapsed() time.Duration {
 	return r.Process.FinishedAt.Sub(r.Process.StartedAt)
+}
+
+// Request is one run's check stage: where it runs, what it runs, and what
+// every check is told.
+type Request struct {
+	RunID        string
+	Directory    string
+	Commands     []string
+	LastSequence uint64
+	// Env is what every check is given beyond this process's own environment,
+	// in KEY=VALUE form. It is how the harness tells a check what it knows about
+	// the change — the Go packages it touches — without the check having to ask.
+	Env []string
+	// Started is told each check as it begins, with what the stage has spent so
+	// far. It is optional, and it is what lets a run's durable record say which
+	// check the stage is on while it is still running rather than only once it
+	// has ended.
+	Started func(command string, stageElapsed time.Duration)
 }
 
 type Runner struct {
@@ -40,16 +79,22 @@ type Runner struct {
 	// Timeout is the total budget each check gets, the whole time it may run
 	// rather than the time it may stay quiet: a suite that keeps printing is
 	// still spending it. Zero falls back to defaultTimeout.
-	Timeout      time.Duration
+	Timeout time.Duration
+	// StageTimeout is the total budget the whole list gets, from the first
+	// check starting to the last one ending. A check is given the smaller of its
+	// own budget and what the stage has left, and a check the stage has nothing
+	// left for is recorded as stopped without being started. Zero falls back to
+	// defaultStageTimeout.
+	StageTimeout time.Duration
 	RedactValues []string
 }
 
-func (r Runner) Run(ctx context.Context, runID, directory string, commands []string, lastSequence uint64, sink func(execution.Event) error) ([]Result, uint64, error) {
+func (r Runner) Run(ctx context.Context, request Request, sink func(execution.Event) error) ([]Result, uint64, error) {
 	if r.Process == nil {
-		return nil, lastSequence, errors.New("check process runner is required")
+		return nil, request.LastSequence, errors.New("check process runner is required")
 	}
-	if strings.TrimSpace(runID) == "" || strings.TrimSpace(directory) == "" {
-		return nil, lastSequence, errors.New("run id and check directory are required")
+	if strings.TrimSpace(request.RunID) == "" || strings.TrimSpace(request.Directory) == "" {
+		return nil, request.LastSequence, errors.New("run id and check directory are required")
 	}
 	clock := r.Clock
 	if clock == nil {
@@ -63,42 +108,96 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
-	sequence := execution.NewSequence(lastSequence)
-	lastAccepted := lastSequence
-	results := make([]Result, 0, len(commands))
+	stageTimeout := r.StageTimeout
+	if stageTimeout == 0 {
+		stageTimeout = DefaultStageTimeout
+	}
+	// The checks are the project's own commands, so a toolchain that cannot
+	// write its build cache fails them at setup with nothing about the change to
+	// show for it. The environment is this process's own with the cache pointed
+	// inside the repository being checked -- the same redirect the run's own
+	// probe was given, so the two share what has already been compiled -- and
+	// what the request adds after it, so a check reads what the harness knows
+	// about the change from its environment.
+	environment := execution.WithGoBuildCache(nil, request.Directory)
+	if environment == nil {
+		environment = os.Environ()
+	}
+	environment = append(environment, request.Env...)
+	sequence := execution.NewSequence(request.LastSequence)
+	lastAccepted := request.LastSequence
+	results := make([]Result, 0, len(request.Commands))
 	redactor := execution.NewRedactor(r.RedactValues...)
-	for _, command := range commands {
+	// The stage starts as its first check does, so the first check is given the
+	// smaller of the two budgets whole rather than that less the instant it took
+	// to get here.
+	var stageStarted time.Time
+	for _, command := range request.Commands {
 		if strings.TrimSpace(command) == "" {
 			return results, lastAccepted, errors.New("check command cannot be empty")
 		}
 		safeCommand := redactor.Redact(command)
-		if err := emit(runID, sequence, clock, sink, execution.EventCommandStarted, map[string]any{"command": safeCommand, "kind": "check"}); err != nil {
+		now := clock.Now()
+		if stageStarted.IsZero() {
+			stageStarted = now
+		}
+		stageElapsed := now.Sub(stageStarted)
+		if request.Started != nil {
+			request.Started(safeCommand, stageElapsed)
+		}
+		if err := emit(request.RunID, sequence, clock, sink, execution.EventCommandStarted, map[string]any{"command": safeCommand, "kind": "check"}); err != nil {
 			return results, lastAccepted, err
 		}
 		lastAccepted = sequence.Last()
+		// What the stage has left is what this check may have, and a check the
+		// stage has nothing left for is not started at all: a check given a
+		// budget of nothing would be killed as it began and read as a check that
+		// ran, which is the one thing a stopped stage must not record.
+		remaining := stageTimeout - stageElapsed
+		if remaining <= 0 {
+			now := clock.Now()
+			result := Result{
+				Command: safeCommand,
+				Process: execution.ProcessResult{
+					Status:     execution.ProcessTimedOut,
+					ExitCode:   -1,
+					StartedAt:  now,
+					FinishedAt: now,
+				},
+				Timeout:        timeout,
+				StageTimeout:   stageTimeout,
+				StageElapsed:   stageElapsed,
+				StoppedByStage: true,
+			}
+			results = append(results, result)
+			if err := emitCompleted(request.RunID, sequence, clock, sink, result); err != nil {
+				return results, lastAccepted, err
+			}
+			lastAccepted = sequence.Last()
+			break
+		}
+		budget := timeout
+		boundByStage := remaining < timeout
+		if boundByStage {
+			budget = remaining
+		}
 		var observerErrors []error
 		processResult, err := r.Process.Run(ctx, execution.Command{
-			Name: shell,
-			Args: []string{"-c", command},
-			Dir:  directory,
-			// The checks are the project's own commands, so a toolchain that
-			// cannot write its build cache fails them at setup with nothing
-			// about the change to show for it. The environment is this
-			// process's own with the cache pointed inside the repository being
-			// checked -- the same redirect the run's own probe was given, so
-			// the two share what has already been compiled.
-			Env:     execution.WithGoBuildCache(nil, directory),
-			Timeout: timeout,
+			Name:    shell,
+			Args:    []string{"-c", command},
+			Dir:     request.Directory,
+			Env:     environment,
+			Timeout: budget,
 			// Every line this check writes is emitted below, so the run's own
 			// event log holds the whole of a suite too verbose to retain, and
 			// the marker in the cut copy is what says so.
-			OutputRecord: execution.EventLogOf(runID),
+			OutputRecord: execution.EventLogOf(request.RunID),
 			Redactor:     redactor,
 		}, func(output execution.Output) {
 			if len(observerErrors) > 0 {
 				return
 			}
-			if observerErr := emit(runID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
+			if observerErr := emit(request.RunID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
 				"kind":    "check",
 				"command": safeCommand,
 				"stream":  output.Stream,
@@ -121,7 +220,7 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 		// said: the line saying so is in the stream a follower is watching, and
 		// it names the log that has the rest.
 		if processResult.OutputTruncation != "" {
-			if err := emit(runID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
+			if err := emit(request.RunID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
 				"kind":    "check",
 				"command": safeCommand,
 				"stream":  execution.StreamStdout,
@@ -132,20 +231,19 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			lastAccepted = sequence.Last()
 		}
 		passed := processResult.Status == execution.ProcessSucceeded
-		result := Result{Command: safeCommand, Process: processResult, Passed: passed, Timeout: timeout}
+		result := Result{
+			Command:      safeCommand,
+			Process:      processResult,
+			Passed:       passed,
+			Timeout:      timeout,
+			StageTimeout: stageTimeout,
+			StageElapsed: clock.Now().Sub(stageStarted),
+			// A check killed on time under a budget the stage cut short was
+			// stopped by the stage, whatever its own budget would have allowed.
+			StoppedByStage: boundByStage && processResult.Status == execution.ProcessTimedOut,
+		}
 		results = append(results, result)
-		// Every check reports what it spent against what it was allowed, not
-		// only the one that ran out: a suite walking toward its ceiling is
-		// visible in the event stream long before it reaches it.
-		if err := emit(runID, sequence, clock, sink, execution.EventCommandCompleted, map[string]any{
-			"command":   safeCommand,
-			"kind":      "check",
-			"passed":    passed,
-			"status":    processResult.Status,
-			"exit_code": processResult.ExitCode,
-			"elapsed":   result.Elapsed().String(),
-			"timeout":   timeout.String(),
-		}); err != nil {
+		if err := emitCompleted(request.RunID, sequence, clock, sink, result); err != nil {
 			return results, lastAccepted, err
 		}
 		lastAccepted = sequence.Last()
@@ -154,6 +252,25 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 		}
 	}
 	return results, lastAccepted, nil
+}
+
+// emitCompleted records what a check spent against what it was allowed, not
+// only for the one that ran out: a suite walking toward its ceiling is visible
+// in the event stream long before it reaches it, and so is a stage walking
+// toward its own.
+func emitCompleted(runID string, sequence *execution.Sequence, clock execution.Clock, sink func(execution.Event) error, result Result) error {
+	return emit(runID, sequence, clock, sink, execution.EventCommandCompleted, map[string]any{
+		"command":          result.Command,
+		"kind":             "check",
+		"passed":           result.Passed,
+		"status":           result.Process.Status,
+		"exit_code":        result.Process.ExitCode,
+		"elapsed":          result.Elapsed().String(),
+		"timeout":          result.Timeout.String(),
+		"stage_elapsed":    result.StageElapsed.String(),
+		"stage_timeout":    result.StageTimeout.String(),
+		"stopped_by_stage": result.StoppedByStage,
+	})
 }
 
 func emit(runID string, sequence *execution.Sequence, clock execution.Clock, sink func(execution.Event) error, eventType execution.EventType, payload any) error {

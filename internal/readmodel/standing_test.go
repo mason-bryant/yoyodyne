@@ -406,6 +406,53 @@ func TestARunResumedAtItsPromotionSaysSoOnTheRunningLine(t *testing.T) {
 	}
 }
 
+// A run in its checks says where the stage stands in place of the bare phase:
+// what it has spent of the bound, and which check it is on. That is the line
+// the 2026-09-19 stage would have been visible on — two hours into a stage
+// nothing said the bound of — and it is derived from the record rather than
+// from the run's own elapsed time, because the stage starts long after the run
+// does.
+func TestARunInItsChecksSaysWhereTheStageStandsOnTheRunningLine(t *testing.T) {
+	t.Parallel()
+	sources := quietSources()
+	sources.Runs = fakeRuns{
+		incomplete: []runstate.State{{
+			RunID:      "run-a",
+			WorkItemID: "yoyodyne-ifd.389",
+			Status:     runstate.StatusRunning,
+			Phase:      runstate.PhaseChecking,
+			StartedAt:  moment.Add(-time.Hour),
+			CheckStage: &runstate.CheckStage{
+				StartedAt:    moment.Add(-14 * time.Minute),
+				BoundSeconds: int64((30 * time.Minute) / time.Second),
+				Command:      "make race",
+			},
+		}},
+		prices: map[string]runstate.ItemPrice{
+			"yoyodyne-ifd.389": {Runs: []runstate.RunPrice{{RunID: "run-a", CostUSD: 4.00}}},
+		},
+	}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.Running) != 1 || standing.Running[0].Checks != "checks: 14m of 30m, on make race" {
+		t.Fatalf("running = %+v, want the check stage said as it stands", standing.Running)
+	}
+	rendered := standing.Render()
+	want := "  yoyodyne-ifd.389 — checks: 14m of 30m, on make race, 1h00m elapsed, $4.00 so far\n"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("rendered:\n%s\nmissing: %q", rendered, want)
+	}
+
+	// A stage that has ended says nothing here: the run has moved on and the
+	// phase is what it is doing now.
+	finished := moment
+	sources.Runs.(fakeRuns).incomplete[0].CheckStage.FinishedAt = &finished
+	sources.Runs.(fakeRuns).incomplete[0].Phase = runstate.PhaseReviewing
+	standing = ReadStanding(context.Background(), sources)
+	if standing.Running[0].Checks != "" {
+		t.Fatalf("running = %+v, want nothing said of a stage that has ended", standing.Running)
+	}
+}
+
 // A conversation turn in flight is what no surface counted before this. It is
 // the lease that decides, so a recorded conversation nobody is holding is not
 // working.

@@ -3422,6 +3422,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			UsageLimitUnknownResetPause:            config.Duration(30 * time.Minute),
 			ServerOverloadPause:                    config.Duration(90 * time.Second),
 			CheckTimeout:                           config.Duration(30 * time.Minute),
+			CheckStageTimeout:                      config.Duration(30 * time.Minute),
 			WorkPoll:                               config.Duration(60 * time.Second),
 			BlockedRunsBeforeIntakeHold:            3,
 			// What a loaded configuration fills in, and what every run this suite

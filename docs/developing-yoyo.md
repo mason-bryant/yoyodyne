@@ -22,6 +22,19 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+`make race` takes the packages it covers as `RACE_PACKAGES`, and is the whole
+module when nothing names them, which is what `make check` and a person's own
+run want. A run's gate is meant to name them: the harness hands every check the
+Go packages the change touches as `YOYODYNE_CHANGED_GO_PACKAGES`, and
+`make race RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"` in the check list
+runs the race detector over those alone, with the whole suite run once per
+landing from `landing_checks` instead. An explicitly empty `RACE_PACKAGES` is a
+change touching no Go package, and the target says so and passes. The check
+stage as a whole is bounded by `execution.check_stage_timeout`;
+[what a whole check stage may cost](configuration.md#what-a-whole-check-stage-may-cost)
+is the arithmetic, and [where the whole suite runs](configuration.md#where-the-whole-suite-runs)
+is the arrangement.
+
 `make adoption` is the fifth thing and deliberately not one of them. It runs
 [`scripts/walk-adoption.sh`](../scripts/walk-adoption.sh), which executes the
 README's "Getting started" against a throwaway Python project — its own scratch
