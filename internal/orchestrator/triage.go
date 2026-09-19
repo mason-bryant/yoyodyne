@@ -989,18 +989,34 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		// this a stoppage. Every other entry has a blocker that says the same thing
 		// in the words the work item carries, and printing the failure beside it
 		// would be the same fact twice on every ordinary stoppage.
-		Failure:       docketFailure(state),
-		Summary:       docketSummary(state),
-		Findings:      docketFindings(state.ReviewFindingDetails),
-		Check:         docketCheck(state.CheckFailure),
-		Artifacts:     docketArtifacts(state),
-		Environmental: docketEnvironmental(state.Environmental),
-		Counters:      counters,
+		Failure:         docketFailure(state),
+		Summary:         docketSummary(state),
+		Findings:        docketFindings(state.ReviewFindingDetails),
+		Check:           docketCheck(state.CheckFailure),
+		Artifacts:       docketArtifacts(state),
+		Environmental:   docketEnvironmental(state.Environmental),
+		IntegrationStop: docketIntegrationStop(state.IntegrationStop),
+		Counters:        counters,
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
 	}
 	return entry, nil
+}
+
+// docketIntegrationStop carries the run's record of the environment stopping
+// its approved change onto the entry, in the docket's own shape. It is the whole
+// of what tells the development manager this stoppage asks her for nothing.
+func docketIntegrationStop(stopped *runstate.IntegrationStop) *triage.IntegrationStop {
+	if stopped == nil {
+		return nil
+	}
+	return &triage.IntegrationStop{
+		Cause:  string(stopped.Cause),
+		Detail: singleLine(stopped.Detail, triage.MaxMessageBytes),
+		Phase:  string(stopped.Phase),
+		Title:  stopped.Cause.Title(),
+	}
 }
 
 // unstartedRunEntry is one dispatch that died before it took its item, as the

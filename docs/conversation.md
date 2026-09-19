@@ -1291,7 +1291,9 @@ action that does. Two are the opposite answers to a run that stopped: `yoyo
 triage rerun` starts the item over, and `yoyo triage repair` continues the run
 that stopped on the change it already has. The third, `yoyo triage rearm`, is
 about a publication rather than a run: it repeats the merge request the forge
-dropped.
+dropped. A fourth action, `yoyo triage resume`, carries out no decision at all,
+and [the paragraph on it below](#resuming-an-approved-change-the-environment-stopped)
+says why there is none to carry out.
 
 `yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
 docket entry names — the case where the ground moved under a change that was
@@ -1469,6 +1471,57 @@ every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that
 owns it, the decision is durable on the item, and it reaches you only when the
 development manager judged it had to.
+
+### Resuming an approved change the environment stopped
+
+`yoyo triage resume <run-id>` is the one action here that carries out no
+decision, because the stoppage it answers asks for none. A change the reviewer
+approved can still stop short of the target branch for reasons that are not
+about the change: the primary checkout carrying an edit you had not committed,
+a tracker read that timed out under load, a forge or a network that went away.
+Each of those ends the run, and each used to reach the development manager as
+a stoppage to decide about — where every decision she could record spent
+something for it. A repair was refused outright, because the run recorded no
+findings, failing check, or refused paths to hand back; a re-run spent the
+item's re-run budget and bought a fresh run and a fresh review of a change
+nobody disputed. Five overrides were signed on yoyodyne-ifd.309 that way, four
+of them for the environment.
+
+So the harness records such a stop for what it is. As the run ends it reads
+the error that ended it — the dirty-checkout sentinel, or the same closed
+reading of a transport failure the [recovery
+rule](operations.md#recovering-interrupted-runs) waits out elsewhere — and
+where the change was approved and nothing was promoted, it writes an
+*integration stop* on the run: the cause and the step. The docket entry carries
+it too, names the harness as the next mover, and prints the command. The
+resume then makes the run live again at exactly that step, with the approval
+it already has, and the pipeline promotes — replay onto where the target now
+stands, push, merge request — without invoking anybody: no developer attempt,
+no review round, no repair grant, no re-run, and every counter on the item's
+triage record where the review left it. The resumption is recorded on the run
+as a continuation rather than an attempt, `/status` says **approved, resuming
+integration** of the run while it promotes, and the item's notes carry the
+harness's own account of the stop it superseded, plus whatever `--reason` you
+gave beside it, attributed to the command rather than to any role.
+
+Six things refuse it, all asked before anything is written, so a refused
+resume leaves the run exactly as it stopped and asking again once the cause
+has cleared resumes the same run. The run's own record has to say it is one
+of these — an approving verdict standing, no promotion, an integration stop
+recorded — and a run whose record says anything else is refused naming what
+it is and which verb it needs. The primary checkout has to be one a promotion
+can be made from again, because it is what stopped the run once already. The
+preserved worktree has to be as the harness left it and still hold the
+approved change, on the same two conditions a repair asks and to the same
+person. The item must not be closed or waiting on other work. And your hold on
+intake applies, for the reason it applies to a repair: the harness is choosing
+to carry work on. A full harness waits rather than refusing.
+
+One thing leaves the resumed path, and it leaves it exactly as it always did:
+a replay onto a target that moved re-earns the checks and the review like any
+replay, and a replay that conflicts stops the run for a person with both sides
+preserved. A conflict is never recorded as an integration stop, because the
+environment does not answer for it.
 
 Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 `/reports`, `/refresh` — means the same thing in every conversation, because

@@ -3295,7 +3295,12 @@ decisions have an action for the second. Two of them are the opposite answers to
 a run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
 repair` continues the run that stopped on the change it already has. The third,
 `yoyo triage rearm`, is about a publication rather than a run: it repeats the
-merge request the forge dropped.
+merge request the forge dropped. A fourth action carries out no decision:
+`yoyo triage resume` promotes an approved change the environment stopped short
+of the target branch, spending nothing and asking nobody, because nothing about
+such a stop is a verdict —
+[the conversation guide](conversation.md#resuming-an-approved-change-the-environment-stopped)
+says what it records and what refuses it.
 
 `yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
 docket entry names. It takes the run and nothing else: the decision it carries

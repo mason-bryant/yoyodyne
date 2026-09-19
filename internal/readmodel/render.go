@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // maxListed bounds how many entries one line names before it counts the rest.
@@ -249,7 +251,15 @@ func unreadable(label, problem string) string {
 // phaseOf is where a run has got to, or the stated absence. A record written
 // before the run reached a phase has none, and a blank in the middle of a line
 // reads as a bug in the printing.
+//
+// A run promoting again after the environment stopped it says so in the read
+// model's own words rather than as the bare phase: what an operator who signed
+// overrides for that stop is reading the line for is that the approval stood
+// and nothing was spent.
 func phaseOf(run RunningRun) string {
+	if run.ResumingIntegration {
+		return runstate.ResumingIntegrationSays
+	}
 	if strings.TrimSpace(string(run.Phase)) == "" {
 		return "no phase recorded yet"
 	}

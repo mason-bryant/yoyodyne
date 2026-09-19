@@ -73,10 +73,17 @@ func TestEveryRegisteredActionWrapsAFunctionThisPackageHas(t *testing.T) {
 // of its own, everything inside it was invisible to this test, which is how
 // recording the outcome, closing the item and pricing it came to be delivery
 // work no definition could express.
+//
+// `promoteApproved` is one for the same reason: it orders the independence
+// check, the last holds, `integrate` and then `finish`, and turns a promotion
+// that lost its race into the replay the gate is re-earned from. It is reached
+// from the loop and from the integration resume, which is why it is a sequencer
+// of its own rather than the tail of `verifyReviewAndFinish`.
 var sequencers = []string{
 	"(Pipeline).Run",
 	"(Pipeline).resumeRun",
 	"(*activeRun).verifyReviewAndFinish",
+	"(*activeRun).promoteApproved",
 	"(*activeRun).repairLoop",
 	"(*activeRun).finish",
 }
@@ -876,6 +883,7 @@ var notAStep = map[string]string{
 	"recordCheckFailure":           "records the failing check as the run's outstanding repair input",
 	"recordPathRefusal":            "records the refused paths as the run's outstanding repair input",
 	"recordDevelopment":            "records what a developer invocation produced and cost",
+	"carryReviewEvidence":          "puts the verdict the record holds onto the outcome a run resumed at its promotion reports",
 	"deliveredInvariants":          "selects the invariants a developer is given",
 	"repairBudget":                 "reads how many repair attempts this run may still make",
 	"recordPrice":                  "prices the item against what this run spent, inside run.complete",

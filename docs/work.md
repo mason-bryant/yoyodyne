@@ -210,6 +210,43 @@ would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the
 blocker on the item says so.
 
+**An environmental stop after approval costs nothing.** Not everything that
+stops an approved change short of the target branch is a verdict on it, and
+the ones that are not spend nothing. A promotion refused because the primary
+checkout carried somebody's uncommitted edit, a tracker read that timed out
+under load on the way to it, a forge or a network that went away — each ends
+the run, and each is recorded on the run as an *integration stop*: which
+environmental cause it was, read from the error's own sentinel rather than
+from its wording, and which step the run was in. Nothing about the change is
+in question, so nothing about it is anybody's to decide. `yoyo triage resume
+<run-id>` resumes the run at the promotion it stopped short of — replay onto
+where the target now stands, push, merge request — with its approval standing,
+and it charges the item nothing: no review round, no repair grant, no re-run.
+The resumption is recorded on the run as a continuation rather than an
+attempt, so the repair count and the review evidence are exactly what the
+reviewer left, and every counter on the item's triage record stands where the
+review left it. While the promotion is going, `yoyo status` says
+**approved, resuming integration** of the run rather than the bare phase. A
+run can be resumed as many times as the environment stops it; the one thing
+that leaves the path is a replay that conflicts, which re-enters the conflict
+path above — the run stops, both sides survive, and a person decides — and is
+never recorded as a stop the harness can resume past. Before this existed
+every verb that could pick such a run up spent something for it, and
+yoyodyne-ifd.309's approved change cost four operator overrides to reach the
+target, none of them for a verdict.
+
+The resume asks everything that can refuse before it writes anything: the
+run's own record has to say it is one of these, the primary checkout has to
+be one a promotion can be made from again, the preserved worktree has to be
+as the harness left it and still hold the approved change, the item must not
+be closed or waiting on other work, and the harness has to have a free slot —
+a full one waits rather than refusing, and so does a held intake. A refused
+resume leaves the run exactly as it stopped, and asking again once the cause
+has cleared resumes the same run. The docket entry for such a stop says all of
+this itself: it names the harness as the next mover and the verb that resumes
+it, so the development manager is not asked to choose among decisions that
+each spend something for a stop that was never hers to decide.
+
 ## What a landing claims
 
 Whether a change landed and whether it discharged the item it was made for are

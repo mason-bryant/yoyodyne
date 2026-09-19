@@ -234,9 +234,15 @@ type RunningRun struct {
 	RunID      string         `json:"run_id"`
 	WorkItemID string         `json:"work_item_id"`
 	Phase      runstate.Phase `json:"phase,omitempty"`
-	StartedAt  time.Time      `json:"started_at"`
-	Elapsed    time.Duration  `json:"elapsed"`
-	CostUSD    float64        `json:"cost_usd"`
+	// ResumingIntegration reports a run at its promotion again after the
+	// environment stopped it there, with its approval standing. The line says
+	// runstate.ResumingIntegrationSays for it in place of the bare phase, because
+	// a run integrating after such a stop and one integrating for the first time
+	// are the same phase and different facts.
+	ResumingIntegration bool          `json:"resuming_integration,omitempty"`
+	StartedAt           time.Time     `json:"started_at"`
+	Elapsed             time.Duration `json:"elapsed"`
+	CostUSD             float64       `json:"cost_usd"`
 	// UnknownCost says why there is no figure rather than reporting one of zero: a
 	// run whose evidence cannot be read has not cost nothing.
 	UnknownCost string `json:"unknown_cost,omitempty"`
@@ -510,11 +516,12 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 			continue
 		}
 		run := RunningRun{
-			RunID:      state.RunID,
-			WorkItemID: state.WorkItemID,
-			Phase:      state.Phase,
-			StartedAt:  state.StartedAt,
-			Elapsed:    now.Sub(state.StartedAt),
+			RunID:               state.RunID,
+			WorkItemID:          state.WorkItemID,
+			Phase:               state.Phase,
+			ResumingIntegration: state.ResumingIntegration(),
+			StartedAt:           state.StartedAt,
+			Elapsed:             now.Sub(state.StartedAt),
 			// A run nothing has priced yet is stated as unpriced rather than as free.
 			// It is overwritten below by whatever the ledger actually says.
 			UnknownCost: "no priced invocation is recorded for it yet",

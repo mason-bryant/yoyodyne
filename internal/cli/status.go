@@ -745,6 +745,15 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		fmt.Fprintf(writer, "  %s: %s\n", reason.label, singleLine(reason.text))
 		printed = true
 	}
+	// An approved change the environment stopped is said beside its reason,
+	// because the reason alone reads as a failed piece of work and sends an
+	// operator to the verbs that each spend something for it. This names the one
+	// that spends nothing.
+	if run.IntegrationStop != nil {
+		fmt.Fprintf(writer, "  integration stop: %s; `yoyo triage resume %s` resumes it at no cost once the cause has cleared\n",
+			singleLine(run.IntegrationStop.Describe()), run.RunID)
+		printed = true
+	}
 	if run.FailingCheck != nil {
 		fmt.Fprintf(writer, "  failing check: %s exited %d\n", singleLine(run.FailingCheck.Command), run.FailingCheck.ExitCode)
 		printed = true
@@ -926,7 +935,13 @@ func describeRunSelection(workItemID string, failedOnly bool) string {
 // outstanding marker keeps the same rule and for the same reason it always had.
 func renderRunState(run runstate.RunSummary) string {
 	state := string(run.Outcome)
-	if run.Phase != "" {
+	switch {
+	case run.ResumingIntegration:
+		// The read model's own phrase for a promotion going again after the
+		// environment stopped it, in place of the bare phase: the same words the
+		// Running line says about the same run.
+		state += ", " + runstate.ResumingIntegrationSays
+	case run.Phase != "":
 		state += ", " + string(run.Phase)
 	}
 	if run.Integrated {
