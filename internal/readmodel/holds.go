@@ -25,6 +25,22 @@ package readmodel
 // this reads stop saying the item is held. An item is released by the facts
 // changing rather than by anything written back over them.
 //
+// # A preserved change is looked for, not read off a flag
+//
+// Whether a stopped run's change is still there is answered by the repository
+// rather than by the run's record. The record's removal flags are what a sweep
+// or a cleanup remembered to write, and a flag is exactly the kind of field this
+// derivation exists to stop trusting: on 2026-09-19 the product manager's
+// stale-state repair cleared yoyodyne-ifd.372's blocked status as "no longer
+// held behind a preserved run" on the strength of the record, while the item's
+// own notes still said the run's branch and worktree were checked and there. So
+// a stopped run is held where its branch or its worktree exists, checked as the
+// hold is read; where the check could not be made it is held as if they did,
+// with the reason saying so; and a stopped run about which a triage decision
+// stands that the harness has still to carry out — a repair continuation first
+// among them — is held whatever became of its artifacts, because what that
+// decision continues is the run, and a fresh pull would start over beside it.
+//
 // # Two holds, two movers
 //
 // A decision being recorded is not the decision being carried out, and until
@@ -43,10 +59,12 @@ package readmodel
 // derivation exists to prevent.
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -74,6 +92,14 @@ type Decisions interface {
 	Counters(workItemID string) (runstate.TriageCounters, error)
 }
 
+// Remains is what the repository actually holds of a stopped run's change: its
+// branch, and its checkout. It is asked rather than the run's record read,
+// because the record's removal flags are what something remembered to write and
+// the repository is what is there. It is satisfied by *gitworktree.Manager.
+type Remains interface {
+	Survives(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Survival, error)
+}
+
 // HeldForAPerson is the admitted work somebody has to release before anything
 // pulls it, with what each item is waiting for and whose move that is.
 //
@@ -89,7 +115,12 @@ type Decisions interface {
 // is the conservative direction — it points at the role that would have to
 // decide, which is where the answer went before the two were separated — and it
 // keeps one unreadable file from making a whole queue unpullable.
-func HeldForAPerson(stoppages Stoppages, decisions Decisions) (backlog.Holds, error) {
+//
+// remains may be nil too, and a run's artifacts may fail to be looked for. A
+// reading wired without it falls back to what each run's record says survived,
+// and says in the reason that nothing looked; a look that failed holds the run
+// as if its change were there, for the reason an unread hold holds everything.
+func HeldForAPerson(ctx context.Context, stoppages Stoppages, decisions Decisions, remains Remains) (backlog.Holds, error) {
 	runs, err := stoppages.Recorded()
 	if err != nil {
 		return backlog.Holds{}, fmt.Errorf("read the recorded runs: %w", err)
@@ -98,7 +129,58 @@ func HeldForAPerson(stoppages Stoppages, decisions Decisions) (backlog.Holds, er
 	if err != nil {
 		return backlog.Holds{}, fmt.Errorf("read the escalated stoppages: %w", err)
 	}
-	return heldForAPerson(runs, escalated, standingDecisions(decisions)), nil
+	return heldForAPerson(runs, escalated, standingDecisions(decisions), lookingFor(ctx, remains)), nil
+}
+
+// survival is what one stopped run's change comes to, looked for. Where the
+// repository was asked, Found is its answer. Where it was not, Unchecked says
+// why: a reading with nothing wired to ask answers from the run's own record,
+// and a look that failed answers nothing at all, which Unknown says — and an
+// answer of nothing is held as if the change were there.
+type survival struct {
+	Found     gitworktree.Survival
+	Unchecked string
+	Unknown   bool
+}
+
+// holds reports a run whose change this reading has to treat as still there.
+func (s survival) holds() bool { return s.Unknown || s.Found.Any() }
+
+// looking is the check itself, over one run.
+type looking func(run runstate.State) survival
+
+// lookingFor is the check as one reading makes it. A run that recorded neither a
+// branch nor a worktree has nothing to look for, and is answered without asking;
+// everything else is asked of the repository.
+func lookingFor(ctx context.Context, remains Remains) looking {
+	return func(run runstate.State) survival {
+		if run.Branch == "" && run.WorktreePath == "" {
+			return survival{}
+		}
+		if remains == nil {
+			recorded := run.Artifacts()
+			return survival{
+				Found: gitworktree.Survival{
+					BranchExists:    recorded.Branch != "" && !recorded.BranchRemoved,
+					WorktreePresent: recorded.WorktreePath != "" && !recorded.WorktreeRemoved,
+				},
+				Unchecked: "as its record says, nothing having been wired to look",
+			}
+		}
+		found, err := remains.Survives(ctx, gitworktree.Worktree{
+			RunID:         run.RunID,
+			WorkItemID:    run.WorkItemID,
+			Path:          run.WorktreePath,
+			Branch:        run.Branch,
+			BaseCommit:    run.BaseCommit,
+			TargetBranch:  run.TargetBranch,
+			HarnessCommit: run.HarnessCommit,
+		})
+		if err != nil {
+			return survival{Unchecked: fmt.Sprintf("whether its branch or its worktree is still there could not be checked (%v)", err), Unknown: true}
+		}
+		return survival{Found: found}
+	}
 }
 
 // standing is what triage has decided about one item's stoppage: whether a
@@ -193,7 +275,7 @@ func heldFor(account string, decided bool, problem string) backlog.Hold {
 // heldForAPerson is the derivation itself, over records already read. It is
 // separate so the rule can be tested against run and escalation records without
 // a store behind them.
-func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, decided standing) backlog.Holds {
+func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, decided standing, look looking) backlog.Holds {
 	reasons := make(map[string]backlog.Hold)
 	// The escalations first, so that an item that is both — a stoppage nobody
 	// answered whose change is also still preserved — reads as the preserved one.
@@ -221,9 +303,32 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		carryOut, problem := decided(workItemID, run.RunID)
 		reasons[workItemID] = heldFor(unmergedPublication(run), carryOut, problem)
 	}
-	for workItemID, run := range latestPerItem(runs, preservedStoppage) {
+	// The stoppages, each looked at rather than read: a run whose change the
+	// repository still holds, a run whose change nothing could look for, and a run
+	// about which a decision stands that the harness has still to carry out. The
+	// third is held with nothing of it surviving, because what the decision
+	// continues is the run itself — a repair grant re-enters its preserved
+	// session — and a fresh pull would start over beside it.
+	remaining := make(map[string]survival)
+	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
+		if !stoppage(run) {
+			return false
+		}
+		found := look(run)
+		if found.holds() {
+			remaining[run.RunID] = found
+			return true
+		}
+		carryOut, _ := decided(run.WorkItemID, run.RunID)
+		return carryOut
+	}) {
 		carryOut, problem := decided(workItemID, run.RunID)
-		reasons[workItemID] = heldFor(preservedChange(run), carryOut, problem)
+		found, preserved := remaining[run.RunID]
+		if !preserved {
+			reasons[workItemID] = heldFor(continuedStoppage(run), carryOut, problem)
+			continue
+		}
+		reasons[workItemID] = heldFor(preservedChange(run, found), carryOut, problem)
 	}
 	// The merged publications last. Only these know the change reached everywhere
 	// it was going, so only these may say there is nothing left to do about it —
@@ -256,29 +361,60 @@ func latestPerItem(runs []runstate.State, matches func(runstate.State) bool) map
 	return latest
 }
 
-// preservedStoppage reports a run that stopped on this item and left its change
-// behind. Both halves matter. A run that ended without a durable blocker was not
-// handed to anybody, so nothing is waiting on a decision about it; and a run
-// whose branch and worktree are both recorded as removed has nothing left for a
-// fresh run to strand.
-func preservedStoppage(run runstate.State) bool {
+// stoppage reports a run that stopped on this item and was handed to somebody.
+// A run that ended without a durable blocker was not, so nothing is waiting on
+// a decision about it however much of it survives. Whether its change survived
+// is deliberately not asked here: that is the repository's answer rather than
+// the record's, and the derivation asks for it.
+func stoppage(run runstate.State) bool {
 	return run.WorkItemID != "" &&
 		run.Status.Terminal() &&
-		strings.TrimSpace(run.Blocker) != "" &&
-		run.Artifacts().Preserved()
+		strings.TrimSpace(run.Blocker) != ""
 }
 
 // preservedChange says why an item with work still on a branch is not something
 // to pull. It names the run because that is what somebody has to go and look at:
 // the decision is whether to pick the change up, re-run it, or retire it, and
-// none of those is a fresh run started underneath it.
+// none of those is a fresh run started underneath it. It names what was found,
+// and how, because that is what a reader about to release the item checks: a
+// branch and a worktree checked and there are a different claim from a record
+// that says so, and a look that failed is a third.
 //
 // It stops short of saying whose move that is, as the two publication accounts
 // below do, because heldFor closes every one of them with the answer the item's
 // own triage record gives.
-func preservedChange(run runstate.State) string {
+func preservedChange(run runstate.State, found survival) string {
+	if found.Unknown {
+		return fmt.Sprintf(
+			"run %s stopped on it and %s, so it is held as preserved: a fresh run would start over on top of work that may still be there",
+			run.RunID, found.Unchecked)
+	}
+	var there []string
+	if found.Found.BranchExists {
+		there = append(there, "branch")
+	}
+	if found.Found.WorktreePresent {
+		there = append(there, "worktree")
+	}
+	checked := "checked and there"
+	if found.Unchecked != "" {
+		checked = found.Unchecked
+	}
 	return fmt.Sprintf(
-		"run %s stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there",
+		"run %s stopped on it and its change is preserved (%s %s), so a fresh run would start over on top of work that is still there",
+		run.RunID, strings.Join(there, " and "), checked)
+}
+
+// continuedStoppage says why an item whose stopped run left nothing behind is
+// still not something to pull: a decision about that stoppage stands recorded
+// and the harness has yet to act on it. What it acts on is the run — a repair
+// grant re-enters the session the run preserved, a re-run starts the item over
+// from what the run recorded — so a fresh pull meanwhile would be a second run
+// on the same work, and the first thing the carried-out decision met would be
+// the fresh run's claim.
+func continuedStoppage(run runstate.State) string {
+	return fmt.Sprintf(
+		"run %s stopped on it and a decision about that stoppage is recorded and not yet carried out, so a fresh run would start beside the continuation that decision buys",
 		run.RunID)
 }
 

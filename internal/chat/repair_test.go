@@ -5,12 +5,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/backlogrepair"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -654,10 +656,14 @@ type fakeHeldWork struct {
 // would assume rather than show.
 type heldFromRunRecords struct {
 	store *runstate.Store
+	// remains is the repository the derivation asks whether a stopped run's
+	// change is still there, and it is a fake here for the reason the store is
+	// real: what has to be established is that the answer decides the hold.
+	remains readmodel.Remains
 }
 
-func (h heldFromRunRecords) HeldForAPerson(context.Context) (backlog.Holds, error) {
-	return readmodel.HeldForAPerson(h.store, h.store.Triage())
+func (h heldFromRunRecords) HeldForAPerson(ctx context.Context) (backlog.Holds, error) {
+	return readmodel.HeldForAPerson(ctx, h.store, h.store.Triage(), h.remains)
 }
 
 func (f fakeHeldWork) HeldForAPerson(context.Context) (backlog.Holds, error) {
@@ -665,4 +671,197 @@ func (f fakeHeldWork) HeldForAPerson(context.Context) (backlog.Holds, error) {
 		return backlog.Holds{}, f.err
 	}
 	return f.holds, nil
+}
+
+// The yoyodyne-ifd.372 shape, 2026-09-19, end to end. The run stopped in the
+// developing phase on a provider fault with its change preserved; the item's
+// notes said the branch and worktree were checked and there; and the product
+// manager's repair cleared the blocked status because the survey had listed the
+// item under the state a repair corrects rather than under held. What decides
+// the hold now is the repository rather than the run's removal flags: a stopped
+// run whose branch or worktree exists is held, the survey lists it only under
+// held with the run named, and a repair on it is refused with the same sentence.
+func TestAStoppedRunWhoseChangeTheRepositoryHoldsIsNeverRepairedAndTheSurveySaysSo(t *testing.T) {
+	t.Parallel()
+
+	const runID = "run-192522d857b8f1f1b7624dccc7e4eb70"
+	stopped := beads.WorkItem{ID: "yoyodyne-ifd.372", Title: "A recurring task that skips says why, and resumes on its own", Status: "blocked"}
+	tracker := &fakeTracker{
+		items:        map[string]beads.WorkItem{stopped.ID: stopped},
+		blockedItems: []beads.WorkItem{stopped},
+	}
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	// The record as the sweep left it: both artifacts flagged removed, each
+	// dated. The repository below says otherwise, and the repository is what is
+	// asked.
+	completed := time.Date(2026, 9, 16, 10, 5, 41, 0, time.UTC)
+	swept := time.Date(2026, 9, 19, 13, 0, 57, 0, time.UTC)
+	if err := store.Create(runstate.State{
+		SchemaVersion:   runstate.StateSchemaVersion,
+		RunID:           runID,
+		ProductID:       "yoyodyne",
+		RepositoryID:    "yoyodyne",
+		WorkItemID:      stopped.ID,
+		WorkItemTitle:   stopped.Title,
+		Backend:         "claude-code",
+		Status:          runstate.StatusFailed,
+		Phase:           runstate.PhaseDeveloping,
+		StartedAt:       completed.Add(-2 * time.Hour),
+		UpdatedAt:       completed,
+		CompletedAt:     &completed,
+		WorktreePath:    "/state/worktrees/yoyodyne-ifd-372-192522d8",
+		Branch:          "yoyodyne/yoyodyne-ifd-372/192522d8",
+		BranchRemoved:   true,
+		BranchSweptAt:   &swept,
+		WorktreeRemoved: true,
+		WorktreeSweptAt: &swept,
+		BaseCommit:      "449b375812b5f92a3d64efc33f7fcf26b41584e3",
+		TargetBranch:    "main",
+		Blocker:         "Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	held := heldFromRunRecords{store: store, remains: repositoryHolding{runID: {BranchExists: true, WorktreePresent: true}}}
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Nothing unfinished blocks it and it is no longer held behind a preserved run.",
+			`{"action":"repair","id":"yoyodyne-ifd.372","state":"status","reason":"status says blocked, nothing unfinished blocks it, and it is no longer held behind a preserved run"}`)},
+		{SessionID: "session-1", FinalText: "It is held; I left it alone."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Held = held
+	options.Directives = &fakeDirectives{}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tidy the queue.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the repair refused", reply.Actions)
+	}
+	refusal := reply.Actions[0].Failure
+	for _, want := range []string{"held for a person", runID, "its change is preserved (branch and worktree checked and there)"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("failure = %q, want it to say %q", refusal, want)
+		}
+	}
+	if len(tracker.unblocked) != 0 || len(tracker.updates) != 0 {
+		t.Fatalf("a held item was written to: cleared %#v, updated %#v", tracker.unblocked, tracker.updates)
+	}
+
+	// The survey lists it under held, naming the run, and nowhere else — with the
+	// sentence the repair was refused with, so the pass that reads the survey
+	// and the act it then asks for cannot come to different answers.
+	surveyProvider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Surveying.", `{"action":"survey"}`)},
+		{SessionID: "session-1", FinalText: "One item held."},
+	}}
+	surveyOptions := testOptions(t, surveyProvider)
+	surveyOptions.Tracker = tracker
+	surveyOptions.Held = held
+	surveyOptions.Directives = &fakeDirectives{}
+	surveyed := openTestSession(t, surveyOptions)
+	surveyReply, err := surveyed.Send(context.Background(), "What is stale?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	detail := surveyReply.Actions[0].Detail
+	if strings.Contains(detail, "State the records have made stale, which \"repair\" corrects") {
+		t.Fatalf("the survey offers a preserved stoppage as correctable: %q", detail)
+	}
+	for _, want := range []string{
+		"Held for a person",
+		"- yoyodyne-ifd.372 [status]",
+		"held because run " + runID + " stopped on it and its change is preserved (branch and worktree checked and there)",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the survey says %q, want it to carry %q", detail, want)
+		}
+	}
+}
+
+// A repair reports what the write left behind, not what the read before it
+// found. Twice in one week the outcome said "cleared" and, on the same line,
+// that the item was blocked as the tracker held it now — the pre-write reading,
+// appended as if it were the result. The result is the item as the tracker
+// returns it after the write: open, and said so; or not open, and then the
+// write did not land and the repair failed.
+func TestAClearedStatusIsReportedFromTheWriteAndAWriteThatDidNotLandFails(t *testing.T) {
+	t.Parallel()
+
+	stale := beads.WorkItem{ID: "yoyodyne-ifd.346", Title: "A recorded triage decision carries itself out", Status: "blocked",
+		Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: beads.BlocksDependency, Status: "closed"}}}
+	repairAction := trackerReply("Nothing unfinished blocks it.",
+		`{"action":"repair","id":"yoyodyne-ifd.346","state":"status","reason":"no run holds it"}`)
+
+	t.Run("landed", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{items: map[string]beads.WorkItem{stale.ID: stale}, blockedItems: []beads.WorkItem{stale}}
+		provider := &fakeBackend{results: []backendapi.RunResult{
+			{SessionID: "session-1", FinalText: repairAction},
+			{SessionID: "session-1", FinalText: "Cleared."},
+		}}
+		options := testOptions(t, provider)
+		options.Tracker = tracker
+		options.Held = readHolds(nil)
+		options.Directives = &fakeDirectives{}
+		reply, err := openTestSession(t, options).Send(context.Background(), "Tidy the queue.")
+		if err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+			t.Fatalf("actions = %#v, want the repair applied", reply.Actions)
+		}
+		summary := reply.Actions[0].Summary
+		if !strings.Contains(summary, "the tracker holds it open") {
+			t.Errorf("summary = %q, want the status the write left", summary)
+		}
+		if strings.Contains(summary, "is blocked as the tracker holds it now") {
+			t.Errorf("summary = %q, which reports the pre-write reading as the result", summary)
+		}
+		if reply.Actions[0].TargetStatus != "open" {
+			t.Errorf("target status = %q, want the item as the write left it", reply.Actions[0].TargetStatus)
+		}
+	})
+
+	t.Run("did not land", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{items: map[string]beads.WorkItem{stale.ID: stale}, blockedItems: []beads.WorkItem{stale}, unblockLeaves: "blocked"}
+		provider := &fakeBackend{results: []backendapi.RunResult{
+			{SessionID: "session-1", FinalText: repairAction},
+			{SessionID: "session-1", FinalText: "It did not clear."},
+		}}
+		options := testOptions(t, provider)
+		options.Tracker = tracker
+		options.Held = readHolds(nil)
+		options.Directives = &fakeDirectives{}
+		reply, err := openTestSession(t, options).Send(context.Background(), "Tidy the queue.")
+		if err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+			t.Fatalf("actions = %#v, want the repair reported as failed", reply.Actions)
+		}
+		if failure := reply.Actions[0].Failure; !strings.Contains(failure, `holds yoyodyne-ifd.346 at "blocked"`) || !strings.Contains(failure, "did not land") {
+			t.Errorf("failure = %q, want the write that did not land named", failure)
+		}
+		if strings.Contains(reply.Actions[0].Summary, "cleared") {
+			t.Errorf("summary = %q, which says cleared over a write that did not land", reply.Actions[0].Summary)
+		}
+	})
+}
+
+// repositoryHolding is a repository that holds exactly the artifacts it lists,
+// by run.
+type repositoryHolding map[string]gitworktree.Survival
+
+func (r repositoryHolding) Survives(_ context.Context, worktree gitworktree.Worktree) (gitworktree.Survival, error) {
+	return r[worktree.RunID], nil
 }

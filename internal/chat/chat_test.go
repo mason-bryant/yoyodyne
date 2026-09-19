@@ -1468,6 +1468,11 @@ type fakeTracker struct {
 	// separates the two marks a blocker leaves: the item comes back blocked, and
 	// searching its notes for the write finds nothing.
 	blockLosesNote bool
+	// unblockLeaves is the status the fake reports the item in after clearing
+	// its blocked status, where that is not open: a write the tracker took and
+	// did not carry out, which is the shape a repair has to report as failed
+	// rather than as cleared.
+	unblockLeaves string
 }
 
 // trackerUpdate is one edit the fake was asked to apply.
@@ -1560,8 +1565,11 @@ func (f *fakeTracker) Unblock(_ context.Context, id, note string) (beads.WorkIte
 	}
 	item := f.items[id]
 	item.Status = "open"
+	if f.unblockLeaves != "" {
+		item.Status = f.unblockLeaves
+	}
 	f.items[id] = item
-	return beads.WorkItem{ID: id, Status: "open"}, nil
+	return beads.WorkItem{ID: id, Status: item.Status}, nil
 }
 
 // append adds to what an item's notes say, so a write the fake took and then

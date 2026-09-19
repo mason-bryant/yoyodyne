@@ -46,6 +46,11 @@ var backlogStatuses = []string{"open", "blocked"}
 type conversationWork struct {
 	tracker beads.Client
 	store   *runstate.Store
+	// remains is the repository the hold derivation asks whether a stopped run's
+	// change is still there, which is what a hold on a preserved change is
+	// decided from rather than the run's record. It is nil where the parts had
+	// no worktree manager, and the derivation then answers from the record.
+	remains readmodel.Remains
 	// productID is what a record this conversation writes beside a run has to
 	// name. The store knows its own product, and a record it will not accept from
 	// the wrong one is exactly why this is carried rather than assumed.
@@ -61,6 +66,7 @@ func newConversationWork(parts components) conversationWork {
 	return conversationWork{
 		tracker:    parts.tracker(),
 		store:      parts.store,
+		remains:    remainsOf(parts),
 		productID:  parts.config.Product.ID,
 		pipeline:   pipelineFrom(parts),
 		reconciler: reconcilerFrom(parts),
@@ -211,7 +217,7 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 	// releasing work whose hold it could not read.
 	var held backlog.Holds
 	if w.store != nil {
-		held, err = readmodel.HeldForAPerson(w.store, w.store.Triage())
+		held, err = readmodel.HeldForAPerson(ctx, w.store, w.store.Triage(), w.remains)
 		if err != nil {
 			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}

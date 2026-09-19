@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -348,6 +349,9 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 	// development manager's rather than the harness's: the two are named apart
 	// wherever held work is counted.
 	sources.Decisions = recordedDecisions{}
+	// The repository holds the branch and the worktree the run left, which is
+	// what the hold is decided from rather than the run's own removal flags.
+	sources.Remains = &remainsOf{survives: map[string]gitworktree.Survival{"run-b": {BranchExists: true, WorktreePresent: true}}}
 	sources.IntakeHolds = fakeIntakeHolds{
 		hold: runstate.IntakeHold{HeldAt: moment.Add(-2 * time.Hour), HeldBy: runstate.IntakeHolderOperator, Reason: "the overnight looked wrong"},
 		held: true,
@@ -364,7 +368,7 @@ func TestTheOperatorsExampleRendersFromState(t *testing.T) {
 		// The whole line, because docs/operations.md prints it as the example an
 		// operator reads: a wording change has to break the document and the test
 		// together rather than leaving the two saying different things.
-		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has\n",
+		"  yoyodyne-ifd.201 — run run-b stopped on it and its change is preserved (branch and worktree checked and there), so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has\n",
 		"Needs a human (2):\n",
 		"intake is held, since 2026-08-30T10:00:00Z: the operator placed it — the overnight looked wrong — the operator's",
 		"1 admitted item awaits the development manager's decision — the development manager's",

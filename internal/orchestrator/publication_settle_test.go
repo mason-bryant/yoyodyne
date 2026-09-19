@@ -379,7 +379,7 @@ type heldItems map[string]bool
 
 func heldItemsOf(t *testing.T, store *runstate.Store, items ...string) heldItems {
 	t.Helper()
-	holds, err := readmodel.HeldForAPerson(store, store.Triage())
+	holds, err := readmodel.HeldForAPerson(context.Background(), store, store.Triage(), nil)
 	if err != nil {
 		t.Fatalf("HeldForAPerson() error = %v", err)
 	}

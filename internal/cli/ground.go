@@ -184,18 +184,34 @@ func conversationHeldWork(parts components) chat.HeldWork {
 	if parts.store == nil {
 		return nil
 	}
-	return conversationHolds{store: parts.store}
+	return conversationHolds{store: parts.store, remains: remainsOf(parts)}
+}
+
+// remainsOf is the repository the hold derivation asks whether a stopped run's
+// change is still there, where these parts have one. A nil manager is kept as
+// no observer rather than as an interface holding nil, so a derivation wired
+// from parts built without one falls back to the record and says so instead of
+// failing on the first stopped run.
+func remainsOf(parts components) readmodel.Remains {
+	if parts.worktrees == nil {
+		return nil
+	}
+	return parts.worktrees
 }
 
 // conversationHolds reads the held work through the read model, on demand: what
-// is held changes as runs stop and as triage decides, so a repair asks now
-// rather than at the moment the conversation opened.
+// is held changes as runs stop, as triage decides, and as the sweep retires what
+// a run left behind, so a repair asks now rather than at the moment the
+// conversation opened — and it asks the repository whether a stopped run's
+// change is still there rather than the run's record, which is what a hold on a
+// preserved change is decided from.
 type conversationHolds struct {
-	store *runstate.Store
+	store   *runstate.Store
+	remains readmodel.Remains
 }
 
-func (h conversationHolds) HeldForAPerson(context.Context) (backlog.Holds, error) {
-	return readmodel.HeldForAPerson(h.store, h.store.Triage())
+func (h conversationHolds) HeldForAPerson(ctx context.Context) (backlog.Holds, error) {
+	return readmodel.HeldForAPerson(ctx, h.store, h.store.Triage(), h.remains)
 }
 
 // conversationDocketEntries wires the docket itself for the role that decides

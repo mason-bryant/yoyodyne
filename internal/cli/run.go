@@ -24,6 +24,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -147,23 +148,33 @@ type components struct {
 	redactValues []string
 }
 
-func buildComponents(configPath string) (components, error) {
-	resolved, err := loadConfiguration(configPath)
-	if err != nil {
-		return components{}, err
-	}
+// roots is where a product's three durable places are: the checkout the runs
+// are cut from, the directory their worktrees are cut into, and the state root
+// everything that is not the repository lives under.
+type roots struct {
+	repository   string
+	worktreeRoot string
+	stateRoot    string
+}
+
+// resolveRoots resolves the three from the configuration. It is separate from
+// the components because a surface that reads without acting — `yoyo status`,
+// the Slack sink — builds no components and still has to ask the repository
+// whether a stopped run's change is there, which needs the same two roots the
+// worktree manager is built on.
+func resolveRoots(resolved config.Resolved) (roots, error) {
 	cfg := resolved.Config
 	// Relative paths resolve against the project, not against the .yoyodyne
 	// directory the configuration happens to live in.
 	projectDirectory := config.ProjectDirectory(resolved.Path)
 	repository, err := resolvePath(projectDirectory, cfg.Product.Repository)
 	if err != nil {
-		return components{}, fmt.Errorf("resolve product repository: %w", err)
+		return roots{}, fmt.Errorf("resolve product repository: %w", err)
 	}
 
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
-		return components{}, err
+		return roots{}, err
 	}
 	worktreeRoot := cfg.Execution.WorktreeRoot
 	if worktreeRoot == "auto" {
@@ -171,7 +182,7 @@ func buildComponents(configPath string) (components, error) {
 	} else {
 		worktreeRoot, err = resolvePath(projectDirectory, worktreeRoot)
 		if err != nil {
-			return components{}, fmt.Errorf("resolve worktree root: %w", err)
+			return roots{}, fmt.Errorf("resolve worktree root: %w", err)
 		}
 	}
 	// A verb run from inside one of those worktrees resolves its repository to the
@@ -185,8 +196,43 @@ func buildComponents(configPath string) (components, error) {
 	// building a worktree manager at all.
 	repository, err = primaryCheckout(repository, worktreeRoot)
 	if err != nil {
+		return roots{}, err
+	}
+	return roots{repository: repository, worktreeRoot: worktreeRoot, stateRoot: stateRoot}, nil
+}
+
+// standingRemains is the repository a read-only surface asks whether a stopped
+// run's change is still there. It is the same manager the components build,
+// stripped to what a look needs, and a surface that cannot build one reads the
+// holds from the record instead: a status line is owed the answer it can give
+// rather than a failure over the one it cannot.
+func standingRemains(resolved config.Resolved) readmodel.Remains {
+	roots, err := resolveRoots(resolved)
+	if err != nil {
+		return nil
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: roots.repository,
+		WorktreeRoot:   roots.worktreeRoot,
+	})
+	if err != nil {
+		return nil
+	}
+	return worktrees
+}
+
+func buildComponents(configPath string) (components, error) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
 		return components{}, err
 	}
+	cfg := resolved.Config
+	roots, err := resolveRoots(resolved)
+	if err != nil {
+		return components{}, err
+	}
+	repository, worktreeRoot, stateRoot := roots.repository, roots.worktreeRoot, roots.stateRoot
 	cfg.Product.Repository = repository
 
 	processRunner := execution.OSProcessRunner{}

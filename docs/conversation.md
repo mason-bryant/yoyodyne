@@ -428,15 +428,37 @@ preserved branch, a publication that never finished, a directive in force that
 pauses the work it affects. The escalation is the one that most needs saying:
 triage blocks an item in order to escalate it and leaves no dependency behind, so
 an escalated item reads as a blocked status with nothing at all standing behind
-it, and the hold is the whole of what separates the two. Such an
-item is reported with the reason it is held, every pass, and left exactly as it
-is: clearing its status would start a fresh run on top of work that is still
-there. Both records behind a hold fail the same way: a conversation that cannot
-read what the harness is holding, or cannot read the directives, corrects nothing
-rather than deciding that nothing is held — for the same reason
+it, and the hold is the whole of what separates the two. The preserved branch is
+the one that was misread. On 2026-09-19 the survey listed yoyodyne-ifd.372 under
+the state a repair corrects, the product manager cleared its blocked status as
+"no longer held behind a preserved run", and the item's own notes still said the
+stopped run's branch and worktree were checked and there: the hold had been read
+off the run's removal flags. So whether a stopped run's change is still there is
+now looked for rather than read — any stopped run whose branch or worktree
+exists in the repository holds its item, whatever the run's record says, and a
+look that could not be made holds it as if they did, saying so. A stopped run
+about which the development manager has recorded a decision the harness has
+still to carry out — a repair continuation first among them — holds its item
+with nothing of it surviving, because what the continuation resumes is the run
+and a fresh pull would start over beside it. Such an item is reported with the
+reason it is held, naming the run, every pass, and left exactly as it is:
+clearing its status would start a fresh run on top of work that is still there.
+A survey lists an item in exactly one of its two lists, and a repair asked for
+on a held one is refused with the sentence the survey gave. Both records behind
+a hold fail the same way: a conversation that cannot read what the harness is
+holding, or cannot read the directives, corrects nothing rather than deciding
+that nothing is held — for the same reason
 [the queue holds every blocked item it cannot read a hold for](work.md#letting-the-harness-choose-the-work),
 since a reader that cannot tell a stale status from a stoppage must not clear
 either.
+
+A cleared status is reported from the item as the write left it. Twice in one
+week — yoyodyne-ifd.346 on 2026-09-18, yoyodyne-ifd.372 on 2026-09-19 — the
+outcome said the status was cleared and, on the same line, that the item was
+blocked as the tracker held it now; the second half was the reading taken before
+the write, appended as if it were the result. Now "cleared" means the tracker
+read the status back as open after the write, and a write it did not read back
+that way is reported as failed rather than as cleared.
 
 An item also says what carries it, where that is not a developer run, and whose
 conversation that is. Work whose execution is a conversation with a role —

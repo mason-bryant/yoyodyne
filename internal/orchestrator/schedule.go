@@ -481,7 +481,13 @@ type Pull struct {
 	// out. It is optional, and a pull wired without it passes every held item over
 	// as one nobody has decided about — which is where the answer went before the
 	// two were told apart. It is satisfied by *runstate.TriageStore.
-	Decisions  readmodel.Decisions
+	Decisions readmodel.Decisions
+	// Remains is what the repository actually holds of each stopped run's
+	// change, which is what a hold on a preserved change is decided from rather
+	// than the run's own removal flags. It is optional, and a pull wired without
+	// it decides from the record and says so in the hold. It is satisfied by
+	// *gitworktree.Manager.
+	Remains    readmodel.Remains
 	Intake     IntakeHolds
 	Directives Directives
 	// Staleness is optional; see ScheduleStaleness for what a pull without one
@@ -3137,7 +3143,7 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	// records were consulted at all.
 	var held backlog.Holds
 	if p.Stoppages != nil {
-		held, err = readmodel.HeldForAPerson(p.Stoppages, p.Decisions)
+		held, err = readmodel.HeldForAPerson(ctx, p.Stoppages, p.Decisions, p.Remains)
 		if err != nil {
 			return pulled{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}
