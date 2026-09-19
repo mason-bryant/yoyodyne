@@ -464,6 +464,41 @@ func TestScaffoldShowsTheOptionalSlackSectionCommented(t *testing.T) {
 	}
 }
 
+// The services section is written live, every service present and at its
+// default state, rather than commented out: it is the product's shape, and a
+// generated file has to show every part there is. Loaded back, every value
+// originates in the file -- which the origins test above already holds the
+// whole file to -- and the defaults are the harness's.
+func TestScaffoldWritesEveryServiceAtItsDefault(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."})
+	rendered, err := os.ReadFile(resolved.Path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		"\nservices:\n",
+		"  slack:\n    enabled: false\n",
+		"  dashboard:\n    enabled: false\n    port: 8765\n    bind: 127.0.0.1\n    allowed_hosts: []\n    token: generated\n",
+		"  scheduler:\n    enabled: true\n",
+		"  maintenance:\n    enabled: true\n",
+	} {
+		if !strings.Contains(string(rendered), want) {
+			t.Errorf("generated configuration does not write %q:\n%s", want, rendered)
+		}
+	}
+	if !reflect.DeepEqual(resolved.Config.Services, DefaultServices()) {
+		t.Errorf("services = %+v, want the harness defaults %+v", resolved.Config.Services, DefaultServices())
+	}
+	for _, name := range ServiceNames {
+		key := "services." + string(name) + ".enabled"
+		if origin := resolved.Origins[key]; origin != resolved.Path {
+			t.Errorf("origin[%q] = %q, want the generated file", key, origin)
+		}
+	}
+}
+
 // The example is only worth showing if the gesture it asks for works, so the
 // whole of it is uncommented here and loaded: an example that does not load is
 // worse than none, because the operator who tried it has no reason to think the

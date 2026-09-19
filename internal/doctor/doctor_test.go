@@ -14,6 +14,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/dashboard"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
@@ -186,7 +187,156 @@ func brokenInstallations() map[string]func(*world) {
 		"every agent runs on one model and none names an alternate": func(w *world) {
 			w.configuration = singleModelConfig
 		},
+		"the slack service is on and this project's secrets are not stored": func(w *world) {
+			w.configuration = servicesConfig("slack:\n    enabled: true\n")
+			w.runner.reply("find-generic-password", failed("The specified item could not be found in the keychain."))
+			w.sinkRunning(slack.Presence{Version: currentVersion, SecretNamespace: "yoyodyne", Channel: "C1"})
+		},
+		"the dashboard service is on and its keychain token was never stored": func(w *world) {
+			w.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: keychain\n")
+			w.runner.reply("find-generic-password -s yoyo-dashboard", failed("The specified item could not be found in the keychain."))
+		},
+		"the dashboard service is on with a keychain token on a machine with no keychain": func(w *world) {
+			w.goos = "linux"
+			w.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: keychain\n")
+		},
+		"the dashboard service is on and its token file was never written": func(w *world) {
+			w.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: file\n")
+		},
+		"the dashboard service is on and its token file is empty": func(w *world) {
+			w.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: file\n")
+			w.dashboardTokenFile("", 0o600)
+		},
+		"the dashboard service's token file is readable by others": func(w *world) {
+			w.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: file\n")
+			w.dashboardTokenFile("0123456789abcdef0123456789abcdef", 0o644)
+		},
 	}
+}
+
+// The services a product declares are each reported: off, on with what they
+// need in place, or on with what they need missing and the command that stores
+// it. A healthy project has the scheduler and the maintenance pass on and needs
+// nothing stored for either, so every service finding is ok.
+func TestEveryDeclaredServiceIsReported(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	report := world.diagnose()
+	for check, want := range map[string]string{
+		"service:slack":       "the slack service is off",
+		"service:dashboard":   "the dashboard service is off",
+		"service:scheduler":   "the scheduler service is on",
+		"service:maintenance": "the maintenance service is on",
+	} {
+		finding, found := findingFor(report, check)
+		if !found {
+			t.Fatalf("Diagnose() never checked %q: %s", check, render(report))
+		}
+		if finding.Status != StatusOK || !strings.Contains(finding.Summary, want) {
+			t.Errorf("%s = %s %q, want ok and %q in it", check, finding.Status, finding.Summary, want)
+		}
+	}
+}
+
+// The Slack service is on and its tokens are not stored: the product would
+// start a sink that refuses to run for want of them. The finding says so and
+// carries the same store command the secrets check does, because both are one
+// question asked of one keychain.
+func TestTheSlackServiceWithoutItsTokensIsAWarningWithTheStoreCommand(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = servicesConfig("slack:\n    enabled: true\n")
+	world.runner.reply("find-generic-password", failed("The specified item could not be found in the keychain."))
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "service:slack")
+	if !found {
+		t.Fatalf("Diagnose() never checked the slack service: %s", render(report))
+	}
+	if finding.Status != StatusWarning {
+		t.Fatalf("service:slack = %s, want a warning: a sink that cannot start stops no run", finding.Status)
+	}
+	if !strings.Contains(finding.Summary, "tokens are not stored") {
+		t.Errorf("summary = %q, want the missing tokens named", finding.Summary)
+	}
+	secrets, _ := findingFor(report, "slack-secrets")
+	if finding.Remedy == "" || finding.Remedy != secrets.Remedy {
+		t.Errorf("remedy = %q, want the secrets check's own %q", finding.Remedy, secrets.Remedy)
+	}
+	if !report.Healthy() {
+		t.Fatalf("Diagnose() = %s, want an installation that still runs work: %s", report.Status, render(report))
+	}
+}
+
+// A dashboard bound outside loopback names where its token is stored, and the
+// diagnosis looks there: a keychain item that carries the product, or a file
+// under the state root. Stored is ok and says where; missing is a warning with
+// the command that stores it; and neither ever reads the token.
+func TestTheDashboardServiceIsCheckedAgainstTheStoreItsEntryNames(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a keychain token that is stored", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: keychain\n")
+		report := world.diagnose()
+		finding, _ := findingFor(report, "service:dashboard")
+		if finding.Status != StatusOK || !strings.Contains(finding.Summary, "yoyo-dashboard.yoyodyne") || !strings.Contains(finding.Summary, "192.168.1.20:8765") {
+			t.Fatalf("service:dashboard = %s %q, want ok naming the item and the address", finding.Status, finding.Summary)
+		}
+		for _, command := range world.runner.commands {
+			if strings.Contains(strings.Join(command, " "), "yoyo-dashboard") && contains(command, "-w") {
+				t.Fatalf("the diagnosis asked the keychain for the token itself: %v", command)
+			}
+		}
+	})
+	t.Run("a keychain token that is missing", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: keychain\n")
+		world.runner.reply("find-generic-password -s yoyo-dashboard", failed("The specified item could not be found in the keychain."))
+		report := world.diagnose()
+		finding, _ := findingFor(report, "service:dashboard")
+		if finding.Status != StatusWarning {
+			t.Fatalf("service:dashboard = %s, want a warning", finding.Status)
+		}
+		if want := "security add-generic-password -s yoyo-dashboard.yoyodyne -a yoyo -w"; finding.Remedy != want {
+			t.Errorf("remedy = %q, want %q", finding.Remedy, want)
+		}
+	})
+	t.Run("a file token that is stored", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: file\n")
+		file := world.dashboardTokenFile("0123456789abcdef0123456789abcdef", 0o600)
+		report := world.diagnose()
+		finding, _ := findingFor(report, "service:dashboard")
+		if finding.Status != StatusOK || finding.Detail != file {
+			t.Fatalf("service:dashboard = %s %q (%q), want ok naming %s", finding.Status, finding.Summary, finding.Detail, file)
+		}
+	})
+	t.Run("a file token that is missing", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.configuration = servicesConfig("dashboard:\n    enabled: true\n    bind: 192.168.1.20\n    token: file\n")
+		report := world.diagnose()
+		finding, _ := findingFor(report, "service:dashboard")
+		if finding.Status != StatusWarning || !strings.Contains(finding.Remedy, "dashboard.token") {
+			t.Fatalf("service:dashboard = %s with remedy %q, want a warning whose remedy writes the file", finding.Status, finding.Remedy)
+		}
+	})
+	t.Run("a loopback dashboard with a generated token needs nothing stored", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.configuration = servicesConfig("dashboard:\n    enabled: true\n")
+		report := world.diagnose()
+		finding, _ := findingFor(report, "service:dashboard")
+		if finding.Status != StatusOK || !strings.Contains(finding.Summary, "generated at each start") {
+			t.Fatalf("service:dashboard = %s %q, want ok with the generated token named", finding.Status, finding.Summary)
+		}
+	})
 }
 
 // TestAHealthyInstallationSaysSo is the other half of the promise. An operator
@@ -207,7 +357,7 @@ func TestAHealthyInstallationSaysSo(t *testing.T) {
 	if _, warnings, problems := report.Counts(); warnings != 0 || problems != 0 {
 		t.Fatalf("Diagnose() = %d warnings, %d problems: %s", warnings, problems, render(report))
 	}
-	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "artifact-readmes", "provider:claude-code", "failover", "forge", "slack"} {
+	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "artifact-readmes", "provider:claude-code", "failover", "forge", "slack", "service:slack", "service:dashboard", "service:scheduler", "service:maintenance"} {
 		if finding, found := findingFor(report, want); !found {
 			t.Fatalf("Diagnose() never checked %q: %s", want, render(report))
 		} else if finding.Status != StatusOK {
@@ -1113,6 +1263,20 @@ func (w *world) secretsFile(contents string) string {
 	return path
 }
 
+// dashboardTokenFile writes the file a file-sourced dashboard token is read
+// from, under the product's state directory, with the mode the test is about.
+func (w *world) dashboardTokenFile(contents string, mode os.FileMode) string {
+	w.t.Helper()
+	path := dashboard.TokenFile(w.stateRoot, "yoyodyne")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		w.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
 // sinkRecorded leaves the record a sink writes, without a process behind it.
 func (w *world) sinkRecorded(presence slack.Presence) {
 	w.t.Helper()
@@ -1411,3 +1575,11 @@ agents:
       enabled: true
       model: sonnet
 `
+
+// servicesConfig is the reporting configuration with one service's entry
+// written under `services`, which is how each service state is arranged: the
+// entry is the whole of what the test is about, and reporting is on so that a
+// Slack service is a declaration the configuration accepts.
+func servicesConfig(entry string) string {
+	return reportingConfig + "services:\n  " + entry
+}

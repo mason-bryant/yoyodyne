@@ -194,6 +194,20 @@ approvals:
   integration: human
   publishing: human
 
+services:           # the parts of the product, each on or off; see Services
+  slack:
+    enabled: false
+  dashboard:
+    enabled: false
+    port: 8765
+    bind: 127.0.0.1
+    allowed_hosts: []
+    token: generated
+  scheduler:
+    enabled: true
+  maintenance:
+    enabled: true
+
 checks: []          # yours to write; a run with none is refused
 
 accounts:
@@ -409,8 +423,13 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.check_timeout` (`30m`),
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
-   `approvals.publishing` (`human`), `approvals.work_items` (`human`), and an
-   agent's `instances` (1).
+   `approvals.publishing` (`human`), `approvals.work_items` (`human`), an
+   agent's `instances` (1), and every value under [`services`](#services):
+   `services.slack.enabled` (`false`), `services.dashboard.enabled` (`false`),
+   `services.dashboard.port` (8765), `services.dashboard.bind` (`127.0.0.1`),
+   `services.dashboard.allowed_hosts` (empty), `services.dashboard.token`
+   (`generated`), `services.scheduler.enabled` (`true`), and
+   `services.maintenance.enabled` (`true`).
    `triage.repair_grant_attempts` is filled in too, but as a derivation rather
    than a fixed default: it takes the size of the effective
    `execution.repair_attempts_before_replan`, read after every layer has been
@@ -4164,6 +4183,17 @@ These are all errors, reported before any work is claimed:
   role or `harness` or valued as something that is neither an emoji shortcode
   nor an https image URL — all checked whether or not reporting is switched on,
   so a typo is found now rather than on the day somebody turns it on;
+- a `services` entry that is not one of the four the product has, a
+  `services.dashboard.port` outside 1–65535, a `services.dashboard.bind` that
+  is not an IP address, a `services.dashboard.token` that is not `generated`,
+  `keychain`, or `file`, an entry under `services.dashboard.allowed_hosts` that
+  is empty, carries a scheme, a port, or a path, or is named twice; and two
+  combinations: `services.slack` enabled while `slack.enabled` is off, since a
+  sink for a project that reports nothing has nowhere to post, and a
+  `services.dashboard.bind` outside loopback with a `generated` token, since a
+  token printed to one terminal is unusable from the other device the bind
+  exists for — all checked whether or not the service is enabled, so a typo is
+  found now rather than on the day the product is started;
 - an `operators` entry that binds no namespace at all, binds one that is not an
   address, a forge account, or a Slack member id, names a grant the harness does
   not have, or binds an identifier a second human already bound — and two humans
@@ -4606,6 +4636,132 @@ Reporting is an observation and never a gate: a workspace that is down, slow, or
 misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup.md)
 takes a workspace from nothing to live reporting, and the app manifest it asks
 for is checked in beside it.
+
+## Services
+
+Slack, the dashboard, the scheduler, and the maintenance pass are parts of one
+product rather than independent small tools, and `services` is where a product
+declares which of them it runs. It is the
+[management-and-supervision design's](designs/management-and-supervision.md)
+supervision tree written down: one supervisor per product, and these are its
+children, started and stopped together.
+
+```yaml
+services:
+  slack:
+    enabled: false
+  dashboard:
+    enabled: false
+    port: 8765
+    bind: 127.0.0.1
+    allowed_hosts: []
+    token: generated
+  scheduler:
+    enabled: true
+  maintenance:
+    enabled: true
+```
+
+**Every service is present whether or not a project mentions it.** The section is
+the product's shape rather than a list a project appends to: a service a file
+leaves out is at its harness default, and `yoyo config show --origins` names
+`harness-default` for each value the file did not write. `yoyo init` writes the
+whole section, live rather than commented, so a generated file shows every part
+there is and the state each starts in. The four names are the four the product
+has; a fifth is refused when the file loads, and the refusal names the four.
+
+| Service | What it is | Default |
+| --- | --- | --- |
+| `slack` | the reporting sink, the `yoyo slack` process that holds this product's two tokens | off |
+| `dashboard` | the read-only projection of the read model, served to a browser | off |
+| `scheduler` | the watch loop — `yoyo work --watch` — that reads the queue and starts what is ready | on |
+| `maintenance` | the periodic pass that keeps the installation converged: reconciling interrupted runs, catching the checkout up, restarting what stopped | on |
+
+The two that are on need nothing that is not already in the file: they are the
+harness's own loop and its self-maintenance, and a product started with neither
+starts nothing. The two that are off each need something arranged outside it
+first — Slack a workspace, an app, and two stored tokens; the dashboard a port
+somebody means to open — and each is switched on by the operator who arranged
+it, as reporting itself is.
+
+**The section declares and never widens.** There is no key here for a
+capability, a tool, an account, or an authority. A part started from this
+section holds exactly what it holds when started by hand: the sink still reads
+its tokens from the store only its own launch looks at, the dashboard still
+refuses every request without its bearer token, the scheduler still passes every
+gate a `yoyo work --watch` you started yourself would pass.
+
+**`services.slack` requires reporting to be on.** A sink started for a project
+whose [`slack`](#reporting-to-slack) section is off reads a stream and then
+discovers it has nowhere to post, so enabling the service over reporting that is
+off is refused when the file loads, naming both ways out. Whether the two tokens
+are actually stored cannot be read from the file; `yoyo doctor` asks, under
+`service:slack`, and a service enabled with its tokens missing is a warning
+carrying the command that stores them — the same command its `slack-secrets`
+finding carries, because both are one question asked of one keychain.
+
+### The dashboard's entry
+
+The dashboard is the one service with more to say than a switch, because it
+listens. Its entry is the
+[observability-and-dashboard design's](designs/observability-and-dashboard.md#web-security-the-repositorys-web-service-conventions-established-here)
+web-security conventions made configuration:
+
+- **`port`** is the TCP port it serves on, a fixed number rather than one the
+  operating system chooses, because a supervised child that came up on a
+  different port after every restart is one nobody can bookmark or reach from
+  another device. It must be between 1 and 65535; `8765` is the default, the
+  same port the operations guide has used as its example of one worth
+  bookmarking.
+- **`bind`** is the address it binds, as an IP literal. `127.0.0.1` is the
+  default — the IPv4 loopback address by number rather than as `localhost`,
+  which on some machines resolves to the IPv6 loopback first — and a project
+  that says nothing gets exactly the loopback-only behaviour the standalone
+  command had. Writing an interface address instead is the opt-in that lets
+  another device on your network open the page. A specific interface address is
+  preferred over a wildcard, which reaches every interface the machine has, and
+  neither is refused.
+- **`allowed_hosts`** are the names, beyond the bound address itself, a request
+  may carry as its Host and Origin. Empty is the bound address alone — with
+  `localhost` beside it under the loopback default, which the standalone
+  command already accepted. Each entry is a host name or an IP address written
+  without a scheme, a port, or a path, because a request's Host header is
+  compared against it exactly and an entry with a port in it would match
+  nothing a browser sends. The list is replaced wholesale rather than merged,
+  as `checks` is.
+- **`token`** is where the bearer token every request has to carry comes from.
+  It is a reference and never the token: this file is committed, and a secret
+  in it would be a secret in the repository. `generated` is the default and the
+  loopback arrangement — a token made at each start and printed once where you
+  can read it. `keychain` and `file` are the two stores the Slack tokens already
+  use, under names that carry the product: the keychain item
+  `yoyo-dashboard.<product id>` under the account `yoyo`, or the file
+  `<state root>/products/<product id>/dashboard.token`.
+
+**A bind outside loopback with a generated token is refused when the file
+loads**, with the reason. The opt-in exists so a browser on another device can
+reach the page, and a token printed to this terminal is exactly what that
+device cannot read, so a non-loopback bind has to name where its token is
+stored before it is accepted at all. What the opt-in keeps is every other rule:
+the token is still required on every request, Host and Origin are still checked
+against the configured address and hosts, and there is still no write path at
+any address — a wider bind widens who can read observability data and never who
+can direct work. Transport is plain HTTP in V1, so the opt-in is for a network
+you trust.
+
+`yoyo doctor` reports the dashboard under `service:dashboard`: off, on with a
+generated token, or on with a supplied token that it looks for in the store the
+entry names — the keychain item by name, the file by its existence and mode —
+without ever reading the token. A supplied token that is not there is a warning
+carrying the command that stores it.
+
+**Nothing acts on this section yet.** It is the declaration, read by the
+supervisor command that starts and stops the enabled parts together, which is
+the next item of the same direction; until it lands, `yoyo slack`, `yoyo work
+--watch`, and `yoyo dashboard` are started as they are today, and `yoyo
+dashboard` still binds loopback on its `--port` rather than reading this entry.
+Declaring the section now is what lets that command and the resident that
+starts with the machine read one statement rather than two.
 
 ## Recurring tasks
 

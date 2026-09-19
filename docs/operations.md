@@ -21,8 +21,9 @@ checks and whether this machine can run the programs they name, each provider
 your agents name — installed always, and authenticated where the harness has an
 adapter that can ask, which today is Claude Code — whether every agent runs on
 one model with nothing to fail over to, forge access when the project publishes,
-and, when reporting is on, this project's own Slack secrets and the sink that is
-supposed to be using them.
+when reporting is on, this project's own Slack secrets and the sink that is
+supposed to be using them, and each part the [`services`](configuration.md#services)
+section declares — off, on with what it needs stored, or on with it missing.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
@@ -97,6 +98,16 @@ observation and never a gate, so a sink you never started, a workspace that is
 down, and a token nobody stored all leave an installation that runs work exactly
 as it would have. They are still named, in full, with the command that ends each
 one — what the exit status refuses to do is fail a machine that works.
+
+**So is every service finding.** Each part the configuration's
+[`services`](configuration.md#services) section declares gets a line of its
+own — `service:slack`, `service:dashboard`, `service:scheduler`,
+`service:maintenance` — saying it is off, or on with what it needs in place, or
+on with what it needs missing: the Slack service without this project's two
+tokens stored, the dashboard with a `keychain` or `file` token that is not in
+the store its entry names. The remedy is the command that stores it, and a
+part that cannot start reports nothing or serves nothing rather than stopping a
+run, which is why none of these is a problem.
 
 It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is ever read: whether a secret is stored is
@@ -1671,6 +1682,13 @@ until you stop it:
 ./bin/yoyo dashboard              # a port the operating system chooses
 ./bin/yoyo dashboard --port 8765  # one you can bookmark
 ```
+
+The configuration's [`services.dashboard`](configuration.md#services) entry
+declares the dashboard as a part of the product — its port, the address it
+binds, the hosts a request may name, and where a supplied token comes from —
+for the supervisor that will start it with the rest. Nothing reads that entry
+yet: this command still binds loopback and serves on `--port`, exactly as
+below, until the supervisor command lands and adopts it.
 
 It prints two things when it starts, and the second of them once:
 

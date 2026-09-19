@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -48,6 +50,14 @@ type configDocument struct {
 	// effective type because there is no per-field override to distinguish.
 	Providers *map[string]backend.ProviderPlugin `yaml:"providers"`
 	Slack     *slackDocument                     `yaml:"slack"`
+	// Services is the parts of the product and whether each runs. Each entry
+	// overrides field by field, the way execution does: a layer that switches
+	// the dashboard on has said nothing about its port, and should not have to
+	// restate the port to keep it. The set of services is the struct's rather
+	// than a mapping, so a name that is not one of them is refused by the
+	// decoder like any other unknown key — and named as a service that does not
+	// exist, by unknownServices, rather than as a Go field.
+	Services *servicesDocument `yaml:"services"`
 	// RecurringTasks replaces an inherited mapping entirely rather than merging
 	// into it, for the reason the accounts mapping does: what the harness does on
 	// a cadence is one statement, and a schedule half from a bundle and half from
@@ -153,6 +163,29 @@ type slackDocument struct {
 	Avatars *map[string]string `yaml:"avatars"`
 }
 
+type servicesDocument struct {
+	Slack       *serviceDocument          `yaml:"slack"`
+	Dashboard   *dashboardServiceDocument `yaml:"dashboard"`
+	Scheduler   *serviceDocument          `yaml:"scheduler"`
+	Maintenance *serviceDocument          `yaml:"maintenance"`
+}
+
+type serviceDocument struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+type dashboardServiceDocument struct {
+	Enabled *bool   `yaml:"enabled"`
+	Port    *int    `yaml:"port"`
+	Bind    *string `yaml:"bind"`
+	// AllowedHosts replaces an inherited list wholesale rather than adding to
+	// it, the way the check list does: which hosts may reach the page is one
+	// statement, and half of one layer's answer joined to half of another's is
+	// a set nobody decided.
+	AllowedHosts *[]string             `yaml:"allowed_hosts"`
+	Token        *DashboardTokenSource `yaml:"token"`
+}
+
 type agentDocument struct {
 	Role    *domain.AgentRole `yaml:"role"`
 	Backend *domain.Backend   `yaml:"backend"`
@@ -234,6 +267,9 @@ func decodeDocument(reader io.Reader) (configDocument, error) {
 		if migration := retiredSlackOperators(source); migration != "" {
 			return configDocument{}, errors.New(migration)
 		}
+		if refusal := unknownServices(source); refusal != "" {
+			return configDocument{}, errors.New(refusal)
+		}
 		return configDocument{}, fmt.Errorf("decode config: %w", err)
 	}
 
@@ -284,3 +320,34 @@ operators:
 // exampleSlackMemberID is the shape of a member id, for a refusal that shows the
 // entry to write rather than describing it.
 const exampleSlackMemberID = "U0123456789"
+
+// unknownServices reports the refusal for a file whose services section names
+// something that is not a service, and the empty string for a file that failed
+// to decode for any other reason. The decoder's own answer is "field x not
+// found in type config.servicesDocument", which is true and names a Go type
+// rather than the four things the section may hold; somebody who wrote a fifth
+// was either mistyping one of them or expecting a part the product does not
+// have, and either way the four are what they need to see.
+//
+// It runs only after the strict decode has already failed, and it is lenient
+// about everything else in the file, for the reason retiredSlackOperators is.
+func unknownServices(source []byte) string {
+	var lenient struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(source, &lenient); err != nil || lenient.Services == nil {
+		return ""
+	}
+	var unknown []string
+	for name := range lenient.Services {
+		if !knownService(name) {
+			unknown = append(unknown, fmt.Sprintf("%q", name))
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	sort.Strings(unknown)
+	return fmt.Sprintf("decode config: services names %s, which is not a service the product has; the services are %s",
+		strings.Join(unknown, " and "), describeServiceNames())
+}

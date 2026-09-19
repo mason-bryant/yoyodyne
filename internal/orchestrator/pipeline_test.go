@@ -3443,7 +3443,11 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
 			WorkItems: domain.ApprovalHuman, Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,
 		},
-		Checks: commands,
+		// The parts of the product a loaded configuration would have filled in.
+		// Nothing here starts one; they are stated for the reason the triage
+		// thresholds are.
+		Services: config.DefaultServices(),
+		Checks:   commands,
 		Agents: map[string]config.AgentConfig{
 			"developer": {Role: domain.RoleDeveloper, Backend: domain.BackendClaudeCode, Model: testDeveloperModel, Instances: 1},
 		},

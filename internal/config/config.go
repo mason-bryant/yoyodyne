@@ -99,6 +99,13 @@ type Config struct {
 	// Slack configures the reporting sink. It is absent from a project that does
 	// not report to a workspace, which is every project until one opts in.
 	Slack Slack `yaml:"slack,omitempty" json:"slack,omitempty"`
+	// Services are the parts of the product — the Slack sink, the dashboard,
+	// the scheduler, and the maintenance pass — and whether each runs. It is
+	// always present, at harness defaults where a project writes nothing,
+	// because the set of parts is the product's shape rather than something a
+	// project opts into; what a project decides is which of them are on. See
+	// services.go for what the section declares and what deliberately reads it.
+	Services Services `yaml:"services" json:"services"`
 	// RecurringTasks are the things the harness does on a cadence rather than
 	// because something happened, keyed by the name each one is reported and
 	// recorded under. It is absent from a project that has scheduled nothing,
@@ -974,6 +981,7 @@ func (c Config) Validate() error {
 	problems = append(problems, c.accountProviderProblems(providers)...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
+	problems = append(problems, c.Services.problems(c.Slack)...)
 	problems = append(problems, validateRecurringTasks(c)...)
 
 	if len(problems) > 0 {
