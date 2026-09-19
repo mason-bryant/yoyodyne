@@ -31,9 +31,13 @@ getting-started sections, and it is a merge gate rather than a habit: the
 `adoption` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 installs `bd` — at [a pinned version this repository
 owns](#the-tracker-version-ci-pins) — and runs this target on every pull
-request. It stays out of
+request. On a machine with no `bd` at all, the walk fetches that same pinned
+release itself, from [the one home Beads has](https://github.com/gastownhall/beads)
+into its scratch root, so a fresh machine and CI install the tracker from the
+same place; a machine that has `bd` walks with the one it has. It stays out of
 `check` because `check` is what a run applies to a developer's worktree, and
-that worktree is given neither the tracker nor a reason to cut a scratch clone.
+that worktree is given neither the tracker, nor the network to fetch one, nor a
+reason to cut a scratch clone.
 It needs no provider unless you pass `WALK_PROVIDER=1`, and it names any claim
 it could not exercise rather than passing over it. It does need a scratch root
 outside every git repository, which `$TMPDIR` and `/tmp` are on an ordinary

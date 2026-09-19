@@ -332,7 +332,7 @@ func (s *setup) ensureTracker(ctx context.Context) setupStep {
 			Status:  setupHandedOff,
 			Summary: "bd is not installed, and setup does not install tools",
 			Detail:  err.Error(),
-			Remedy:  "go install github.com/gastownhall/beads/cmd/bd@latest",
+			Remedy:  beads.InstallCommand,
 		}
 	}
 	if s.trackerAnswers(ctx, repository) {

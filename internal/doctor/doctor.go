@@ -37,6 +37,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -436,7 +437,7 @@ func (d *diagnosis) checkTracker(ctx context.Context, repository string) Finding
 			Status:  StatusProblem,
 			Summary: "bd is not installed, and every role reads and writes the tracker",
 			Detail:  err.Error(),
-			Remedy:  "go install github.com/gastownhall/beads/cmd/bd@latest",
+			Remedy:  beads.InstallCommand,
 		}
 	}
 	// `bd stats` opens the project's database and reports on it, which is the
