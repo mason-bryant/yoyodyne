@@ -299,6 +299,13 @@ type Execution struct {
 	// run's record while the stage runs, so `yoyo status` says how much of it has
 	// been spent rather than only how long the run has been going.
 	CheckStageTimeout Duration `yaml:"check_stage_timeout" json:"check_stage_timeout"`
+	// LandingCheckTimeout is the budget each landing check gets. It is its own
+	// budget rather than the per-run gate's, and the landing has no stage bound,
+	// because what is moved to the landing is exactly the suite too long for the
+	// gate — bounding it the same way would stop it on every landing. A landing
+	// check stopped at this budget makes the landing unverified rather than
+	// red, since a stopped check judged nothing.
+	LandingCheckTimeout Duration `yaml:"landing_check_timeout" json:"landing_check_timeout"`
 	// ServerOverloadPause is how long a run waits before reissuing an attempt the
 	// provider refused because its own servers were transiently overloaded. It is
 	// the same polling discipline as an exhausted limit with a different clock:
@@ -390,6 +397,11 @@ const (
 	// fits it with two runs contending, and a project whose stage does not is
 	// told which check the bound stopped and what moves it.
 	defaultCheckStageTimeout = Duration(30 * time.Minute)
+	// defaultLandingCheckTimeout is what the whole race suite took under load
+	// on 2026-09-19 with room to spare: a landing runs once per landing rather
+	// than once per attempt, and nothing waits on it, so it can be given what
+	// the suite actually takes rather than what a developer seat can spare.
+	defaultLandingCheckTimeout = Duration(2 * time.Hour)
 	// defaultServerOverloadPause is long enough to be worth waiting — the
 	// provider CLI has already spent its own ten retries on the condition before
 	// the harness ever sees it — and short enough that a run resumes within a
@@ -782,6 +794,9 @@ func (c Config) Validate() error {
 	// which is the two-hour stage this exists to end.
 	if c.Execution.CheckStageTimeout <= 0 {
 		problems = append(problems, "execution.check_stage_timeout must be positive")
+	}
+	if c.Execution.LandingCheckTimeout <= 0 {
+		problems = append(problems, "execution.landing_check_timeout must be positive")
 	}
 	// An overload names no reset time, so this interval is the whole of the wait
 	// rather than a bound on it. Zero would mean reissuing straight back into the

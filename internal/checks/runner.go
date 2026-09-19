@@ -24,6 +24,12 @@ const defaultTimeout = 30 * time.Minute
 // none.
 const DefaultStageTimeout = 30 * time.Minute
 
+// DefaultLandingCheckTimeout is what a landing check is given where the
+// configuration names no execution.landing_check_timeout, matching that
+// default: a landing runs the suite the gate's stage cannot hold, once, with
+// nothing waiting on it.
+const DefaultLandingCheckTimeout = 2 * time.Hour
+
 type Result struct {
 	Command string                  `json:"command"`
 	Process execution.ProcessResult `json:"process"`
@@ -70,6 +76,15 @@ type Request struct {
 	// check the stage is on while it is still running rather than only once it
 	// has ended.
 	Started func(command string, stageElapsed time.Duration)
+	// Timeout, where set, is the budget each check of this request gets in
+	// place of the runner's. Unbounded runs the request with no stage bound at
+	// all: each check has its budget and the list may take the sum. Both are
+	// what a landing asks for — the suite moved to the landing is the one too
+	// long for the gate's stage bound, so a landing run under that bound would
+	// be stopped every time — and neither reaches a request that leaves them
+	// out, which is every per-run gate.
+	Timeout   time.Duration
+	Unbounded bool
 }
 
 type Runner struct {
@@ -105,12 +120,18 @@ func (r Runner) Run(ctx context.Context, request Request, sink func(execution.Ev
 		shell = "/bin/sh"
 	}
 	timeout := r.Timeout
+	if request.Timeout > 0 {
+		timeout = request.Timeout
+	}
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
 	stageTimeout := r.StageTimeout
 	if stageTimeout == 0 {
 		stageTimeout = DefaultStageTimeout
+	}
+	if request.Unbounded {
+		stageTimeout = 0
 	}
 	// The checks are the project's own commands, so a toolchain that cannot
 	// write its build cache fails them at setup with nothing about the change to
@@ -154,7 +175,7 @@ func (r Runner) Run(ctx context.Context, request Request, sink func(execution.Ev
 		// budget of nothing would be killed as it began and read as a check that
 		// ran, which is the one thing a stopped stage must not record.
 		remaining := stageTimeout - stageElapsed
-		if remaining <= 0 {
+		if stageTimeout > 0 && remaining <= 0 {
 			now := clock.Now()
 			result := Result{
 				Command: safeCommand,
@@ -177,7 +198,7 @@ func (r Runner) Run(ctx context.Context, request Request, sink func(execution.Ev
 			break
 		}
 		budget := timeout
-		boundByStage := remaining < timeout
+		boundByStage := stageTimeout > 0 && remaining < timeout
 		if boundByStage {
 			budget = remaining
 		}

@@ -342,6 +342,25 @@ type CheckStage struct {
 	// StoppedAtBound reports a stage that ended because it reached its bound,
 	// with Command naming the check it stopped.
 	StoppedAtBound bool `json:"stopped_at_bound,omitempty"`
+	// Interrupted reports a stage the sweep closed because the process running
+	// it died, with Command naming the check it was on. It is written by the
+	// settlement rather than by the run, because a run that died wrote nothing;
+	// without it a blocked run read as one still in its checks, with a spend
+	// that grew for as long as the record stood.
+	Interrupted bool `json:"interrupted,omitempty"`
+}
+
+// CloseInterrupted ends a stage the process running it never ended: the sweep
+// settling the run calls it, so the record says the checks were interrupted
+// rather than still running. A stage already ended is left as it is.
+func (c *CheckStage) CloseInterrupted(now time.Time) {
+	if c == nil || !c.Running() {
+		return
+	}
+	finished := now
+	c.FinishedAt = &finished
+	c.ElapsedSeconds = int64(c.SpentBy(now) / time.Second)
+	c.Interrupted = true
 }
 
 // Validate reports every contract violation in the recorded stage at once.
@@ -394,9 +413,12 @@ func (c CheckStage) SpentBy(now time.Time) time.Duration {
 func (c CheckStage) Describe(now time.Time) string {
 	said := fmt.Sprintf("checks: %s of %s", describeSpan(c.SpentBy(now)), describeSpan(c.Bound()))
 	if c.Command != "" {
-		if c.StoppedAtBound {
+		switch {
+		case c.StoppedAtBound:
 			said += ", stopped at the bound during " + c.Command
-		} else if c.Running() {
+		case c.Interrupted:
+			said += ", interrupted during " + c.Command
+		case c.Running():
 			said += ", on " + c.Command
 		}
 	}
@@ -426,14 +448,20 @@ type LandingChecks struct {
 	StartedAt time.Time `json:"started_at"`
 	// FinishedAt is absent while the landing checks run.
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	// BoundSeconds is the stage bound the landing checks ran under, which is the
-	// same execution.check_stage_timeout the gate runs under.
+	// BoundSeconds is the budget each landing check ran under —
+	// execution.landing_check_timeout — which is its own rather than the
+	// gate's: the suite moved to the landing is the one too long for the gate's
+	// stage bound, so a landing bounded the same way would stop every time.
+	// The landing has no stage bound; its checks together may take the sum.
 	BoundSeconds int64                `json:"bound_seconds"`
 	Checks       []LandingCheckResult `json:"checks,omitempty"`
-	// Ran reports the checks ran at all, and Green that every one of them
-	// passed. Both are meaningful once FinishedAt is set. A landing whose
-	// checks could not run is neither green nor red: it is unverified, and
-	// Problem says why.
+	// Ran reports the checks ran to a verdict of their own — every one of them
+	// passed or failed on its own exit — and Green that every one of them
+	// passed. Both are meaningful once FinishedAt is set. A landing whose checks
+	// could not run, or were stopped before they finished — at a budget, by a
+	// cancelled process, by a process that died — is neither green nor red: a
+	// stopped check judged nothing, so the landing is unverified, and Problem
+	// says why.
 	Ran   bool `json:"ran,omitempty"`
 	Green bool `json:"green,omitempty"`
 	// FiledWorkItem is the item a red landing filed, and FilingProblem is why
@@ -455,7 +483,9 @@ type LandingCheckResult struct {
 	Passed         bool   `json:"passed"`
 	ExitCode       int    `json:"exit_code"`
 	ElapsedSeconds int64  `json:"elapsed_seconds"`
-	StoppedAtBound bool   `json:"stopped_at_bound,omitempty"`
+	// StoppedAtBound reports a check stopped at its budget rather than one that
+	// ran to its own exit, which makes the landing unverified rather than red.
+	StoppedAtBound bool `json:"stopped_at_bound,omitempty"`
 	// Output is the bounded capture of a failing check, for the item a red
 	// landing files and for whoever reads the run.
 	Output string `json:"output,omitempty"`
@@ -487,6 +517,21 @@ func (l LandingChecks) Validate() error {
 // Finished reports a landing whose checks have ended, one way or another.
 func (l LandingChecks) Finished() bool {
 	return l.FinishedAt != nil
+}
+
+// CloseInterrupted ends a landing the process running its checks never ended,
+// as unverified: the sweep settling the run calls it, because a landing that
+// reads as running forever is one nobody was told went unverified. A landing
+// already ended is left as it is.
+func (l *LandingChecks) CloseInterrupted(now time.Time) {
+	if l == nil || l.Finished() {
+		return
+	}
+	finished := now
+	l.FinishedAt = &finished
+	l.Ran = false
+	l.Green = false
+	l.Problem = strings.TrimPrefix(l.Problem+"; the process running the landing checks died before they ended", "; ")
 }
 
 // Red reports a finished landing whose checks ran and did not all pass.
@@ -535,20 +580,14 @@ func (l LandingChecks) Describe() string {
 	var said string
 	switch {
 	case !l.Finished():
-		return fmt.Sprintf("landing checks running over %s, bounded at %s", commit, describeSpan(l.Bound()))
+		return fmt.Sprintf("landing checks running over %s, each bounded at %s", commit, describeSpan(l.Bound()))
 	case !l.Ran:
-		said = fmt.Sprintf("unverified landing: the landing checks did not run over %s", commit)
+		said = fmt.Sprintf("unverified landing: the landing checks did not run to the end over %s", commit)
 	case l.Green:
 		said = fmt.Sprintf("green landing: %s passed over %s in %s", count(len(l.Checks), "landing check"), commit, describeSpan(l.spent()))
 	default:
 		failing, _ := l.Failing()
-		said = fmt.Sprintf("red landing: %s ", failing.Command)
-		if failing.StoppedAtBound {
-			said += fmt.Sprintf("was stopped at the %s stage bound", describeSpan(l.Bound()))
-		} else {
-			said += fmt.Sprintf("exited %d", failing.ExitCode)
-		}
-		said += " over " + commit
+		said = fmt.Sprintf("red landing: %s exited %d over %s", failing.Command, failing.ExitCode, commit)
 		switch {
 		case l.FiledWorkItem != "":
 			said += "; filed as " + l.FiledWorkItem
@@ -2502,6 +2541,13 @@ func (s State) Outstanding() bool {
 	}
 	if s.Integration == nil {
 		return false
+	}
+	// A landing whose checks the record says are still running is owed a
+	// settlement: the process running them either still holds the run, in which
+	// case the sweep leaves it alone, or died, in which case the landing is
+	// unverified and its checkout is standing.
+	if s.LandingChecks != nil && !s.LandingChecks.Finished() {
+		return true
 	}
 	return s.Phase != PhaseComplete || (s.PullRequest != nil && s.PullRequest.MergeQueued)
 }

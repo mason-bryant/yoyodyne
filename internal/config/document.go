@@ -91,6 +91,7 @@ type executionDocument struct {
 	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
 	CheckStageTimeout                      *Duration `yaml:"check_stage_timeout"`
+	LandingCheckTimeout                    *Duration `yaml:"landing_check_timeout"`
 	WorkPoll                               *Duration `yaml:"work_poll"`
 	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
 	// DeclarativeDelivery is absent from every file written before it existed and

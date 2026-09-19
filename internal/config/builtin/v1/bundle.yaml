@@ -62,6 +62,10 @@ execution:
   # a stoppage naming the bound and the check it stopped. It is in minutes on
   # purpose -- a stage that can take hours holds a developer seat for hours.
   check_stage_timeout: 30m
+  # The budget each landing check gets, with no stage bound over the list: what
+  # runs once per landing is the suite too long for the gate, so it is given what
+  # it actually takes. A check stopped here leaves the landing unverified.
+  landing_check_timeout: 2h
   # "yoyo work --watch" does not return when the queue empties: it waits this
   # long and reads the queue again. Nothing is cached between readings, so this
   # is also how long work admitted or reordered waits to be picked up, and an

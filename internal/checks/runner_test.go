@@ -440,3 +440,35 @@ func (r *advancingRunner) Run(_ context.Context, command execution.Command, _ ex
 	}
 	return execution.ProcessResult{Status: status, ExitCode: exitCode, StartedAt: started, FinishedAt: r.clock.Now()}, nil
 }
+
+// A request may run with a budget of its own and no stage bound, which is what
+// a landing asks for: the suite moved to the landing is the one too long for
+// the gate's stage bound, so each landing check is given its own budget whole
+// and the list may take the sum of them.
+func TestARequestMayRunUnboundedWithItsOwnBudget(t *testing.T) {
+	t.Parallel()
+
+	clock := &steppingClock{now: time.Date(2026, 9, 19, 6, 0, 0, 0, time.UTC)}
+	process := &advancingRunner{clock: clock, runs: 50 * time.Minute}
+	results, _, err := (Runner{Process: process, Clock: clock, Timeout: 10 * time.Minute, StageTimeout: 30 * time.Minute}).Run(
+		context.Background(),
+		Request{
+			RunID: "run-0123456789abcdef0123456789abcdef", Directory: t.TempDir(),
+			Commands: []string{"make race", "make test"},
+			Timeout:  2 * time.Hour, Unbounded: true,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 2 || !results[0].Passed || !results[1].Passed {
+		t.Fatalf("results = %#v, want both checks run whole past the runner's own bounds", results)
+	}
+	if got := process.budgets; !reflect.DeepEqual(got, []time.Duration{2 * time.Hour, 2 * time.Hour}) {
+		t.Fatalf("budgets given = %v, want the request's own budget each", got)
+	}
+	if results[1].StoppedByStage || results[1].StageTimeout != 0 || results[1].StageElapsed != 100*time.Minute {
+		t.Fatalf("second result = %#v, want no stage bound and the list's spend recorded", results[1])
+	}
+}

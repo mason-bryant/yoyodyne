@@ -4190,6 +4190,15 @@ func (a *activeRun) closeCheckStage(stage *runstate.CheckStage, results []checks
 	a.state.UpdatedAt = finished
 }
 
+// landingCheckTimeout is the budget each landing check is given, read from the
+// configuration with the same fallback the stage bound has.
+func (p Pipeline) landingCheckTimeout() time.Duration {
+	if budget := p.Config.Execution.LandingCheckTimeout.Duration(); budget > 0 {
+		return budget
+	}
+	return checks.DefaultLandingCheckTimeout
+}
+
 // checkStageTimeout is the bound the stage is recorded under. It is read from
 // the configuration rather than from the runner, which is an interface here,
 // and a configuration that names none — a pipeline assembled in a test — is
@@ -4431,10 +4440,11 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 		return
 	}
 	commit := a.outcome.Integration.TargetCommit
+	budget := p.landingCheckTimeout()
 	landed := &runstate.LandingChecks{
 		Commit:       commit,
 		StartedAt:    p.clock().Now(),
-		BoundSeconds: int64(p.checkStageTimeout() / time.Second),
+		BoundSeconds: int64(budget / time.Second),
 	}
 	a.state.LandingChecks = landed
 	a.outcome.LandingChecks = landed
@@ -4451,8 +4461,12 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 			Commands:     p.Config.LandingChecks,
 			LastSequence: a.state.LastSequence,
 			// A landing is where the whole suite runs, so a landing check written
-			// to read the narrowing is told there is none.
-			Env: []string{checks.Narrowing{Whole: true, Reason: "a landing runs the whole suite"}.Env()},
+			// to read the narrowing is told there is none — and it is given the
+			// landing's own budget with no stage bound, because the suite moved
+			// here is the one the gate's stage bound cannot hold.
+			Env:       []string{checks.Narrowing{Whole: true, Reason: "a landing runs the whole suite"}.Env()},
+			Timeout:   budget,
+			Unbounded: true,
 		}, a.sink)
 		a.state.LastSequence = lastSequence
 		if removeErr := p.Landings.RemoveCheckout(ctx, path); removeErr != nil {
@@ -4461,19 +4475,33 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("the landing checks could not be run: %v", err))
 		}
+		stopped := ""
 		for _, result := range results {
+			// A check killed on time or cancelled judged nothing, which is the
+			// same rule the per-run gate applies: it is neither a pass nor a
+			// failure, and a landing it happened in is unverified rather than
+			// red, filing nothing.
+			atBudget := result.Process.Status == execution.ProcessTimedOut
+			if atBudget {
+				stopped = fmt.Sprintf("%s was stopped at its %s execution.landing_check_timeout budget after %s and judged nothing", result.Command, budget, result.Elapsed().Round(time.Second))
+			} else if result.Process.Status == execution.ProcessCancelled || result.Process.Status == execution.ProcessStalled {
+				stopped = fmt.Sprintf("%s was %s after %s and judged nothing", result.Command, result.Process.Status, result.Elapsed().Round(time.Second))
+			}
 			landed.Checks = append(landed.Checks, runstate.LandingCheckResult{
 				Command:        result.Command,
 				Passed:         result.Passed,
 				ExitCode:       result.Process.ExitCode,
 				ElapsedSeconds: int64(result.Elapsed() / time.Second),
-				StoppedAtBound: result.StoppedByStage,
+				StoppedAtBound: atBudget,
 				Output:         landingCheckOutput(result),
 			})
 		}
-		// Every check ran and passed is green; a list the runner stopped short
-		// of, on a failure or on the bound, is not.
-		landed.Ran = err == nil && len(results) > 0
+		if stopped != "" {
+			problems = append(problems, stopped)
+		}
+		// Every check ran to its own exit and passed is green; one that failed
+		// on its own exit is red; a list stopped short of a verdict is neither.
+		landed.Ran = err == nil && len(results) > 0 && stopped == ""
 		landed.Green = landed.Ran && len(results) == len(p.Config.LandingChecks) && landed.AllPassed()
 	}
 	finished := p.clock().Now()
@@ -4528,9 +4556,6 @@ func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.Landing
 	}
 	target := a.outcome.Integration.TargetBranch
 	what := fmt.Sprintf("%s exited %d", failing.Command, failing.ExitCode)
-	if failing.StoppedAtBound {
-		what = fmt.Sprintf("%s was stopped at the %s landing stage bound", failing.Command, landed.Bound())
-	}
 	description := fmt.Sprintf("Red landing on %s at %s, after %s (%s) integrated: %s.\n\n"+
 		"The per-run gate passed on the change and the reviewer approved it; the landing checks then ran the whole suite over the integrated commit and this one failed. "+
 		"So %s is red at %s, and every run cut from it starts on a red base until this is fixed or the landing is shown to have been the suite's fault. "+
@@ -4544,7 +4569,9 @@ func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.Landing
 	if statement, named := goal.NamedIn(a.item.Notes); named {
 		notes += "\n\n" + goal.Note(statement)
 	}
-	priority := 1
+	// Priority 0 is where this project puts an operator's order, and a red
+	// target branch is that: every run until it is fixed is cut from it.
+	priority := 0
 	created, err := p.Filer.Create(ctx, beads.NewWorkItem{
 		Title:       fmt.Sprintf("Red landing on %s at %s: %s after %s integrated", target, commit, what, a.state.WorkItemID),
 		Description: description,

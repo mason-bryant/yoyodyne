@@ -244,6 +244,10 @@ execution:
   # status" shows how much of it a run has spent while its checks run. Keep it
   # in minutes: a stage that can take hours holds a developer seat for hours.
   check_stage_timeout: %s
+  # The budget each landing check gets -- the list under "landing_checks" below,
+  # run once per landing over the integrated commit. It is its own budget with
+  # no stage bound, because what goes there is the suite too long for the gate.
+  landing_check_timeout: %s
   # "yoyo work --watch" stays open instead of returning when the queue is empty,
   # and this is how long it waits before reading the queue again. Nothing is
   # cached between readings, so this is also the delay on work you admit or
@@ -347,6 +351,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
 		renderScaffoldDuration(effective.Execution.CheckStageTimeout),
+		renderScaffoldDuration(effective.Execution.LandingCheckTimeout),
 		renderScaffoldDuration(effective.Execution.WorkPoll),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		effective.Execution.DeclarativeDelivery,
@@ -655,8 +660,10 @@ func renderScaffoldLandingChecks(builder *strings.Builder) {
 # Landing checks run once per landing on the target branch, over the integrated
 # commit, after a run has integrated and closed its item. A failure is reported
 # as a red landing that files its own work item; it never blocks the run that
-# landed the change. This is where a suite too expensive for every attempt goes
-# whole -- a race detector, a long integration suite -- while the per-run gate
+# landed the change. Each check gets landing_check_timeout above and the list
+# has no stage bound; a check stopped at its budget leaves the landing
+# unverified rather than red. This is where a suite too expensive for every
+# attempt goes whole -- a race detector, a long integration suite -- while the per-run gate
 # above runs it narrowed: every check is given YOYODYNE_CHANGED_GO_PACKAGES,
 # the Go packages the change touches as "./dir" patterns, "./..." where the
 # harness cannot narrow, and empty where the change touches no package.

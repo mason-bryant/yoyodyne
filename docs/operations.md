@@ -721,28 +721,45 @@ RACE_PACKAGES="$YOYODYNE_CHANGED_GO_PACKAGES"` here — runs over those alone.
 `landing_checks` is then what runs whole, once per landing on the target
 branch: after a run has integrated, closed its item, and removed its worktree,
 the harness cuts a detached checkout of the integrated commit under the
-worktree root, runs the list there under the same stage bound, and removes the
-checkout. What the landing made of the commit is recorded on the run and said
-on the item and in the thread:
+worktree root, runs the list there, and removes the checkout. The landing has
+a budget of its own, `execution.landing_check_timeout` (two hours by default,
+per check, with no stage bound over the list), because what is moved there is
+the suite the gate's stage bound cannot hold; nothing waits on it, since the
+run is over and its seat is free. What the landing made of the commit is
+recorded on the run and said on the item and in the thread:
 
 ```text
 green landing: 1 landing check passed over 3d3d367a1b2c in 18m
 red landing: make race exited 1 over 3d3d367a1b2c; filed as yoyodyne-ifd.402
-unverified landing: the landing checks did not run over 3d3d367a1b2c (no checkout of the integrated commit could be cut: ...)
+unverified landing: the landing checks did not run to the end over 3d3d367a1b2c (make race was stopped at its 2h0m0s execution.landing_check_timeout budget after 2h0m0s and judged nothing)
 ```
+
+A landing check stopped at its budget judged nothing, exactly as a gate check
+the harness stops on time judged nothing, so the landing is unverified rather
+than red and files nothing: the record and the channel say which check was
+stopped and at what budget, and raising `landing_check_timeout` is the remedy.
 
 **A red landing files its own item and blocks nothing.** The run that landed
 the change passed its gate and was approved, so the run stays succeeded and its
-item stays closed. What the harness does is admit a bug at the front of the
-queue — the target branch, the commit, the failing check and its bounded
-output, the run and the item that landed it — under the goal the landed item
-served, because every run after it is cut from that commit. The red landing
-reaches the channel as a warning naming the item it filed; a green one stays in
-the thread; an unverified one reaches the channel too, because a landing nobody
-verified reads as green to anybody who was not told. A landing checkout a dead
-process left standing is replaced by the next landing of the same run, and one
-the harness could not remove is named on the run for somebody to remove by
-hand: `landing-<run>` under the worktree root.
+item stays closed. What the harness does is admit a bug at priority 0 — the
+front of the queue — the target branch, the commit, the failing check and its
+bounded output, the run and the item that landed it — under the goal the
+landed item served, because every run after it is cut from that commit. The
+red landing reaches the channel as a warning naming the item it filed; a green
+one stays in the thread; an unverified one reaches the channel too, because a
+landing nobody verified reads as green to anybody who was not told.
+
+**A process that dies inside the landing checks is settled by the sweep.** It
+leaves a run that is over with a landing the record says is still running, and
+the checkout the checks ran in — `landing-<run>` under the worktree root —
+still registered. Such a run owes a step, so `yoyo reconcile` takes it up:
+where the process is really gone (a live one still holds the run's lease and is
+left alone) the landing is settled as unverified, saying the process died, and
+the checkout is removed. A checkout the sweep could not remove is named on the
+run for somebody to remove by hand. A run killed inside its per-run checks is
+settled the same way: the sweep closes the stage as interrupted, naming the
+check it was on, so `yoyo status` stops saying the checks are running under a
+run that has ended.
 
 [What a whole check stage may cost](configuration.md#what-a-whole-check-stage-may-cost)
 and [where the whole suite runs](configuration.md#where-the-whole-suite-runs)

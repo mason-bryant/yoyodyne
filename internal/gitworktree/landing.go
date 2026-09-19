@@ -94,6 +94,23 @@ func (m *Manager) RemoveCheckout(ctx context.Context, path string) error {
 	return m.removeCheckout(ctx, path)
 }
 
+// RemoveLandingCheckout removes whatever landing checkout a run left, and
+// nothing where there is none. It is what the sweep calls for a run whose
+// process died with its landing checks running: the record names no path for
+// the checkout, so it is found by the name the run's landing would have used.
+func (m *Manager) RemoveLandingCheckout(ctx context.Context, runID string) error {
+	if strings.TrimSpace(runID) == "" || len(strings.TrimPrefix(runID, "run-")) < 8 {
+		return fmt.Errorf("run id %q is not one a landing checkout can be named for", runID)
+	}
+	path := filepath.Join(m.worktreeRoot, landingDirectoryName(runID))
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect landing checkout path: %w", err)
+	}
+	return m.RemoveCheckout(ctx, path)
+}
+
 // removeCheckout removes a checkout whatever it holds: a landing checkout is
 // nobody's change, so a check that left build products in it is not work to
 // preserve. The caller holds the registry lease.

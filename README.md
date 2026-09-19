@@ -405,7 +405,8 @@ the per-check budget as your suite grows, and raise it again if you run several
 developers at once: concurrent runs share the machine, so each suite's wall
 clock grows without its work doing so. Keep the stage bound in minutes, and fit
 the stage inside it by running the expensive suite narrowed to what a change
-touches per run and whole once per landing, with `landing_checks`. See
+touches per run and whole once per landing, with `landing_checks`, which run
+under a budget of their own (`execution.landing_check_timeout`, two hours). See
 [How long a check may take](docs/configuration.md#how-long-a-check-may-take)
 and [Where the whole suite runs](docs/configuration.md#where-the-whole-suite-runs).
 

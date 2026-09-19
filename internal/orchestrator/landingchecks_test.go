@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/checks"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -129,7 +132,7 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 	if !strings.Contains(filed.Notes, "Goal served: [reliable-delivery] Run development nearly autonomously.") || !strings.Contains(filed.Notes, outcome.RunID) {
 		t.Fatalf("filed notes = %q, want the landed item's goal and the run named", filed.Notes)
 	}
-	if filed.Type != "bug" || filed.Priority == nil || *filed.Priority != 1 {
+	if filed.Type != "bug" || filed.Priority == nil || *filed.Priority != 0 {
 		t.Fatalf("filed as %s at %v, want a bug at the front of the queue", filed.Type, filed.Priority)
 	}
 	state, err := store.Load(outcome.RunID)
@@ -198,6 +201,130 @@ func TestAProjectWithNoLandingChecksRecordsNoLanding(t *testing.T) {
 	}
 }
 
+// A landing runs under its own budget with no stage bound, because what is
+// moved to the landing is the suite the gate's stage bound cannot hold: the
+// runner's per-check and stage bounds are not what a landing check is given.
+// And a landing check stopped at that budget judged nothing, so the landing is
+// unverified rather than red — recorded and said, filing nothing — which is the
+// rule the per-run gate already applies to a check it stopped on time.
+func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
+	pipeline.Landings = pipeline.Worktrees.(*gitworktree.Manager)
+	filer := &recordingFiler{}
+	pipeline.Filer = filer
+	// The gate's bounds are far below what the landing check takes, and the
+	// landing's own budget is what stops it.
+	runner := pipeline.Checks.(checks.Runner)
+	runner.Timeout = 50 * time.Millisecond
+	runner.StageTimeout = 50 * time.Millisecond
+	pipeline.Checks = runner
+	// One second of the code's own timer, which is the thing under test here;
+	// the budget is recorded in whole seconds, so it is not made shorter.
+	pipeline.Config.Execution.LandingCheckTimeout = config.Duration(time.Second)
+	pipeline.Config.LandingChecks = []string{"sleep 30", "true"}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("Run() = %#v, %v, want a succeeded run", outcome, err)
+	}
+	landed := outcome.LandingChecks
+	if landed == nil || !landed.Finished() || !landed.Unverified() || landed.Red() || landed.Green {
+		t.Fatalf("landing = %#v, want an unverified landing", landed)
+	}
+	if landed.Bound() != time.Second {
+		t.Fatalf("landing bound = %s, want the landing's own budget recorded", landed.Bound())
+	}
+	if len(landed.Checks) != 1 || !landed.Checks[0].StoppedAtBound || landed.Checks[0].Passed {
+		t.Fatalf("landing checks = %#v, want the first stopped at its budget and the second never run", landed.Checks)
+	}
+	if !strings.Contains(landed.Problem, "sleep 30 was stopped at its") || !strings.Contains(landed.Problem, "execution.landing_check_timeout budget") {
+		t.Fatalf("landing problem = %q, want the stopped check and the budget named", landed.Problem)
+	}
+	if len(filer.filed) != 0 || landed.FiledWorkItem != "" {
+		t.Fatalf("filed = %#v, want nothing filed for a landing that judged nothing", filer.filed)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.LandingChecks == nil || !state.LandingChecks.Unverified() || state.Outstanding() {
+		t.Fatalf("state = %#v, want an unverified landing on a run that owes nothing", state.LandingChecks)
+	}
+	if notes := strings.Join(tracker.noteRecords, "\n"); !strings.Contains(notes, "Landing checks: unverified landing: the landing checks did not run to the end over") {
+		t.Fatalf("item notes do not say the landing went unverified:\n%s", notes)
+	}
+}
+
+// A process that dies inside its landing checks leaves a run that is over with
+// a landing the record says is running, and a checkout under the worktree
+// root. The sweep settles the landing as unverified, removes the checkout, and
+// leaves the run as it recorded itself; a live process running the checks holds
+// the run's lease and is left alone.
+func TestTheSweepSettlesALandingWhoseProcessDiedAsUnverified(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"true"}), provider)
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// What a dead process leaves: the landing recorded as started and never
+	// ended, and the checkout it was running in still registered.
+	manager := newObserver(t, repository, worktreeRoot).(*gitworktree.Manager)
+	checkout, err := manager.CheckoutCommit(context.Background(), outcome.RunID, outcome.Integration.TargetCommit)
+	if err != nil {
+		t.Fatalf("CheckoutCommit() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	state.LandingChecks = &runstate.LandingChecks{Commit: outcome.Integration.TargetCommit, StartedAt: state.UpdatedAt, BoundSeconds: 7200}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if !state.Outstanding() {
+		t.Fatal("a run with its landing checks running owes nothing, so no sweep would ever settle it")
+	}
+
+	results, err := Reconciler{Tracker: tracker, Worktrees: manager, Store: store}.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionCompleted || !strings.Contains(results[0].Detail, "unverified") {
+		t.Fatalf("reconciliation = %#v, want the landing settled as unverified", results)
+	}
+	settled, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Status != runstate.StatusSucceeded || settled.Outstanding() || !tracker.closed {
+		t.Fatalf("settled = %#v, closed = %t, want the run left as it recorded itself and owing nothing", settled, tracker.closed)
+	}
+	if settled.LandingChecks == nil || !settled.LandingChecks.Unverified() || !strings.Contains(settled.LandingChecks.Problem, "died before they ended") {
+		t.Fatalf("settled landing = %#v, want it unverified with the death named", settled.LandingChecks)
+	}
+	if _, err := os.Lstat(checkout); !os.IsNotExist(err) {
+		t.Fatalf("Lstat(%s) = %v, want the landing checkout removed", checkout, err)
+	}
+	sweep := Reconciler{Tracker: tracker, Worktrees: manager, Store: store}
+	if again, err := sweep.Reconcile(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("second Reconcile() = %#v, %v, want nothing left to settle", again, err)
+	}
+}
+
 // recordingFiler is a tracker that takes the items a red landing files, or
 // refuses them.
 type recordingFiler struct {
@@ -211,4 +338,49 @@ func (f *recordingFiler) Create(_ context.Context, item beads.NewWorkItem) (bead
 	}
 	f.filed = append(f.filed, item)
 	return beads.WorkItem{ID: "yoyodyne-red-1", Title: item.Title}, nil
+}
+
+// A run killed inside its checks leaves a record saying the stage is running.
+// The sweep that settles the run closes the stage as interrupted, naming the
+// check it was on, so no surface goes on saying the checks are running — with a
+// spend that grows for as long as the record stands — under a run that ended.
+func TestTheSweepClosesACheckStageWhoseProcessDiedAsInterrupted(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+	// What a process killed inside `make race` leaves on disk: the stage
+	// recorded as started and on that check, and nothing after it.
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	state.Phase = runstate.PhaseChecking
+	state.CheckStage = &runstate.CheckStage{StartedAt: state.UpdatedAt, BoundSeconds: 1800, Command: "make race"}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action == ActionUnsettled {
+		t.Fatalf("reconciliation = %#v, want the run settled", results)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Status.Terminal() || settled.CheckStage == nil || settled.CheckStage.Running() || !settled.CheckStage.Interrupted {
+		t.Fatalf("settled = %#v, stage = %#v, want the stage closed as interrupted", settled.Status, settled.CheckStage)
+	}
+	if said := settled.CheckStage.Describe(time.Now()); !strings.Contains(said, "interrupted during make race") {
+		t.Fatalf("stage says %q, want the interruption and the check named", said)
+	}
 }

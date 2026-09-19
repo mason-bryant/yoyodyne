@@ -340,7 +340,7 @@ func TestALandingIsSaidOnceWhicheverWayItWent(t *testing.T) {
 		{
 			name:    "unverified",
 			landing: runstate.LandingChecks{Commit: commit, StartedAt: moment, FinishedAt: &finished, BoundSeconds: 1800, Problem: "no checkout of the integrated commit could be cut"},
-			kind:    KindLandingUnverified, severity: report.SeverityWarning, body: "unverified landing: the landing checks did not run over cccccccccccc (no checkout of the integrated commit could be cut)",
+			kind:    KindLandingUnverified, severity: report.SeverityWarning, body: "unverified landing: the landing checks did not run to the end over cccccccccccc (no checkout of the integrated commit could be cut)",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -986,7 +986,11 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	// stage that ended inside its bound is the ordinary case and says nothing
 	// here — the reason line above already answers for a run the bound stopped,
 	// and this is the figure beside it.
-	if stage := run.CheckStage; stage != nil && (stage.Running() || stage.StoppedAtBound) {
+	//
+	// A stage still running is only said of a run still in flight: a run that
+	// ended with its stage open is one whose process died inside it, and the
+	// sweep closes that stage as interrupted when it settles the run.
+	if stage := run.CheckStage; stage != nil && ((stage.Running() && run.Status.InFlight()) || stage.StoppedAtBound || stage.Interrupted) {
 		fmt.Fprintf(writer, "  %s\n", singleLine(stage.Describe(time.Now())))
 		printed = true
 	}

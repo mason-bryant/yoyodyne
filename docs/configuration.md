@@ -182,6 +182,7 @@ execution:
   server_overload_pause: 90s
   check_timeout: 30m
   check_stage_timeout: 30m
+  landing_check_timeout: 2h
 
 triage:
   stuck_merge_age: 2h
@@ -410,6 +411,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.server_overload_pause` (`90s`),
    `execution.check_timeout` (`30m`),
    `execution.check_stage_timeout` (`30m`),
+   `execution.landing_check_timeout` (`2h`),
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
    `approvals.publishing` (`human`), `approvals.work_items` (`human`), and an
@@ -885,6 +887,19 @@ setting that governed proposals while work arrived through the other door would
 say one thing and do another. Decomposition is not admission: a role that may
 only create underneath work you already admitted is building structure under a
 decision that was made, and it is unaffected by either setting.
+
+**One admission is the harness's own and is governed by neither value: the
+item a red landing files.** When the [landing checks](#where-the-whole-suite-runs)
+fail over a commit that every gate passed, the harness files a bug for it
+directly, at priority 0, under either `work_items` setting — the operator's
+standing order of 2026-09-19, that a red landing files its own item. No role
+asks for it and no proposal is put to you: it is the harness reporting that
+the target branch is broken, in the one form that stops the next run being cut
+from it unnoticed. Its notes record that basis — filed by the harness for the
+red landing of the named item and run, on the operator's standing order — and
+carry the `Goal served:` line of the item whose landing went red, so the
+attribution check reads it as work serving that goal rather than as work nobody
+attributed. Nothing else the harness does admits work on its own account.
 
 **`approvals.work_item_exemptions` narrows the per-item gate without lifting it.**
 It is a list of classes of work this project admits without asking, whatever
@@ -1974,27 +1989,49 @@ item's notes.
 **Landing checks.** `landing_checks` is a second list beside `checks`, run
 once per landing on the target branch — after a run has integrated, closed its
 item, and removed its worktree — in a detached checkout of the integrated commit
-cut under the worktree root for the purpose and removed afterwards, under the
-same `check_stage_timeout`, and told `YOYODYNE_CHANGED_GO_PACKAGES=./...`
-because a landing is where the whole suite runs. A landing whose checks all
-pass is **green**; one whose checks do not is **red**; one whose checks could
-not run — no checkout could be cut, say — is **unverified**. All three are
-recorded on the run, said on the item's notes, and said in the run's Slack
-thread, and a red or unverified landing reaches the channel because it is the
-one fact about a landed change that the run's own ending does not carry.
+cut under the worktree root for the purpose and removed afterwards, and told
+`YOYODYNE_CHANGED_GO_PACKAGES=./...` because a landing is where the whole
+suite runs. It runs under a budget of its own:
+
+```yaml
+execution:
+  landing_check_timeout: 2h   # per landing check; the list has no stage bound
+```
+
+The budget is the landing's rather than the gate's on purpose. What is moved
+to the landing is exactly the suite the gate's stage bound cannot hold, so a
+landing held to `check_stage_timeout` would be stopped on every landing of the
+repository that needed it; each landing check gets `landing_check_timeout`
+whole, the list may take the sum, and nothing waits on it — the run is over
+and its seat is free. The default is two hours, which is what the whole race
+suite took under load on 2026-09-19 with room to spare.
+
+A landing whose checks all pass on their own exit is **green**; one where a
+check fails on its own exit is **red**; one whose checks did not run to a
+verdict — no checkout could be cut, a check was stopped at its budget, the
+process running them died — is **unverified**. A stopped check judged nothing,
+which is the rule the per-run gate already applies to a check it stops on
+time, so a landing it happened in files nothing and says why instead. All
+three are recorded on the run, said on the item's notes, and said in the run's
+Slack thread, and a red or unverified landing reaches the channel because it is
+the one fact about a landed change that the run's own ending does not carry.
 
 **A red landing files its own item and blocks nothing.** The run that landed
 the change succeeded on the gate it was given and was approved; a red landing
 is news about the target branch, not a verdict on that run, so nothing is
 reopened, failed, or blocked. What happens instead is that the harness admits a
-bug at the front of the queue naming the target branch, the commit, the check
-that failed and its output, and the run and item that landed it, under the goal
-the landed item served — because every run after it is cut from that commit,
-and a red target branch is the thing to fix first. The item is named on the run
+bug at priority 0 — the front of the queue, where this project puts an
+operator's order — naming the target branch, the commit, the check that failed
+and its output, and the run and item that landed it, under the goal the landed
+item served, because every run after it is cut from that commit and a red
+target branch is the thing to fix first. The item is named on the run
 (`filed as yoyodyne-ifd.402`) and on the landed item's notes. A red landing the
 tracker would not take an item for is still recorded and said as red, with the
 refusal beside it. This is the operator's standing order of 2026-09-19, and it
-is the one place the harness admits work on its own account.
+is the one place the harness admits work on its own account: it goes straight
+to the tracker under either `approvals.work_items` value, which
+[what reaches the queue](#what-reaches-the-queue) states as the exception it
+is.
 
 For this repository the two halves are written as, with the Makefile's `race`
 target taking the packages it covers as `RACE_PACKAGES` and passing on an empty
@@ -2018,7 +2055,11 @@ the checks above, non-interactive and non-zero on failure, and an empty one is
 refused when the configuration loads. The landing checks are run by the process
 that made the landing, once its run is over: a run whose process died and whose
 integration `yoyo reconcile` settled afterwards lands without them, and its
-record carries no landing rather than a green one.
+record carries no landing rather than a green one. A process that dies inside
+the landing checks leaves a run that is over with a landing the record says is
+running; `yoyo reconcile` settles that landing as unverified, saying the process
+died, and removes the checkout it was running in — a live process running them
+holds the run's lease and is left alone.
 
 ## Scheduling ready work
 
@@ -4220,11 +4261,12 @@ These are all errors, reported before any work is claimed:
 - a persona override missing `version` or `path`;
 - a usage-limit pause bound that is not a duration, or that is negative — `0`
   is accepted, because "never wait" is a choice somebody can mean;
-- an `execution.check_timeout` or `execution.check_stage_timeout` that is zero
-  or negative, since a check or a stage with no bound holds a worktree, a
-  claim, and a developer seat open for as long as it runs; and an empty entry
-  in `checks` or `landing_checks`, which is a line the shell would run as
-  nothing and report as passed;
+- an `execution.check_timeout`, `execution.check_stage_timeout`, or
+  `execution.landing_check_timeout` that is zero or negative, since a check or
+  a stage with no bound holds a worktree, a claim, and a developer seat open —
+  or a landing checkout — for as long as it runs; and an empty entry in
+  `checks` or `landing_checks`, which is a line the shell would run as nothing
+  and report as passed;
 - a `triage.stuck_merge_age` that is not a duration, or that is zero or
   negative — unlike the usage-limit pauses, "no time at all" is not a choice
   anybody can mean here;
@@ -4572,7 +4614,9 @@ second holder when the configuration loads, and what a person auditing the
 mapping reads — rather than as a gate an act passes through.
 
 **What keeps an agent out of the goals is two enforcements that do not depend on
-the signature.** A conversation runs with no tools at all, so the roles that
+the signature.** (The one item the harness admits on its own account — the bug
+a [red landing](#where-the-whole-suite-runs) files — is the harness's act and
+not an agent's, and it reaches the queue and never the goals.) A conversation runs with no tools at all, so the roles that
 could argue for a goal cannot run a command; and a run's change is compared
 against the [protected paths](#protected-paths-in-a-developers-change) before any
 check runs and before any reviewer sees it, so an approval a developer wrote is

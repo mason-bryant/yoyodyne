@@ -44,6 +44,11 @@ type ReconcileWorktrees interface {
 	// only unregisters checkouts that are no longer on disk.
 	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree, uncommitted gitworktree.UncommittedWork) (gitworktree.WorktreeRemoval, error)
 	PruneRegistrations(ctx context.Context) (gitworktree.Prune, error)
+	// RemoveLandingCheckout removes the checkout a run's landing checks were
+	// running in when the process running them died, and nothing where there is
+	// none. It is nobody's change — a landing checkout is a detached copy of an
+	// integrated commit — so it is the one removal here that preserves nothing.
+	RemoveLandingCheckout(ctx context.Context, runID string) error
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
@@ -255,6 +260,15 @@ func (r Reconciler) reconcileRun(ctx context.Context, recorded runstate.State) R
 
 // settle decides one run from its durable state and what the repository shows.
 func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	// A run that is over and whose landing checks the record says are still
+	// running is a run whose process died inside them: a live process would hold
+	// the lease this settlement took. The landing is settled as unverified —
+	// nothing judged the commit — and the checkout the checks ran in is
+	// removed, because it is nobody's change and nothing else will ever remove
+	// it. The run itself is left exactly as it recorded itself.
+	if state.Status.Terminal() && state.LandingChecks != nil && !state.LandingChecks.Finished() {
+		return r.settleInterruptedLanding(ctx, state)
+	}
 	// A run its own pipeline can still continue is left alone. Ending it here
 	// would discard a change that can still be finished, and finishing it here
 	// would mean starting the developer reconciliation must never start.
@@ -350,6 +364,24 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 		return r.recoverIntegration(ctx, state, observation)
 	}
 	return r.abandon(ctx, state, observation)
+}
+
+// settleInterruptedLanding ends a landing whose process died with its checks
+// running: the record says the landing is unverified and why, and the checkout
+// is removed. The action is the run's own outcome rather than a new one — the
+// run was settled long before, and this settles only what it left running.
+func (r Reconciler) settleInterruptedLanding(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	state.LandingChecks.CloseInterrupted(r.clock().Now())
+	if err := r.Worktrees.RemoveLandingCheckout(ctx, state.RunID); err != nil {
+		state.LandingChecks.Problem += fmt.Sprintf("; the landing checkout could not be removed and is left for somebody to remove by hand: %v", err)
+	}
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("save the unverified landing of %s: %w", state.RunID, err)
+	}
+	result := reconciliationOf(state, ActionCompleted)
+	result.Detail = "settled the landing checks the run's process died inside as unverified: " + state.LandingChecks.Describe()
+	return result, nil
 }
 
 // queuedMerge reports a run waiting on a merge the forge accepted and has not
@@ -1005,6 +1037,10 @@ func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (ru
 		state.UpdatedAt = completedAt
 		state.CompletedAt = &completedAt
 		state.Failure = reconciled
+		// A check stage the dead process left running is closed as interrupted,
+		// so the record does not go on saying the checks are running under a run
+		// that has ended, with a spend that grows for as long as it stands.
+		state.CheckStage.CloseInterrupted(completedAt)
 	} else if strings.TrimSpace(state.Failure) == "" && strings.TrimSpace(state.PublishFailure) == "" {
 		// A record that was already terminal keeps the status it wrote for itself,
 		// but a record that says nothing about why is what left every surface
