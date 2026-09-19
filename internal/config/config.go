@@ -295,6 +295,16 @@ type Execution struct {
 	// work admitted, reprioritized, or unblocked is picked up at the next poll
 	// rather than by anything detecting it.
 	WorkPoll Duration `yaml:"work_poll" json:"work_poll"`
+	// RedeployDrainLimit bounds how long a watch session that has found a build
+	// deployed over it waits out the runs it hosts before it restarts anyway.
+	// Past it the hosted runs are stopped and preserved — worktree, branch,
+	// claim, developer session, and every counter — for the session that comes
+	// back to re-adopt, so a deploy over a session hosting a long check suite
+	// costs minutes rather than the length of the suite. A draining session
+	// keeps polling, pulling into free seats, and firing its recurring tasks
+	// right up to the restart; only the runs it hosts are what the drain is
+	// about.
+	RedeployDrainLimit Duration `yaml:"redeploy_drain_limit" json:"redeploy_drain_limit"`
 	// BlockedRunsBeforeIntakeHold is the failure-storm brake: this many runs
 	// blocking in a row, with nothing landing between them, holds intake and
 	// leaves it held for the operator to lift. It is a bound on systemic
@@ -373,6 +383,16 @@ const (
 	// responsive. Shorter buys latency nobody is waiting on; much longer makes
 	// reordering the queue feel like it did nothing.
 	defaultWorkPoll = Duration(60 * time.Second)
+	// defaultRedeployDrainLimit is measured in minutes, deliberately. On
+	// 2026-09-19 a session found a build deployed over it at 07:35Z and then did
+	// nothing for two hours, waiting out one hosted run whose race suite alone
+	// took over ninety minutes under load; two recurring passes were missed and
+	// the second seat stayed empty the whole time. Fifteen minutes is long enough
+	// for a run at its checks or its review to finish on an ordinary machine, and
+	// short enough that a deploy is taken up within the hour it landed in. A run
+	// the bound cuts off loses nothing but the minutes its current phase had
+	// spent: it is re-adopted from durable state by the session that comes back.
+	defaultRedeployDrainLimit = Duration(15 * time.Minute)
 	// defaultBlockedRunsBeforeIntakeHold is three, which is the same shape of
 	// bound as the repair and relaunch budgets: enough that one bad item and the
 	// unlucky item after it do not stop the line, and short of a session that
@@ -759,6 +779,13 @@ func (c Config) Validate() error {
 	// for as long as the queue stayed empty, which is a spin rather than a watch.
 	if c.Execution.WorkPoll <= 0 {
 		problems = append(problems, "execution.work_poll must be positive")
+	}
+	// Zero is not a choice here: a drain with no bound is a session that waits
+	// on whatever its hosted run happens to be doing, which on 2026-09-19 was two
+	// hours of a race suite under load. A session that must not stop its runs
+	// for a deploy sets this long rather than to nothing.
+	if c.Execution.RedeployDrainLimit <= 0 {
+		problems = append(problems, "execution.redeploy_drain_limit must be positive")
 	}
 	// Zero is a choice here — never brake, let the operator be the only thing
 	// that holds intake — so only a negative bound, which describes no run

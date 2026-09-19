@@ -99,6 +99,49 @@ func TestTheStallIsNamedInTheOrderAnOperatorActsIn(t *testing.T) {
 	}
 }
 
+// A session restarting into a build deployed over it is not idle and not
+// absent: it is stopping the runs it hosts and is seconds from coming back, and
+// telling an operator to look at it — or to start one — is the chore the
+// self-redeploy exists to end. It is named as itself whether the log's last
+// word is the drain's bound running out or the stop the session recorded as a
+// restart, and it waits on nobody.
+func TestASessionRestartingIntoADeployedBuildIsNeitherIdleNorAbsent(t *testing.T) {
+	t.Parallel()
+	since := moment.Add(-20 * time.Minute)
+	drained := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-time.Minute),
+		Draining: &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1, BoundReached: true}}
+	stall := WhyNothingStarts(Conditions{Sessions: held(drained)})
+	if stall.Reason != ReasonRedeploying || !strings.Contains(stall.Says, "bounded at 15m0s") || !stall.Since.Equal(since) {
+		t.Fatalf("stall = %+v, want the drain named with its bound, since the deploy was found", stall)
+	}
+	if _, waiting := stall.Waiting(); waiting {
+		t.Fatalf("a session restarting on its own was put on the attention line: %+v", stall)
+	}
+	if strings.Contains(stall.Refusal(), "yoyo work --watch") {
+		t.Fatalf("a session on its way back was told to start a session: %q", stall.Refusal())
+	}
+
+	restarting := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment.Add(-time.Minute), Restarting: true}
+	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting)})
+	if stall.Reason != ReasonRedeploying {
+		t.Fatalf("reason = %q (%q), want a stop recorded as a restart read as the session coming back", stall.Reason, stall.Says)
+	}
+	// A restart that then did not happen writes a later stop that is an ending,
+	// and that one is what the log says.
+	ended := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchStopped, At: moment}
+	stall = WhyNothingStarts(Conditions{Sessions: held(drained, restarting, ended)})
+	if stall.Reason != ReasonNoWatchSession {
+		t.Fatalf("reason = %q, want the restart that did not happen read as no session", stall.Reason)
+	}
+	// And a drain still inside its bound is a session choosing work, drain or no
+	// drain: it pulls into free seats and fires its tasks right up to the restart.
+	watching := runstate.WatchTransition{SessionID: "watch-2", State: runstate.WatchWatching, At: moment,
+		Draining: &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1}}
+	if stall := WhyNothingStarts(Conditions{Sessions: held(watching)}); stall.Stopped() {
+		t.Fatalf("stall = %+v, want a draining session inside its bound read as choosing", stall)
+	}
+}
+
 // A session watching settles it. The harness would start the next pullable item,
 // which is what makes a startable item's absence from the not-startable line
 // mean something.

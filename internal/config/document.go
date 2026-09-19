@@ -86,6 +86,7 @@ type executionDocument struct {
 	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
 	WorkPoll                               *Duration `yaml:"work_poll"`
+	RedeployDrainLimit                     *Duration `yaml:"redeploy_drain_limit"`
 	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
 	// DeclarativeDelivery is absent from every file written before it existed and
 	// from every file whose project is content with the default. A layer that does

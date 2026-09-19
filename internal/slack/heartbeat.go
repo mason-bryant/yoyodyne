@@ -454,7 +454,9 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 	// this surface says it in its own message, once, tagged to the people who
 	// end it, and a line said again every hour about a wait they have been told
 	// about is the nagging that gets a channel muted.
-	if stall.Reason == readmodel.ReasonUnwatched || stall.Reason == readmodel.ReasonProviderWindow || stall.Reason == readmodel.ReasonProviderAway {
+	// A session restarting into a deployed build is left out because it is over
+	// within a minute and the session's own restart message already says it.
+	if stall.Reason == readmodel.ReasonUnwatched || stall.Reason == readmodel.ReasonProviderWindow || stall.Reason == readmodel.ReasonProviderAway || stall.Reason == readmodel.ReasonRedeploying {
 		return readmodel.Stall{}
 	}
 	return stall

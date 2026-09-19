@@ -120,6 +120,12 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		// not have to discover by watching it happen.
 		"also takes up a build deployed over it",
 		"restarts into what was deployed",
+		// And that the wait on its runs is bounded, by what, and what becomes of
+		// the runs the bound stops: a two-hour wait on one run's checks is what
+		// the bound exists to end, and an operator reading "waits out every run"
+		// would be reading the old promise.
+		"execution.redeploy_drain_limit",
+		"re-adopt at its first pull",
 		// And what a deploy does to a bound the operator set, which is the half
 		// somebody reading "caps what one session spends" would otherwise have to
 		// find out from a bill.
@@ -737,6 +743,54 @@ func TestStatusSaysAStopThatIsARestartIsNotAnEnding(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "the session choosing work is stopped") {
 		t.Fatalf("status stdout = %q, want the session reported as stopped", stdout)
+	}
+}
+
+// A session draining to restart says so on `yoyo status` with its bound, on
+// whatever line it wrote last: a reader is told what stops the wait rather than
+// left to time it, which on 2026-09-19 was two hours nobody could account for.
+func TestStatusNamesTheDrainAndItsBoundWhileASessionDrains(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	watch, err := runstate.NewWatchStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	sessionID, err := runstate.NewWatchSessionID()
+	if err != nil {
+		t.Fatalf("NewWatchSessionID() error = %v", err)
+	}
+	since := time.Date(2026, 9, 19, 7, 35, 0, 0, time.UTC)
+	if err := watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     sessionID,
+		State:         runstate.WatchIdle,
+		At:            since.Add(time.Minute),
+		Reason:        "1 run in flight; nothing more is ready to pull",
+		Running:       1,
+		Draining:      &runstate.WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1},
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"the session choosing work is idle",
+		"draining to restart into the build deployed over it since 2026-09-19T07:35:00Z",
+		"bounded at 15m0s",
+		"until 2026-09-19T07:50:00Z",
+		"waiting out 1 run(s) it hosts while still pulling into free seats and firing its recurring tasks",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("status stdout = %q, want %q in it", stdout, want)
+		}
 	}
 }
 

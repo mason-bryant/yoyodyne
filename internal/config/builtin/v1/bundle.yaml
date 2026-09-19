@@ -62,6 +62,13 @@ execution:
   # is also how long work admitted or reordered waits to be picked up, and an
   # idle session costs one local tracker read per interval and no provider call.
   work_poll: 60s
+  # A watching session that finds a build deployed over it waits out the runs it
+  # hosts before restarting into the new build -- for at most this long. Past it
+  # the session restarts anyway and the hosted runs are stopped and preserved
+  # for the session that comes back to re-adopt, with every counter as it was.
+  # The session keeps pulling into free seats and firing its recurring tasks
+  # while it drains; only the runs it hosts are what the drain is about.
+  redeploy_drain_limit: 15m
   # The failure-storm brake for a session left running unattended: this many runs
   # blocking in a row, with nothing landing between them, holds intake and leaves
   # it held for the operator to lift. It is aimed at a broken machine rather than

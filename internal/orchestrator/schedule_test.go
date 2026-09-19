@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2132,11 +2133,14 @@ func TestAWatchingSessionStopsToTakeUpTheBuildDeployedOverIt(t *testing.T) {
 	}
 }
 
-// The guarantee the whole shape rests on: a run already going is never
-// interrupted for a redeploy. The session stops claiming immediately and waits
-// out what it started, which is what makes the window an external restart can
-// never find.
-func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
+// A run already going inside the drain bound is never interrupted for a
+// redeploy: the session waits it out, and restarts the moment it hosts nothing.
+// What the wait does not stop is the session's other duties — a seat freed
+// while it drains is pulled into, because draining is about the runs the
+// session hosts and not about the queue. The 07:35Z shape of 2026-09-19 was a
+// session that had stopped everything to wait on one run, with the second seat
+// empty for two hours.
+func TestARedeployWaitsOutTheRunsAlreadyGoingAndKeepsPullingIntoFreeSeats(t *testing.T) {
 	t.Parallel()
 
 	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
@@ -2145,12 +2149,13 @@ func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
 	// two live runs rather than with one that has already finished.
 	harness.developersMeet(2)
 	deployment := &deployedOver{}
+	sessions := &recordedSessions{}
 	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
 		deployment.deploy()
 		return h.complete(id), nil
 	}
 
-	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
 	schedule, err := scheduler.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
@@ -2161,13 +2166,393 @@ func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
 	if schedule.Stopped != ScheduleRedeployed {
 		t.Fatalf("stopped = %q, want the session stopped to be restarted", schedule.Stopped)
 	}
-	if len(schedule.Started) != 2 {
-		t.Fatalf("started = %#v, want the two runs already going and nothing claimed after them", schedule.Started)
+	// The third item was pulled into the seat the first finished run freed,
+	// while the session was still draining, and every run was carried to its own
+	// end: the bound was nowhere near.
+	if len(schedule.Started) != 3 {
+		t.Fatalf("started = %d run(s), want the two runs already going and the third pulled into the seat one of them freed: %s", len(schedule.Started), schedule.Render())
 	}
 	for _, started := range schedule.Started {
 		if started.Failure != "" || started.Outcome.Status != runstate.StatusSucceeded {
 			t.Fatalf("%s = %#v, want a live run carried to its own end rather than cut off", started.WorkItemID, started)
 		}
+	}
+	if schedule.Drain == nil || schedule.Drain.BoundReached || len(schedule.Drain.Stopped) != 0 {
+		t.Fatalf("drain = %#v, want a drain whose runs all ended inside the bound", schedule.Drain)
+	}
+	// And the drain is on every line the session wrote while it lasted, with its
+	// bound, so a reader is told what stops the wait rather than left to time it.
+	drained := false
+	for _, transition := range sessions.recorded() {
+		if transition.draining != nil {
+			drained = true
+			if transition.draining.Bound() != 15*time.Minute {
+				t.Fatalf("transition draining = %#v, want the configured bound on it", transition.draining)
+			}
+		}
+	}
+	if !drained {
+		t.Fatalf("no transition carried the drain: %#v", sessions.recorded())
+	}
+	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "restarting into it") || strings.Contains(reason, "ran out") {
+		t.Fatalf("stopped reason = %q, want a restart with no bound reached", reason)
+	}
+}
+
+// The bound is what makes the drain a drain rather than a wait on whatever the
+// hosted run happens to be doing. Past it the session stops the runs it hosts
+// with the drain as the cause, which their pipelines read as a stop to continue
+// from rather than a failure, and restarts with them preserved. On 2026-09-19 a
+// session waited two hours on one run's race suite; this is the two hours.
+func TestTheDrainBoundStopsTheHostedRunsAndRestartsAnyway(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.capacity = 2
+	harness.developersMeet(2)
+	// A bound the test reaches in real time. The harness's clock is fake and
+	// never reaches it; what fires is the drain's own timer, which is the thing
+	// under test.
+	harness.drainLimit = 20 * time.Millisecond
+	// The deploy lands while the session is waiting on the runs, which is where
+	// it lands in practice, so the session has to wake to find it.
+	harness.poll = 5 * time.Millisecond
+	deployment := &deployedOver{}
+	sessions := &recordedSessions{}
+	// Both runs are checking under load: they end only when the session stops
+	// them, and each records the cause it was stopped with as its pipeline would.
+	var stopped sync.Map
+	harness.hostedRun = func(ctx context.Context, h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		h.mu.Lock()
+		state := h.inFlight[id]
+		state.Phase = runstate.PhaseChecking
+		h.inFlight[id] = state
+		h.mu.Unlock()
+		<-ctx.Done()
+		var drained RedeployDrain
+		if !errors.As(context.Cause(ctx), &drained) {
+			return Outcome{WorkItemID: id, Status: runstate.StatusCancelled}, nil
+		}
+		stopped.Store(id, drained)
+		return Outcome{WorkItemID: id, Status: runstate.StatusRunning, Paused: true, RedeployStop: &runstate.RedeployStop{At: drained.At, Phase: runstate.PhaseChecking, BoundSeconds: int64(drained.Bound / time.Second), SessionID: drained.SessionID}}, nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, SessionID: "watch-drain", Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.rendezvousFailure != nil {
+		t.Fatalf("the deploy never landed on two live runs: %v", harness.rendezvousFailure)
+	}
+	if schedule.Stopped != ScheduleRedeployed || !schedule.Redeploying() {
+		t.Fatalf("stopped = %q, want the session restarted anyway once the bound ran out: %s", schedule.Stopped, schedule.Render())
+	}
+	if schedule.Drain == nil || !schedule.Drain.BoundReached {
+		t.Fatalf("drain = %#v, want the bound recorded as reached", schedule.Drain)
+	}
+	if got := schedule.Drain.Stopped; len(got) != 2 || got[0] != "yoyodyne-one" || got[1] != "yoyodyne-two" {
+		t.Fatalf("stopped = %v, want both hosted runs stopped for the restart", got)
+	}
+	for _, id := range []string{"yoyodyne-one", "yoyodyne-two"} {
+		cause, found := stopped.Load(id)
+		if !found {
+			t.Fatalf("%s was not stopped with the drain as its cause", id)
+		}
+		if drained := cause.(RedeployDrain); drained.Bound != 20*time.Millisecond || drained.SessionID != "watch-drain" {
+			t.Fatalf("%s cause = %#v, want the bound and the session on it", id, drained)
+		}
+	}
+	// Neither run is a failure on the schedule: each is a run owed a
+	// continuation, exactly as a provider the harness stopped on time leaves one.
+	for _, started := range schedule.Started {
+		if started.Failure != "" || !started.Outcome.Paused || started.Outcome.RedeployStop == nil {
+			t.Fatalf("%s = %#v, want a run stopped and preserved rather than failed", started.WorkItemID, started)
+		}
+	}
+	// The stop names what was preserved, so the reader of the log knows what the
+	// session that comes back is about to pick up.
+	if reason := sessions.said(runstate.WatchStopped); !strings.Contains(reason, "ran out with 2 run(s) still going") || !strings.Contains(reason, "yoyodyne-one, yoyodyne-two") {
+		t.Fatalf("stopped reason = %q, want the bound and the preserved runs named", reason)
+	}
+	if !sessions.restarted() {
+		t.Fatal("the session recorded its stop as an ending rather than a restart")
+	}
+	// And the bound running out was said before the runs were stopped, marked
+	// on the drain so `yoyo status` names it rather than reading an idle line.
+	reached := false
+	for _, transition := range sessions.recorded() {
+		if transition.state == runstate.WatchIdle && transition.draining != nil && transition.draining.BoundReached &&
+			strings.Contains(transition.reason, "bound has run out") {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Fatalf("no idle transition said the bound had run out: %#v", sessions.recorded())
+	}
+}
+
+// Draining is about the runs the session hosts and not about its other duties:
+// a recurring task that comes due while the session waits on a hosted run is
+// fired on schedule, from the pull the session goes on making every interval.
+// On 2026-09-19 the development manager's hourly pass was missed twice inside
+// one drain; this is the pass that would have fired.
+func TestADrainingSessionFiresItsRecurringTasksWhileItWaitsOnARun(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.capacity = 2
+	// The session wakes from its wait on the run once per poll, in real time,
+	// which is how a cadence coming due reaches it.
+	harness.poll = 5 * time.Millisecond
+	deployment := &deployedOver{}
+	sessions := &recordedSessions{}
+	// The hosted run outlives two firings, and ends only once they have been
+	// made — inside the bound, so nothing is stopped for it.
+	fired := make(chan struct{}, 8)
+	harness.fire = func(_ *scheduleHarness, passes int) (RecurringSweep, error) {
+		if passes < 2 {
+			return RecurringSweep{}, nil
+		}
+		select {
+		case fired <- struct{}{}:
+		default:
+		}
+		return RecurringSweep{Fired: []Fired{{Task: "development-manager-sweep", Role: domain.RoleDevelopmentManager, Turns: 1}}}, nil
+	}
+	harness.hostedRun = func(ctx context.Context, h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		for made := 0; made < 2; {
+			select {
+			case <-fired:
+				made++
+			case <-ctx.Done():
+				return Outcome{WorkItemID: id, Status: runstate.StatusCancelled}, nil
+			}
+		}
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the restart once the run ended: %s", schedule.Stopped, schedule.Render())
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].Outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("started = %#v, want the hosted run carried to its end inside the bound", schedule.Started)
+	}
+	if len(schedule.Fired) < 2 {
+		t.Fatalf("fired = %#v, want the recurring task fired while the session drained and waited on its run", schedule.Fired)
+	}
+	if schedule.Drain == nil || schedule.Drain.BoundReached {
+		t.Fatalf("drain = %#v, want a drain the runs ended inside", schedule.Drain)
+	}
+}
+
+// A pull made with the bound less than one poll away would start a run only to
+// stop it, so the seat is left for the session that comes back — and the skip
+// is said, in the watch log and on the pass, rather than reading as a poll that
+// found nothing.
+func TestAPullSkippedForTheDrainBoundSaysSo(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.capacity = 2
+	harness.poll = 5 * time.Millisecond
+	deployment := &deployedOver{}
+	sessions := &recordedSessions{}
+	skipped := make(chan struct{})
+	harness.hostedRun = func(ctx context.Context, h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		// The run ends once the session has said it skipped a pull.
+		select {
+		case <-skipped:
+		case <-ctx.Done():
+			return Outcome{WorkItemID: id, Status: runstate.StatusCancelled}, nil
+		}
+		return h.complete(id), nil
+	}
+	// Once the session has found the deploy — said in the log before the pull
+	// that follows is opened — the bound is moved to under one poll away on the
+	// session's own clock, which is the clock the skip is decided on; and a
+	// second item is admitted for the free seat the session is about to decline
+	// to fill. It is done on the pull itself so the queue is read after both.
+	moved := false
+	harness.onPull = func(h *scheduleHarness, _ int) {
+		if moved {
+			return
+		}
+		for _, transition := range sessions.recorded() {
+			if transition.draining != nil {
+				h.mu.Lock()
+				h.now = h.now.Add(15*time.Minute - h.poll/2)
+				h.mu.Unlock()
+				h.admit(readyItems("yoyodyne-two")...)
+				moved = true
+				return
+			}
+		}
+	}
+	go func() {
+		for {
+			for _, transition := range sessions.recorded() {
+				if strings.Contains(transition.reason, "less than one poll") {
+					close(skipped)
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Now: harness.clock, Sessions: sessions, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the restart once the run ended: %s", schedule.Stopped, schedule.Render())
+	}
+	// The second item was never pulled: the seat was free, and the bound was
+	// too close for a pull into it to be worth making. The run ended inside the
+	// bound, so the session restarted with nothing stopped for it.
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want nothing pulled into the free seat with the bound a minute away", schedule.Started)
+	}
+	if schedule.Drain == nil || schedule.Drain.Skipped == 0 {
+		t.Fatalf("drain = %#v, want the skipped pull counted", schedule.Drain)
+	}
+	var said *recordedTransition
+	for _, transition := range sessions.recorded() {
+		if transition.state == runstate.WatchIdle && strings.Contains(transition.reason, "less than one poll") {
+			said = &transition
+			break
+		}
+	}
+	if said == nil || !strings.Contains(said.reason, "the drain bound is") || !strings.Contains(said.reason, "1 free seat(s)") {
+		t.Fatalf("transitions = %#v, want the skip said with the bound and the seat it left", sessions.recorded())
+	}
+	if said.draining == nil || said.draining.Bound() != 15*time.Minute {
+		t.Fatalf("idle transition draining = %#v, want the drain and its bound on the line", said.draining)
+	}
+}
+
+// A run at its promotion is the one the bound does not stop. It holds the
+// target branch's lease and is minutes from its end, and a promotion cancelled
+// part-way is the one boundary durable state cannot describe — so the session
+// waits it out past the bound, and the restart follows it.
+func TestTheDrainBoundLeavesARunAtItsPromotionToFinish(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.drainLimit = 20 * time.Millisecond
+	harness.poll = 5 * time.Millisecond
+	deployment := &deployedOver{}
+	finished := make(chan struct{})
+	harness.hostedRun = func(ctx context.Context, h *scheduleHarness, id string) (Outcome, error) {
+		deployment.deploy()
+		h.mu.Lock()
+		state := h.inFlight[id]
+		state.Phase = runstate.PhaseIntegrating
+		h.inFlight[id] = state
+		h.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return Outcome{WorkItemID: id, Status: runstate.StatusCancelled}, nil
+		case <-finished:
+			return h.complete(id), nil
+		}
+	}
+	// The promotion finishes on its own clock, well after the bound.
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		close(finished)
+	}()
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Deployment: deployment}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the restart once the promotion finished: %s", schedule.Stopped, schedule.Render())
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].Outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("started = %#v, want the promotion carried to its end rather than cancelled", schedule.Started)
+	}
+	if schedule.Drain == nil || !schedule.Drain.BoundReached || len(schedule.Drain.Stopped) != 0 {
+		t.Fatalf("drain = %#v, want the bound reached and nothing stopped for it", schedule.Drain)
+	}
+}
+
+// The session that comes back picks up what the one before it put down: a run
+// in flight carrying a redeploy stop is re-adopted at the first pull, into the
+// seat it already holds, ahead of anything new. Its selection says it was handed
+// over rather than chosen, and names the run and the phase it continues from.
+func TestASessionReadoptsTheRunsTheOneBeforeItStoppedForARedeploy(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-two")...)
+	harness.capacity = 2
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+	// Both are required to be inside at once, which is what proves the re-adopted
+	// run took no seat from the new one.
+	harness.developersMeet(2)
+	stoppedAt := time.Date(2026, 9, 19, 7, 50, 0, 0, time.UTC)
+	harness.inFlight["yoyodyne-one"] = runstate.State{
+		RunID:         "run-one",
+		WorkItemID:    "yoyodyne-one",
+		WorkItemTitle: "yoyodyne-one",
+		Status:        runstate.StatusRunning,
+		Phase:         runstate.PhaseChecking,
+		RedeployStop:  &runstate.RedeployStop{At: stoppedAt, Phase: runstate.PhaseChecking, BoundSeconds: 900, SessionID: "watch-before"},
+	}
+	// The re-adopted run continues from its record; the harness stands in for
+	// the pipeline adopting it and carrying it to its end.
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		return h.complete(id), nil
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	// Both were started from the one pull; which goroutine ran first is not the
+	// order they were chosen in, and the schedule below says that.
+	order := harness.pullOrder()
+	slices.Sort(order)
+	if len(order) != 2 || order[0] != "yoyodyne-one" || order[1] != "yoyodyne-two" {
+		t.Fatalf("pulled = %v, want the stopped run re-adopted and the new item started", order)
+	}
+	if len(schedule.Started) != 2 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the re-adoption ahead of the new item on the schedule", schedule.Started)
+	}
+	var readopted *Started
+	for index := range schedule.Started {
+		if schedule.Started[index].Readopted != "" {
+			readopted = &schedule.Started[index]
+		}
+	}
+	if readopted == nil || readopted.WorkItemID != "yoyodyne-one" || readopted.Readopted != "run-one" {
+		t.Fatalf("started = %#v, want the stopped run re-adopted and named as such", schedule.Started)
+	}
+	selection := harness.selectionFor("yoyodyne-one")
+	if selection.By != runstate.SelectedByScheduler || !strings.Contains(selection.Reason, "re-adopted") ||
+		!strings.Contains(selection.Reason, "run-one") || !strings.Contains(selection.Reason, "checking") || !strings.Contains(selection.Reason, "15m0s") {
+		t.Fatalf("selection = %#v, want the hand-over, the run, its phase, and the bound named", selection)
+	}
+	// The re-adopted run held a seat already, so the second seat was still free
+	// for the new item: nothing was pulled into a seat a continuation holds.
+	if harness.peak != 2 {
+		t.Fatalf("peak = %d, want the re-adoption and the new item running side by side", harness.peak)
+	}
+	if strings.Contains(schedule.Render(), "failed") {
+		t.Fatalf("render = %s, want no failure", schedule.Render())
 	}
 }
 
@@ -2402,6 +2787,20 @@ type scheduleHarness struct {
 	outages     ScheduleOutages
 	provider    ScheduleProvider
 	outageProbe time.Duration
+	// poll is the interval a watching pull reports. A minute is the shipped one,
+	// which no test spends: the fake sleep advances the clock by it instead. A
+	// test that needs the session to wake from a run it is waiting on, in real
+	// time, sets one short enough to.
+	poll time.Duration
+	// drainLimit is the bound a watching pull reports on the session's wait to
+	// restart into a deployed build. The default is the shipped one, which no
+	// test reaches in real time; a test about the bound running out sets one
+	// short enough to.
+	drainLimit time.Duration
+	// hostedRun stands in for the pipeline where a test needs the run to see the
+	// context the session hosts it under — which is how the drain bound reaches
+	// a run. It takes precedence over run where both are set.
+	hostedRun func(context.Context, *scheduleHarness, string) (Outcome, error)
 
 	pulls      int
 	order      []string
@@ -2425,6 +2824,8 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		selections: map[string]runstate.Selection{},
 		prices:     map[string]float64{},
 		capacity:   1,
+		poll:       time.Minute,
+		drainLimit: 15 * time.Minute,
 		gate:       make(chan struct{}),
 		// The morning the session that provoked the retry died, so a test reading
 		// its own timings reads the ones in the report.
@@ -2510,6 +2911,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	h.mu.Unlock()
 	h.mu.Lock()
 	tree := h.tree
+	poll, drainLimit := h.poll, h.drainLimit
 	// The docket is wired whether or not a tree is, because the two things it
 	// records are found at different moments: an unready item is found by reading
 	// the tree, and a dispatch that never became a run is found by making one. A
@@ -2526,14 +2928,15 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Tree: tree, Triage: docket, Recurring: recurring,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
-		// against.
-		Poll:                        time.Minute,
+		// against — unless a test shortened it to wake a waiting session.
+		Poll:                        poll,
 		BlockedRunsBeforeIntakeHold: blockedRuns,
 		Brake:                       h,
 		Spend:                       h,
 		Outages:                     h.outages,
 		Provider:                    h.provider,
 		OutageProbe:                 h.outageProbe,
+		RedeployDrainLimit:          drainLimit,
 	}, nil
 }
 
@@ -2697,6 +3100,9 @@ type recordedTransition struct {
 	// reader of it reads. It is what the stall alarm names a cause from, so a test
 	// about what a woken operator is told reads it here.
 	passedOver runstate.PassedOver
+	// draining is the session's wait to restart into a deployed build, with its
+	// bound, on every line written while it lasts.
+	draining *runstate.WatchDrain
 }
 
 func (r *recordedSessions) Record(transition SessionState) error {
@@ -2716,6 +3122,7 @@ func (r *recordedSessions) Record(transition SessionState) error {
 		window:         transition.ProviderWindow,
 		windowResetsAt: transition.ProviderWindowResetsAt,
 		passedOver:     transition.PassedOver,
+		draining:       transition.Draining,
 	})
 	return nil
 }
@@ -2855,20 +3262,30 @@ func (h *scheduleHarness) Stale(context.Context) ([]staleness.WorkItem, error) {
 // start stands in for a reservation and a run: the item takes a slot, the
 // selection is kept for the test to read, and the replaceable run decides what
 // becomes of it.
-func (h *scheduleHarness) start(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
+func (h *scheduleHarness) start(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 	h.mu.Lock()
 	h.order = append(h.order, workItemID)
 	h.selections[workItemID] = selection
-	h.inFlight[workItemID] = runstate.State{RunID: "run-" + workItemID, WorkItemID: workItemID, Status: runstate.StatusRunning}
+	// A run a session before this one stopped for its redeploy is already in
+	// flight, and re-adopting it continues that record rather than making one.
+	if _, adopted := h.inFlight[workItemID]; !adopted {
+		h.inFlight[workItemID] = runstate.State{RunID: "run-" + workItemID, WorkItemID: workItemID, Status: runstate.StatusRunning, Phase: runstate.PhaseDeveloping}
+	}
 	h.running++
 	if h.running > h.peak {
 		h.peak = h.running
 	}
-	run := h.run
+	run, hostedRun := h.run, h.hostedRun
 	h.mu.Unlock()
 
 	h.rendezvous()
-	outcome, err := run(h, workItemID)
+	var outcome Outcome
+	var err error
+	if hostedRun != nil {
+		outcome, err = hostedRun(ctx, h, workItemID)
+	} else {
+		outcome, err = run(h, workItemID)
+	}
 
 	h.mu.Lock()
 	delete(h.inFlight, workItemID)

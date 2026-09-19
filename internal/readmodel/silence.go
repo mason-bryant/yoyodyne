@@ -288,6 +288,9 @@ func LastWord(sessions []runstate.WatchTransition) string {
 		if latest.Restarting {
 			state = "stopped to restart into the build deployed over it"
 		}
+		if latest.Draining != nil {
+			state += ", " + latest.Draining.Says()
+		}
 		return fmt.Sprintf("the session choosing work last recorded %s at %s, and has said nothing since",
 			state, latest.At.UTC().Format(time.RFC3339))
 	}

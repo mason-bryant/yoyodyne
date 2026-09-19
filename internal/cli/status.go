@@ -664,6 +664,13 @@ func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
 	}
 	fmt.Fprintf(writer, "the session choosing work is %s as of %s",
 		state, watched.At.UTC().Format(time.RFC3339))
+	// A session draining to restart says so on every line it writes, with the
+	// bound on the wait, so the reader knows what stops it rather than timing it.
+	// It is the transition's own mark, read here rather than derived, for the
+	// reason the restart is.
+	if watched.Draining != nil {
+		fmt.Fprintf(writer, ", %s", watched.Draining.Says())
+	}
 	if reason := strings.TrimSpace(watched.Reason); reason != "" {
 		fmt.Fprintf(writer, ": %s", reason)
 	}

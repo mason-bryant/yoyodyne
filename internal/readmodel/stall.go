@@ -85,6 +85,15 @@ const (
 	// thing about it, and because telling them to start a session they are already
 	// running is worse than telling them nothing.
 	ReasonSessionIdle Reason = "idle"
+	// ReasonRedeploying is a session restarting into a build deployed over it: it
+	// has found the deploy, its bounded drain has run out with runs still going,
+	// and it is stopping and preserving them, or it has already stopped and is
+	// being re-executed. It is distinct from an idle session and from no session
+	// because an operator does nothing at all about it — the session comes back
+	// on its own within a minute and re-adopts what it stopped — and a surface
+	// that reported it as either would send somebody to start a session that is
+	// already on its way back.
+	ReasonRedeploying Reason = "redeploying"
 	// ReasonNoWatchSession is a product that was being watched and is not any more.
 	ReasonNoWatchSession Reason = "stopped"
 	// ReasonUnwatched is a product no session has ever watched. It is not a line
@@ -104,6 +113,7 @@ func Reasons() []Reason {
 		ReasonNoCapacity,
 		ReasonProviderWindow,
 		ReasonSessionIdle,
+		ReasonRedeploying,
 		ReasonNoWatchSession,
 		ReasonUnwatched,
 	}
@@ -130,6 +140,8 @@ func (r Reason) Whose() string {
 		return "nobody's — the harness asks again when the provider's usage window lifts"
 	case ReasonSessionIdle:
 		return "the operator's — a queue with ready work and an idle session is a stall rather than a rest"
+	case ReasonRedeploying:
+		return "nobody's — the session restarts into the deployed build on its own, and the session that comes back re-adopts the runs it stopped"
 	case ReasonNoWatchSession, ReasonUnwatched:
 		return "the operator's — nothing pulls the queue until `yoyo work --watch` starts a session"
 	default:
@@ -336,6 +348,18 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	}
 	// Live is newest first, so the first idle session it holds is the latest one.
 	live := Live(sessions)
+	// A session whose drain has run out is stopping the runs it hosts and is
+	// seconds from restarting. It is answered ahead of everything else the log
+	// says, because from every other record it is a live session choosing
+	// nothing, and the one thing that must not be said about it is that it wants
+	// looking at.
+	if len(live) > 0 && live[0].Draining != nil && live[0].Draining.BoundReached {
+		return Stall{
+			Reason: ReasonRedeploying,
+			Says:   "the watch session is " + live[0].Draining.Says(),
+			Since:  live[0].Draining.Since,
+		}
+	}
 	for _, transition := range live {
 		if transition.State != runstate.WatchIdle {
 			// Watching, braked, or resumed: a session is alive and either choosing or
@@ -361,6 +385,17 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	for _, transition := range sessions {
 		if transition.State == runstate.WatchStopped && transition.At.After(stopped.At) {
 			stopped = transition
+		}
+	}
+	// A stop the session recorded as a restart is a session on its way back
+	// rather than a line that went down: a restart that then did not happen
+	// writes a second, later stop that says so, and that one is read here
+	// instead.
+	if stopped.Restarting {
+		return Stall{
+			Reason: ReasonRedeploying,
+			Says:   "the watch session stopped to restart into the build deployed over it and is on its way back",
+			Since:  stopped.At,
 		}
 	}
 	return Stall{
