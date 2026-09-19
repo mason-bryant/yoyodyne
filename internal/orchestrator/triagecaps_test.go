@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,6 +106,136 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	// first developer attempt.
 	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastRound != want {
 		t.Fatalf("last counted round = %q, want the first attempt %q", counters.LastRound, want)
+	}
+}
+
+// A verdict on a run with no change present charges nothing, and the worktree
+// is what is asked whether a change is present. Which worktree question is
+// asked decides whether the rule is yoyodyne-ifd.391's or one that switched the
+// cap off: under approvals.publishing: automatic the harness commits the
+// developer's work before the checks and the review run, so at the moment the
+// reviewer judges a published attempt its worktree has nothing uncommitted. A
+// presence question read from uncommitted status would answer "no change" for
+// every published attempt, record every repair verdict on one as uncharged, and
+// leave the cap counting nothing for a publishing project. The question has to
+// be measured against the run's recorded base commit, and this is the run that
+// proves it is: a published attempt, judged with its status clean, whose repair
+// verdict is charged. The live counters of the first post-391 run sent back on
+// a published change, which agree, are quoted in
+// docs/diagnoses/yoyodyne-ifd-399-empty-diff-rule-is-base-relative.md.
+func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte(fmt.Sprintf("attempt %d\n", attempts)), 0o600)
+	}, repairVerdict, approveVerdict)
+	// What the worktree's uncommitted status was at the moment each reviewer was
+	// invoked in it. The test is about a change that is committed and nothing
+	// else, so it records the condition rather than assuming publishing produced
+	// it; a status that was not clean here would make the charge below prove
+	// nothing about the published case.
+	var statusAtReview []string
+	judge := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			status, err := attemptPipelineGit(request.WorkingDirectory, "status", "--porcelain=v1", "--untracked-files=all")
+			if err != nil {
+				status = "git status failed: " + err.Error() + ": " + status
+			}
+			statusAtReview = append(statusAtReview, status)
+		}
+		return judge(request)
+	}
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || outcome.RepairAttempts != 1 {
+		t.Fatalf("Run() outcome = %#v, want the repaired change integrated after one repair", outcome)
+	}
+	// The condition the charge is being proven under: both attempts were
+	// published before they were judged, so each reviewer saw a worktree with
+	// its work committed and nothing uncommitted beside it.
+	if outcome.PullRequest == nil || outcome.PullRequest.HeadCommit == "" {
+		t.Fatalf("outcome = %#v, want the attempts published before review", outcome)
+	}
+	if len(statusAtReview) != 2 {
+		t.Fatalf("reviewer invocations = %d, want the first attempt judged and the repair judged", len(statusAtReview))
+	}
+	for i, status := range statusAtReview {
+		if status != "" {
+			t.Fatalf("review %d judged a worktree with uncommitted changes, so this is not the published case:\n%s", i, status)
+		}
+	}
+
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	// One round: the repair verdict on the first published attempt. A count of
+	// zero here is the cap switched off for every publishing project.
+	if counters.ReviewRounds != 1 {
+		t.Fatalf("review rounds = %d, want the repair verdict on a published change charged", counters.ReviewRounds)
+	}
+	if want := runstate.RoundKey(outcome.RunID, 0); counters.LastRound != want {
+		t.Fatalf("last counted round = %q, want the first published attempt %q", counters.LastRound, want)
+	}
+}
+
+// The other half of the same question, under the same publishing pipeline: a
+// verdict on a run whose worktree carries no change against its base charges
+// nothing, whatever the verdict said. The developer here does act — it rewrites
+// a file the base already holds, byte for byte — so what is empty is the change
+// measured against the base commit rather than the developer's activity, and
+// there is nothing for publishing to commit. Every verdict is still recorded
+// under the attempt it judged, so a re-review of the last attempt stays free.
+// TestAnEmptyDeliveryWithNoEnvironmentalCauseIsInNoClassAndSpendsNoRound is the
+// same rule seen from the environmental class's side.
+func TestPipelineChargesNoRoundForAVerdictOnNoChangeAgainstTheBase(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("design content\n"), 0o600)
+	}, repairVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() ended without stopping, so no repair verdict was reached on the empty change")
+	}
+	if !outcome.Blocked {
+		t.Fatalf("outcome = %#v, want the run blocked on its unresolved findings", outcome)
+	}
+	// Nothing was published: there was no change against the base to commit.
+	if outcome.PullRequest != nil || len(forge.opened) != 0 {
+		t.Fatalf("outcome pull request = %#v, forge requests = %d; want nothing published for an empty change", outcome.PullRequest, len(forge.opened))
+	}
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers < 2 {
+		t.Fatalf("developer invocations = %d, want the run to have spent its own repair budget on the empty change", developers)
+	}
+	spent, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: no verdict here was against a change present in the worktree", counters.ReviewRounds)
+	}
+	if want := runstate.RoundKey(outcome.RunID, spent.RepairAttempts); counters.LastJudged != want {
+		t.Fatalf("last judged attempt = %q, want %q: an uncharged verdict is still recorded against the attempt it judged", counters.LastJudged, want)
 	}
 }
 
