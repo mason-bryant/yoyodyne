@@ -929,6 +929,16 @@ anybody to clear, and a session that stops to take up a deploy lets it go before
 it restarts so the build it becomes can take it up. A drain takes nothing and is
 refused nothing: what this refuses is a second session that stays open.
 
+The same lease is how the product's supervisor keeps a session watching. With
+the scheduler enabled in the configuration's
+[`services`](configuration.md#services) section,
+[`yoyo start`](operations.md#starting-the-product-and-stopping-it) starts
+`yoyo work --watch` as one part of the product and starts it again if it dies,
+within the supervisor's bounds; a session you started by hand before that is
+found holding the watch and taken as it is, and `yoyo stop` stops the session
+with the rest, which cancels the runs it is hosting exactly as stopping it
+yourself does.
+
 Three things guard a loop that no longer ends. A session does not start the same
 item twice unless the item has changed — what it says, what it is for, its
 priority, its status, what it depends on, its notes — so a start the harness

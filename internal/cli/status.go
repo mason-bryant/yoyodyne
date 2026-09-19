@@ -569,6 +569,11 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewProviderOutageStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.ProviderOutages = store
 	}
+	// The product's supervisor and its record of the parts, so a part the
+	// supervisor has left down is said here with its reason.
+	if store, err := runstate.NewSupervisionStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Supervision = store
+	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}

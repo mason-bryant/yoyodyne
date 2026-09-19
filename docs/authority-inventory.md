@@ -238,6 +238,8 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/runstate/store.go` | `Lease` | The handle every lease here is held through. |
 | `internal/runstate/store.go` | `leaseGrace` | How long a run's lease is waited for before it is treated as gone. |
 | `internal/runstate/store.go` | `leaseGracePoll` | How often that wait looks again. |
+| `internal/runstate/supervision.go` | `(*SupervisionStore).Lease` | Serializes the product's supervisor against a second copy of itself, so two of them do not each restart what the other stopped. It decides which process may supervise, never which role may do anything. |
+| `internal/runstate/supervision.go` | `supervisorLeaseFile` | Names the file that lease is taken on. |
 | `internal/runstate/watch.go` | `(*WatchStore).Lease` | Serializes watching sessions against a second copy of one, so two of them do not choose from one queue at once. It decides which process may watch, never which role may do anything. |
 | `internal/runstate/watch.go` | `watchLeaseFile` | Names the file that lease is taken on. |
 | `internal/separation/separation.go` | `PromotionIsNeverUnleased` | The name one of the separation policies refuses under. The check is `separation.operation`, and the lease it defends is `promotion.lease`. |

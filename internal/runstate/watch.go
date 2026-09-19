@@ -503,6 +503,26 @@ func (s *WatchStore) Lease(sessionID string) (*Lease, bool, error) {
 	return lease, true, nil
 }
 
+// Held reports whether a session is holding this product's watch, by trying to
+// take the lease and letting it go again. It is how the product's supervisor
+// asks whether its scheduler child is alive, and it is the same question the
+// sink's store answers about the sink the same way: the lock is dropped by the
+// operating system when its holder dies, so the answer is about a process. It
+// stamps nothing, because it is a question rather than a session.
+func (s *WatchStore) Held() (bool, error) {
+	lease, held, err := TryLeasePath(filepath.Join(s.root, watchLeaseFile), "watch session")
+	if err != nil {
+		return false, err
+	}
+	if !held {
+		return true, nil
+	}
+	if err := lease.Release(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // WatchHolder is the session holding this product's watch, as it stamped itself
 // when it took the lease. It carries the session identifier the log and `yoyo
 // status` also carry, so a refusal and every other surface name one session

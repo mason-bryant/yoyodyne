@@ -665,9 +665,12 @@ keychain items into that one process. It is safe to run on a schedule — an
 unattended pass every few minutes meets a running sink and does nothing — and it
 is safe on a machine running several harnesses, because whether a sink is
 running is asked of this product's lease rather than of the process table, where
-one project's `yoyo slack` answers for every project's. Putting it on a schedule
-is yours until the productized maintenance job (`yoyodyne-ifd.207`) lands and
-calls it: the harness ships the step and, for now, no timer.
+one project's `yoyo slack` answers for every project's. With the Slack service
+enabled in the [`services`](configuration.md#services) section, the product's
+supervisor makes that same start for you:
+[`yoyo start`](operations.md#starting-the-product-and-stopping-it) starts the
+sink with the rest of the product and starts it again whenever it dies, within
+the supervisor's bounds, so the timer is no longer yours.
 [`docs/slack/setup.md`](slack/setup.md#6-start-the-sink) has the rest of it.
 
 **The top of the channel reads as a status board.** Each thread's opening message

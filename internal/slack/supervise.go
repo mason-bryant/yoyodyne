@@ -275,6 +275,19 @@ func detail(unavailable []unreadable) string {
 // which is what lets `yoyo doctor` tell a sink that is merely running from one
 // that is running for this product.
 func Environment(environ []string, product domain.ProductID, bot, app string) []string {
+	return append(WithoutSecrets(environ),
+		BotTokenVariable+"="+bot,
+		AppTokenVariable+"="+app,
+		SecretNamespaceVariable+"="+string(product),
+	)
+}
+
+// WithoutSecrets is an inherited environment with every Slack variable taken
+// out of it, which is what every process the product starts other than the
+// sink is given. The sink is the one process that holds the tokens, and a
+// scheduler started from a shell that had them exported would otherwise hand
+// them to every developer's subprocess tree it went on to start.
+func WithoutSecrets(environ []string) []string {
 	constructed := make([]string, 0, len(environ)+3)
 	for _, entry := range environ {
 		switch name, _, _ := strings.Cut(entry, "="); name {
@@ -284,11 +297,7 @@ func Environment(environ []string, product domain.ProductID, bot, app string) []
 			constructed = append(constructed, entry)
 		}
 	}
-	return append(constructed,
-		BotTokenVariable+"="+bot,
-		AppTokenVariable+"="+app,
-		SecretNamespaceVariable+"="+string(product),
-	)
+	return constructed
 }
 
 // Keychain reads a stored secret out of the macOS keychain, which is where a
