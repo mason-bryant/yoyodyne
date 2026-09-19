@@ -71,6 +71,12 @@ type ProviderOutage struct {
 	// Detail is the provider's own words on the latest refusal, carried as
 	// evidence rather than interpreted.
 	Detail string `json:"detail,omitempty"`
+	// Channel is where the latest refusal was read: the terminal of the
+	// provider's stream, or its process's stderr because it refused before
+	// writing one. It is empty when the refusal was met somewhere other than an
+	// invocation — the availability check before a dispatch reads the
+	// provider's own record of being signed in and neither channel.
+	Channel domain.ProviderChannel `json:"channel,omitempty"`
 	// Waiting names what the latest refusal stopped, in words: a run of an item,
 	// a role's conversation, a dispatch. It is prose because the things that can
 	// be waiting do not share a shape.
@@ -87,6 +93,9 @@ func (o ProviderOutage) Validate() error {
 	}
 	if !o.Cause.Valid() {
 		problems = append(problems, fmt.Errorf("provider outage cause %q is not one this harness names", o.Cause))
+	}
+	if o.Channel != "" && !o.Channel.Valid() {
+		problems = append(problems, fmt.Errorf("provider outage channel %q is not one this harness names", o.Channel))
 	}
 	if o.Since.IsZero() {
 		problems = append(problems, errors.New("since is required"))
@@ -232,8 +241,11 @@ type ProviderOutageObservation struct {
 	Provider     domain.Backend
 	AccountAlias string
 	Detail       string
-	Waiting      string
-	At           time.Time
+	// Channel is where the refusal was read, and empty where it was met
+	// somewhere other than an invocation.
+	Channel domain.ProviderChannel
+	Waiting string
+	At      time.Time
 }
 
 // Notice records that the provider was met refusing, and reports the outage as
@@ -263,6 +275,7 @@ func (s *ProviderOutageStore) Notice(observed ProviderOutageObservation) (Provid
 		LastSeen:      at,
 		Refusals:      1,
 		Detail:        boundOutageText(observed.Detail),
+		Channel:       observed.Channel,
 		Waiting:       boundOutageText(observed.Waiting),
 	}
 	if found && standing.Cause == observed.Cause {

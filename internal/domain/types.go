@@ -116,6 +116,45 @@ func (c ProviderOutageCause) Valid() bool {
 	return false
 }
 
+// ProviderChannel is where a provider said something: on an envelope of the
+// event stream it was asked for, or on its process's stderr. It is the
+// vocabulary the adapter contract hands a dialect an event with and the durable
+// record says a classification by, and it lives here so that neither redeclares
+// it.
+//
+// It is closed at two. A provider process has exactly those two places to say
+// anything, and which one a refusal arrived on is kept because the two are read
+// under different rules: an envelope names the event and the ending, and stderr
+// is prose with neither, read only when the stream ended without an ending of
+// its own. A run waiting on a refusal read off stderr is a run whose provider
+// died before it wrote a single envelope, which is what a reader of the record
+// has to know before deciding whether the dialect read it right.
+type ProviderChannel string
+
+const (
+	// ProviderChannelEnvelope is an envelope of the provider's event stream: the
+	// terminal result, a rate-limit report, a retry in progress.
+	ProviderChannelEnvelope ProviderChannel = "envelope"
+	// ProviderChannelStderr is the provider process's stderr, read whole once
+	// the process has ended without a terminal of its own.
+	ProviderChannelStderr ProviderChannel = "stderr"
+)
+
+// ProviderChannels is every channel, in the order they are documented.
+func ProviderChannels() []ProviderChannel {
+	return []ProviderChannel{ProviderChannelEnvelope, ProviderChannelStderr}
+}
+
+// Valid reports a channel this harness names.
+func (c ProviderChannel) Valid() bool {
+	for _, known := range ProviderChannels() {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
 // WorkItemClass names a kind of work a project may treat differently at
 // admission. It exists because "ask about every work item" turned out to be
 // coarser than the operators who set it actually meant: work that only reads and

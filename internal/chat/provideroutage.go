@@ -53,6 +53,7 @@ func (s *Session) noteProviderOutage(result backend.RunResult, err error) error 
 		Provider:     s.options.Provider,
 		AccountAlias: s.options.AccountAlias,
 		Detail:       outage.Detail,
+		Channel:      outage.Channel,
 		Waiting:      fmt.Sprintf("the %s conversation %s", RoleTitle(s.state.Role), s.state.ConversationID),
 		At:           s.options.clock().Now(),
 	}); recordErr != nil {

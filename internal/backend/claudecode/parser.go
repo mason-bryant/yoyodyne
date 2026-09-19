@@ -35,6 +35,11 @@ type streamParser struct {
 	reply     func(string)
 	result    backend.RunResult
 	sawResult bool
+	// stderr is what the process wrote to its error stream, kept bounded so it
+	// can be handed to the dialect once the stream has ended. It is read only
+	// when no terminal arrived — see ObserveStderr — so for every invocation
+	// that ended the way the provider ends one it is held and never consulted.
+	stderr strings.Builder
 	// duplicateTerminal is what to say about an invocation the provider ended
 	// more than once, and empty when it ended once. It is held rather than
 	// applied because what a duplicate asks the caller for depends on the whole
@@ -172,10 +177,45 @@ func (p *streamParser) ParseLine(line string) error {
 }
 
 func (p *streamParser) EmitProcessOutput(output execution.Output) error {
+	text := p.redactor.Redact(output.Text)
+	if output.Stream == execution.StreamStderr {
+		p.keepStderr(text)
+	}
 	return p.emit(execution.EventProcessOutput, map[string]any{
 		"stream": output.Stream,
-		"text":   truncate(p.redactor.Redact(output.Text)),
+		"text":   truncate(text),
 	})
+}
+
+// keepStderr holds one redacted stderr line for ObserveStderr, up to the same
+// bound an event's text is held to. A refusal the CLI makes before it writes
+// anything structured is one short line at the front of stderr, so what the
+// bound cuts is the tail of a process that had a great deal else to say.
+func (p *streamParser) keepStderr(text string) {
+	if p.stderr.Len() >= maxEventTextBytes {
+		return
+	}
+	if p.stderr.Len() > 0 {
+		p.stderr.WriteByte('\n')
+	}
+	p.stderr.WriteString(text)
+}
+
+// ObserveStderr hands the dialect what the process wrote to stderr, as the one
+// event on that channel, and records whatever it answers. It is for the stream
+// that ended without a terminal of its own: a CLI that refuses an expired login
+// before it writes a single envelope says so on stderr and exits, and a
+// dialect that read only envelopes left that invocation an unclassified process
+// failure — which relaunches into the same login, spends the budget, and
+// blocks, exactly as 2026-09-17 did. The caller asks this only in that case,
+// so a terminal the provider did write is never second-guessed by its
+// diagnostics, and a process that wrote nothing is asked nothing.
+func (p *streamParser) ObserveStderr() {
+	text := strings.TrimSpace(p.stderr.String())
+	if text == "" {
+		return
+	}
+	p.observe(backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: text})
 }
 
 // truncatedStreamLine is the harness's own name for a provider line the process
@@ -281,6 +321,9 @@ func (p *streamParser) observe(event backend.ProviderEvent) {
 	if !said {
 		return
 	}
+	// Where the provider said it is the event's fact rather than the dialect's
+	// claim, so it is written here, after the answer and before the record.
+	observation.Channel = event.Channel
 	observation.Record(&p.result)
 }
 
@@ -603,6 +646,13 @@ func (p *streamParser) Result() backend.RunResult {
 
 func (p *streamParser) SawResult() bool {
 	return p.sawResult
+}
+
+// SawUsageLimit reports a stream that told the dialect a limit is refusing
+// work. A stream that said so and then ended without a terminal has already
+// been answered, and is not one whose stderr should be read for a second one.
+func (p *streamParser) SawUsageLimit() bool {
+	return p.result.UsageLimit != nil
 }
 
 const domainBackend = "claude-code"

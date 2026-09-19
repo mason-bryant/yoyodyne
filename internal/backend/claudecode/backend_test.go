@@ -1688,6 +1688,172 @@ func TestRunReportsATransientProviderDeath(t *testing.T) {
 	}
 }
 
+// loginRefusedOnStderr is the CLI's own title for an account it will not
+// accept, paired with the remedy it prints beside it — the words Claude Code
+// 2.1.276 carries, and what a CLI that refuses before writing any envelope has
+// to say on the only channel left to it.
+const loginRefusedOnStderr = "Not logged in · Please run /login"
+
+// runProcessFailure runs a process that wrote the given stream, said the given
+// things on stderr, and exited 1, and returns what the adapter made of it
+// beside every event it recorded.
+func runProcessFailure(t *testing.T, stream, stderr string) (backendapi.RunResult, []execution.Event) {
+	t.Helper()
+	var events []execution.Event
+	result, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: stream, Stderr: stderr}}},
+		Clock:  fixedClock{},
+	}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	return result, events
+}
+
+// A CLI that refuses an expired login before it writes any stream envelope hands
+// the dialect no terminal, so until yoyodyne-ifd.393 the attempt ended as a
+// process failure nobody classified — relaunched into the same login, budget
+// spent, run blocked, exactly as on 2026-09-17. The refusal is on stderr, which
+// is the only channel left to a process that wrote nothing structured, and it
+// is read there as the same wait the terminal form earns, with the channel it
+// came on recorded beside it.
+func TestRunClassifiesARefusalMadeOnStderrBeforeAnyEnvelope(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stderr string
+		cause  domain.ProviderOutageCause
+		// words is what the provider said that the record has to carry.
+		words string
+	}{
+		{name: "a login the CLI will not accept", stderr: loginRefusedOnStderr + "\n", cause: domain.ProviderUnauthenticated, words: loginRefusedOnStderr},
+		{name: "a login that expired, in the CLI's other words", stderr: "Login expired · Please run /login\n", cause: domain.ProviderUnauthenticated, words: "Login expired"},
+		{
+			// Node's own warnings arrive on stderr ahead of anything the CLI says,
+			// and a refusal read off stderr has to be found behind them.
+			name:   "a refusal behind the runtime's own noise",
+			stderr: "(node:4242) ExperimentalWarning: something is experimental\nOAuth token revoked · Please run /login\n",
+			cause:  domain.ProviderUnauthenticated,
+			words:  "OAuth token revoked",
+		},
+		{name: "nothing answering at the API", stderr: "API Error: Can't reach the API server\n", cause: domain.ProviderUnreachable, words: "Can't reach the API server"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, events := runProcessFailure(t, "", testCase.stderr)
+			if result.ProviderOutage == nil {
+				t.Fatalf("Run() reported no provider outage: %#v", result)
+			}
+			if result.ProviderOutage.Cause != testCase.cause {
+				t.Fatalf("outage cause = %q, want %q", result.ProviderOutage.Cause, testCase.cause)
+			}
+			if result.ProviderOutage.Channel != domain.ProviderChannelStderr {
+				t.Fatalf("outage channel = %q, want %q: the record has to say the provider died before writing a terminal", result.ProviderOutage.Channel, domain.ProviderChannelStderr)
+			}
+			if !strings.Contains(result.ProviderOutage.Detail, testCase.words) {
+				t.Fatalf("outage detail = %q, want the CLI's own words %q", result.ProviderOutage.Detail, testCase.words)
+			}
+			// The process still ended the way it ended: the exit is the stop reason
+			// and the failure stands beside the wait, exactly as a terminal outage
+			// travels beside IsError.
+			if !result.IsError || result.StopReason != "process_exit_1" {
+				t.Fatalf("Run() = IsError %t, StopReason %q, want the process failure kept beside the wait", result.IsError, result.StopReason)
+			}
+			// A wait that spends nothing is never also a death to relaunch on.
+			if result.TransientFailure != nil || result.ServerOverload != nil || result.UsageLimit != nil {
+				t.Fatalf("a refusal read off stderr also became something to relaunch or wait on a clock for: %#v", result)
+			}
+			// What the process said on stderr is in the record whether or not the
+			// dialect read anything off it.
+			var recorded bool
+			for _, event := range events {
+				if event.Type == execution.EventProcessOutput && strings.Contains(string(event.Payload), `"stream":"stderr"`) {
+					recorded = true
+				}
+			}
+			if !recorded {
+				t.Fatalf("stderr was read and not recorded: %#v", events)
+			}
+		})
+	}
+}
+
+// Stderr is read narrowly and only when nothing else answered. A process that
+// died with a terminal has been answered by the terminal, whatever its
+// diagnostics say; one that reported a limit has been answered by the limit;
+// and one whose stderr says something the dialect does not read for — an
+// overload, a refused request, a crash — stays the process failure it always
+// was rather than becoming a wait nobody can justify.
+func TestRunReadsStderrOnlyForAProcessNothingElseAnswered(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+		stderr string
+		// wantOutage is the outage the terminal or the stderr earns, and nil for
+		// a process failure that stays unclassified.
+		wantOutage *backendapi.ProviderOutage
+	}{
+		{
+			name:   "an overload said on stderr is not a wait",
+			stderr: overloadedMessage + "\n",
+		},
+		{
+			name:   "a request refused on stderr is not a wait",
+			stderr: "API Error: 400 Bad Request. Your request could not be read.\n",
+		},
+		{
+			name:   "a crash that mentions nothing this dialect reads",
+			stderr: "TypeError: Cannot read properties of undefined\n    at main (/cli.js:1:1)\n",
+		},
+		{
+			// The terminal is the provider's account of the ending and stderr does
+			// not second-guess it: an agent's tool wrote about being logged out,
+			// and the provider ended on a refusal that stands.
+			name:       "a terminal the provider wrote is not overridden by stderr",
+			stream:     terminalErrorStream("refusal", "I cannot help with that"),
+			stderr:     loginRefusedOnStderr + "\n",
+			wantOutage: nil,
+		},
+		{
+			// A terminal outage still says which channel it came on.
+			name:       "a terminal outage names the envelope",
+			stream:     terminalErrorStream("api_error", loginRefusedOnStderr),
+			wantOutage: &backendapi.ProviderOutage{Cause: domain.ProviderUnauthenticated, Detail: "api_error: " + loginRefusedOnStderr, Channel: domain.ProviderChannelEnvelope},
+		},
+		{
+			// A limit reported before the process died has already been answered.
+			name:   "a limit reported before the death is the answer",
+			stream: `{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}` + "\n" + `{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}` + "\n",
+			stderr: loginRefusedOnStderr + "\n",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runProcessFailure(t, testCase.stream, testCase.stderr)
+			if !result.IsError {
+				t.Fatalf("Run() lost the reported failure: %#v", result)
+			}
+			if !reflect.DeepEqual(result.ProviderOutage, testCase.wantOutage) {
+				t.Fatalf("ProviderOutage = %#v, want %#v", result.ProviderOutage, testCase.wantOutage)
+			}
+		})
+	}
+}
+
 // An overload is the transient death the harness already has a wait for. Two
 // answers to the same terminal would leave which one a run took depending on the
 // order the caller happened to read them.

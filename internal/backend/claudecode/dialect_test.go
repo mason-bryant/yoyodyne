@@ -170,6 +170,70 @@ func TestTheClaudeDialectAnswersInTheContractsTerms(t *testing.T) {
 			},
 		},
 		{
+			// The one recorded shape of a home nobody has logged into, asked on
+			// 2026-09-19 with Claude Code 2.1.276: a terminal envelope with
+			// terminal_reason "api_error" and the title paired with its remedy.
+			name: "the recorded not-logged-in terminal is a wait for the operator",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "Not logged in · Please run /login",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnauthenticated,
+				Detail: "api_error: Not logged in · Please run /login",
+			},
+		},
+		{
+			// The CLI's other titles for the same condition, each paired with the
+			// same remedy, earn the same wait.
+			name: "a login that expired is a wait for the operator",
+			event: backend.ProviderEvent{
+				Type: "result", Subtype: terminalAPIError, Terminal: true, Failed: true,
+				Text: "Login expired · Please run /login",
+			},
+			said: true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnauthenticated,
+				Detail: "api_error: Login expired · Please run /login",
+			},
+		},
+		{
+			// A CLI that refuses the login before it writes any envelope says so
+			// on stderr, which is handed over as the one event on that channel.
+			// It is the same wait the terminal form earns: relaunching a process
+			// that died this way is the 2026-09-17 stall through the gap
+			// yoyodyne-ifd.377 left.
+			name:  "a login refused on stderr before any envelope is the same wait",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "Not logged in · Please run /login"},
+			said:  true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnauthenticated,
+				Detail: "Not logged in · Please run /login",
+			},
+		},
+		{
+			name:  "nothing answering, said on stderr, is the same wait",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "API Error: Can't reach the API server"},
+			said:  true,
+			want: backend.Observation{
+				Answer: backend.AnswerUnreachable,
+				Detail: "API Error: Can't reach the API server",
+			},
+		},
+		{
+			// Stderr names no ending and no status, so nothing else is read off
+			// it: an overload there would be a guess about diagnostics, and a
+			// process that died for any other reason stays the process failure
+			// it always was.
+			name:  "an overload on stderr says nothing",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "API Error: 529 Overloaded"},
+		},
+		{
+			name:  "a crash on stderr says nothing",
+			event: backend.ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "TypeError: Cannot read properties of undefined"},
+		},
+		{
 			// The CLI's own words when nothing answers at the API, recorded on the
 			// runs that died in the 2026-09-15..18 outage. It quotes no status
 			// because nothing answered, and it is not the mid-reply drop below:

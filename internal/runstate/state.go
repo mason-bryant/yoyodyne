@@ -1466,6 +1466,16 @@ type State struct {
 	// is not waiting, and an empty value alongside a deadline reads as a usage
 	// limit, which is what every record written before this field described.
 	PauseCause string `json:"pause_cause,omitempty"`
+	// ProviderOutageChannel is where the provider's refusal was read on the
+	// outage pause this run took: on the terminal of its stream, or on its
+	// process's stderr because the provider refused before it wrote a terminal
+	// at all. It is kept beside UsageLimitKind as evidence and outlives the
+	// deadline like it, because which channel a refusal came on is what says
+	// whether the dialect read an ending the provider wrote or a process that
+	// died before writing one — the shape yoyodyne-ifd.377 could not see. It is
+	// empty on a run that never waited on an outage, and on one whose wait was
+	// recorded before the channel was.
+	ProviderOutageChannel domain.ProviderChannel `json:"provider_outage_channel,omitempty"`
 	// OperatorHeldSince is when this run parked at a provider-call boundary
 	// because the operator holds all harness activity. It is written before the
 	// wait begins, exactly as a usage-limit deadline is, so a process that dies
@@ -1882,6 +1892,9 @@ func (s State) Validate() error {
 	if _, outage := PausedForProviderOutage(s.PauseCause); s.PauseCause != "" && !outage &&
 		s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload && s.PauseCause != PauseOperatorHold {
 		problems = append(problems, errors.New("pause_cause is invalid"))
+	}
+	if s.ProviderOutageChannel != "" && !s.ProviderOutageChannel.Valid() {
+		problems = append(problems, errors.New("provider_outage_channel is invalid"))
 	}
 	if s.OperatorHeldSeconds < 0 {
 		problems = append(problems, errors.New("operator_held_seconds cannot be negative"))

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // truth is a pointer to a boolean, which is how a rule says "must be true"
@@ -168,6 +170,18 @@ func TestADialectThatWouldSilentlyDoNothingIsRefused(t *testing.T) {
 			},
 			want: "also from the prose",
 		},
+		{
+			name: "a channel the contract does not name",
+			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: "stdout", Match: "not logged in"},
+			want: "names channel \"stdout\", which is not one of",
+		},
+		{
+			// Stderr has no type, no subtype, and no payload, so a rule reading it
+			// with no match expression answers for whatever the process said.
+			name: "a stderr rule with nothing to match",
+			rule: DialectRule{Answer: AnswerUnauthenticated, Channel: string(domain.ProviderChannelStderr), Terminal: truth(true)},
+			want: "reads stderr without a match expression",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -272,5 +286,56 @@ func TestAnAbsentFieldMatchesNothing(t *testing.T) {
 	}
 	if _, found := lookupField(nil, "a"); found {
 		t.Error("lookupField() found a field in an event with no payload")
+	}
+}
+
+// Stderr reaches only a rule that asked for it. A rule written before there was
+// a second channel keeps matching exactly what it did — the envelope — so a
+// declared dialect's refusal rule cannot start answering for a process's
+// diagnostics; and a rule that names stderr reads the refusal a provider makes
+// before it writes any envelope, which is the one case stderr is handed over
+// for.
+func TestStderrReachesOnlyARuleThatAskedForIt(t *testing.T) {
+	t.Parallel()
+
+	dialect, err := NewDeclarativeDialect("declared", DialectSpec{Rules: []DialectRule{
+		{Answer: AnswerUnauthenticated, Channel: string(domain.ProviderChannelStderr), Match: "(?i)not signed in"},
+		{Answer: AnswerRefused, Match: "(?i)not signed in"},
+	}})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDialect() error = %v", err)
+	}
+	stderr := ProviderEvent{Channel: domain.ProviderChannelStderr, Text: "fatal: not signed in; run my-harness login"}
+	observation, said := dialect.Observe(stderr)
+	if !said || observation.Answer != AnswerUnauthenticated {
+		t.Fatalf("Observe(stderr) = %#v, %t, want the stderr rule's answer", observation, said)
+	}
+	envelope := ProviderEvent{Type: "error", Text: "not signed in", Terminal: true, Failed: true}
+	observation, said = dialect.Observe(envelope)
+	if !said || observation.Answer != AnswerRefused {
+		t.Fatalf("Observe(envelope) = %#v, %t, want the envelope rule's answer rather than the stderr rule's", observation, said)
+	}
+
+	// The same envelope rule alone says nothing about stderr, however well the
+	// words match: it never asked for that channel.
+	envelopeOnly, err := NewDeclarativeDialect("declared", DialectSpec{Rules: []DialectRule{
+		{Answer: AnswerRefused, Match: "(?i)not signed in"},
+	}})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDialect() error = %v", err)
+	}
+	if observation, said := envelopeOnly.Observe(stderr); said {
+		t.Fatalf("Observe(stderr) = %#v, said, want a rule that named no channel to read the envelope alone", observation)
+	}
+	// A rule that spells the envelope out is the same rule as one that named
+	// none.
+	spelled, err := NewDeclarativeDialect("declared", DialectSpec{Rules: []DialectRule{
+		{Answer: AnswerRefused, Channel: string(domain.ProviderChannelEnvelope), Match: "(?i)not signed in"},
+	}})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDialect() error = %v", err)
+	}
+	if observation, said := spelled.Observe(envelope); !said || observation.Answer != AnswerRefused {
+		t.Fatalf("Observe(envelope) = %#v, %t, want a rule naming the envelope to read it", observation, said)
 	}
 }

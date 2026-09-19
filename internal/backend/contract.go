@@ -177,6 +177,23 @@ type ProviderEvent struct {
 	// nobody has seen the shape of cannot be diagnosed from a record that
 	// already threw the shape away.
 	Payload json.RawMessage
+	// Channel is where the provider said it. Empty is the envelope, which is
+	// every event the adapters built before stderr was read at all, so a dialect
+	// written against envelopes alone keeps reading exactly what it did.
+	//
+	// The stderr channel is the one event that is not an envelope: the whole of
+	// what the process wrote to stderr, handed over once — after the process has
+	// ended, and only when the stream ended without a terminal of its own. It is
+	// there for the refusal a provider CLI makes before it writes anything
+	// structured, which is a login it will not accept or an API it cannot reach,
+	// and it carries no Type, no Subtype, and no Payload because stderr names
+	// none, and is neither Terminal nor Failed because it is not an envelope:
+	// the channel is the whole of its condition, so a dialect written against
+	// envelopes says nothing about it unless it asks. What a dialect may read
+	// off it is deliberately narrow — see the two built-in dialects — because
+	// stderr is a wider surface than a terminal and most of what a process
+	// writes there is diagnostics.
+	Channel domain.ProviderChannel
 }
 
 // Observation is what a dialect reports about one event: the answer, and the
@@ -199,6 +216,25 @@ type Observation struct {
 	// records it. It is what turns a category shared by a transient overload and
 	// a refused request into a record somebody can act on.
 	Detail string
+	// Channel is where the provider said it, carried onto the record so a reader
+	// can tell a refusal read off a terminal from one read off a process that
+	// died before writing one. It is the caller's to write from the event, after
+	// the dialect answers and before the observation is recorded: where a thing
+	// was said is a fact about the event rather than a judgement any dialect
+	// makes, and a dialect delivered as data has no way to state it. Empty is the
+	// envelope, as it is on the event.
+	Channel domain.ProviderChannel
+}
+
+// ChannelOf is the channel an event or an observation names, with the empty
+// value read as the envelope it has always meant. It is the one conversion from
+// the zero value, so a record never carries an empty channel where it could
+// carry the word.
+func ChannelOf(channel domain.ProviderChannel) domain.ProviderChannel {
+	if channel == "" {
+		return domain.ProviderChannelEnvelope
+	}
+	return channel
 }
 
 // Dialect turns one provider's operational vocabulary into the contract's
@@ -300,7 +336,7 @@ func (o Observation) Record(result *RunResult) {
 		// does: a result carrying both would leave which answer a run took to the
 		// order its caller read them, and the relaunch it would otherwise spend is
 		// exactly the spend this answer exists to stop.
-		result.ProviderOutage = &ProviderOutage{Cause: outageCauseOf(o.Answer), Detail: o.Detail}
+		result.ProviderOutage = &ProviderOutage{Cause: outageCauseOf(o.Answer), Detail: o.Detail, Channel: ChannelOf(o.Channel)}
 		result.ServerOverload = nil
 		result.TransientFailure = nil
 	case AnswerRefused:
