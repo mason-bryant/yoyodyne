@@ -85,6 +85,15 @@ const (
 	// thing about it, and because telling them to start a session they are already
 	// running is worse than telling them nothing.
 	ReasonSessionIdle Reason = "idle"
+	// ReasonRedeploying is a session restarting into a build deployed over it: it
+	// has found the deploy, its bounded drain has run out with runs still going,
+	// and it is stopping and preserving them, or it has already stopped and is
+	// being re-executed. It is distinct from an idle session and from no session
+	// because an operator does nothing at all about it — the session comes back
+	// on its own within a minute and re-adopts what it stopped — and a surface
+	// that reported it as either would send somebody to start a session that is
+	// already on its way back.
+	ReasonRedeploying Reason = "redeploying"
 	// ReasonNoWatchSession is a product that was being watched and is not any more.
 	ReasonNoWatchSession Reason = "stopped"
 	// ReasonUnwatched is a product no session has ever watched. It is not a line
@@ -104,6 +113,7 @@ func Reasons() []Reason {
 		ReasonNoCapacity,
 		ReasonProviderWindow,
 		ReasonSessionIdle,
+		ReasonRedeploying,
 		ReasonNoWatchSession,
 		ReasonUnwatched,
 	}
@@ -130,6 +140,8 @@ func (r Reason) Whose() string {
 		return "nobody's — the harness asks again when the provider's usage window lifts"
 	case ReasonSessionIdle:
 		return "the operator's — a queue with ready work and an idle session is a stall rather than a rest"
+	case ReasonRedeploying:
+		return "nobody's — the session restarts into the deployed build on its own, and the session that comes back re-adopts the runs it stopped"
 	case ReasonNoWatchSession, ReasonUnwatched:
 		return "the operator's — nothing pulls the queue until `yoyo work --watch` starts a session"
 	default:
@@ -266,6 +278,16 @@ func (s Stall) Mark() string {
 	return string(s.Reason) + ":" + s.Since.UTC().Format(time.RFC3339Nano)
 }
 
+// RestartGrace is how long a stop the session recorded as a restart is read as
+// a session on its way back. The re-execution is given a minute and happens in
+// milliseconds when it happens at all, and a restart that the operating system
+// refuses writes a second stop that is an ending — but a new build that exits
+// during its own startup, after the exec, writes nothing, and that is exactly
+// the build a self-developing harness deploys over itself. Past this the stop
+// is read as the ending it turned out to be, and the reader is told to start a
+// session.
+const RestartGrace = 2 * time.Minute
+
 // WhyNothingStarts is the one derivation of what has stopped the choosing.
 //
 // The order is the order an operator acts in: the switch that stops everything,
@@ -336,6 +358,23 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	}
 	// Live is newest first, so the first idle session it holds is the latest one.
 	live := Live(sessions)
+	// A session whose drain has run out has stopped the runs it hosts and is
+	// restarting as soon as it hosts nothing, and one within a poll of that bound
+	// has declined to pull into a free seat on purpose. Both are answered ahead
+	// of everything else the log says, because from every other record each is a
+	// live session choosing nothing, and the one thing that must not be said
+	// about either is that it wants looking at. A skip is read that way only
+	// while the bound it was declined for is near: past it, the session either
+	// stopped — which its own later lines say — or died, and a dead session must
+	// not go on reading as one on its way back.
+	if len(live) > 0 && live[0].Draining != nil &&
+		(live[0].Draining.BoundReached || (live[0].Draining.PullSkipped && now.Before(live[0].Draining.Until.Add(RestartGrace)))) {
+		return Stall{
+			Reason: ReasonRedeploying,
+			Says:   "the watch session is " + live[0].Draining.Says(),
+			Since:  live[0].Draining.Since,
+		}
+	}
 	for _, transition := range live {
 		if transition.State != runstate.WatchIdle {
 			// Watching, braked, or resumed: a session is alive and either choosing or
@@ -361,6 +400,18 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	for _, transition := range sessions {
 		if transition.State == runstate.WatchStopped && transition.At.After(stopped.At) {
 			stopped = transition
+		}
+	}
+	// A stop the session recorded as a restart is a session on its way back
+	// rather than a line that went down — for as long as a restart takes. A
+	// restart that then did not happen writes a second, later stop that says
+	// so, and that one is read here instead; a new build that died in its own
+	// startup writes nothing, and is read past the grace as the ending it was.
+	if stopped.Restarting && now.Before(stopped.At.Add(RestartGrace)) {
+		return Stall{
+			Reason: ReasonRedeploying,
+			Says:   "the watch session stopped to restart into the build deployed over it and is on its way back",
+			Since:  stopped.At,
 		}
 	}
 	return Stall{

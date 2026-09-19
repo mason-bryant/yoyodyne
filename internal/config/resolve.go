@@ -213,6 +213,7 @@ func newResolution() *resolution {
 				ServerOverloadPause:               defaultServerOverloadPause,
 				CheckTimeout:                      defaultCheckTimeout,
 				WorkPoll:                          defaultWorkPoll,
+				RedeployDrainLimit:                defaultRedeployDrainLimit,
 				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
 				// The declarative path is what a new run executes unless the project
 				// says otherwise, so it is a harness default like every other value
@@ -275,6 +276,7 @@ func newResolution() *resolution {
 			"execution.usage_limit_in_process_pause":              OriginDefault,
 			"execution.check_timeout":                             OriginDefault,
 			"execution.work_poll":                                 OriginDefault,
+			"execution.redeploy_drain_limit":                      OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"execution.declarative_delivery":                      OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
@@ -314,6 +316,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.server_overload_pause", execution.ServerOverloadPause, &r.config.Execution.ServerOverloadPause, applied.origin)
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
+		setValue(r.origins, "execution.redeploy_drain_limit", execution.RedeployDrainLimit, &r.config.Execution.RedeployDrainLimit, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 		// The declarative path carries a harness default like the values above it,
 		// because it is what a run does rather than something a project opts into.

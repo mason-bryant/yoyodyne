@@ -321,6 +321,84 @@ type WatchTransition struct {
 	// because the entry stays in it. An unknown field is ignored by the same
 	// reader, so what an older one loses is the distinction and not the log.
 	Restarting bool `json:"restarting,omitempty"`
+	// Draining marks a session that has found a build deployed over it and is
+	// waiting out the runs it hosts before it restarts — bounded, so that the wait
+	// is minutes and never the length of a check suite under load. It travels on
+	// every transition the session makes while it drains, whatever state that
+	// transition is, because draining is about the runs the session hosts and
+	// not about the scheduler's other duties: a draining session still polls,
+	// still pulls into free seats, and still fires its recurring tasks, and a
+	// reader of any of those lines is owed the drain and its bound beside them.
+	//
+	// It is a field beside the state rather than a state of its own, for the
+	// reason Restarting above is: a reader from before the field existed —
+	// which is exactly what is running while a redeploy is happening — ignores an
+	// unknown field and refuses an unknown state, permanently.
+	Draining *WatchDrain `json:"draining,omitempty"`
+}
+
+// WatchDrain is a session waiting out the runs it hosts to restart into a build
+// deployed over it: since when, how long it will wait, and the moment it stops
+// waiting and restarts anyway.
+type WatchDrain struct {
+	Since time.Time `json:"since"`
+	// BoundSeconds is execution.redeploy_drain_limit as the session read it, and
+	// Until is Since plus that bound: the moment past which the session restarts
+	// with its hosted runs stopped and preserved rather than waited out.
+	BoundSeconds int64     `json:"bound_seconds"`
+	Until        time.Time `json:"until"`
+	// Hosting is how many of the session's own runs it was waiting out when it
+	// recorded this. Zero is a session on the point of restarting.
+	Hosting int `json:"hosting,omitempty"`
+	// BoundReached marks the drain having run out: the session has stopped and
+	// preserved the runs it hosts, pulls nothing more into a free seat, and
+	// restarts as soon as it hosts nothing — which, for a run at its promotion,
+	// is when that promotion ends. Its recurring tasks go on firing meanwhile.
+	BoundReached bool `json:"bound_reached,omitempty"`
+	// PullSkipped marks a poll that declined to pull into a free seat because
+	// the bound was less than one poll away — a run started then would only be
+	// stopped. It is on the drain so a reader of the idle line it was said on
+	// knows the seat was left on purpose rather than for want of work.
+	PullSkipped bool `json:"pull_skipped,omitempty"`
+}
+
+// Bound is how long the session waits before it restarts anyway.
+func (d WatchDrain) Bound() time.Duration {
+	return time.Duration(d.BoundSeconds) * time.Second
+}
+
+// Says is the drain as the clause every surface prints beside the session's
+// state, so `yoyo status`, the watch log, and the channel name it in one way.
+func (d WatchDrain) Says() string {
+	said := fmt.Sprintf("draining to restart into the build deployed over it since %s, bounded at %s (until %s)",
+		d.Since.UTC().Format(time.RFC3339), d.Bound(), d.Until.UTC().Format(time.RFC3339))
+	if d.BoundReached {
+		return said + "; the bound has run out, so the runs it hosts are stopped and preserved for the session that comes back, nothing more is pulled into a free seat until it does, and its recurring tasks go on firing"
+	}
+	if d.PullSkipped {
+		return said + "; the bound is less than one poll away, so nothing more is pulled into a free seat and the session that comes back pulls it"
+	}
+	if d.Hosting > 0 {
+		return fmt.Sprintf("%s, waiting out %d run(s) it hosts while still pulling into free seats and firing its recurring tasks", said, d.Hosting)
+	}
+	return said
+}
+
+func (d WatchDrain) validate() error {
+	var problems []error
+	if d.Since.IsZero() {
+		problems = append(problems, errors.New("draining names no moment it began"))
+	}
+	if d.BoundSeconds <= 0 {
+		problems = append(problems, fmt.Errorf("draining is bounded at %d seconds, which is no bound", d.BoundSeconds))
+	}
+	if d.Until.IsZero() {
+		problems = append(problems, errors.New("draining names no moment it ends"))
+	}
+	if d.Hosting < 0 {
+		problems = append(problems, fmt.Errorf("draining reports %d hosted runs, which is not a count", d.Hosting))
+	}
+	return errors.Join(problems...)
 }
 
 func (t WatchTransition) Validate() error {
@@ -422,6 +500,13 @@ func (t WatchTransition) Validate() error {
 	// under way that nothing is going to make.
 	if t.Restarting && t.State != WatchStopped {
 		problems = append(problems, fmt.Errorf("a %s transition cannot be a restart, which is a thing only a stop is", t.State))
+	}
+	// A drain that cannot say when it began or when it gives up is a drain no
+	// surface can name the bound of, which is the whole of what the field is for.
+	if t.Draining != nil {
+		if err := t.Draining.validate(); err != nil {
+			problems = append(problems, fmt.Errorf("draining: %w", err))
+		}
 	}
 	return errors.Join(problems...)
 }

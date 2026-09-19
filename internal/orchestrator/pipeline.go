@@ -750,7 +750,13 @@ type Outcome struct {
 	// rather than the provider ending it: runstate.ProviderStopStalled when it
 	// stopped emitting events, runstate.ProviderStopBudgetExhausted when it was
 	// still live and out of budget. It is never a report of failure by the agent.
-	ProviderStop string                   `json:"provider_stop,omitempty"`
+	ProviderStop string `json:"provider_stop,omitempty"`
+	// RedeployStop is the run having been stopped by the watch session hosting
+	// it, so that session could restart into a build deployed over it once its
+	// drain bound ran out. Like ProviderStop it is the harness's own clock and
+	// never a report by the agent; the run is in flight and owed a continuation
+	// from the phase recorded on it.
+	RedeployStop *runstate.RedeployStop   `json:"redeploy_stop,omitempty"`
 	Integration  *gitworktree.Integration `json:"integration,omitempty"`
 	// PullRequest is the published pull request, present only on a run that
 	// published one. PublishSkipped says why a run that asked to publish did not,
@@ -923,7 +929,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// making, and the rest are owed the rest of the step they stopped short of.
 		// Nothing reaches here while the hold or the dependency is still in force,
 		// so a run carrying one is a run whose reason to wait has gone.
-		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForDependency(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForDependency(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !stoppedForRedeployIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -1356,6 +1362,11 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// stands where it did while its counters say otherwise, which is the misreading
 	// this class exists to prevent, inverted.
 	state.Environmental = nil
+	// A redeploy stop is spent by being picked up: this process is the
+	// continuation it promised, whichever session or command it is. Left
+	// standing it would have the next session re-adopt a run that is already
+	// being carried.
+	state.RedeployStop = nil
 	// The invariants are re-read rather than carried in run state: they are the
 	// repository's current constraints, and a resumed attempt must be held to what
 	// holds now rather than to what held when the interrupted process started.
@@ -1976,14 +1987,27 @@ func (a *activeRun) promoteApproved(ctx context.Context) (Outcome, bool, error) 
 	}
 	retry, retryErr := a.prepareIntegrationRetry(ctx, err)
 	if retryErr != nil {
-		outcome, err := a.fail(retryErr, failureStatus(ctx, retryErr))
+		outcome, err := a.endPromotion(ctx, retryErr)
 		return outcome, false, err
 	}
 	if !retry {
-		outcome, err := a.fail(err, failureStatus(ctx, err))
+		outcome, err := a.endPromotion(ctx, err)
 		return outcome, false, err
 	}
 	return Outcome{}, true, nil
+}
+
+// endPromotion is the ending a failed promotion gets. Ordinarily that is the
+// failure it always was. The one exception is a run whose hosting session
+// cancelled it for its own redeploy in the moment between reading its phase and
+// the promotion starting: that goes through stop, so it ends with its reason
+// naming the redeploy — nothing at a promotion is resumable, so it is cancelled
+// with its change preserved rather than held, and never silently.
+func (a *activeRun) endPromotion(ctx context.Context, cause error) (Outcome, error) {
+	if _, forRedeploy := drainedForRedeploy(ctx); forRedeploy {
+		return a.stop(ctx, cause)
+	}
+	return a.fail(cause, failureStatus(ctx, cause))
 }
 
 // contendedIntegration reports a promotion refused because the target branch is
@@ -4398,6 +4422,7 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	// A recorded stop or park is an instruction to continue later, and this run
 	// has finished. Leaving either would promise a continuation of a completed run.
 	a.state.ProviderStop = ""
+	a.state.RedeployStop = nil
 	a.state.OperatorHeldSince = nil
 	a.state.Status = runstate.StatusSucceeded
 	a.state.Phase = runstate.PhaseCleaningUp
@@ -4503,6 +4528,14 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	if errors.As(cause, &raised) {
 		return a.escalate(ctx)
 	}
+	// A stop the hosting watch session made to restart into a build deployed
+	// over it is the harness's own clock again, and is read off the context's
+	// cause rather than the error: every step between the cancelled process and
+	// here reports it as the step failing, and what it is instead is a run owed a
+	// continuation by the session that comes back.
+	if drained, forRedeploy := drainedForRedeploy(ctx); forRedeploy {
+		return a.pauseForRedeploy(drained)
+	}
 	// A stop the operator asked for is the one ending here that is not a pause and
 	// not a failure of the work. It is recorded as cancelled, which is exactly
 	// what a run this process cancelled itself is recorded as, so what it leaves
@@ -4581,6 +4614,7 @@ func (a *activeRun) escalate(ctx context.Context) (Outcome, error) {
 	// A recorded stop or park is an instruction to continue later, and this run has
 	// finished, exactly as it has when `complete` clears the same two.
 	a.state.ProviderStop = ""
+	a.state.RedeployStop = nil
 	a.state.OperatorHeldSince = nil
 	a.state.Status = runstate.StatusSucceeded
 	a.state.Phase = runstate.PhaseComplete
@@ -4812,6 +4846,7 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.UsageLimitResetsAt = nil
 	a.state.PauseCause = ""
 	a.state.ProviderStop = ""
+	a.state.RedeployStop = nil
 	a.state.DirectivePause = nil
 	a.state.DependencyPause = nil
 	a.state.OperatorHeldSince = nil
@@ -4932,6 +4967,7 @@ func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, complet
 	durable.UsageLimitResetsAt = nil
 	durable.PauseCause = ""
 	durable.ProviderStop = ""
+	durable.RedeployStop = nil
 	durable.DirectivePause = nil
 	durable.DependencyPause = nil
 	durable.OperatorHeldSince = nil

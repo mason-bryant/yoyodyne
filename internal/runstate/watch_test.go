@@ -319,6 +319,61 @@ func TestASessionSaysWhenItsStopIsARestart(t *testing.T) {
 	}
 }
 
+// A session draining to restart into a build deployed over it says so on every
+// line it writes while it drains, with the bound on the wait: a reader of any of
+// them is owed what stops the wait rather than left to time it, because on
+// 2026-09-19 the wait was two hours and nothing said what it was waiting on.
+//
+// The mark is a field rather than a state of its own for the reason the restart
+// above is: a reader from before it existed ignores an unknown field and refuses
+// an unknown state.
+func TestASessionSaysWhenItIsDrainingAndUnderWhatBound(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestWatchStore(t, root)
+	since := time.Date(2026, 9, 19, 7, 35, 0, 0, time.UTC)
+	draining := testWatchTransition(testWatchSessionID, WatchIdle, "nothing more is ready to pull")
+	draining.Draining = &WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1}
+	if err := store.Record(draining); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	reached := testWatchTransition(testWatchSessionID, WatchIdle, "the bound has run out")
+	reached.Draining = &WatchDrain{Since: since, BoundSeconds: 900, Until: since.Add(15 * time.Minute), Hosting: 1, BoundReached: true}
+	if err := store.Record(reached); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	recorded, err := newTestWatchStore(t, root).List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || recorded[0].Draining == nil || recorded[1].Draining == nil {
+		t.Fatalf("List() = %#v, want both lines carrying the drain", recorded)
+	}
+	if got := recorded[0].Draining; got.Bound() != 15*time.Minute || !got.Since.Equal(since) || got.Hosting != 1 || got.BoundReached {
+		t.Fatalf("drain = %#v, want the bound, the start, and the hosted run read back", got)
+	}
+	if !recorded[1].Draining.BoundReached {
+		t.Fatal("the line that said the bound had run out reads back as one still waiting")
+	}
+	for _, said := range []string{"since 2026-09-19T07:35:00Z", "bounded at 15m0s", "until 2026-09-19T07:50:00Z", "waiting out 1 run(s)"} {
+		if !strings.Contains(recorded[0].Draining.Says(), said) {
+			t.Fatalf("Says() = %q, want %q in it", recorded[0].Draining.Says(), said)
+		}
+	}
+	if !strings.Contains(recorded[1].Draining.Says(), "the bound has run out") {
+		t.Fatalf("Says() = %q, want the bound running out said", recorded[1].Draining.Says())
+	}
+	// A drain with no bound is the wait this field exists to bound, so it is
+	// refused rather than recorded as a wait on nothing.
+	unbounded := testWatchTransition(testWatchSessionID, WatchIdle, "draining")
+	unbounded.Draining = &WatchDrain{Since: since, Until: since}
+	if err := store.Record(unbounded); err == nil {
+		t.Fatal("Record() error = nil, want a drain with no bound refused")
+	}
+}
+
 // A session waiting out the provider's usage window says so on the poll it made
 // inside one, and says when the provider named the window lifting. Nothing else
 // in the record distinguishes that poll from a poll over an empty queue, and on

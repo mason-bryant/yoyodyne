@@ -855,6 +855,46 @@ func (d DependencyPause) Validate() error {
 	return nil
 }
 
+// RedeployStop is a run the watch session hosting it stopped so that the
+// session could restart into a build deployed over it: when, at which phase, how
+// long the session had drained before it gave up waiting, and which session did
+// it. The phase is recorded rather than read off the run because it is what the
+// continuation is owed — a developer attempt in the same session, or the gate
+// from its checks — and the bound is recorded because it is what a reader asks
+// first about a run the harness stopped on its own clock.
+type RedeployStop struct {
+	At    time.Time `json:"at"`
+	Phase Phase     `json:"phase"`
+	// Bound is the drain limit that ran out, in seconds. It is the configured
+	// execution.redeploy_drain_limit as the session read it.
+	BoundSeconds int64 `json:"bound_seconds"`
+	// SessionID is the watch session that stopped the run, so the run's record
+	// and the watch log can be read against each other.
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// Bound is the drain limit that ran out.
+func (r RedeployStop) Bound() time.Duration {
+	return time.Duration(r.BoundSeconds) * time.Second
+}
+
+// Validate rejects a recorded stop that cannot say what the run is owed: a stop
+// with no moment is one nothing can age, and one with no phase is one nothing
+// knows how to continue.
+func (r RedeployStop) Validate() error {
+	var problems []error
+	if r.At.IsZero() {
+		problems = append(problems, errors.New("at is required"))
+	}
+	if !r.Phase.Valid() {
+		problems = append(problems, fmt.Errorf("phase %q is not one a run reaches", r.Phase))
+	}
+	if r.BoundSeconds < 0 {
+		problems = append(problems, fmt.Errorf("bound_seconds is %d, which is not a duration", r.BoundSeconds))
+	}
+	return errors.Join(problems...)
+}
+
 // MaxRepairContinuations bounds how many granted continuations one run's record
 // may carry. What actually bounds them is the item's per-item grant cap, which
 // refuses long before this; this is the record's own bound, so a budget somebody
@@ -1530,6 +1570,15 @@ type State struct {
 	// one because what lifts them differs: a directive is settled by a person
 	// deciding, and this is lifted by other work finishing.
 	DependencyPause *DependencyPause `json:"dependency_pause,omitempty"`
+	// RedeployStop records that the watch session hosting this run stopped it
+	// in order to restart into a build deployed over it, once the drain the
+	// session was given ran out with this run still going. Like a recorded
+	// provider stop it is an instruction to continue later rather than a
+	// failure: the run keeps its claim, its worktree, its branch, and its
+	// developer session, and the session that comes back re-adopts it from
+	// exactly here, with every counter as it was. It is written only when what
+	// the run leaves behind can be continued, and cleared as the run resumes.
+	RedeployStop *RedeployStop `json:"redeploy_stop,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -1965,6 +2014,17 @@ func (s State) Validate() error {
 		// continuation nothing will ever make.
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("dependency_pause requires a run that is still in flight"))
+		}
+	}
+	if s.RedeployStop != nil {
+		if err := s.RedeployStop.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("redeploy_stop: %w", err))
+		}
+		// A redeploy stop is the same kind of instruction again: the session that
+		// comes back continues this. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("redeploy_stop requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

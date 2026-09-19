@@ -613,6 +613,42 @@ func TestTheWatchSettingsResolveFromEveryLayer(t *testing.T) {
 	}
 }
 
+// The drain bound resolves like the other watch settings, and its default is
+// minutes rather than hours: a deploy over a session hosting a long check suite
+// has to be taken up within the hour it landed in.
+func TestTheRedeployDrainLimitResolvesFromEveryLayer(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if got := inherited.Config.Execution.RedeployDrainLimit; got != Duration(15*time.Minute) {
+		t.Fatalf("inherited redeploy_drain_limit = %s, want 15m", got)
+	}
+	if origin := inherited.Origins["execution.redeploy_drain_limit"]; origin != BuiltinV1 {
+		t.Fatalf("redeploy_drain_limit origin = %q, want %q", origin, BuiltinV1)
+	}
+
+	overridden := loadProject(t, minimalProjectConfig+"execution:\n  redeploy_drain_limit: 45m\n", nil)
+	if got := overridden.Config.Execution.RedeployDrainLimit; got != Duration(45*time.Minute) {
+		t.Fatalf("overridden redeploy_drain_limit = %s, want 45m", got)
+	}
+	if origin := overridden.Origins["execution.redeploy_drain_limit"]; origin == BuiltinV1 {
+		t.Fatalf("an overridden key kept the bundle's origin %q", origin)
+	}
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	if got := generated.Execution.RedeployDrainLimit; got != Duration(15*time.Minute) {
+		t.Fatalf("generated redeploy_drain_limit = %s, want 15m", got)
+	}
+
+	// A drain with no bound is the two-hour wait this bound exists to end.
+	for _, body := range []string{"execution:\n  redeploy_drain_limit: 0s\n", "execution:\n  redeploy_drain_limit: -5m\n"} {
+		_, err := loadProjectError(t, minimalProjectConfig+body, nil)
+		if err == nil || !strings.Contains(err.Error(), "execution.redeploy_drain_limit must be positive") {
+			t.Fatalf("LoadResolved() error = %v, want one refusing %q", err, strings.TrimSpace(body))
+		}
+	}
+}
+
 // An interval of nothing is a session reading the queue as fast as the machine
 // allows, which is a spin rather than a watch. A brake of zero is a choice —
 // never brake, leave the operator as the only thing that holds intake — and a

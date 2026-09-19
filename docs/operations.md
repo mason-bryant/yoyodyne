@@ -466,9 +466,11 @@ What the wait costs is nothing, and that is the whole of the rule:
   been renewed, and the poll that finds it renewed resumes the line by itself:
   **nothing is released and nothing is restarted.** A provider nobody can reach
   is asked about by pulling into it again once the probe interval has passed,
-  because nothing cheaper says whether the network is back. A drain (`yoyo work`
-  without `--watch`) stops on the wait instead, since it is a command you are
-  waiting on the return of.
+  because nothing cheaper says whether the network is back. A draining pass
+  (`yoyo work` without `--watch` — the pass that returns when the queue empties,
+  not the [redeploy drain](#a-session-draining-to-restart-into-a-deployed-build)
+  below) stops on the wait instead, since it is a command you are waiting on
+  the return of.
 - **A recurring task records the wait rather than a failed turn.** A firing due
   while it stands moves its cadence, asks the role nothing, and its sweep record
   says the provider is not authenticated (or cannot be reached) — so `yoyo
@@ -668,6 +670,91 @@ the log is what says why it is missing.
 This used to end the run too, in the harder way: the process was killed on the
 spot with `token too long`, so the work in the worktree and the invocation's cost
 went with it.
+
+## A session draining to restart into a deployed build
+
+A watching `yoyo work` session runs the binary it was started from, so when you
+install or rebuild `yoyo` over it, the session restarts itself into the new
+build — [how work flows](work.md#letting-the-harness-choose-the-work) says why
+nothing outside the process can. Between finding the deploy and restarting, the
+session is **draining**, and it is worth being exact about what that does and
+does not stop, because on 2026-09-19 it stopped everything: at 07:35Z the
+session logged that it was restarting, then did nothing for over two hours
+while the one run it hosted sat in `make race` under load — no pull into the
+second seat, no recurring task, two hourly passes missed, and the operator
+learned by looking.
+
+**A drain stops nothing but the wait on the runs it hosts.** A draining session
+still polls, still pulls ready work into any free seat, still puts stopped work
+in front of the development manager, and still fires every recurring task as
+its cadence comes due — a firing already under way when the bound runs out is
+finished first. The one thing it declines is a pull made with the bound less
+than one poll away, which would start a run only to stop it; that pull is
+skipped, and the skip is said in the watch log and in `yoyo status` — which
+names it as the session restarting, not as an idle session over a queue with
+work in it — rather than looking like a poll that found nothing.
+
+**The drain is bounded.** It restarts the moment it hosts no run, and otherwise
+waits at most `execution.redeploy_drain_limit` — fifteen minutes by default,
+minutes rather than hours on purpose. Past that it restarts anyway:
+
+- Each run it still hosts at its developer attempt, its checks, or its review is
+  stopped where it is and **preserved whole** — worktree, branch, claim,
+  developer session, repair attempts, relaunches, review rounds, every counter.
+  The run's record carries a `redeploy_stop` naming the phase, the bound, and
+  the session that stopped it; the work item gets a note saying the run was
+  paused for a redeploy, not failed.
+- The session that comes back **re-adopts** each of them at its first pull,
+  ahead of anything new and into the seat the run already holds, and continues
+  it from the recorded phase: a developer attempt resumes in the same session,
+  and a run stopped at its checks or its review re-earns the gate from the
+  checks. Its selection reason says it was handed over rather than chosen. A
+  re-adoption the pipeline could not take at that moment — a lease another
+  process held, a tracker that did not answer — is made again at the next
+  pull for as long as the run's record carries its stop, reported on one line
+  of the pass with the count of tries, and counts toward nothing.
+  `yoyo run <beads-id>` continues one the same way if no session does, and
+  `yoyo reconcile` leaves it alone as a run its own pipeline can continue.
+- A run at its promotion is the one exception: it holds the target branch's
+  lease, and a promotion cancelled part-way is the one boundary durable state
+  cannot describe, so the session waits it out past the bound and restarts
+  after it. The wait is the session's ordinary loop and not a silence — the
+  pull is still opened every poll and every recurring task still fires on its
+  cadence; only new starts are declined, and each declined pull says so. A
+  forge outage can hold a promotion for hours, and those hours cost the
+  scheduler nothing but the seat the promotion holds.
+- No recurring task is ever skipped for the drain, so the sweep record has
+  nothing to carry: a firing already under way when the bound runs out is
+  finished, a firing due while a promotion is waited out is made, and a firing
+  due in the moment the session restarts is made by the session that comes
+  back at its first pull, because the cadence is claimed durably and the
+  restart takes a minute.
+- A run the bound stops **before it recorded anything a continuation could pick
+  up** — no developer session yet — is not held with a marker nothing can act
+  on. It is recorded as cancelled, with its branch and worktree preserved and
+  its reason naming the redeploy, exactly as a run a killed process leaves:
+  `yoyo status --failed` lists it, the item's note says why, and the item stays
+  claimed until `yoyo triage rerun` starts it over or somebody releases it.
+  Nothing is ever silently held.
+
+What a stopped run loses is the minutes its current phase had spent: a run
+stopped at its checks runs them again. Set the bound longer if that trade is
+wrong for your suite, and never to nothing — the configuration refuses a drain
+with no bound.
+
+**`yoyo status` names the drain throughout.** The session's line says it is
+draining, since when, under what bound, and until when, on every transition it
+writes while the drain lasts; once the bound has run out, or a pull has been
+declined for being within a poll of it, the not-startable line names the
+restart as its own state — whose move is nobody's, because the session comes
+back on its own — rather than reporting an idle session or no session, either
+of which would send you to start one that is already on its way back. The stop
+recorded as a restart reads that way for two minutes, which is the minute the
+re-execution is given plus slack: a new build that dies in its own startup
+after the exec writes nothing, and past that it reads as the ending it was —
+no session running, and yours to start. The pass's own report, when the
+session returns, says the same: when the deploy was found, the bound, and
+which runs it stopped for it.
 
 ## Recovering interrupted runs
 
@@ -944,7 +1031,9 @@ artifacts that are already gone does nothing, and a stall already standing is no
 recorded twice. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
 inside its repair loop, one paused for a provider usage limit, one whose
-provider the harness stopped on time, one paused for an [unresolved
+provider the harness stopped on time, one a watch session
+[stopped for its own redeploy](#a-session-draining-to-restart-into-a-deployed-build),
+one paused for an [unresolved
 directive](conversation.md#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
@@ -1175,10 +1264,12 @@ Needs a human (3):
   choosing at all. That last one comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
   developer slot taken, a session waiting out the provider's usage window, a live
-  watch session that has found nothing it can start, no watch session running any
-  more, and a product no session has ever watched. An idle session and no session
-  are named apart on purpose — telling you to start a session you are already
-  running sends you to the wrong place. A provider window is named apart from
+  watch session that has found nothing it can start, a session
+  [restarting into a build deployed over it](#a-session-draining-to-restart-into-a-deployed-build),
+  no watch session running any more, and a product no session has ever watched.
+  An idle session, a restarting one, and no session are named apart on purpose —
+  telling you to start a session you are already running, or one that is on its
+  way back, sends you to the wrong place. A provider window is named apart from
   both for the same reason and says `Paused on the provider's usage window until
   13:43Z`: nobody has a move, the window lifts on the provider's clock, and
   reporting it as a session finding nothing to start sends you to look at a queue
