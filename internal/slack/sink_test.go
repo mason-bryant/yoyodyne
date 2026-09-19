@@ -425,7 +425,7 @@ func TestProductLevelNewsIsNotBuriedInAnItemsThread(t *testing.T) {
 	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
 		Stream:       productStream,
 		Cursor:       Cursor{Position: 1},
-		Notification: notify.IntakeReleased(time.Now()),
+		Notification: notify.IntakeReleased(time.Now(), runstate.IntakeRelease{}, false),
 	}}}, posts)
 
 	if err := sink.pass(context.Background()); err != nil {
@@ -1460,6 +1460,58 @@ func TestADegradedHarnessReachesEachOperatorAsWellAsTheChannel(t *testing.T) {
 		}
 		if said.Text != posts.requests[0].Text {
 			t.Fatalf("post %d said %q, want the account the channel got", index+1, said.Text)
+		}
+	}
+}
+
+// A finding only the operator can act on is said to him directly and tagged by
+// member id, in the channel and in the direct message alike: the communication
+// rule says a message that is his to act on names him wherever it is said, and
+// a member id is what makes the workspace notify a person rather than only
+// print their name.
+func TestAFindingForTheOperatorIsTaggedInTheChannelAndInTheDirectMessage(t *testing.T) {
+	t.Parallel()
+
+	finding, err := notify.FromOperatorAction(notify.OperatorAction{
+		Needs:      "add the PreToolUse hook to .claude/settings.json by hand",
+		RecordedIn: "the handling of report-0123456789abcdef0123456789abcde0 recorded in chat-1",
+		FoundBy:    "the product manager, handling the report",
+		Since:      moment,
+	})
+	if err != nil {
+		t.Fatalf("select a finding: %v", err)
+	}
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{{
+		Stream:       operatorActionStream,
+		Cursor:       Cursor{Position: 1, Delivered: []string{findingMark + "report:report-0123456789abcdef0123456789abcde0"}},
+		Direct:       true,
+		Tag:          true,
+		Notification: finding,
+	}}}
+	sink := newTestSink(t, t.TempDir(), feed, posts)
+	sink.operators = []string{"U0FIRST", "U0SECOND"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 3 {
+		t.Fatalf("posts = %#v, want the channel and both operators", posts.requests)
+	}
+	channel := posts.requests[0]
+	if channel.Channel != "C1" || !strings.Contains(channel.Text, "<@U0FIRST>") || !strings.Contains(channel.Text, "<@U0SECOND>") {
+		t.Fatalf("channel post = %#v, want the operators tagged by member id", channel)
+	}
+	for index, member := range sink.operators {
+		said := posts.requests[index+1]
+		if said.Channel != "D"+member {
+			t.Fatalf("post %d went to %q, want the conversation opened with %s", index+1, said.Channel, member)
+		}
+		if !strings.HasPrefix(said.Text, "<@"+member+">") {
+			t.Fatalf("post %d said %q, want it tagged to %s", index+1, said.Text, member)
+		}
+		if !strings.Contains(said.Text, "add the PreToolUse hook to .claude/settings.json by hand") {
+			t.Fatalf("post %d said %q, want the finding itself", index+1, said.Text)
 		}
 	}
 }

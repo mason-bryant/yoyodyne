@@ -207,8 +207,191 @@ func TestReportsAndProposalsAreSaidOnceInTheOrderTheyWereRecorded(t *testing.T) 
 		notify.KindReportFiled, notify.KindProposalRaised)
 	harness.poll(t, cursors)
 
+	// A critical report is also a finding for the operator until somebody handles
+	// it, said to him beside the report.
 	harness.file(t, "report-0123456789abcdef0123456789abcde1", report.SeverityCritical, moment.Add(time.Minute))
-	harness.poll(t, cursors, notify.KindReportFiled)
+	harness.poll(t, cursors, notify.KindReportFiled, notify.KindOperatorAction)
+}
+
+// A finding that needs the operator's own hand is said to him once — directly,
+// and tagged by member id — the pass after it is recorded, and never again while
+// it stands: `yoyo status` names it. Two records make one: a report handled as
+// needing him, and a critical report nobody has handled. A later handling of the
+// same report that says nothing of the kind ends it, silently; and the same
+// report handled as needing him again is a second finding, said once more.
+func TestAFindingForTheOperatorIsSaidToHimOnceDirectly(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityWarning, moment)
+	cursors := harness.poll(t, harness.start(), notify.KindReportFiled)
+
+	// The product manager handles it as needing the operator: the finding is
+	// recorded the moment the handling is, and said on the next pass.
+	harness.handle(t, "report-0123456789abcdef0123456789abcde0", "add the PreToolUse hook to .claude/settings.json by hand", true, moment.Add(time.Hour))
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	var findings []Delivery
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream == operatorActionStream && delivery.Posts() {
+			findings = append(findings, delivery)
+		}
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %#v, want the handling said once", findings)
+	}
+	finding := findings[0]
+	if !finding.Direct || !finding.Tag {
+		t.Fatalf("finding = %#v, want it said to the operator directly and tagged by member id", finding)
+	}
+	if finding.Notification.Event.Kind != notify.KindOperatorAction || finding.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("finding = %#v, want a warning of the operator-action kind", finding.Notification.Event)
+	}
+	message, err := notify.Render(finding.Notification.Topic, finding.Notification.Speaker, finding.Notification.Event)
+	if err != nil {
+		t.Fatalf("render the finding: %v", err)
+	}
+	for _, want := range []string{"add the PreToolUse hook to .claude/settings.json by hand", "report-0123456789abcdef0123456789abcde0", "the product manager, handling the report"} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("finding reads as %q, which does not say %q", message.Body, want)
+		}
+	}
+	cursors = harness.poll(t, cursors, notify.KindOperatorAction)
+	if !cursors.Streams[operatorActionStream].Has(findingMark + "report:report-0123456789abcdef0123456789abcde0") {
+		t.Fatalf("cursor = %#v, want the finding marked as said", cursors.Streams[operatorActionStream])
+	}
+
+	// A second pass sends nothing more, however many times the record is read.
+	cursors = harness.poll(t, cursors)
+	cursors = harness.poll(t, cursors)
+
+	// The operator makes the change and the product manager records it: the
+	// finding ends, and its mark goes with it. Nothing is said about that — the
+	// status line stops naming it, which is the ending.
+	harness.handle(t, "report-0123456789abcdef0123456789abcde0", "the hook is in place; the operator added it", false, moment.Add(2*time.Hour))
+	cursors = harness.poll(t, cursors)
+	if len(cursors.Streams[operatorActionStream].Delivered) != 0 {
+		t.Fatalf("cursor = %#v, want a finding that ended forgotten", cursors.Streams[operatorActionStream])
+	}
+
+	// Handled as needing him again, it is a finding again, said once more.
+	harness.handle(t, "report-0123456789abcdef0123456789abcde0", "the hook was removed by a settings sync; it has to go back", true, moment.Add(3*time.Hour))
+	cursors = harness.poll(t, cursors, notify.KindOperatorAction)
+	harness.poll(t, cursors)
+}
+
+// A finding from before the watermark is history, exactly as the record it came
+// from is: it is marked and not said. Its moment is the record that made it, so
+// a handling made today of a report filed before the channel existed is news
+// today.
+func TestAFindingFromBeforeTheWatermarkIsReadPast(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment)
+	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityCritical, moment.Add(-2*time.Hour))
+	harness.file(t, "report-0123456789abcdef0123456789abcde1", report.SeverityNote, moment.Add(-time.Hour))
+	cursors := harness.poll(t, harness.start())
+	if !cursors.Streams[operatorActionStream].Has(findingMark + "report:report-0123456789abcdef0123456789abcde0") {
+		t.Fatalf("cursor = %#v, want the old critical marked without being said", cursors.Streams[operatorActionStream])
+	}
+	harness.handle(t, "report-0123456789abcdef0123456789abcde1", "only the operator can rotate that token", true, moment.Add(time.Hour))
+	harness.poll(t, cursors, notify.KindOperatorAction)
+}
+
+// The brake tripping is a finding for the operator in the same sense: it is said
+// to him directly and tagged, naming the runs it counted with their items and
+// what stopped each, and the verb that lifts it. The release is said once, by
+// whom. His own hold is said to the channel alone, because he placed it.
+func TestABrakeTripIsSaidToTheOperatorDirectlyAndTheReleaseNamesWhoLiftedIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stops := []runstate.IntakeStop{
+		{RunID: "run-0000000000000000000000000000398a", WorkItemID: "yoyodyne-ifd.398", Reason: "its reviewer still required repair after 2 repair attempt(s), with 3 finding(s) unresolved"},
+		{RunID: "run-0000000000000000000000000000401a", WorkItemID: "yoyodyne-ifd.401", Reason: "check `make test` failed (exit 1) after 2 repair attempt(s)"},
+		{RunID: "run-0000000000000000000000000000402a", WorkItemID: "yoyodyne-ifd.402", Reason: "its reviewer still required repair after 2 repair attempt(s), with 1 finding(s) unresolved"},
+	}
+	if _, err := harness.intake.Brake("3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3", stops, moment); err != nil {
+		t.Fatalf("Brake() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	var trip *Delivery
+	for index := range batch.Deliveries {
+		if batch.Deliveries[index].Notification.Event.Kind == notify.KindIntakeHeld {
+			trip = &batch.Deliveries[index]
+		}
+	}
+	if trip == nil {
+		t.Fatalf("deliveries = %#v, want the brake trip said", batch.Deliveries)
+	}
+	if !trip.Direct || !trip.Tag {
+		t.Fatalf("trip = %#v, want it said to the operator directly and tagged by member id", *trip)
+	}
+	message, err := notify.Render(trip.Notification.Topic, trip.Notification.Speaker, trip.Notification.Event)
+	if err != nil {
+		t.Fatalf("render the trip: %v", err)
+	}
+	for _, want := range []string{
+		"run run-0000000000000000000000000000398a of yoyodyne-ifd.398 stopped: its reviewer still required repair",
+		"run run-0000000000000000000000000000401a of yoyodyne-ifd.401 stopped: check `make test` failed (exit 1)",
+		"run run-0000000000000000000000000000402a of yoyodyne-ifd.402 stopped",
+		"`yoyo release`",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("trip reads as %q, which does not say %q", message.Body, want)
+		}
+	}
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	// Said once: a second pass sends nothing more.
+	cursors = harness.poll(t, cursors)
+
+	if _, _, err := harness.intake.Release("the operator, at a terminal (`yoyo release`)", moment.Add(2*time.Hour)); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	batch, err = harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	var release *Delivery
+	for index := range batch.Deliveries {
+		if batch.Deliveries[index].Notification.Event.Kind == notify.KindIntakeReleased {
+			release = &batch.Deliveries[index]
+		}
+	}
+	if release == nil {
+		t.Fatalf("deliveries = %#v, want the release said", batch.Deliveries)
+	}
+	message, err = notify.Render(release.Notification.Topic, release.Notification.Speaker, release.Notification.Event)
+	if err != nil {
+		t.Fatalf("render the release: %v", err)
+	}
+	if !strings.Contains(message.Body, "released by the operator, at a terminal (`yoyo release`)") {
+		t.Fatalf("release reads as %q, which does not say who lifted it", message.Body)
+	}
+	if !release.Notification.Event.At.Equal(moment.Add(2 * time.Hour)) {
+		t.Fatalf("release is dated %s, want the moment it was recorded", release.Notification.Event.At)
+	}
+	cursors = harness.poll(t, cursors, notify.KindIntakeReleased)
+	harness.poll(t, cursors)
+
+	// The operator's own hold is his decision, and is said to the channel alone.
+	if _, err := harness.intake.Hold(runstate.IntakeHolderOperator, "reordering the backlog first", moment.Add(3*time.Hour)); err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	batch, err = harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	for _, delivery := range batch.Deliveries {
+		if delivery.Notification.Event.Kind == notify.KindIntakeHeld && (delivery.Direct || delivery.Tag) {
+			t.Fatalf("the operator's own hold was said to him directly: %#v", delivery)
+		}
+	}
 }
 
 // What a product recorded before this sink started is history. It is read past
@@ -258,8 +441,9 @@ func TestARecordFiledWhileTheSinkWasDownIsStillPosted(t *testing.T) {
 	// An hour of downtime, and a critical filed in the middle of it.
 	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityCritical, moment.Add(time.Hour))
 
-	// The restart reads the same watermark it wrote, so the report is news.
-	harness.poll(t, cursors, notify.KindReportFiled)
+	// The restart reads the same watermark it wrote, so the report is news — and
+	// so is the finding a critical report is until somebody handles it.
+	harness.poll(t, cursors, notify.KindReportFiled, notify.KindOperatorAction)
 }
 
 // The same thing for a run: one that both started and finished while the sink
@@ -418,7 +602,7 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	// Held twice is the same hold, and it is said once.
 	cursors = harness.poll(t, cursors)
 
-	if _, _, err := harness.intake.Release(); err != nil {
+	if _, _, err := harness.intake.Release("the operator, at a terminal (`yoyo release`)", time.Now()); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	cursors = harness.poll(t, cursors, notify.KindIntakeReleased)
@@ -1034,6 +1218,26 @@ func (h *testHarness) fileAs(t *testing.T, id, workItemID string, severity repor
 		RecordedAt:    at,
 	}); err != nil {
 		t.Fatalf("Append() error = %v", err)
+	}
+}
+
+// handle records what the product manager decided about one report, and
+// whether that decision is a finding for the operator.
+func (h *testHarness) handle(t *testing.T, id, reason string, needsOperator bool, at time.Time) {
+	t.Helper()
+	if err := h.reports.Handle(report.Handling{
+		SchemaVersion: report.HandlingSchemaVersion,
+		ReportID:      id,
+		Role:          domain.RoleProductManager,
+		Agent:         "product-manager",
+		RunID:         "chat-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Reason:        reason,
+		RecordedAt:    at,
+		NeedsOperator: needsOperator,
+	}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
 	}
 }
 

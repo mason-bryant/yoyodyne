@@ -124,11 +124,13 @@ func (c catchUp) say(index int, delivery Delivery) (notify.Notification, bool) {
 // planCatchUp decides what a batch is too deep to say in full, and digests the
 // older half of it per thread.
 //
-// Three things are never digested, and each of them is the reason a reader is
+// Four things are never digested, and each of them is the reason a reader is
 // looking at the channel at all: anything in a backlog shallow enough to post,
-// anything inside the recent window, and anything critical. A critical event is
-// the one thing a digest must not swallow — important findings standing out is
-// what the surface is for, and a count is not a finding.
+// anything inside the recent window, anything critical, and anything said to
+// somebody directly. A critical event is the one thing a digest must not
+// swallow — important findings standing out is what the surface is for, and a
+// count is not a finding — and a direct message is said once and marked as
+// said, so one folded into a digest is one never said.
 func planCatchUp(deliveries []Delivery, now time.Time) catchUp {
 	pending := 0
 	for _, delivery := range deliveries {
@@ -185,6 +187,13 @@ func planCatchUp(deliveries []Delivery, now time.Time) catchUp {
 // is never history: absence of a date is not evidence of age.
 func digestible(delivery Delivery, horizon time.Time) bool {
 	if !delivery.Posts() {
+		return false
+	}
+	// A message said to somebody directly is never folded into a thread's
+	// digest. The digest stands in for a thread's narrative, and a direct
+	// message is not narrative: it is said once, to a person, and marked as said
+	// — so one collapsed into a digest is one never said at all.
+	if delivery.Direct {
 		return false
 	}
 	event := delivery.Notification.Event

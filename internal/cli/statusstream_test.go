@@ -570,7 +570,7 @@ func TestStatusAnnouncesWhatTheOperatorHasStopped(t *testing.T) {
 	if _, _, err := holds.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
-	if _, _, err := intake.Release(); err != nil {
+	if _, _, err := intake.Release("the operator, at a terminal (`yoyo release`)", time.Now()); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	if _, stderr, _ := runCLI(t, "status", "--list", "--config", configPath); strings.Contains(stderr, "PAUSED") || strings.Contains(stderr, "INTAKE HELD") {

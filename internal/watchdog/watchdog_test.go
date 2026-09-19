@@ -333,7 +333,7 @@ func TestTheTrackerIsAskedOnlyWhereNothingElseAccountsForTheQuiet(t *testing.T) 
 	// Once nothing accounts for the quiet it is asked, because nothing but the
 	// tracker can say whether the queue is drained. A checker that never asked
 	// would notice nothing at all.
-	if _, _, err := harness.intake.Release(); err != nil {
+	if _, _, err := harness.intake.Release("the operator, at a terminal (`yoyo release`)", time.Now()); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	harness.check(t)

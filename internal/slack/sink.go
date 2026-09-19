@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -968,9 +969,16 @@ func (p *poster) deliver(ctx context.Context, message notify.Message, emoji, url
 			sink.log("a direct conversation with %s could not be opened, so %s stands in the channel alone: %v", member, message.Kind, err)
 			continue
 		}
+		// A message that is tagged in the channel is tagged in the direct
+		// conversation too: the communication rule says a message that is theirs
+		// to act on names them by member id, wherever it is said.
+		text := renderText(message)
+		if slices.Contains(p.tags, member) {
+			text = tagged(member, text)
+		}
 		if _, err := sink.post(ctx, Message{
 			Channel:   conversation,
-			Text:      renderText(message),
+			Text:      text,
 			Username:  message.Identity.Name,
 			IconEmoji: emoji,
 			IconURL:   url,

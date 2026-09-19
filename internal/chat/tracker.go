@@ -187,6 +187,10 @@ const (
 	// pile the product manager is shown, so a report nobody decides about keeps
 	// coming back.
 	actionHandle = "handle"
+	// handleNeedsOperator is the one value "needs" takes on a handling: the
+	// report asks for a change only the operator can make, and the handling is
+	// a finding for him rather than a decision that closes the report.
+	handleNeedsOperator = "operator"
 )
 
 // trackerActionArguments names the optional arguments each operation accepts.
@@ -209,7 +213,7 @@ var trackerActionArguments = map[string][]string{
 	actionClose:        {},
 	actionRetire:       {},
 	actionTriage:       {"run", "decision", "budget"},
-	actionHandle:       {"report"},
+	actionHandle:       {"report", "needs"},
 }
 
 // trackerCapabilities is which authority each operation belongs to. It is the
@@ -348,6 +352,18 @@ type TrackerAction struct {
 	// item, and it is what the next admission citing the same report is checked
 	// against — which is how one report stops producing the same work twice.
 	Report string `json:"report,omitempty"`
+	// Needs says who a handled report is waiting on, and it takes one value:
+	// "operator", for a report that asks for a change only the operator can make
+	// by hand — a file the harness may not write, a credential, a workspace
+	// setting. It is taken by a handling and by nothing else, and it is optional
+	// there: most handlings close a report, and this one keeps it standing as a
+	// finding for the operator — named on `yoyo status` and said to him once —
+	// until a later handling of the same report records the change made.
+	//
+	// It is a field rather than a sentence in the reason because a sentence is
+	// what six such reports were, from 2026-08-17 until the 2026-09-14 sweep read
+	// them: nothing reads a reason for whose move it names.
+	Needs string `json:"needs,omitempty"`
 	// State is which kind of stale backlog state a repair corrects, from the
 	// vocabulary internal/backlogrepair declares. It is required there and taken
 	// by nothing else: the three are found in different records and corrected by
@@ -894,6 +910,9 @@ func (a TrackerAction) validateArguments() []error {
 		case !report.ValidID(reported):
 			problems = append(problems, fmt.Errorf("handle report %q is not a report identifier; a report is named exactly as it was listed to you", reported))
 		}
+		if needs := strings.TrimSpace(a.Needs); needs != "" && needs != handleNeedsOperator {
+			problems = append(problems, fmt.Errorf("handle \"needs\" is %q; the one value it takes is %q, for a change only the operator can make by hand", needs, handleNeedsOperator))
+		}
 	}
 	// A grant naming a path the provider refuses is refused wherever an item's
 	// authored text is written, which is admitting work and rewriting it. The
@@ -1022,6 +1041,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Report) != "" {
 		carried = append(carried, "report")
+	}
+	if strings.TrimSpace(a.Needs) != "" {
+		carried = append(carried, "needs")
 	}
 	return carried
 }

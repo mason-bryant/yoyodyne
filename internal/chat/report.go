@@ -363,6 +363,7 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 		RepositoryID:  s.options.RepositoryID,
 		Reason:        strings.TrimSpace(outcome.Action.Reason),
 		RecordedAt:    s.options.clock().Now(),
+		NeedsOperator: strings.TrimSpace(outcome.Action.Needs) == handleNeedsOperator,
 	}
 	if err := s.options.Reports.Handle(handling); err != nil {
 		outcome.fail(err)
@@ -372,6 +373,13 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 	// this conversation has not been shown yet is not then offered to it as
 	// something still waiting.
 	s.markReportDelivered(subject.ID)
+	if handling.NeedsOperator {
+		// The handling is a finding rather than a closing, and it is said as one:
+		// what the operator is told and what `yoyo status` names is this record.
+		outcome.applied("recorded that %s, reported at %q by the %s%s, needs the operator's hand; it is named on `yoyo status` and said to him directly until a later handling records the change made",
+			subject.ID, subject.Severity, RoleTitle(subject.Role), reportedOn(subject))
+		return
+	}
 	outcome.applied("recorded what became of %s, reported at %q by the %s%s",
 		subject.ID, subject.Severity, RoleTitle(subject.Role), reportedOn(subject))
 }

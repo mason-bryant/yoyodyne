@@ -1220,7 +1220,7 @@ func TestTheOperatorsSwitchesAreAddressedToTheWholeLine(t *testing.T) {
 			HeldAt:        moment,
 			Reason:        "reordering the backlog first",
 		}),
-		IntakeReleased(moment),
+		IntakeReleased(moment, runstate.IntakeRelease{}, false),
 		FromOperatorHold(runstate.OperatorHold{SchemaVersion: runstate.OperatorHoldSchemaVersion, HeldAt: moment}),
 		HoldLifted(moment),
 	} {
@@ -1241,6 +1241,124 @@ func TestTheOperatorsSwitchesAreAddressedToTheWholeLine(t *testing.T) {
 	}
 	if !strings.Contains(message.Body, "reordering the backlog first") {
 		t.Fatalf("body %q does not carry the operator's reason", message.Body)
+	}
+	if strings.Contains(message.Body, "The runs it counted") {
+		t.Fatalf("body %q names runs on a hold that counted none", message.Body)
+	}
+}
+
+// The brake's hold names the runs that tripped it — each with its item and what
+// stopped it — and the verb that lifts it, because that is what the operator
+// asked to be told rather than a count; and it is a warning, because the line
+// has stopped and only he lifts it. The release names who lifted it, and says
+// so where nobody is named rather than naming the operator by default.
+func TestABrakeTripNamesTheRunsItCountedAndTheReleaseNamesWhoLiftedIt(t *testing.T) {
+	held := FromIntakeHold(runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        moment,
+		HeldBy:        runstate.IntakeHolderBrake,
+		Reason:        "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+		Stops: []runstate.IntakeStop{
+			{RunID: "run-1", WorkItemID: "yoyodyne-ifd.398", Reason: "its reviewer still required repair after 2 repair attempt(s)"},
+			{RunID: "run-2", WorkItemID: "yoyodyne-ifd.401", Reason: "check `make test` failed (exit 1) after 2 repair attempt(s)"},
+		},
+	})
+	if held.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a brake trip is %q, want a warning", held.Event.Severity)
+	}
+	message, err := Render(held.Topic, held.Speaker, held.Event)
+	if err != nil {
+		t.Fatalf("render a brake trip: %v", err)
+	}
+	for _, want := range []string{
+		"the harness's own brake placed it after 3 run(s) blocked in a row",
+		"run run-1 of yoyodyne-ifd.398 stopped: its reviewer still required repair after 2 repair attempt(s)",
+		"run run-2 of yoyodyne-ifd.401 stopped: check `make test` failed (exit 1)",
+		"`yoyo release`",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("body %q does not carry %q", message.Body, want)
+		}
+	}
+
+	released := IntakeReleased(moment, runstate.IntakeRelease{
+		SchemaVersion: runstate.IntakeReleaseSchemaVersion,
+		Hold:          runstate.IntakeHold{SchemaVersion: runstate.IntakeHoldSchemaVersion, ProductID: "yoyodyne", HeldAt: moment, HeldBy: runstate.IntakeHolderBrake},
+		ReleasedAt:    moment.Add(time.Hour),
+		ReleasedBy:    "the operator, at a terminal (`yoyo release`)",
+	}, true)
+	if !released.Event.At.Equal(moment.Add(time.Hour)) {
+		t.Fatalf("a recorded release is dated %s, want the moment it was recorded", released.Event.At)
+	}
+	message, err = Render(released.Topic, released.Speaker, released.Event)
+	if err != nil {
+		t.Fatalf("render a release: %v", err)
+	}
+	if !strings.Contains(message.Body, "released by the operator, at a terminal (`yoyo release`)") {
+		t.Fatalf("body %q does not say who lifted the hold", message.Body)
+	}
+	unrecorded := IntakeReleased(moment, runstate.IntakeRelease{}, false)
+	message, err = Render(unrecorded.Topic, unrecorded.Speaker, unrecorded.Event)
+	if err != nil {
+		t.Fatalf("render an unrecorded release: %v", err)
+	}
+	if !strings.Contains(message.Body, "released by somebody the record does not name") {
+		t.Fatalf("body %q names somebody on a release nothing recorded", message.Body)
+	}
+}
+
+// A finding only the operator can act on is said as what is needed, who found
+// it, and where it is recorded, in that order, and it is a warning whatever the
+// report was filed at. It is addressed to the item where the finding is about
+// one, and to the product otherwise.
+func TestAFindingForTheOperatorSaysWhatIsNeededAndWhereItIsRecorded(t *testing.T) {
+	finding, err := FromOperatorAction(OperatorAction{
+		WorkItemID: "yoyodyne-ifd.383",
+		Needs:      "add the PreToolUse hook to .claude/settings.json; the harness may not write that file",
+		RecordedIn: "the handling of report-00000000000000000000000000000002 recorded in chat-1, over the developer's report from run-1",
+		FoundBy:    "the product manager, handling the report",
+		Since:      moment,
+	})
+	if err != nil {
+		t.Fatalf("select a finding: %v", err)
+	}
+	if finding.Topic.Kind != TopicWorkItem || finding.Topic.ID != "yoyodyne-ifd.383" {
+		t.Fatalf("a finding about an item is addressed to %q", finding.Topic.Key())
+	}
+	if finding.Event.Severity != report.SeverityWarning || !finding.Speaker.IsHarness() {
+		t.Fatalf("finding = %+v, want a warning the harness says", finding.Event)
+	}
+	message, err := Render(finding.Topic, finding.Speaker, finding.Event)
+	if err != nil {
+		t.Fatalf("render a finding: %v", err)
+	}
+	for _, want := range []string{
+		"add the PreToolUse hook to .claude/settings.json; the harness may not write that file",
+		"the product manager, handling the report",
+		"report-00000000000000000000000000000002",
+		"`yoyo status`",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("body %q does not carry %q", message.Body, want)
+		}
+	}
+	if message.Reach != ReachChannel {
+		t.Fatalf("a finding for the operator reaches %q, want the channel level", message.Reach)
+	}
+	product, err := FromOperatorAction(OperatorAction{Needs: "renew the login", RecordedIn: "report-1", FoundBy: "the developer, in a critical report", Since: moment})
+	if err != nil {
+		t.Fatalf("select a finding about no item: %v", err)
+	}
+	if product.Topic.Kind != TopicProduct {
+		t.Fatalf("a finding about no item is addressed to %q", product.Topic.Key())
+	}
+	message, err = Render(product.Topic, product.Speaker, product.Event)
+	if err != nil {
+		t.Fatalf("render a finding about no item: %v", err)
+	}
+	if message.Reach != ReachChannel {
+		t.Fatalf("a finding about no item reaches %q, want the channel level", message.Reach)
 	}
 }
 

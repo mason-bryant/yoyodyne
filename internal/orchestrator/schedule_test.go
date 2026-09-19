@@ -1440,7 +1440,7 @@ func TestWatchingReportsTheOperatorsHoldWhenItsOwnBrakeTripsUnderOne(t *testing.
 			}
 			h.mu.Unlock()
 		}
-		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+		return verdictStop(id), nil
 	}
 	sessions := &recordedSessions{}
 	harness.onSleep = func(*scheduleHarness, int) bool { return false }
@@ -1580,6 +1580,21 @@ func TestDrainingStillStopsWhenNothingMoreIsReady(t *testing.T) {
 // between them holds intake, and it stays held. What it places is the operator's
 // own switch, so what an operator arriving at a stopped line finds is one thing
 // to understand and one thing to lift.
+// verdictStop is a run that stopped on a judgement of its change: the reviewer
+// still required repair after every permitted attempt. It is what the brake
+// counts.
+func verdictStop(id string) Outcome {
+	return Outcome{
+		RunID:          "run-" + id,
+		WorkItemID:     id,
+		Status:         runstate.StatusFailed,
+		Blocked:        true,
+		ReviewDecision: review.DecisionRepair,
+		ReviewFindings: []review.Finding{{Severity: review.SeverityMajor, Message: "the change does not do what the item asks"}},
+		RepairAttempts: 2,
+	}
+}
+
 func TestWatchingHoldsIntakeWhenRunsKeepBlocking(t *testing.T) {
 	t.Parallel()
 
@@ -1589,7 +1604,7 @@ func TestWatchingHoldsIntakeWhenRunsKeepBlocking(t *testing.T) {
 		// A blocked run leaves the tracker with the item blocked, which is what
 		// takes it out of the ready queue.
 		h.retire(id)
-		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+		return verdictStop(id), nil
 	}
 	sessions := &recordedSessions{}
 	harness.onSleep = func(*scheduleHarness, int) bool { return false }
@@ -1622,6 +1637,72 @@ func TestWatchingHoldsIntakeWhenRunsKeepBlocking(t *testing.T) {
 	if strings.Contains(reason, "the operator") {
 		t.Fatalf("braked reason = %q, want a hold the brake placed never attributed to the operator", reason)
 	}
+	// The hold names the runs that tripped it, in the order they stopped, with
+	// what stopped each: the message that reaches the operator is read from it.
+	if len(schedule.Braked.Stops) != 3 {
+		t.Fatalf("the brake's hold names %d stop(s), want the three that tripped it: %#v", len(schedule.Braked.Stops), schedule.Braked.Stops)
+	}
+	for index, id := range []string{"yoyodyne-one", "yoyodyne-two", "yoyodyne-three"} {
+		stop := schedule.Braked.Stops[index]
+		if stop.RunID != "run-"+id || stop.WorkItemID != id {
+			t.Fatalf("stop %d = %#v, want run-%s of %s", index, stop, id, id)
+		}
+		if !strings.Contains(stop.Reason, "its reviewer still required repair after 2 repair attempt(s)") {
+			t.Fatalf("stop %d reason = %q, want the verdict that stopped it", index, stop.Reason)
+		}
+	}
+}
+
+// A stop the environment made is not a verdict on the change and the brake does
+// not count it: a round the harness refused as environmental, an approved change
+// stopped short of its promotion, a run that failed with no blocker and no
+// verdict at all. On 2026-09-19 the brake tripped on three stops of which two
+// were environmental, and held intake for two hours over a state `yoyo release`
+// does not fix. Such a stop neither counts nor clears the storm, so verdict stops
+// on either side of it are still one storm.
+func TestWatchingDoesNotBrakeOnEnvironmentalStops(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four", "yoyodyne-five")...)
+	harness.blockedRuns = 3
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.retire(id)
+		switch id {
+		case "yoyodyne-two":
+			// An approved change the environment stopped between its approval and
+			// its promotion, which is 394's class.
+			return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusFailed, Blocked: true,
+				ReviewDecision:  review.DecisionApprove,
+				IntegrationStop: &runstate.IntegrationStop{Cause: runstate.CauseTransportFailure, Phase: runstate.PhaseIntegrating, RecordedAt: time.Date(2026, 9, 19, 17, 50, 0, 0, time.UTC)}}, nil
+		case "yoyodyne-three":
+			// A round the harness refused as environmental: the worktree held none
+			// of the change it was to continue.
+			return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusFailed, Blocked: true,
+				Environmental: &runstate.EnvironmentalRefusal{Cause: runstate.CauseHandbackMissingChange, RecordedAt: time.Date(2026, 9, 19, 17, 52, 0, 0, time.UTC), Settled: true, Refused: true}}, nil
+		case "yoyodyne-four":
+			// A run that failed outright, with nothing judged.
+			return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusFailed, Failure: "the provider kept ending its invocations without judging the work"}, nil
+		}
+		return verdictStop(id), nil
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Braked != nil {
+		t.Fatalf("the brake held intake after %d verdict stop(s) among environmental ones: %#v", schedule.BlockedInARow, schedule.Braked)
+	}
+	if len(schedule.Started) != 5 {
+		t.Fatalf("started = %d run(s), want every item pulled with the brake untripped: %s", len(schedule.Started), schedule.Render())
+	}
+	// Two verdict stops with three environmental ones between them are still a
+	// storm of two: the environment neither counts nor clears.
+	if schedule.BlockedInARow != 2 {
+		t.Fatalf("blocked in a row = %d, want the two verdict stops counted and nothing else", schedule.BlockedInARow)
+	}
 }
 
 // One item failing is not a storm. A run that blocks between runs that land
@@ -1637,7 +1718,7 @@ func TestWatchingDoesNotBrakeOnBlockedRunsThatAreNotConsecutive(t *testing.T) {
 		if id == "yoyodyne-two" {
 			return Outcome{WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
 		}
-		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+		return verdictStop(id), nil
 	}
 	harness.onSleep = func(*scheduleHarness, int) bool { return false }
 
@@ -2574,9 +2655,9 @@ func (h *scheduleHarness) sleep(_ context.Context, interval time.Duration) bool 
 	return onSleep(h, sleeps)
 }
 
-// Hold is the brake placing the operator's own switch. Nothing in the scheduler
-// releases one, so this harness only ever has to place it.
-func (h *scheduleHarness) Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error) {
+// Brake is the brake placing the operator's own switch. Nothing in the
+// scheduler releases one, so this harness only ever has to place it.
+func (h *scheduleHarness) Brake(reason string, stops []runstate.IntakeStop, at time.Time) (runstate.IntakeHold, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.held != nil {
@@ -2586,8 +2667,9 @@ func (h *scheduleHarness) Hold(holder runstate.IntakeHolder, reason string, at t
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
 		ProductID:     "yoyodyne",
 		HeldAt:        at,
-		HeldBy:        holder,
+		HeldBy:        runstate.IntakeHolderBrake,
 		Reason:        reason,
+		Stops:         stops,
 	}
 	h.held = &held
 	return held, nil

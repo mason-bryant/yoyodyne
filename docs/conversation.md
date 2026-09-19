@@ -673,7 +673,8 @@ and why, beneath the PAUSED banner if both are in force. Who placed it is on the
 record rather than assumed: the harness's own failure-storm brake
 ([`blocked_runs_before_intake_hold`](configuration.md#watching-instead-of-draining))
 places the same hold, and a banner that called that one yours would send you
-looking for a decision you never made. It is recorded per product, unlike
+looking for a decision you never made. Which surface lifted a hold is recorded
+too, so the channel can say who ended a brake it told you about. It is recorded per product, unlike
 [`yoyo pause`](operations.md#pausing-everything-and-resuming-it), because what a development
 manager may pull is a fact about one backlog.
 

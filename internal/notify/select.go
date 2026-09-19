@@ -359,12 +359,71 @@ func FromProposal(proposal amendment.Proposal) (Notification, error) {
 // switch is placed by the operator and by the harness's own failure-storm brake,
 // and a channel that named one for the other is a channel that sent somebody to
 // look at the wrong state.
+// The brake's hold carries the runs that tripped it, each with its item and
+// what stopped it, so the message that reaches the operator names what he is
+// being asked to look at rather than counting it. A brake trip is a warning: the
+// line has stopped, and only he lifts it. The operator's own hold is a note, in
+// the way every other thing he did himself is.
 func FromIntakeHold(hold runstate.IntakeHold) Notification {
-	return productNotification(KindIntakeHeld, hold.HeldAt, Detail{Reason: hold.Says()})
+	notification := productNotification(KindIntakeHeld, hold.HeldAt, Detail{Reason: hold.Says(), Stops: hold.StopsSay()})
+	if hold.Braked() {
+		notification.Event.Severity = report.SeverityWarning
+	}
+	return notification
 }
 
-func IntakeReleased(at time.Time) Notification {
-	return productNotification(KindIntakeReleased, at, Detail{})
+// IntakeReleased says the hold was lifted, and by whom where the record names
+// them. The moment is the observer's where no release was recorded — a hold
+// lifted by a harness from before releases were written down — because what
+// lifts a hold is its absence, and an absence has no moment of its own.
+func IntakeReleased(at time.Time, release runstate.IntakeRelease, recorded bool) Notification {
+	if !recorded {
+		return productNotification(KindIntakeReleased, at, Detail{})
+	}
+	return productNotification(KindIntakeReleased, release.ReleasedAt, Detail{Reason: release.Says()})
+}
+
+// OperatorAction is one finding only the operator can act on, as the read model
+// derives it: what is needed, where it is recorded, who found it, and since
+// when. It is carried here rather than read from the read model because this
+// package speaks and does not read; the surface that reads hands it over.
+type OperatorAction struct {
+	WorkItemID string
+	Needs      string
+	RecordedIn string
+	FoundBy    string
+	Since      time.Time
+}
+
+// FromOperatorAction says a finding that needs the operator's hand, once. It is
+// addressed to the item the finding is about where there is one, so it sits in
+// that item's narrative, and to the product otherwise. The harness speaks it:
+// what the finding says is in Needs, in the words of whoever found it, and the
+// message is the harness telling the operator it is his.
+//
+// It is a warning, whatever the report was filed at: something only a person
+// can change is stopping something until they change it, and a note is what a
+// reader scrolls past.
+func FromOperatorAction(action OperatorAction) (Notification, error) {
+	topic, err := topicForItem(action.WorkItemID)
+	if err != nil {
+		return Notification{}, fmt.Errorf("address the finding recorded in %s: %w", action.RecordedIn, err)
+	}
+	return Notification{
+		Topic:   topic,
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindOperatorAction,
+			At:       action.Since,
+			Severity: report.SeverityWarning,
+			Refs:     Refs{WorkItemID: action.WorkItemID},
+			Detail: Detail{
+				Needs:      action.Needs,
+				RecordedIn: action.RecordedIn,
+				FoundBy:    action.FoundBy,
+			},
+		},
+	}, nil
 }
 
 // FromWatch says what a watch session changed to. It is addressed to the

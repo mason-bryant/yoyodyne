@@ -932,7 +932,13 @@ with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
 whole backlog through a failed run overnight — and what reports that hold
 names the brake rather than you, because the hold records which of the two
-placed it. And it records what it is doing — watching, idle, braked, resumed,
+placed it, and names the runs it counted with what stopped each. Only a stop
+that judged a change counts — a reviewer still requiring repair, a check still
+failing — never a stop the environment made or a run that failed with nothing
+judged; [the configuration guide](configuration.md#watching-instead-of-draining)
+says why. A trip is said to you directly the moment it is recorded and named on
+`yoyo status` until you lift it, because on 2026-09-19 one stood for two hours
+with nothing saying so. And it records what it is doing — watching, idle, braked, resumed,
 stopped — where `yoyo status` and the Slack sink read it, because an idle
 session and a dead one are otherwise the same silence. A
 poll that starts nothing names the runs going and what it passed over. It records

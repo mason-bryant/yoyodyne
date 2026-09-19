@@ -305,6 +305,12 @@ type Refused struct {
 type Attention struct {
 	What  string `json:"what"`
 	Whose string `json:"whose"`
+	// Named says the entry is always printed by name and never counted into
+	// "and N things not named here". It is set on a finding only the operator
+	// can act on — a brake he has to lift, a change only a person can make —
+	// because a line that folds those into a remainder has told him nothing,
+	// and nothing telling him is the month this class of finding once waited.
+	Named bool `json:"named,omitempty"`
 }
 
 // Standing is where the harness stands, in the four lines and nothing else.
@@ -476,9 +482,14 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// and this is where a surface finds out that it is asleep.
 	standing.CapacityBlocked = CapacityBlockedOf(sources, now)
 
-	standing.Reports, standing.ReportsProblem = readReports(sources, now)
+	// The pile is read once and used twice: for how it stands, and for the
+	// findings in it that need the operator. Two readings of one pile a moment
+	// apart could disagree about whether a report is handled.
+	reports, handlings, pileProblem := readPile(sources)
+	standing.Reports, standing.ReportsProblem = summarizePile(reports, handlings, pileProblem, now)
+	actions := readOperatorActions(reports, handlings, pileProblem)
 
-	needs, needsProblem := readNeedsHuman(sources, switches)
+	needs, needsProblem := readNeedsHuman(sources, switches, actions)
 	// The provider answering nobody is on the attention line whatever the queue
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.
@@ -985,13 +996,13 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 // says so and reports no counts at all: a zero here would read as a channel
 // nobody has filed into, which is the one thing a broken read of it must never
 // look like.
-func readReports(sources Sources, now time.Time) (report.Pile, string) {
+func readPile(sources Sources) ([]report.Report, []report.Handling, string) {
 	if sources.Reports == nil {
-		return report.Pile{}, "nothing was wired to read what the roles have reported"
+		return nil, nil, "nothing was wired to read what the roles have reported"
 	}
 	reports, err := sources.Reports.List()
 	if err != nil {
-		return report.Pile{}, fmt.Sprintf("the collected reports could not be read: %v", err)
+		return nil, nil, fmt.Sprintf("the collected reports could not be read: %v", err)
 	}
 	handlings, err := sources.Reports.Handlings()
 	if err != nil {
@@ -999,7 +1010,16 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 		// count as undecided. That overstates the backlog in the direction that
 		// sends somebody to work on something already done, so no counts are given
 		// at all and the gap is named.
-		return report.Pile{}, fmt.Sprintf("what became of the collected reports could not be read, so how many are still waiting cannot be said: %v", err)
+		return nil, nil, fmt.Sprintf("what became of the collected reports could not be read, so how many are still waiting cannot be said: %v", err)
+	}
+	return reports, handlings, ""
+}
+
+// summarizePile is how the pile stands, from one reading of it, or the stated
+// absence where it could not be read.
+func summarizePile(reports []report.Report, handlings []report.Handling, problem string, now time.Time) (report.Pile, string) {
+	if problem != "" {
+		return report.Pile{}, problem
 	}
 	return report.Summarize(reports, handlings, now), ""
 }
@@ -1016,8 +1036,13 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 // Held work is the one entry here whose mover can be the harness rather than a
 // person, and it is on this line for exactly that reason: an operator scanning
 // for what is waiting on him has to be able to see which of it is not.
-func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
-	attention := make([]Attention, 0, 4)
+//
+// A finding only the operator can act on is named ahead of the undecided
+// proposals and is never folded into the remainder: the brake's hold, with the
+// runs that tripped it, and each report-derived finding by name. Those are the
+// entries whose wait was measured in weeks before they were named here.
+func readNeedsHuman(sources Sources, held switches, actions []Attention) ([]Attention, string) {
+	attention := make([]Attention, 0, 4+len(actions))
 	if held.operatorHeld {
 		attention = append(attention, Attention{
 			What: fmt.Sprintf("all harness activity is held, since %s",
@@ -1026,15 +1051,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		})
 	}
 	if held.intakeHeld {
-		// Who placed it is on the record and is said with it: the same switch is
-		// placed by the operator and by the harness's own failure-storm brake,
-		// and an operator told this hold is theirs when the brake placed it goes
-		// looking for a decision they never made.
-		attention = append(attention, Attention{
-			What: fmt.Sprintf("intake is held, since %s: %s",
-				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(held.intake.Says(), maxRefusalBytes)),
-			Whose: "the operator's — nothing new is chosen until `yoyo release` lifts it",
-		})
+		attention = append(attention, IntakeAttention(held.intake))
 	}
 	for _, paused := range held.pausing {
 		attention = append(attention, Attention{
@@ -1043,6 +1060,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 			Whose: "the operator's — the work it affects waits until `yoyo directive resolve` settles it",
 		})
 	}
+	attention = append(attention, actions...)
 	problem := strings.Join(held.problems, "; ")
 
 	if sources.Amendments == nil {
@@ -1090,6 +1108,32 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	}
 	return attention, problem
 }
+
+// IntakeAttention is a held intake as the attention line names it. Who placed
+// it is on the record and is said with it: the same switch is placed by the
+// operator and by the harness's own failure-storm brake, and an operator told
+// this hold is theirs when the brake placed it goes looking for a decision they
+// never made. The brake's hold names the runs that tripped it, each with its
+// item and what stopped it, and is never folded into the remainder: it is the
+// finding the operator has to act on, and on 2026-09-19 it stood for two hours
+// with nothing naming it.
+func IntakeAttention(hold runstate.IntakeHold) Attention {
+	what := fmt.Sprintf("intake is held, since %s: %s",
+		hold.HeldAt.UTC().Format(time.RFC3339), singleLine(hold.Says(), maxRefusalBytes))
+	if stops := hold.StopsSay(); stops != "" {
+		what += "; " + singleLine(stops, maxIntakeStopsBytes)
+	}
+	return Attention{
+		What:  what,
+		Whose: "the operator's — nothing new is chosen until `yoyo release` (or `/release` in the conversation) lifts it",
+		Named: hold.Braked(),
+	}
+}
+
+// maxIntakeStopsBytes bounds the runs a brake's hold names on the attention
+// line. Three stops with a line each fit; a storm longer than that is cut with
+// the ellipsis, and the hold's own record carries the whole.
+const maxIntakeStopsBytes = 1 << 10
 
 // Held is the admitted work somebody has to release, as attention rather than as
 // queue entries: how many items wait on the development manager's decision and

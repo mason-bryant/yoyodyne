@@ -203,8 +203,19 @@ func (s Standing) renderNeedsHuman() string {
 		rendered.WriteString("Needs a human: nothing\n")
 	} else {
 		fmt.Fprintf(&rendered, "Needs a human (%d):\n", len(s.NeedsHuman))
-		listed, further := bound(len(s.NeedsHuman))
-		for _, waiting := range s.NeedsHuman[:listed] {
+		// A named entry is printed wherever it falls and is never counted into
+		// the remainder; the bound is spent on the rest. A finding only the
+		// operator can act on that reached him as "and 3 things not named here"
+		// is one that did not reach him.
+		listed, further := 0, 0
+		for _, waiting := range s.NeedsHuman {
+			if !waiting.Named {
+				if listed >= maxListed {
+					further++
+					continue
+				}
+				listed++
+			}
 			fmt.Fprintf(&rendered, "  %s — %s\n", waiting.What, waiting.Whose)
 		}
 		rendered.WriteString(remainder(further, "thing waiting on somebody"))

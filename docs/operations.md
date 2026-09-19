@@ -200,7 +200,66 @@ blocking, and every report of a held intake at a terminal now names this command
 beside `/release`. Releasing what is not held is not an error, an item you name
 with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
 starts choosing again at its next poll. Placing a hold stays in the conversation,
-where the reason for it can be recorded with it.
+where the reason for it can be recorded with it. Which surface lifted a hold is
+recorded beside the absence — `intake-release.json` under the product, naming
+the hold it lifted, when, and by whom — because a brake you were told about is a
+hold the channel owes you the ending of:
+[the release is said once, by whom](reporting.md#a-finding-that-needs-your-hand).
+
+## Where a finding that needs your hand goes
+
+Some of what the roles find can be acted on only by a person: a hook that has to
+go into `.claude/settings.json`, a credential to renew, a setting in a workspace,
+a change to a file the harness may not write. Until 2026-09-19 such a finding
+went where every other report went — into [the collected pile](reporting.md#what-agents-report-and-where-it-reaches-you),
+worked through on the product manager's cadence, and from there onto a checklist
+in her conversation that you saw when you asked. Six developer reports of that
+class sat in the pile from 2026-08-17 until the sweep of 2026-09-14 reached
+them, and the finding it produced reached you a month after the first of them
+was filed, because you asked why.
+
+**A finding that needs your hand is a class the harness reads, and it goes to
+three places the moment it is recorded.** Three things make one:
+
+- **The product manager handling a report as yours.** Her `handle` action takes
+  `"needs": "operator"` for a report whose answer is a change only you can make,
+  with the reason saying what you have to do. That handling does not close the
+  report; it records the finding, and a later handling of the same report
+  without `needs` is what records the change made.
+- **A report filed at critical severity** by any role, until somebody handles it.
+  Critical is the severity that means action, in the reporting contract's own
+  words; a critical report the product manager then handles as yours is the same
+  finding, and one she handles any other way ends it.
+- **The failure-storm brake tripping.** The hold it places names the runs it
+  counted — each with its item and what stopped it — and only you lift it, so
+  it is a finding for you in the same sense. [The configuration guide](configuration.md#watching-instead-of-draining)
+  says what the brake counts and what it does not.
+
+Where each goes:
+
+1. **One Slack direct message, tagged to you by member id, the moment it is
+   recorded** — saying what is needed, who found it, and where it is recorded,
+   so you can go and read the whole of it. It is said once and never again
+   while it stands: a second pass sends nothing more, and a message repeated
+   about something you have been told is the nagging that gets a channel muted.
+   The brake's message names the runs and the verb that lifts the hold; the
+   release is said once, naming who lifted it. See
+   [reporting](reporting.md#a-finding-that-needs-your-hand).
+2. **A named line under `Needs a human` on `yoyo status`**, ahead of the
+   undecided proposals and never folded into `and N things not named here`:
+   `report-… needs your hand: <what> (found by …; recorded in …)`, and for the
+   brake `intake is held, since <trip time>: …; run … of … stopped: …`. It
+   stays until the finding ends — the change recorded made, the report handled,
+   the hold lifted. `--json` carries each such entry with `"named": true`.
+3. **The durable records that made it** — the report and its handling in the
+   pile, read with `yoyo reports`; the hold in `intake-hold.json` under the
+   product, which the status line is read from. A finding is derived from those
+   and stored nowhere else, so there is nothing to clear by hand: what ends it
+   is the record that says it is done.
+
+What is deliberately not here is a list of your own. The product manager keeps
+none, and the harness keeps none apart from the records above: a checklist is
+what reaches you when you ask, and this is what reaches you when it happens.
 
 ## Waiting out a provider usage limit
 
@@ -1233,7 +1292,9 @@ Needs a human (3):
   months ago — and reading that word as a refusal is what hid two-thirds of the
   backlog on 2026-09-04.
 - **Needs a human** is always present, and says either `nothing` or the list with
-  whose move each one is: the operator's two switches, an unresolved directive, a
+  whose move each one is: the operator's two switches, an unresolved directive,
+  each [finding that needs your hand](#where-a-finding-that-needs-your-hand-goes)
+  by name, a
   proposed change nobody has decided, a run that ended still owing a step, a
   promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling
@@ -1243,7 +1304,10 @@ Needs a human (3):
   oldest undecided entry has been waiting more than a week. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
   on you, and neither is a report pile that is being worked through — what is
-  listed is one that is not. The unpublished promotions are the same set the
+  listed is one that is not. The line names ten entries and counts the rest,
+  except a finding that needs your hand and a hold the brake placed: those are
+  named wherever they fall and never counted into `and N things not named
+  here`, because a finding folded into a count is one that did not reach you. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
   derivation, and each says whose move it is: the forge's while it holds the
   merge queued, the development manager's once it has dropped one, and the

@@ -12,9 +12,9 @@ package cli
 //
 // This is that remedy as a command. It is the same switch the conversation lifts
 // — one record under the product, read by every path that would start work the
-// operator did not name — so which surface lifted it is not a fact the harness
-// keeps, and lifting it here is indistinguishable afterwards from lifting it
-// there.
+// operator did not name — so lifting it here lifts it for both. Which surface
+// lifted it is recorded beside the absence, because a brake the operator was
+// told about is a hold the channel owes him the ending of, by name.
 //
 // It is deliberately only the lifting half. Placing a hold is a decision with a
 // reason attached, and the conversation is where that reason belongs; recovery
@@ -62,7 +62,7 @@ func releaseIntake(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportReleaseError(stdout, stderr, *jsonOutput, err)
 	}
-	lifted, wasHeld, err := parts.intake.Release()
+	lifted, wasHeld, err := parts.intake.Release("the operator, at a terminal (`yoyo release`)", time.Now())
 	if err != nil {
 		return reportReleaseError(stdout, stderr, *jsonOutput, err)
 	}

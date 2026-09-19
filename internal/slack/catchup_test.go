@@ -189,6 +189,56 @@ func TestTheRecentWindowAndAnythingCriticalKeepFullFidelity(t *testing.T) {
 	}
 }
 
+// A message said to somebody directly is never folded into a digest, whatever
+// its age: it is said once and marked as said, so one collapsed into a count is
+// one never said at all. A finding that needs the operator's hand filed during a
+// long outage reaches him after it exactly as it would have without one.
+func TestAMessageSaidDirectlyIsNeverDigested(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	const item = "yoyodyne-ifd.68.8"
+	var deliveries []Delivery
+	for step := 0; step < deepBacklog+10; step++ {
+		deliveries = append(deliveries, aged(item, uint64(step+1), now.Add(-8*time.Hour), report.SeverityNote))
+	}
+	finding, err := notify.FromOperatorAction(notify.OperatorAction{
+		WorkItemID: item,
+		Needs:      "add the PreToolUse hook to .claude/settings.json by hand",
+		RecordedIn: "the handling of report-0123456789abcdef0123456789abcde0 recorded in chat-1",
+		FoundBy:    "the product manager, handling the report",
+		Since:      now.Add(-6 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("select a finding: %v", err)
+	}
+	deliveries = append(deliveries, Delivery{
+		Stream:       operatorActionStream,
+		Cursor:       Cursor{Position: uint64(len(deliveries) + 1)},
+		Direct:       true,
+		Tag:          true,
+		Notification: finding,
+	})
+
+	posts := &recordedPosts{}
+	sink := newTestSinkAt(t, t.TempDir(), &fixedFeed{deliveries: deliveries}, posts, now)
+	sink.operators = []string{"U0FIRST"}
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	// The thread, one digest for everything old and ordinary, the finding said in
+	// full in the channel, and the finding said to the operator.
+	if len(posts.requests) != 4 {
+		t.Fatalf("posts = %d, want the thread, one digest, the finding, and its direct message: %q", len(posts.requests), textOf(posts.requests))
+	}
+	if !strings.Contains(strings.Join(textOf(posts.requests), "\n"), "add the PreToolUse hook to .claude/settings.json by hand") {
+		t.Fatalf("posted %q, want the finding said in its own words rather than counted", textOf(posts.requests))
+	}
+	if last := posts.requests[3]; last.Channel != "DU0FIRST" {
+		t.Fatalf("last post went to %q, want the operator's direct conversation", last.Channel)
+	}
+}
+
 // Below the depth that would flood a channel, nothing is digested at all: a
 // digest standing in for a handful of messages says less than the messages did.
 func TestABacklogAChannelCanCarryIsPostedInFull(t *testing.T) {

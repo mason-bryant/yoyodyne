@@ -179,6 +179,15 @@ const (
 	KindIntakeReleased Kind = "intake.released"
 	KindHoldPlaced     Kind = "hold.placed"
 	KindHoldLifted     Kind = "hold.lifted"
+	// A finding only the operator can act on, recorded: a report handled as
+	// needing his hand, or a report filed at the severity that means action. It
+	// is said once per finding, to him directly and tagged by member id, because
+	// it is both important and his to act on — the communication rule's own test
+	// for a tag — and it is never said again: `yoyo status` names it until it is
+	// done. Six such findings sat in the report pile from 2026-08-17 until a
+	// sweep reached them on 2026-09-14, and then reached him only because he
+	// asked.
+	KindOperatorAction Kind = "operator-action.recorded"
 	// What a watch session is doing. A session that stays open until it is told
 	// to stop spends most of its life saying nothing, and an idle one and a dead
 	// one are the same silence: these are what tell them apart in the record. Idle
@@ -358,6 +367,7 @@ func Kinds() []Kind {
 		KindIntakeReleased,
 		KindHoldPlaced,
 		KindHoldLifted,
+		KindOperatorAction,
 		KindWatchStarted,
 		KindWatchIdle,
 		KindWatchBraked,
@@ -393,7 +403,7 @@ func (k Kind) Valid() bool {
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindDirectiveWithdrawn,
-		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
+		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted, KindOperatorAction,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
 		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,
@@ -931,6 +941,18 @@ type Detail struct {
 	Cap       int    `json:"cap,omitempty"`
 	Crossing  int    `json:"crossing,omitempty"`
 	Crossings int    `json:"crossings,omitempty"`
+	// Needs is what the operator has to do about a finding, in the words of
+	// whoever found it, and RecordedIn is where the finding is recorded, both
+	// read by KindOperatorAction. They are two fields because they are the two
+	// halves of the message the operator asked for: what is needed, and where to
+	// go and read it. FoundBy is who found it and how, read by the same kind.
+	Needs      string `json:"needs,omitempty"`
+	RecordedIn string `json:"recorded_in,omitempty"`
+	FoundBy    string `json:"found_by,omitempty"`
+	// Stops is the runs the brake counted on its way to tripping, already worded
+	// by the record, read by KindIntakeHeld. It is empty on the operator's own
+	// hold, which counts nothing, and the line leaves the clause out.
+	Stops string `json:"stops,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; why proposed work
 	// was turned down, read by KindWorkDeclined; why a thread reply recorded

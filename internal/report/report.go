@@ -404,6 +404,16 @@ type Handling struct {
 	// and says nothing about why, which is worse than leaving it in.
 	Reason     string    `json:"reason"`
 	RecordedAt time.Time `json:"recorded_at"`
+	// NeedsOperator says the handling found that what the report asks for is a
+	// change only the operator can make by hand — a file the harness may not
+	// write, a credential, a workspace setting — and the reason says which. It
+	// is what makes the handling a finding for the operator rather than a
+	// decision that closes the report: the finding stands, named on `yoyo
+	// status` and said to him once, until a later handling of the same report
+	// records it done. Six reports of that class sat handled-in-effect on a
+	// checklist from 2026-08-17 to 2026-09-14, which is why this is a field the
+	// harness reads rather than a sentence in the reason.
+	NeedsOperator bool `json:"needs_operator,omitempty"`
 }
 
 // Validate reports every contract violation in the handling at once.
@@ -514,13 +524,22 @@ func Tally(reports []Report) string {
 // Render describes what became of one report, for a listing that has just shown
 // the report itself. It is indented under it and folded to one line: the reason
 // came from whoever handled the report, and a listing is a listing.
+//
+// A handling that found the report needs the operator's hand says so in the
+// verb: the report is not closed by it, and a listing that read "handled" over
+// a change nobody has made yet would be the checklist this class of finding
+// waited a month on.
 func (h Handling) Render() string {
 	handler := string(h.Role)
 	if h.Agent != "" && h.Agent != string(h.Role) {
 		handler = h.Agent + " (" + string(h.Role) + ")"
 	}
-	return fmt.Sprintf("      handled %s by the %s (%s): %s\n",
-		h.RecordedAt.UTC().Format(time.RFC3339), handler, h.RunID, strings.Join(strings.Fields(h.Reason), " "))
+	verb := "handled"
+	if h.NeedsOperator {
+		verb = "needs the operator's hand, recorded"
+	}
+	return fmt.Sprintf("      %s %s by the %s (%s): %s\n",
+		verb, h.RecordedAt.UTC().Format(time.RFC3339), handler, h.RunID, strings.Join(strings.Fields(h.Reason), " "))
 }
 
 // Render describes one collected report for whoever is reading the pile. The

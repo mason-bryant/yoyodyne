@@ -535,7 +535,7 @@ func TestAHeldIntakeContinuesNothingAndSpendsNothing(t *testing.T) {
 	}
 	// Released, the same decision is carried out: the hold delayed the repair
 	// rather than consuming it.
-	if _, _, err := harness.intake.Release(); err != nil {
+	if _, _, err := harness.intake.Release("the operator, at a terminal (`yoyo release`)", time.Now()); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	if _, err := harness.continuer().Continue(context.Background(), continueRequest()); err != nil {

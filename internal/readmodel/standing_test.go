@@ -3,11 +3,13 @@ package readmodel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
@@ -170,6 +172,25 @@ func filedReport(id string, severity report.Severity, filed time.Time) report.Re
 	}
 }
 
+// proposedChange is one proposal nobody has decided, distinguished by its
+// identifier and when it was raised.
+func proposedChange(id string, raised time.Time) amendment.Record {
+	return amendment.Record{Proposal: &amendment.Proposal{
+		SchemaVersion: amendment.SchemaVersion,
+		ID:            id,
+		Role:          domain.RoleDeveloper,
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Artifact:      "brief",
+		Kind:          artifact.KindBrief,
+		Owner:         domain.RoleProductManager,
+		Change:        "say where a finding goes",
+		Why:           "nothing says it today",
+		RaisedAt:      raised,
+	}}
+}
+
 // quietSources is a harness with nothing wrong with it and nothing happening:
 // one session choosing work, no holds, an empty queue. Each test moves one
 // thing, so what a line says is attributable to the one record that changed.
@@ -194,13 +215,15 @@ func quietSources() Sources {
 
 // A pile that is being worked through says nothing on any line: it is not
 // waiting on a person, and a status that named it every reading would be a
-// status with a permanent entry nobody can clear.
+// status with a permanent entry nobody can clear. A critical report is the one
+// exception, and it is tested below: critical is the severity that means
+// action, so it is a finding for the operator until somebody handles it.
 func TestAPileBeingWorkedThroughWaitsOnNobody(t *testing.T) {
 	t.Parallel()
 
 	sources := quietSources()
 	sources.Reports = fakeReports{reports: []report.Report{
-		filedReport("report-00000000000000000000000000000001", report.SeverityCritical, moment.Add(-2*time.Hour)),
+		filedReport("report-00000000000000000000000000000001", report.SeverityWarning, moment.Add(-2*time.Hour)),
 		filedReport("report-00000000000000000000000000000002", report.SeverityNote, moment.Add(-30*time.Minute)),
 	}}
 	standing := ReadStanding(context.Background(), sources)
@@ -212,8 +235,92 @@ func TestAPileBeingWorkedThroughWaitsOnNobody(t *testing.T) {
 	if standing.Reports.Unhandled != 2 || standing.Reports.Collected != 2 {
 		t.Fatalf("Reports = %#v", standing.Reports)
 	}
-	if standing.Reports.Worst != report.SeverityCritical {
+	if standing.Reports.Worst != report.SeverityWarning {
 		t.Fatalf("Worst = %q, want the pile's worst severity", standing.Reports.Worst)
+	}
+}
+
+// A finding only the operator can act on is named on the attention line, by
+// name, ahead of the undecided proposals, and is never folded into "and N
+// things not named here". Two records make one: a critical report nobody has
+// handled, and a handling that says the report needs the operator's hand. A
+// later handling of the same report that says nothing of the kind ends it.
+func TestAFindingThatNeedsTheOperatorIsNamedAheadOfTheProposals(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	handled := filedReport("report-00000000000000000000000000000002", report.SeverityWarning, moment.Add(-3*time.Hour))
+	handled.WorkItemID = "yoyodyne-ifd.383"
+	sources.Reports = fakeReports{
+		reports: []report.Report{
+			filedReport("report-00000000000000000000000000000001", report.SeverityCritical, moment.Add(-2*time.Hour)),
+			handled,
+			filedReport("report-00000000000000000000000000000003", report.SeverityCritical, moment.Add(-time.Hour)),
+		},
+		handlings: []report.Handling{
+			{ReportID: "report-00000000000000000000000000000002", Role: domain.RoleProductManager, RunID: "chat-1", Reason: "the operator has to add the hook to .claude/settings.json by hand", RecordedAt: moment.Add(-90 * time.Minute), NeedsOperator: true},
+			// The third report was handled, so it is no longer a finding.
+			{ReportID: "report-00000000000000000000000000000003", Role: domain.RoleProductManager, RunID: "chat-1", Reason: "admitted as yoyodyne-ifd.400", RecordedAt: moment.Add(-30 * time.Minute)},
+		},
+	}
+	sources.Amendments = fakeAmendments{records: []amendment.Record{proposedChange("proposal-1", moment.Add(-4*time.Hour))}}
+	standing := ReadStanding(context.Background(), sources)
+
+	var named []Attention
+	proposal := -1
+	for index, waiting := range standing.NeedsHuman {
+		if waiting.Named {
+			named = append(named, waiting)
+		}
+		if strings.Contains(waiting.What, "proposed and undecided") {
+			proposal = index
+		}
+	}
+	if len(named) != 2 {
+		t.Fatalf("NeedsHuman = %#v, want the two findings named", standing.NeedsHuman)
+	}
+	if proposal < 0 {
+		t.Fatalf("NeedsHuman = %#v, want the undecided proposal listed", standing.NeedsHuman)
+	}
+	for index, waiting := range standing.NeedsHuman {
+		if waiting.Named && index > proposal {
+			t.Fatalf("finding %q is listed after the proposal at %d", waiting.What, proposal)
+		}
+	}
+	// Oldest first, in the order the pile was filed: the handled report was
+	// filed before the critical one.
+	handling, critical := named[0], named[1]
+	if !strings.Contains(critical.What, "report-00000000000000000000000000000001 needs your hand: something was noticed") ||
+		!strings.Contains(critical.What, "found by the developer, in a critical report") {
+		t.Fatalf("critical finding = %q", critical.What)
+	}
+	if !strings.Contains(handling.What, "report-00000000000000000000000000000002 needs your hand: the operator has to add the hook to .claude/settings.json by hand") ||
+		!strings.Contains(handling.What, "found by the product manager, handling the report") ||
+		!strings.Contains(handling.What, "about yoyodyne-ifd.383") {
+		t.Fatalf("handling finding = %q", handling.What)
+	}
+	for _, waiting := range named {
+		if !strings.HasPrefix(waiting.Whose, "the operator's") {
+			t.Fatalf("finding %q is %q, want the operator's move", waiting.What, waiting.Whose)
+		}
+	}
+
+	// Rendered, the findings are listed by name however many other entries there
+	// are: eleven proposals would fold the eleventh, and never a finding.
+	var proposals []amendment.Record
+	for index := 0; index < maxListed+1; index++ {
+		proposals = append(proposals, proposedChange(fmt.Sprintf("proposal-%d", index), moment.Add(-4*time.Hour)))
+	}
+	sources.Amendments = fakeAmendments{records: proposals}
+	rendered := ReadStanding(context.Background(), sources).Render()
+	for _, want := range []string{
+		"report-00000000000000000000000000000001 needs your hand",
+		"report-00000000000000000000000000000002 needs your hand",
+		"and 1 thing waiting on somebody not named here",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered standing lacks %q:\n%s", want, rendered)
+		}
 	}
 }
 

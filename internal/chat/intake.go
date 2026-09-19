@@ -32,7 +32,10 @@ import (
 type IntakeHolds interface {
 	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
 	Held() (runstate.IntakeHold, bool, error)
-	Release() (runstate.IntakeHold, bool, error)
+	// Release lifts the hold, recording who lifted it and when beside the
+	// absence, so the channel can say who ended a brake it told the operator
+	// about.
+	Release(by string, at time.Time) (runstate.IntakeHold, bool, error)
 }
 
 // errNoIntake reports a conversation with no intake switch wired to it. Such a
@@ -109,7 +112,7 @@ func (s *Session) ReleaseIntake() (IntakeReport, error) {
 	if s.options.Intake == nil {
 		return IntakeReport{}, errNoIntake
 	}
-	lifted, wasHeld, err := s.options.Intake.Release()
+	lifted, wasHeld, err := s.options.Intake.Release(s.intakeReleaser(), s.options.clock().Now())
 	if err != nil {
 		return IntakeReport{}, fmt.Errorf("release the hold on what the harness starts: %w", err)
 	}
@@ -122,6 +125,14 @@ func (s *Session) ReleaseIntake() (IntakeReport, error) {
 		return report, fmt.Errorf("record releasing intake: %w", err)
 	}
 	return report, nil
+}
+
+// intakeReleaser is who a release from this conversation records as having
+// lifted the hold: the operator, and the conversation and turn it was said in,
+// which is the same trail the hold's own note carries.
+func (s *Session) intakeReleaser() string {
+	return fmt.Sprintf("the operator, from product-manager conversation %s after turn %d (/release)",
+		s.state.ConversationID, s.state.Turns)
 }
 
 // intakeNote is what a hold records about why. The conversation and the turn are

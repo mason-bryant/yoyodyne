@@ -145,6 +145,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
 )
@@ -282,7 +283,11 @@ type ScheduleStaleness interface {
 // exactly as long as it took the next run to fail, and what a held queue needs
 // is a person, which is the whole reason for tripping it.
 type ScheduleBrake interface {
-	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
+	// Brake places the hold as the harness's own brake, naming the runs it
+	// counted: which each was, on which item, and what stopped it. The runs are
+	// on the hold because the hold is the one record that says why the line
+	// stopped, and the message that reaches the operator is read from it.
+	Brake(reason string, stops []runstate.IntakeStop, at time.Time) (runstate.IntakeHold, error)
 }
 
 // ScheduleSpend prices what a session has spent, from the same recorded run
@@ -920,8 +925,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// blockedInARow counts the runs that ended blocked with nothing landing
 	// between them. It is the storm the brake watches for, and it is reset by any
 	// run that finishes: one item failing is not a systemic failure, and the
-	// per-item guard above is what that case is for.
+	// per-item guard above is what that case is for. storm is those runs
+	// themselves, in the order they stopped, so the hold the brake places can
+	// name them.
 	blockedInARow := 0
+	var storm []runstate.IntakeStop
 	// spend is how the runs this session started are priced, taken from the last
 	// pull that could be opened. It is held outside the loop because a run
 	// collected after the final pull still cost what it cost.
@@ -1011,13 +1019,26 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			// what tripped the brake over a login.
 		case started.blockedRun():
 			blockedInARow++
+			storm = append(storm, started.stop())
 			if blockedInARow > schedule.BlockedInARow {
 				schedule.BlockedInARow = blockedInARow
 			}
 		case started.Outcome.Paused:
 			// A parked run is owed a continuation rather than having failed.
+		case started.Outcome.Status != runstate.StatusSucceeded:
+			// A run that ended without landing and without a verdict on its change:
+			// the environment stopped it — a worktree the harness could not cut, a
+			// tracker or forge that did not answer, an approved change stopped short
+			// of its promotion — or it failed outright with nothing judged, or
+			// something cancelled it. None of that is evidence about the work, and
+			// none of it is anything a release would fix: a brake tripped on it
+			// prescribes `yoyo release` for something a release does not lift,
+			// which is 377's rule for the provider being away. So it neither
+			// counts nor clears. On 2026-09-19 two of the three stops that tripped
+			// the brake were of this class.
 		default:
 			blockedInARow = 0
+			storm = nil
 		}
 		if cost, problem := priceRun(spend, started.Outcome); problem != "" {
 			schedule.SpendProblem = problem
@@ -1280,7 +1301,7 @@ pulling:
 		// is the point: a brake that stopped the line by its own separate path
 		// would be a second account of a rule that already has one.
 		if s.Watching && blockedInARow > 0 && pull.BlockedRunsBeforeIntakeHold > 0 && blockedInARow >= pull.BlockedRunsBeforeIntakeHold {
-			s.brake(&schedule, pull, blockedInARow)
+			s.brake(&schedule, pull, blockedInARow, storm)
 			blockedInARow = 0
 		}
 		// The intake hold is read before anything is chosen, because choosing is
@@ -1793,7 +1814,7 @@ func fingerprint(item beads.WorkItem) string {
 // because every surface that prints a hold composes those two itself, and a
 // reason that also named the holder is what stacked three accounts of one hold
 // into a line nobody could read.
-func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
+func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int, storm []runstate.IntakeStop) {
 	reason := fmt.Sprintf("%d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d",
 		blocked, pull.BlockedRunsBeforeIntakeHold)
 	if pull.Brake == nil {
@@ -1802,7 +1823,13 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 		return
 	}
 	at := s.now().UTC()
-	held, err := pull.Brake.Hold(runstate.IntakeHolderBrake, reason, at)
+	// The hold names the runs that tripped it, most recent last and bounded to
+	// what the record carries: a storm longer than the bound is one whose first
+	// stops are history by the time it trips.
+	if len(storm) > runstate.MaxIntakeStops {
+		storm = storm[len(storm)-runstate.MaxIntakeStops:]
+	}
+	held, err := pull.Brake.Brake(reason, storm, at)
 	if err != nil {
 		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
 		return
@@ -2051,11 +2078,69 @@ func priceRun(spend ScheduleSpend, outcome Outcome) (float64, string) {
 	return 0, fmt.Sprintf("run %s is not among the recorded runs of %s, so the session's spend is a floor rather than a total", outcome.RunID, outcome.WorkItemID)
 }
 
-// blockedRun reports a run that ended without getting its work anywhere: it
-// failed outright, or it stopped on a durable blocker. Both are the storm the
-// brake counts, and neither is a run somebody is owed a continuation of.
+// blockedRun reports a run that stopped on a judgement of the change it made:
+// its reviewer still required repair, or a configured check still failed, after
+// every permitted attempt. That is the storm the brake counts — the line
+// producing changes that keep being refused — and it is the whole of it. A run
+// the environment stopped is environmentalStop, and a run that failed outright
+// with no blocker and no verdict is neither: it says nothing about the work,
+// and it does not count. Until 2026-09-19 every failure and every blocker
+// counted, and the brake tripped over three stops of which two were the
+// environment's, holding intake for two hours over a state a release does not
+// fix.
 func (s Started) blockedRun() bool {
-	return s.Failure != "" || s.Outcome.Blocked
+	return s.Outcome.Blocked && !s.environmentalStop() && s.Outcome.judged()
+}
+
+// environmentalStop reports a run the environment stopped rather than a verdict
+// on its change: a round the harness refused as environmental, or an approved
+// change stopped short of its promotion by something environmental. Neither is
+// evidence about the work, so the brake counts neither.
+func (s Started) environmentalStop() bool {
+	if s.Outcome.IntegrationStop != nil {
+		return true
+	}
+	return s.Outcome.Environmental != nil && s.Outcome.Environmental.Refused
+}
+
+// stop is this run as the brake's hold names it: the run, its item, and what
+// stopped it, in the words the run's own record uses for the stop.
+func (s Started) stop() runstate.IntakeStop {
+	return runstate.IntakeStop{
+		RunID:      s.Outcome.RunID,
+		WorkItemID: s.WorkItemID,
+		Reason:     s.Outcome.stopReason(),
+	}
+}
+
+// judged reports an outcome carrying a verdict on the change: the reviewer's
+// last decision required repair, or a configured check failed. It is what
+// separates a stop the brake counts from a stop that recorded nothing anybody
+// judged — a provider that kept dying, a replay that conflicted.
+func (o Outcome) judged() bool {
+	if o.ReviewDecision == review.DecisionRepair {
+		return true
+	}
+	for _, result := range o.Checks {
+		if !result.Passed {
+			return true
+		}
+	}
+	return false
+}
+
+// stopReason is what stopped a judged run, in a line: the check that failed,
+// or the reviewer's verdict with the attempts it outlasted.
+func (o Outcome) stopReason() string {
+	for _, result := range o.Checks {
+		if !result.Passed {
+			return fmt.Sprintf("check `%s` failed (exit %d) after %d repair attempt(s)", result.Command, result.Process.ExitCode, o.RepairAttempts)
+		}
+	}
+	if o.ReviewDecision == review.DecisionRepair {
+		return fmt.Sprintf("its reviewer still required repair after %d repair attempt(s), with %d finding(s) unresolved", o.RepairAttempts, len(o.ReviewFindings))
+	}
+	return "stopped on a durable blocker"
 }
 
 // providerAway reports a start the provider turned away before any run was

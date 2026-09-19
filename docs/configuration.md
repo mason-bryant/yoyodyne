@@ -2044,18 +2044,38 @@ That many runs blocking one after another, with nothing landing between them,
 holds intake — the same hold you would place — and it stays held until you
 release it, with `yoyo release` or the conversation's `/release`. Any run that
 lands clears the count, and `0` turns the brake off, leaving you as the only
-thing that holds intake. A dispatch or a run the provider turned away because
-nobody is logged into it or nobody can reach it counts toward nothing: that is
+thing that holds intake.
+
+**What counts is a verdict on a change that was there**: a run that stopped
+because its reviewer still required repair after every permitted attempt, or
+because a configured check still failed. Nothing else does. A dispatch or a run
+the provider turned away because nobody is logged into it or nobody can reach
+it counts toward nothing: that is
 [a wait](operations.md#waiting-out-a-provider-nobody-can-reach) no run can end,
 and a brake tripped on it prescribes a release that lifts nothing — which is
-what happened on 2026-09-17 over an expired login.
+what happened on 2026-09-17 over an expired login. Neither does a stop the
+environment made — a round the harness refused as environmental, an approved
+change stopped short of its promotion by a dirty checkout or a tracker that
+timed out ([how work flows](work.md) has both) — nor a run that failed
+outright with nothing judged, nor one something cancelled. None of that is
+evidence about the work, and none of it clears the count either: two verdict
+stops with an environmental one between them are still a storm of two. On
+2026-09-19 the brake tripped at 17:56Z on three stops of which two were the
+environment's, and held intake for two hours over a state a release does not
+fix.
 
 The hold records which of you placed it, and everything that reports one says
 so: "the harness's own brake placed it after 3 run(s) blocked in a row with
 nothing landing between them, which is the configured brake at 3" rather than a
 hold attributed to you. It matters because what you do about a stopped line
 depends entirely on which of the two stopped it, and a brake that trips over a
-hold you already placed leaves yours in force and still yours.
+hold you already placed leaves yours in force and still yours. The brake's hold
+also names the runs it counted — each with its item and what stopped it — and
+a trip is [a finding for you](operations.md#where-a-finding-that-needs-your-hand-goes):
+said to you directly the moment it is recorded, named under `Needs a human` on
+`yoyo status` with the trip time until you lift it, and said again by the
+channel's heartbeat while it stands, runs in flight or not. The release is said
+once, naming who lifted it.
 
 And the session says what it is doing, because an idle session and a dead one are
 otherwise the same silence. Each transition — watching, idle, braked, resumed,

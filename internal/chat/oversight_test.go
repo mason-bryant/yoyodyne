@@ -497,7 +497,7 @@ func (f *fakeIntake) Held() (runstate.IntakeHold, bool, error) {
 	return f.hold(), f.held, nil
 }
 
-func (f *fakeIntake) Release() (runstate.IntakeHold, bool, error) {
+func (f *fakeIntake) Release(string, time.Time) (runstate.IntakeHold, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {

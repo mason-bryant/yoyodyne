@@ -77,7 +77,7 @@ func TestTheHeartbeatStopsWhenTheStateClears(t *testing.T) {
 	harness.now = harness.now.Add(time.Hour)
 	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
 
-	if _, _, err := harness.intake.Release(); err != nil {
+	if _, _, err := harness.intake.Release("the operator, at a terminal (`yoyo release`)", time.Now()); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	cursors = harness.poll(t, cursors, notify.KindIntakeReleased)
@@ -268,6 +268,28 @@ func TestALineWithARunInFlightIsNotWaiting(t *testing.T) {
 	cursors := harness.poll(t, harness.start(), notify.KindRunStarted)
 	harness.now = harness.now.Add(2 * time.Hour)
 	harness.poll(t, cursors)
+}
+
+// A held intake is the one state said over a run in flight. The run was already
+// going when the line stopped; nothing new is chosen behind it, and a free slot
+// idle beside it is exactly the shape the brake trip of 2026-09-19 stood in for
+// two hours with the heartbeat silent. So the heartbeat says intake is held
+// while it is, whatever is in flight.
+func TestAHeldIntakeIsSaidAgainOverARunInFlight(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchBraked, "the harness's own brake placed it after 3 run(s) blocked in a row", moment)
+	harness.record(t, harness.run(t, runstate.StatusRunning))
+	harness.hold(t, "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3", moment)
+
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindWatchBraked, notify.KindIntakeHeld)
+	harness.now = harness.now.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+	if !strings.Contains(said.Body, "intake is held") {
+		t.Fatalf("body %q does not say intake is held", said.Body)
+	}
 }
 
 // A tracker that will not answer leaves the sink unable to tell a line waiting on

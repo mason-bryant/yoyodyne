@@ -431,8 +431,13 @@ func shortBuild(build string) string {
 // what stopped the choosing after the fact that choosing stopped. Two messages
 // about one silence, one of them wording it the way he asked not to be told, is
 // worse than one.
+//
+// A held intake is the one state said over runs in flight. The runs are the
+// ones that were already going when the line stopped; nothing new is being
+// chosen behind them, and a free slot idle beside a run is exactly the shape
+// the 2026-09-19 brake trip stood in for two hours with the heartbeat silent.
 func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight int, now time.Time) readmodel.Stall {
-	if inFlight > 0 {
+	if inFlight > 0 && !held.intakeHeld {
 		return readmodel.Stall{}
 	}
 	// Capacity is left unstated. This surface has already decided that a machine

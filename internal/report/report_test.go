@@ -283,6 +283,13 @@ func TestARenderedReportNamesItselfAndWhatBecameOfIt(t *testing.T) {
 			t.Fatalf("Handling.Render() = %q, want it to contain %q", handled, want)
 		}
 	}
+	// A handling that found the report needs the operator's hand is not a
+	// closing, and the listing must not read it as one.
+	needs := testHandling(reported.ID, "add the hook to .claude/settings.json by hand")
+	needs.NeedsOperator = true
+	if rendered := needs.Render(); !strings.Contains(rendered, "needs the operator's hand, recorded") || strings.HasPrefix(strings.TrimSpace(rendered), "handled") {
+		t.Fatalf("Handling.Render() = %q, want it said as a finding for the operator rather than as handled", rendered)
+	}
 }
 
 // Colour is an addition everywhere in this harness and never the carrier of

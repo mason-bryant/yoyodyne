@@ -472,6 +472,16 @@ records and the later one is what is read. There is no vocabulary of outcomes:
 "admitted as ifd.150", "already fixed", "not worth doing" are the same fact to
 everything that reads this, and the reason says which.
 
+One handling is not a closing. A report whose answer is a change only you can
+make by hand — a file the harness may not write, a credential, a workspace
+setting — is handled with `"needs": "operator"` and a reason saying what you
+have to do, and that record is [a finding that needs your hand](#a-finding-that-needs-your-hand):
+said to you once, directly, and named on `yoyo status` until a later handling of
+the same report records the change made. It is a field the harness reads rather
+than a sentence in the reason, because a sentence is what six such reports were
+for a month. A report filed at `critical` is the same kind of finding on its
+own, until somebody handles it.
+
 Where the decision is work, the admission can name the report it came from, and
 the item then records it. That citation is not bookkeeping: it is what a later
 admission citing the same report is checked against, and where one is found
@@ -1012,6 +1022,71 @@ being told it carried on by itself:
 What the wait does to the runs, the scheduler, the brake, and the recurring
 tasks is in [operations](operations.md#waiting-out-a-provider-nobody-can-reach).
 
+### A finding that needs your hand
+
+Some of what the roles find is yours alone to act on: a hook that has to go into
+`.claude/settings.json`, a credential to renew, a workspace setting, a file the
+harness may not write. Six developer reports of that class sat in the pile from
+2026-08-17 until the sweep of 2026-09-14 reached them, and the finding that
+sweep produced landed on the product manager's own checklist, which you saw when
+you asked — a month after the first was filed. And on 2026-09-19 the brake
+tripped at 17:56Z and held intake for two hours with nothing in this channel
+but a note, the free developer slot idle beside a run, and the heartbeat silent
+because a run was in flight.
+
+So the class is one the harness reads, and **each such finding is said to you
+once, directly, tagged by member id** — the communication rule's own test for a
+tag, since it is both important and yours — the pass after it is recorded.
+[Operations](operations.md#where-a-finding-that-needs-your-hand-goes) says what
+makes one: the product manager handling a report with `"needs": "operator"`, a
+report filed at critical severity that nobody has handled, and the brake
+tripping. The message says what is needed, who found it, and where it is
+recorded, so you can go and read the whole of it:
+
+> @operator This needs your hand: add the PreToolUse hook to
+> `.claude/settings.json`; the harness may not write that file. Found by the
+> product manager, handling the report; recorded in the handling of
+> report-9f2c… recorded in chat-91253e0e…, over the developer's report from
+> run-4f2a…. Nothing here changes it, and this is not said again —
+> `yoyo status` names it until a later handling of the report records it done.
+> Next: the operator's — only a person can make this change; a later handling of
+> the report records it done.
+
+It is said once and never again while it stands. The sink marks each finding by
+name in its own durable cursors, so a second pass, a restarted sink, and every
+poll afterwards send nothing more; `yoyo status` names it under `Needs a human`
+until it ends, which is the record that says it is done — the report handled,
+the change recorded made — and the mark is dropped with it, so the same report
+handled as yours again later is a second finding, said once more. A finding
+whose report was filed before this channel was turned on is history like every
+other record from before the watermark, and is marked without being said; its
+moment is the record that made it, so a handling made today of a month-old
+report is today's news.
+
+The brake's trip is said the same way, and its message names what a count did
+not: each run it counted, with its item and what stopped it, and the verb that
+lifts the hold —
+
+> @operator Intake is held for this product: the harness's own brake placed it
+> after 3 run(s) blocked in a row with nothing landing between them, which is
+> the configured brake at 3. The runs it counted: run run-7c27… of
+> yoyodyne-ifd.398 stopped: its reviewer still required repair after 2 repair
+> attempt(s), with 3 finding(s) unresolved; run run-a17c… of yoyodyne-ifd.401
+> stopped: check `make test` failed (exit 1) after 2 repair attempt(s); run
+> run-5035… of yoyodyne-ifd.402 stopped: its reviewer still required repair
+> after 2 repair attempt(s), with 1 finding(s) unresolved. `yoyo release`, or
+> `/release` in the conversation, lifts it. Next: the operator's — nothing new
+> is chosen until `yoyo release` lifts it.
+
+— and while it stands the [heartbeat](#reporting-into-slack) says intake is held
+every hour, runs in flight or not: a held intake is the one state said over a
+run, because the runs are the ones that were already going when the line
+stopped, and a free slot idle beside one is exactly the shape the trip stood in
+unseen. The release is said once, naming who lifted it — `released by the
+operator, at a terminal (`yoyo release`)`, or the conversation and turn — read
+from the release the store records beside the hold's absence. Your own hold is
+said to the channel alone, because you placed it.
+
 ### What arrives as a direct message
 
 Almost everything above is posted in the channel and nowhere else, because a
@@ -1022,13 +1097,17 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The three shipped states are the ones
+  work: something only a person fixes. The four shipped states are the ones
   above — a session running a build the harness has moved well past, the
-  harness having started nothing at all while work was ready, and the provider
-  holding every role with nothing configured to fail over to.
+  harness having started nothing at all while work was ready, the provider
+  holding every role with nothing configured to fail over to, and the brake
+  having held intake.
 - **Advisory-once** — a fact addressed to a person that speaks exactly once per
-  fact, never repeated and never urgent in presentation. One state ships in it:
-  **a value the project's template has improved that this project never edited**.
+  fact, never repeated and never urgent in presentation. Two states ship in it:
+  **a value the project's template has improved that this project never
+  edited**, and [**a finding that needs your hand**](#a-finding-that-needs-your-hand),
+  which is urgent in what it says and is still said exactly once, because
+  `yoyo status` carries it from then on.
 
 The last of those is the comparison
 [`yoyo config drift`](configuration.md#extending-a-built-in-bundle)
@@ -1059,10 +1138,10 @@ said. The comparison itself is read once per `--heartbeat` rather than once per
 poll, so a sink polling every fifteen seconds reads the configuration hourly and
 not four times a minute.
 
-All three need the `im:write` scope the checked-in manifest asks for. A workspace
-that refuses it costs the direct messages and nothing else: the stale build and
-the improvement are in the channel either way, and the stall is in the durable
-record `yoyo status` reads back.
+All of them need the `im:write` scope the checked-in manifest asks for. A
+workspace that refuses it costs the direct messages and nothing else: the stale
+build, the improvement, the finding, and the brake's trip are in the channel
+either way, and the stall is in the durable record `yoyo status` reads back.
 
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
