@@ -1100,17 +1100,25 @@ with no request on its record writes a `Publication outstanding` line naming the
 branch and saying nothing was asked of the forge, rather than finishing quietly,
 and a run whose summary names a request its durable record does not hold is
 refused completion outright and recorded as failed. And the sweep asks the forge
-by the run's branch, which is the one durable handle it has left, and writes the
+by the run's branch, which is the one durable handle it has left, writes the
 request the forge holds onto the record — number, state, and whether a merge is
-queued for it, but no merge method, because the run never asked for a merge and
-a recorded method says it did. From there it is an ordinary publication: on the
-docket, counted as awaiting the forge with the merge as your move, settled by
-the finishing above once the forge records a merge. What it is not is re-armed
-by the sweep: reconcile never merges, and a merge request the run never made is
-not one `yoyo triage rearm` repeats either — a request recovered this way is
-merged by hand, or by a decision still to be admitted. A forge that holds no
-request for the branch leaves the record as the run wrote it, and the sweep says
-so on every pass it stands.
+queued for it — and then makes the merge request the run itself never made. That
+is the run's own merge made late, on the run's own evidence and through the
+run's own gate: the record has to carry the promotion and the approving verdict,
+the request's head has to be the promoted commit, the remote target has to pass
+the same pre-merge check the run's merge makes, and the request is pinned to
+that commit, made by the same method, under the target branch's promotion lease.
+The forge's answer is recorded as a queued merge on either answer, exactly as a
+re-arm records one, and the next sweep settles the run on what the forge does
+with it — confirms the merge, records the merge commit, catches your local
+branch up, deletes the consumed branch. A request the forge has already merged,
+or already holds a merge for, needs no arming and is recorded as that; a request
+whose head has moved, a remote target that no longer passes the check, or a
+merge the forge refuses is recorded as the dropped merge it is, which puts it on
+the docket for triage and holds the item exactly as a drop the run itself met.
+The sweep never repeats a merge the forge dropped: that is still `yoyo triage
+rearm`, a decision, once. A forge that holds no request for the branch leaves the
+record as the run wrote it, and the sweep says so on every pass it stands.
 docs/diagnoses/yoyodyne-ifd-402-publication-record-not-lost.md is the account
 of the two runs this was built on, neither of which turned out to have lost
 anything.

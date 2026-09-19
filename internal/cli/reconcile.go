@@ -21,7 +21,8 @@ type reconcileOutput struct {
 	// Recoveries is what this sweep did about the promoted runs whose record
 	// named no pull request: the request the forge holds for the run's branch,
 	// written back onto the record so the refresh, the settlement, the docket,
-	// and the status line can read it. It is reported first because it is what
+	// and the status line can read it, and the merge the run never asked for,
+	// armed through the run's own gate. It is reported first because it is what
 	// the rest of the publication sweep then reads.
 	Recoveries []orchestrator.PublicationRecovery `json:"recoveries"`
 	// Publications is what the forge now says about the pull requests the harness
@@ -462,20 +463,29 @@ func supervisionActed(outcome orchestrator.SupervisionOutcome) bool {
 }
 
 // printRecoveries reports the promoted runs this sweep found a pull request for
-// and wrote it onto, and the ones it could not. A run kept where it stands for a
-// reason is not printed, for the reason the other publication sweeps do not print
-// what they left alone. A run the forge could not answer for is said on every
-// sweep it stands, because it is still a change the forge holds that nothing
-// reports, and a sweep that went quiet about it would read as one that had
-// recovered it.
+// and wrote it onto, what it did about the merge, and the ones it could not. A
+// run kept where it stands for a reason is not printed, for the reason the other
+// publication sweeps do not print what they left alone. A run the forge could
+// not answer for is said on every sweep it stands, because it is still a change
+// the forge holds that nothing reports, and a sweep that went quiet about it
+// would read as one that had recovered it.
 func printRecoveries(stdout, stderr io.Writer, recoveries []orchestrator.PublicationRecovery) {
 	for _, recovery := range recoveries {
+		if recovery.Recovered {
+			fmt.Fprintf(stdout, "pull request #%d of %s recovered from the forge by branch %s and recorded on run %s, which had none\n",
+				recovery.Number, recovery.WorkItemID, recovery.Branch, recovery.RunID)
+		}
 		switch {
 		case recovery.Failure != "":
 			fmt.Fprintf(stderr, "pull request of %s (run %s) not recovered: %s\n", recovery.WorkItemID, recovery.RunID, recovery.Failure)
-		case recovery.Recovered:
-			fmt.Fprintf(stdout, "pull request #%d of %s recovered from the forge by branch %s and recorded on run %s, which had none\n",
-				recovery.Number, recovery.WorkItemID, recovery.Branch, recovery.RunID)
+		case recovery.Armed && recovery.Queued:
+			fmt.Fprintf(stdout, "  its merge is armed: the forge has it queued and performs it once the base branch's requirements are met; `yoyo reconcile` settles the run when it does\n")
+		case recovery.Armed:
+			fmt.Fprintf(stdout, "  its merge is armed: the forge merged it on the spot; `yoyo reconcile` finishes the publication on its next sweep\n")
+		case recovery.Refused != "":
+			fmt.Fprintf(stderr, "  its merge was not armed: %s\n", recovery.Refused)
+		case recovery.Recovered && recovery.Kept != "":
+			fmt.Fprintf(stdout, "  %s\n", recovery.Kept)
 		}
 	}
 }

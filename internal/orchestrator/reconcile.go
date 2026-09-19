@@ -49,15 +49,24 @@ type ReconcileWorktrees interface {
 	// answer: the forge knows the request and the branch, and the record says
 	// which remote carries that branch.
 	PushRemote() string
+	// VerifyRemoteTarget is the pre-merge check on the remote target that the
+	// run's own merge made, made again by the sweep that arms the merge a run
+	// recorded no request for. It reads and moves nothing.
+	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
-// forge now says about a pull request whose merge it queued. It can only ask,
-// never merge, and that is the point — a queued merge the forge dropped means a
-// requirement went unmet, and satisfying it is a person's work rather than
-// something a sweep should force.
+// forge now says about a pull request whose merge it queued, and the one merge
+// request a sweep may make. It never repeats a merge the forge dropped — a drop
+// means a requirement went unmet, and satisfying it is a person's work rather
+// than something a sweep should force, which is why the re-arm is a triage
+// decision and not a sweep. What it may ask for is the merge a promoted run's
+// approving verdict authorized and the run never asked for, because its record
+// held no request to ask with: that is the run's own merge made late, on the
+// run's own evidence, and not a decision about a refusal.
 type ReconcilePullRequests interface {
 	State(ctx context.Context, head string) (publish.PullRequest, error)
+	Merge(ctx context.Context, request publish.MergeRequest) (publish.MergeResult, error)
 }
 
 // ReconcileStore is the durable run state reconciliation reads and settles.

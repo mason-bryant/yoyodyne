@@ -607,7 +607,8 @@ func lostPublication(runID, workItemID, targetBranch, branch string) error {
 }
 
 // publicationRecorded refuses to complete a run whose outcome names a pull
-// request the durable record does not hold, or holds as a different one.
+// request the durable record does not hold, holds as a different one, or holds
+// in a different arming state.
 //
 // Both are written by one statement wherever a request is obtained, so the two
 // cannot disagree by any path this code has — which is exactly why a
@@ -615,25 +616,50 @@ func lostPublication(runID, workItemID, targetBranch, branch string) error {
 // run prints as its summary and the record is what every surface reads
 // afterwards, and a summary naming a request the record does not is the shape
 // yoyodyne-ifd.402 was admitted on: a change on the forge that nothing on any
-// surface says is waiting. The record is read back from the store rather than
-// from memory, because what is being checked is that the write landed.
+// surface says is waiting. The arming state is compared with the number because
+// it is what the surfaces act on: a record holding the right request with the
+// merge not queued, while the summary says it is, is a merge reconciliation
+// would never settle. The record is read back from the store rather than from
+// memory, because what is being checked is that the write landed.
 func (a *activeRun) publicationRecorded() error {
-	if a.outcome.PullRequest == nil {
+	reported := a.outcome.PullRequest
+	if reported == nil {
 		return nil
 	}
 	durable, err := a.pipeline.Store.Load(a.state.RunID)
 	if err != nil {
 		return fmt.Errorf("confirm the published pull request is on the run record before completing: %w", err)
 	}
-	if durable.PullRequest == nil {
+	recorded := durable.PullRequest
+	if recorded == nil {
 		return fmt.Errorf("the run reports pull request %d and its durable record holds none, so the publication was lost between obtaining it and completing; the run is refused completion rather than recorded succeeded over a request nothing would see",
-			a.outcome.PullRequest.Number)
+			reported.Number)
 	}
-	if durable.PullRequest.Number != a.outcome.PullRequest.Number {
+	if recorded.Number != reported.Number {
 		return fmt.Errorf("the run reports pull request %d and its durable record holds pull request %d, so the two disagree about which request carries the work; the run is refused completion rather than recorded succeeded over the disagreement",
-			a.outcome.PullRequest.Number, durable.PullRequest.Number)
+			reported.Number, recorded.Number)
+	}
+	if recorded.MergeQueued != reported.MergeQueued || recorded.Merged != reported.Merged || recorded.MergeMethod != reported.MergeMethod {
+		return fmt.Errorf("the run reports pull request %d %s and its durable record holds it %s, so the two disagree about what was asked of the forge; the run is refused completion rather than recorded succeeded over the disagreement",
+			reported.Number, describeArming(*reported), describeArming(*recorded))
 	}
 	return nil
+}
+
+// describeArming says what a record claims was asked of the forge about a
+// request, for a refusal that has to name both sides of a disagreement.
+func describeArming(published runstate.PullRequest) string {
+	arming := "with no merge asked for"
+	switch {
+	case published.Merged:
+		arming = "merged"
+	case published.MergeQueued:
+		arming = "with its merge queued"
+	}
+	if published.MergeMethod != "" {
+		arming += " by the " + published.MergeMethod + " method"
+	}
+	return arming
 }
 
 // recordDroppedMerge records an outstanding publication whose merge is also over:

@@ -54,8 +54,10 @@ package orchestrator
 // promoted run that recorded no request is therefore a change the forge holds
 // and nothing reports, and RecoverPublications is what puts it back in view. It
 // runs first, selects on the run's own record of the loss, asks the forge by the
-// run's branch — the one durable handle it has left — and writes the answer onto
-// the record, after which the two sweeps above read it as they read any other.
+// run's branch — the one durable handle it has left — writes the answer onto the
+// record, and makes the merge request the run itself never made, through the
+// run's own gate; after which the run settlement and the two sweeps above read
+// the record as they read any other.
 
 import (
 	"context"
@@ -71,9 +73,10 @@ import (
 // PublicationRecovery is what one sweep did about a promoted run whose record
 // names no pull request. It reports the branch the forge was asked by and what
 // it answered, because the branch is the whole of what the record had to ask
-// with, and a reader acts on whether the answer was written: a recovered
-// request is one every later sweep and surface can read, and one the forge
-// could not be asked about is still a promotion nothing can see waiting.
+// with, and a reader acts on what became of the answer: a recovered request is
+// one every later sweep and surface can read, an armed one is a merge the forge
+// now holds, and one the forge could not be asked about is still a promotion
+// nothing can see waiting.
 type PublicationRecovery struct {
 	RunID      string `json:"run_id"`
 	WorkItemID string `json:"work_item_id"`
@@ -86,15 +89,29 @@ type PublicationRecovery struct {
 	// record, which is what separates a run this sweep put back in view from one
 	// it only asked about.
 	Recovered bool `json:"recovered"`
+	// Armed reports the merge request having been made, and Queued the forge
+	// having accepted it to perform later rather than performing it now. Both
+	// are false on a request the forge already reports merged or holds a merge
+	// for, which needs no arming and is said in Kept.
+	Armed  bool `json:"armed"`
+	Queued bool `json:"queued,omitempty"`
+	// Refused is why the recovered request was not armed: the head the forge
+	// holds is not the promoted commit, the remote target no longer passes the
+	// pre-merge check, or the forge refused the request. It is the same sentence
+	// written onto the record as the dropped merge, so the docket and the item
+	// carry it too.
+	Refused string `json:"refused,omitempty"`
 	// Kept is why a run the forge answered about was deliberately left where it
-	// stands: a live process holds it, or something settled it in the meantime.
+	// stands, which is not a failure: a live process holds it, something settled
+	// it in the meantime, or the forge has already merged or queued the request.
 	Kept    string `json:"kept,omitempty"`
 	Failure string `json:"failure,omitempty"`
 }
 
 // RecoverPublications asks the forge, by branch, about every promoted run whose
-// record says it published and holds no request, and writes what the forge
-// answers onto the run.
+// record says it published and holds no request, writes what the forge answers
+// onto the run, and arms the merge the run's approving verdict authorized and
+// the run never asked for.
 //
 // This is the sweep half of the rule publishIntegration's own check is the run
 // half of: a promotion with no request on its record is a change the forge holds
@@ -102,12 +119,22 @@ type PublicationRecovery struct {
 // the status line counts what awaits the forge from the request, and the refresh
 // and finish sweeps below select on it. The run's own record of the loss — the
 // outstanding publication it wrote instead of asking the forge — is what selects
-// a run here, and the branch is what the forge is asked by; nothing about the
-// promotion is touched, and nothing is merged.
+// a run here, and the branch is what the forge is asked by.
+//
+// The merge it arms is the run's own, made late, and it is made on the run's own
+// evidence and through the run's own gate: the record carries the promotion and
+// the approving verdict, the request's head has to be the promoted commit, the
+// remote target has to pass the same pre-merge check publishIntegration makes,
+// and the request is pinned to that commit and made under the target branch's
+// promotion lease. Nothing is decided here about a refusal: a request the forge
+// refuses is recorded as the dropped merge it is, for triage, and a request the
+// forge has already merged or holds a merge for is recorded as that and left to
+// the sweeps that finish those.
 //
 // It runs before RefreshPublications, which is what the recovered record is then
-// read by: a request the forge reports merged is finished by the sweep after
-// that, and one it reports open is docketed as the unmerged publication it is.
+// read by: a merge the forge queued is settled by the next sweep's run
+// settlement, a request it reports merged is finished by the sweep after the
+// refresh, and one it refused is docketed as the unmerged publication it is.
 func (r Reconciler) RecoverPublications(ctx context.Context) ([]PublicationRecovery, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
@@ -144,6 +171,15 @@ func (r Reconciler) RecoverPublications(ctx context.Context) ([]PublicationRecov
 // run published at all — a purely local run promotes and records no request and
 // no failure, and is not this — and the terminal status is what says the run
 // itself is not going to write one.
+//
+// A record with the promotion, no request, and no outstanding publication is
+// therefore never selected, and that is deliberate rather than a gap the run-side
+// check happens to close: the record carries nothing that tells a local run from
+// a publishing one, and the reconciler is wired with forge access whether or not
+// the project publishes. The thirteen such records the store held when this was
+// written are all from 2026-08-15 and 2026-08-16, the days before and of
+// publishing landing (yoyodyne-ifd.29), and every one is a local promotion; the
+// diagnosis for yoyodyne-ifd.402 says so and puts them out of scope.
 func lostPublicationRecord(state runstate.State) bool {
 	return state.Status.Terminal() &&
 		state.Integration != nil &&
@@ -152,13 +188,18 @@ func lostPublicationRecord(state runstate.State) bool {
 		strings.TrimSpace(state.Branch) != ""
 }
 
-// recoverPublication asks about one run's branch and records the answer under
-// that run's own lease, so the record that is rewritten is the record that was
-// read. What is written is what the forge reported and nothing more: no merge
-// method, because the run never asked for a merge and a recorded method says it
-// did, and the request's head as the forge holds it rather than as the promotion
-// would have it, because a request that moved is exactly what the merge gate
-// afterwards has to be able to refuse.
+// recoverPublication asks about one run's branch, records the answer under that
+// run's own lease so the record that is rewritten is the record that was read,
+// and arms the merge where the forge holds the request open with nothing done
+// about it.
+//
+// The request is written onto the record before anything is asked of the forge
+// about merging it, so a process that dies between the two leaves a record every
+// surface can read rather than one still saying nothing — the arming itself is
+// then made by the next sweep, which finds the same record with the same account
+// on it. What is written is what the forge reported: the request's head as the
+// forge holds it rather than as the promotion would have it, because a request
+// that moved is exactly what the arming below has to be able to refuse.
 func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.State) PublicationRecovery {
 	recovery := PublicationRecovery{
 		RunID:      recorded.RunID,
@@ -199,7 +240,9 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 	if head == "" {
 		// A forge that did not name the head leaves the commit the harness itself
 		// pushed there, which is the promotion's source: the request was opened on
-		// it and the promotion refused anything else.
+		// it and the promotion refused anything else. The merge request below pins
+		// the head anyway, so a request that has since moved is refused by the
+		// forge rather than merged.
 		head = state.Integration.SourceCommit
 	}
 	published := runstate.PullRequest{
@@ -210,8 +253,8 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 		HeadCommit: head,
 		State:      observed.State,
 		Merged:     observed.Merged,
-		// A merge the forge is holding for it — somebody armed the request by hand
-		// — is recorded as queued, which puts the run back where the sweep that
+		// A merge the forge is already holding for it — somebody armed the request
+		// by hand — is recorded as queued, which puts the run where the sweep that
 		// settles queued merges finds it and finishes the publication on the
 		// forge's answer.
 		MergeQueued: observed.AutoMerge && !observed.Merged,
@@ -224,6 +267,90 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 		return recovery
 	}
 	recovery.Recovered = true
+
+	switch {
+	case published.Merged:
+		recovery.Kept = fmt.Sprintf("the forge reports pull request %d merged, so there is nothing to arm; the next sweep confirms the merge on the remote and finishes the publication", published.Number)
+		return recovery
+	case published.MergeQueued:
+		recovery.Kept = fmt.Sprintf("the forge already holds a merge for pull request %d, so there is nothing to arm; the next sweep settles the run on what the forge does with it", published.Number)
+		return recovery
+	}
+	return r.armRecoveredMerge(ctx, state, published, recovery)
+}
+
+// armRecoveredMerge makes the merge request the run's own merge would have
+// made, on the run's own evidence and through the run's own gate.
+//
+// The head has to be the promoted commit, which is the check publishIntegration
+// makes before it asks for anything: a request carrying some other commit is
+// not what the verdict authorized, and merging it would put on the remote a
+// change the authoritative branch does not have. The remote target has to pass
+// the same pre-merge check, and it is made under the target branch's promotion
+// lease for the reason the re-arm makes it there: the check is worth exactly as
+// long as the branch stands still, and a promotion admitted between the check
+// and the merge would have the forge merging into a branch nobody here saw.
+//
+// A refusal at either check, or from the forge, is recorded as the dropped
+// merge it is — the account on the record, the moment beside it — which is what
+// puts the publication on the docket for triage and keeps the item held. The
+// request the forge takes is recorded queued on either answer, exactly as the
+// re-arm records one: a merge performed on the spot still owes the confirmation,
+// the merge commit, the consumed branch and the catch-up, and the run settlement
+// on the next sweep does all four for a merge it finds landed.
+func (r Reconciler) armRecoveredMerge(ctx context.Context, state runstate.State, published runstate.PullRequest, recovery PublicationRecovery) PublicationRecovery {
+	integration := integrationOf(state)
+	if published.HeadCommit != integration.SourceCommit {
+		return r.recordRecoveredDrop(state, recovery, fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
+			published.Number, published.HeadCommit, integration.SourceCommit))
+	}
+	promotion, err := r.Store.LeasePromotion(ctx, integration.TargetBranch)
+	if err != nil {
+		recovery.Failure = fmt.Errorf("wait for a turn to move %s before arming the merge of pull request %d: %w",
+			integration.TargetBranch, published.Number, err).Error()
+		return recovery
+	}
+	defer func() { _ = promotion.Release() }()
+
+	if err := r.Worktrees.VerifyRemoteTarget(ctx, integration); err != nil {
+		return r.recordRecoveredDrop(state, recovery, fmt.Errorf("check the remote target branch before merging: %w", err))
+	}
+	result, err := r.Publisher.Merge(ctx, publish.MergeRequest{
+		Number:     published.Number,
+		HeadCommit: published.HeadCommit,
+		Method:     mergeMethod,
+	})
+	if err != nil {
+		return r.recordRecoveredDrop(state, recovery, err)
+	}
+	recovery.Armed = true
+	recovery.Queued = result.Queued
+	published.MergeMethod = string(mergeMethod)
+	published.MergeQueued = true
+	state.PullRequest = &published
+	// The account of the loss is settled by the request having been made: what
+	// it said was that nothing was asked of the forge, and something now has.
+	state.PublishFailure = ""
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		recovery.Failure = fmt.Errorf("the merge of pull request %d was armed and the run's record still says nothing was asked of the forge, so the next sweep will not settle what the forge does with it: %w",
+			published.Number, err).Error()
+	}
+	return recovery
+}
+
+// recordRecoveredDrop writes a merge this sweep would not or could not arm onto
+// the record as the dropped merge it is, in the words the run's own merge would
+// have recorded it in, so the docket entry and the item's line read the same
+// whichever of the two found it.
+func (r Reconciler) recordRecoveredDrop(state runstate.State, recovery PublicationRecovery, cause error) PublicationRecovery {
+	recovery.Refused = cause.Error()
+	state.PublishFailure = cause.Error()
+	state.MergeDrop = &runstate.MergeDrop{At: r.clock().Now(), Reason: cause.Error()}
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		recovery.Failure = fmt.Errorf("record why the merge of pull request %d was not armed: %w", state.PullRequest.Number, err).Error()
+	}
 	return recovery
 }
 

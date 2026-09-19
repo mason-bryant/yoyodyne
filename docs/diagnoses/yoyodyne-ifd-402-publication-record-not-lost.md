@@ -112,31 +112,46 @@ three places rather than trusting the argument above:
   of the forge, which holds the item out of the pull and puts the account on
   it.
 - `complete` reads the record back from the store and refuses to complete a
-  run whose outcome names a request the record does not hold, or holds as a
-  different number; the run is recorded failed with the reason.
+  run whose outcome names a request the record does not hold, holds as a
+  different number, or holds in a different arming state (merge queued, merged,
+  merge method); the run is recorded failed with the reason.
 - `yoyo reconcile` gains a recovery sweep ahead of the publication refresh:
   a terminal, promoted run whose record says it published and holds no request
-  is looked up on the forge by its branch, and the request the forge holds is
-  written onto the record — number, URL, state, whether a merge is queued, and
-  no merge method, because the run never asked for one. From there the docket,
-  the heartbeat, the refresh, and the finishing sweep read it as any other
-  publication.
+  is looked up on the forge by its branch, the request the forge holds is
+  written onto the record — number, URL, state, whether a merge is queued —
+  and the merge the run never asked for is armed. That is the run's own merge
+  made late, through the run's own gate: the record carries the promotion and
+  the approving verdict, the request's head must be the promoted commit, the
+  remote target must pass the same pre-merge check `publishIntegration` makes,
+  and the request is pinned to that commit, by the same method, under the
+  target branch's promotion lease. The forge's answer is recorded queued on
+  either answer, as a re-arm records one, and the next sweep's run settlement
+  finishes the publication. A request already merged or already holding a
+  merge is recorded as that and left to the sweeps that finish those; a moved
+  head, a remote target that no longer passes, or a forge refusal is recorded
+  as the dropped merge it is, which is what dockets it for triage. The sweep
+  never repeats a dropped merge — that stays `yoyo triage rearm`, a decision.
 - Every docket entry about a run that published — stopped, escalated, or a
   death — names the pull request beside the branch, so the development manager
   reads the open request where the run's other artifacts are.
 
-What it does not do is arm a merge from reconcile. `ReconcilePullRequests` is
-"can only ask, never merge" by contract, and `yoyo triage rearm` repeats a
-request the run made rather than making one — a recovered request has no
-method to repeat. A merge the run should have asked for and did not is made by
-hand or by a first-arm verb still to be admitted; the summary of this run names
-that as work for the product manager to decide.
+The recovery selects on the run's own account of the loss — the outstanding
+publication `publishIntegration` now writes — and not on the bare shape of a
+promotion with no request, because the record carries nothing that tells a
+local run from a publishing one and the reconciler is wired with forge access
+either way. The store held thirteen records of that bare shape when this was
+written, every one completed on 2026-08-15 or 2026-08-16 — before or on the
+day publishing landed (yoyodyne-ifd.29, merged 2026-08-16) — and every one a
+local promotion; they are out of scope, and nothing written since has the shape.
 
 ## Tests
 
 `internal/orchestrator/lostpublication_test.go` replays both shapes —
 `TestAQueuedMergeIsOnTheRecordTheRunCompletesWith` for 391 and
 `TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge` for 141.3, the
-latter asserting the docket entry now names the request — and holds the three
-refusals: the completion refusal, the run-side account, and the reconcile
-recovery, including a forge that holds no request for the branch.
+latter asserting the docket entry now names the request — and holds the rest:
+the completion refusal on a missing request and on a disagreeing arming state,
+the run-side account, and the reconcile recovery — the merge armed and then
+settled by the next sweep, a forge refusal docketed for triage, a request whose
+head moved left unarmed, a request already merged finished by the next sweep,
+and a forge that holds no request for the branch.
