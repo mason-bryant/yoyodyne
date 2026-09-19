@@ -106,6 +106,44 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 		change.Changes.OmittedFiles[0].Reason != OmittedTooLarge || change.Changes.OmittedFiles[0].DiffBytes == 0 {
 		t.Fatalf("omitted files = %#v, want first.txt named with the size of its diff", change.Changes.OmittedFiles)
 	}
+	// The file's own size is measured at the branch's tip rather than left at
+	// zero: a reviewer told "(0 bytes)" of a 1,600-byte file is told a size
+	// nobody measured.
+	if got := change.Changes.OmittedFiles[0].Bytes; got != int64(len(strings.Repeat("one\n", 400))) {
+		t.Fatalf("omitted file size = %d, want the blob's size at the tip", got)
+	}
+}
+
+// A range that deletes a file it could not show names the deletion at zero
+// bytes, which is the file's size at that tip, rather than failing to measure
+// a path the tip no longer has.
+func TestBranchChangesMeasuresADeletedFileAtZero(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	accumulate(t, repository, "accumulated",
+		[2]string{"first.txt", strings.Repeat("one\n", 400)},
+	)
+	runGit(t, repository, "checkout", "-q", "accumulated")
+	runGit(t, repository, "rm", "-q", "README.txt")
+	runGit(t, repository, "commit", "-q", "-m", "remove the README")
+	runGit(t, repository, "checkout", "-q", "main")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	change, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: "accumulated", BaseRef: "main"}, DiffLimits{MaxTotalBytes: 100})
+	if err != nil {
+		t.Fatalf("BranchChanges() error = %v", err)
+	}
+	omitted := map[string]OmittedFile{}
+	for _, file := range change.Changes.OmittedFiles {
+		omitted[file.Path] = file
+	}
+	if got, ok := omitted["README.txt"]; !ok || got.Bytes != 0 || got.DiffBytes == 0 {
+		t.Fatalf("omitted README = %#v, want the deletion named at zero bytes with its diff measured", got)
+	}
+	if got := omitted["first.txt"].Bytes; got != 1600 {
+		t.Fatalf("omitted first.txt = %#v, want it measured at the tip", omitted["first.txt"])
+	}
 }
 
 func TestBranchChangesBoundsTheDescribedHistory(t *testing.T) {

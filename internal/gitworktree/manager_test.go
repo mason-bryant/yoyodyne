@@ -1524,6 +1524,64 @@ func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
 	}
 }
 
+// A change that deletes a file the base tracks is the most ordinary change
+// there is, and the path it deletes is one the worktree no longer has. The
+// deletion is in the patch whole, it is listed with Git's own status at zero
+// bytes, and when the bound cannot show it the omission carries the size of
+// the deletion's diff rather than a size read from a path that is gone.
+func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	writeFile(t, repository, "obsolete.txt", strings.Repeat("an obsolete line\n", 50))
+	runGit(t, repository, "add", "obsolete.txt")
+	runGit(t, repository, "commit", "-m", "the file before its removal")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-deletion", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// One deletion an earlier attempt committed, one still uncommitted: both
+	// are paths the worktree no longer holds.
+	if err := os.Remove(filepath.Join(worktree.Path, "obsolete.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: remove the obsolete file")
+	if err := os.Remove(filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Fatalf("a deleting change was reported as cut: %#v", changes.OmittedFiles)
+	}
+	if strings.Count(changes.Patch, "\n-an obsolete line") != 50 || !strings.Contains(changes.Patch, "deleted file mode") || !strings.Contains(changes.Patch, "-test\n") {
+		t.Fatalf("patch does not carry both deletions whole:\n%s", changes.Patch)
+	}
+	want := []ChangedFile{
+		{Path: "README.txt", Status: "D", Bytes: 0},
+		{Path: "obsolete.txt", Status: "D", Bytes: 0, Committed: true},
+	}
+	if !reflect.DeepEqual(changes.Files, want) {
+		t.Fatalf("files = %#v, want %#v", changes.Files, want)
+	}
+
+	bounded, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() bounded error = %v", err)
+	}
+	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "obsolete.txt" ||
+		bounded.OmittedFiles[0].Bytes != 0 || bounded.OmittedFiles[0].DiffBytes == 0 {
+		t.Fatalf("omitted files = %#v, want the committed deletion named at zero bytes with its diff measured", bounded.OmittedFiles)
+	}
+	if !strings.Contains(bounded.Patch, "-test\n") {
+		t.Fatalf("the deletion that fits the bound is not shown:\n%s", bounded.Patch)
+	}
+}
+
 // The tree listing: every file the change touches, with its size at the tip,
 // whether it is binary, and whether an earlier attempt already committed it.
 // The patch shows none of a binary and nothing distinguishes a committed file
