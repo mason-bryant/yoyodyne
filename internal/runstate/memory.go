@@ -18,6 +18,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/sidestream"
 )
 
 // An agent's memory, as the `### Agent memory` section of
@@ -152,10 +153,21 @@ const (
 	MemorySourceConversation MemorySourceKind = "conversation"
 	MemorySourceRun          MemorySourceKind = "run"
 	MemorySourceWorkItem     MemorySourceKind = "work-item"
+	// MemorySourceSideStream is a side conversation the agent held beside its main
+	// thread. It is a source kind of its own because a side stream is a durable
+	// record of its own — its own file, its own lease, its own transcript — and the
+	// merge that carries its substance back into the agent's context references it
+	// rather than copying it, which is a reference only if it names the thing.
+	MemorySourceSideStream MemorySourceKind = "side-stream"
 )
 
 func (k MemorySourceKind) Valid() bool {
-	return k == MemorySourceConversation || k == MemorySourceRun || k == MemorySourceWorkItem
+	switch k {
+	case MemorySourceConversation, MemorySourceRun, MemorySourceWorkItem, MemorySourceSideStream:
+		return true
+	default:
+		return false
+	}
 }
 
 // MemorySource is one record a memory was drawn from, by identifier alone.
@@ -177,10 +189,21 @@ type MemoryInvocationKind string
 const (
 	MemoryInvocationConversation MemoryInvocationKind = "conversation"
 	MemoryInvocationRun          MemoryInvocationKind = "run"
+	// MemoryInvocationSideStream is a side conversation's own invocations. A merge
+	// back into the agent's context is written out of what the side thread found
+	// rather than out of a main-thread turn, and recording it as either of the
+	// other two would say a turn wrote something no turn wrote — which is the one
+	// thing an audit trail must not do.
+	MemoryInvocationSideStream MemoryInvocationKind = "side-stream"
 )
 
 func (k MemoryInvocationKind) Valid() bool {
-	return k == MemoryInvocationConversation || k == MemoryInvocationRun
+	switch k {
+	case MemoryInvocationConversation, MemoryInvocationRun, MemoryInvocationSideStream:
+		return true
+	default:
+		return false
+	}
 }
 
 // MemoryInvocation is the audit the design requires: the invocation that produced
@@ -236,6 +259,15 @@ func (i MemoryInvocation) validate() error {
 		}
 		if i.Turn != 0 {
 			problems = append(problems, errors.New("a run has no turns to number"))
+		}
+	case MemoryInvocationSideStream:
+		if !sidestream.ValidID(i.ID) {
+			problems = append(problems, errors.New("the invocation names no side stream"))
+		}
+		// A side stream takes turns as a conversation does, and the merge is written
+		// out of the ones it took, so a merge claiming no turn is a merge of nothing.
+		if i.Turn < 1 {
+			problems = append(problems, errors.New("a side stream turn is numbered from one"))
 		}
 	}
 	if !i.Backend.Valid() {
@@ -393,6 +425,10 @@ func (s MemorySource) validate() error {
 	case MemorySourceWorkItem:
 		if err := validateMemorySubject(s.ID); err != nil {
 			return fmt.Errorf("the source names no work item: %w", err)
+		}
+	case MemorySourceSideStream:
+		if !sidestream.ValidID(s.ID) {
+			return errors.New("the source names no side stream")
 		}
 	}
 	return nil
