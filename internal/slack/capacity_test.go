@@ -214,6 +214,91 @@ func TestAHoldThatLiftedIsForgotten(t *testing.T) {
 	}
 }
 
+// parkRunOnTheLimit records one developer run asleep on the September reset,
+// as the pipeline leaves it, and returns it so a later probe can move its
+// record.
+func (h *testHarness) parkRunOnTheLimit(t *testing.T, since time.Time) runstate.State {
+	t.Helper()
+	state := h.run(t, runstate.StatusRunning)
+	resets := septemberResets
+	state.StartedAt = since.Add(-time.Hour)
+	state.UpdatedAt = since
+	state.ProviderModel = "opus"
+	state.UsageLimitResetsAt = &resets
+	state.UsageLimitPausedSince = &since
+	state.UsageLimitKind = "seven_day"
+	state.UsageLimitModel = "opus"
+	state.PauseCause = runstate.PauseUsageLimit
+	h.record(t, state)
+	return state
+}
+
+// The same stoppage with nothing in the log: no recurring task, no open
+// conversation, and the one developer run parked on the reset. The hold is read
+// from the run's own record and reaches the operators on the first pass, is said
+// again while it stands without interrupting them, and is critical past the
+// bar — the same rule, from the other record. The run probing while it waits
+// moves its record and not the hold: it is one hold on one reset, said once.
+func TestARunParkedOnTheLimitReachesTheOperatorsOnceFromTheRunsAlone(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.holdEveryRole(t)
+	harness.feed.Heartbeat = time.Hour
+	harness.feed.CapacityEscalation = 6 * time.Hour
+	// The log the September configuration recorded a refusal in is replaced with
+	// an empty one: what holds here is the run.
+	harness.limits, _ = runstate.NewUsageLimitStore(t.TempDir(), "yoyodyne")
+	harness.feed.Standing.UsageLimits = harness.limits
+	harness.feed.UsageLimits = harness.limits
+	parked := harness.parkRunOnTheLimit(t, septemberOpened)
+
+	// The run's own start and park are said as they always were; what is new is
+	// the hold read off the same record.
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindRunParked, notify.KindCapacityHold)
+	said, found := harness.capacity(t, harness.start())
+	if !found || !said.Direct || said.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("delivery = %+v, found %v; want the hold taken to the operators directly the first time it is seen, as a warning", said, found)
+	}
+	message, err := notify.Render(said.Notification.Topic, said.Notification.Speaker, said.Notification.Event)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	for _, fact := range []string{
+		"Every role is paused on the provider's usage window until 2026-09-13T03:00:00Z",
+		"1 run parked since 2026-09-08T07:38:40Z",
+	} {
+		if !strings.Contains(message.Body, fact) {
+			t.Fatalf("body %q does not carry %q", message.Body, fact)
+		}
+	}
+	if standing := cursors.Streams[capacityStream].Standing; standing != "capacity:2026-09-13T03:00:00Z" {
+		t.Fatalf("standing = %q, want the hold marked by the reset the run is parked on", standing)
+	}
+
+	// The run probes every half hour, re-recording its wait each time. The hold
+	// is said again an hour on, in the channel alone.
+	for hour := 1; hour <= 2; hour++ {
+		harness.now = septemberOpened.Add(time.Duration(hour) * time.Hour)
+		parked.UpdatedAt = harness.now.Add(-10 * time.Minute)
+		harness.save(t, parked)
+		again, found := harness.capacity(t, cursors)
+		if !found || again.Silent() || again.Direct || again.Notification.Event.Severity != report.SeverityWarning {
+			t.Fatalf("hour %d: delivery = %+v, found %v; want the standing hold said again in the channel alone", hour, again, found)
+		}
+		cursors.Streams[capacityStream] = again.Cursor
+	}
+	// And past the bar it is critical and taken to them again, measured from
+	// when the run parked rather than from its latest probe.
+	harness.now = septemberOpened.Add(6 * time.Hour)
+	parked.UpdatedAt = harness.now.Add(-10 * time.Minute)
+	harness.save(t, parked)
+	critical, found := harness.capacity(t, cursors)
+	if !found || !critical.Direct || critical.Notification.Event.Severity != report.SeverityCritical {
+		t.Fatalf("delivery = %+v, found %v; want critical and taken to the operators six hours on", critical, found)
+	}
+}
+
 // A refusal something served through is not a hold, however many times it is
 // recorded: failover working is exactly the state this exists to tell a
 // stoppage from.

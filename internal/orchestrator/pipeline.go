@@ -3267,6 +3267,9 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	p := a.pipeline
 	a.state.UsageLimitKind = limit.Kind
 	a.outcome.UsageLimitKind = limit.Kind
+	// Which model was refused is written with the kind, so the park reads back
+	// as a refusal of that model wherever the refusals outside a run are read.
+	a.state.UsageLimitModel = a.refusedModel()
 	a.state.PauseCause = runstate.PauseUsageLimit
 	a.outcome.PauseCause = runstate.PauseUsageLimit
 	// A limit is the account's state rather than an outage, so a channel left
@@ -3326,14 +3329,40 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	// spent, one probe at a time, by the wait itself.
 	resetsAt := limit.ResetsAt.UTC()
 	a.state.UsageLimitResetsAt = &resetsAt
+	// Whether that deadline is the provider's or the harness's own probe goes
+	// beside it, because a reader saying when the wait lifts cannot tell the two
+	// apart from the time alone.
+	a.state.UsageLimitResetUnknown = unknownReset
 	a.state.UpdatedAt = p.clock().Now()
 	// When this pause was recorded is what tells a release meant for it apart
 	// from one meant for a pause this run has already served and reissued past.
 	a.pausedAt = p.clock().Now()
+	a.recordPauseStart()
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("record usage limit pause: %w", err)
 	}
 	return a.awaitRecordedUsageLimit(ctx)
+}
+
+// refusedModel is the model selector the invocation this run is parked on asked
+// for: the reviewer's during a review, and the developer's otherwise, which are
+// the two invocations a run pauses for. It is read from the configuration the
+// attempt itself was made from, so it is the selector that attempt requested.
+func (a *activeRun) refusedModel() string {
+	if a.state.Phase == runstate.PhaseReviewing {
+		return a.pipeline.reviewer().Model
+	}
+	return a.pipeline.developer().Model
+}
+
+// recordPauseStart writes when the pause being recorded began, once per pause:
+// the moment its deadline is first written, which every probe after that leaves
+// alone. It is the durable copy of pausedAt, kept so a process that picks the
+// run up mid-wait, and every reader of the record, can say how long the run
+// has been parked rather than only when it last probed.
+func (a *activeRun) recordPauseStart() {
+	since := a.pausedAt.UTC()
+	a.state.UsageLimitPausedSince = &since
 }
 
 // pauseForServerOverload records a transiently overloaded provider and waits it
@@ -3374,8 +3403,14 @@ func (a *activeRun) pauseForServerOverload(ctx context.Context, overload backend
 	}
 	resetsAt := p.clock().Now().Add(wait).UTC()
 	a.state.UsageLimitResetsAt = &resetsAt
+	// The deadline is the harness's own, and the record says so: an overload
+	// names no model and no reset, and the model left over from a limit would
+	// describe this wait as a refusal of it.
+	a.state.UsageLimitResetUnknown = true
+	a.state.UsageLimitModel = ""
 	a.state.UpdatedAt = p.clock().Now()
 	a.pausedAt = p.clock().Now()
+	a.recordPauseStart()
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("record server overload pause: %w", err)
 	}
@@ -3538,10 +3573,13 @@ func (a *activeRun) clearUsageLimitPause() error {
 		return err
 	}
 	a.state.UsageLimitResetsAt = nil
-	// The cause goes with the deadline it described. What refused the run is kept
-	// on the outcome for the record, but a cause left in durable state beside no
+	// The cause goes with the deadline it described, and so do the start of the
+	// pause and what kind of deadline it was. What refused the run is kept on
+	// the outcome for the record, but a cause left in durable state beside no
 	// deadline would describe a wait this run is no longer taking.
 	a.state.PauseCause = ""
+	a.state.UsageLimitPausedSince = nil
+	a.state.UsageLimitResetUnknown = false
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		return fmt.Errorf("clear usage limit pause: %w", err)
@@ -4862,6 +4900,8 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	// stopped the run is still named by the recorded limit kind and by the
 	// failure, and what it spent waiting stays on the record either way.
 	a.state.UsageLimitResetsAt = nil
+	a.state.UsageLimitPausedSince = nil
+	a.state.UsageLimitResetUnknown = false
 	a.state.PauseCause = ""
 	a.state.ProviderStop = ""
 	a.state.DirectivePause = nil
@@ -4982,6 +5022,8 @@ func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, complet
 	// The resume markers are cleared for the reason the refused record cleared
 	// them: each is an instruction to continue a run that is now over.
 	durable.UsageLimitResetsAt = nil
+	durable.UsageLimitPausedSince = nil
+	durable.UsageLimitResetUnknown = false
 	durable.PauseCause = ""
 	durable.ProviderStop = ""
 	durable.DirectivePause = nil

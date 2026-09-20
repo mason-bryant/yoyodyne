@@ -150,8 +150,13 @@ func (a *activeRun) pauseForProviderOutage(ctx context.Context, outage backend.P
 	// resumes it through the same path a usage-limit pause resumes through.
 	resetsAt := p.clock().Now().Add(a.outageProbe()).UTC()
 	a.state.UsageLimitResetsAt = &resetsAt
+	// The probe is the harness's own deadline, and nothing about an outage names
+	// a model, so the record says both rather than carrying a limit's over.
+	a.state.UsageLimitResetUnknown = true
+	a.state.UsageLimitModel = ""
 	a.state.UpdatedAt = p.clock().Now()
 	a.pausedAt = p.clock().Now()
+	a.recordPauseStart()
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("record provider outage pause: %w", err)
 	}

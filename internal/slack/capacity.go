@@ -52,7 +52,7 @@ const DefaultCapacityEscalation = 6 * time.Hour
 // attention line — and a sink deriving it a second way would be a channel and a
 // terminal disagreeing about whether every role is held.
 func (f *HarnessFeed) capacityDeliveries(ctx context.Context, cursor Cursor, streams map[string]struct{}) ([]Delivery, error) {
-	if f.Standing == nil || f.Standing.UsageLimits == nil || len(f.Standing.Agents) == 0 {
+	if f.Standing == nil || (f.Standing.UsageLimits == nil && f.Standing.Runs == nil) || len(f.Standing.Agents) == 0 {
 		return nil, nil
 	}
 	streams[capacityStream] = struct{}{}
@@ -60,12 +60,16 @@ func (f *HarnessFeed) capacityDeliveries(ctx context.Context, cursor Cursor, str
 	now := f.now()
 	hold, problem := readmodel.CapacityHoldOf(*f.Standing, now)
 	if problem != "" {
-		// A log that cannot be read leaves the sink unable to tell a held line
-		// from a served one, and it must not guess in either direction. So it is
-		// said where the sink says everything else about itself, and asked again
-		// at the next pass.
-		f.say("whether the provider is holding every role could not be read, so nothing was said about it: %s", problem)
-		return nil, nil
+		// A record that cannot be read is said where the sink says everything
+		// else about itself, and asked again at the next pass. A hold the other
+		// record still shows is said all the same — the two only ever add
+		// refusals, so a hold read from one stands whatever the other holds —
+		// but no hold over a record nobody could read is not a lifted hold, and
+		// the sink must not guess in that direction: the cursor is left as it is.
+		f.say("whether the provider is holding every role could not be read in full: %s", problem)
+		if !hold.Holding {
+			return nil, nil
+		}
 	}
 	if !hold.Holding {
 		// The hold lifted, or there never was one. What lifted it says so itself —

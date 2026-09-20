@@ -203,11 +203,13 @@ type Sources struct {
 	// reported anything" and "nothing was wired to read what anybody reported" are
 	// opposite answers, and only one of them means there is nothing to do.
 	Reports Reports
-	// UsageLimits is the provider's refusals outside a run, read with the agents
-	// below for the one thing the two say together: whether the provider is
-	// holding every role at once. It is optional, and a reading without one says
-	// nothing about a hold rather than reporting none — a project whose every
-	// refusal went unread for five days is the reason this is here.
+	// UsageLimits is the provider's refusals outside a run, read with the runs
+	// above — for the ones parked on a limit — and the agents below for the one
+	// thing the three say together: whether the provider is holding every role
+	// at once. It is optional, and a reading without one reads the hold from the
+	// runs alone and says nothing about the log rather than reporting it empty —
+	// a project whose every refusal went unread for five days is the reason
+	// this is here.
 	UsageLimits UsageLimits
 	// ProviderOutages is the product's record of the provider answering nobody.
 	// It is optional, and a reading without one says nothing about an outage
@@ -538,11 +540,12 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 		}
 	}
 	// The provider holding every role is the other pause, read from the refusal
-	// log rather than from the session choosing work: on 2026-09-08 that session
-	// was idle over items waiting on a decision, and the role that would have
-	// decided was the one being refused, so the watch log never said a window at
-	// all. The session's own account wins where it has one, because it is the
-	// same window said with less inference; this says it where nothing else does.
+	// log and the parked runs rather than from the session choosing work: on
+	// 2026-09-08 that session was idle over items waiting on a decision, and the
+	// role that would have decided was the one being refused, so the watch log
+	// never said a window at all. The session's own account wins where it has
+	// one, because it is the same window said with less inference; this says it
+	// where nothing else does.
 	hold, holdProblem := CapacityHoldOf(sources, now)
 	if hold.Holding {
 		standing.CapacityHold = &hold

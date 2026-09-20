@@ -267,6 +267,18 @@ budget. Time an operator hold accounts for is kept apart in
 `operator_held_seconds` and is bounded by nothing: a maximum pause that stopped
 a held run would be the harness overriding the operator.
 
+Beside the deadline, the run's record keeps three things the deadline alone
+cannot say, because a park is read back as a refusal wherever the refusals
+outside a run are read — the [hold over every role](reporting.md#the-provider-holding-every-role)
+first among them. `usage_limit_paused_since` is when the pause began, which
+every probe after that leaves alone; `usage_limit_reset_unknown` says the
+deadline is the harness's own next probe rather than a reset the provider named,
+which is every overload and outage wait and a limit the provider gave no reset
+for; and `usage_limit_model` is the model selector the refused invocation asked
+for, kept because the reviewer's is otherwise recorded only once a review has
+answered. The first two are cleared with the deadline; the model outlives it as
+the kind does.
+
 ## The counters, and what each one bounds
 
 | Counter | Configured by | What it bounds | What it is evidence about |
@@ -560,6 +572,11 @@ is unmeasured. Most of these are asserted somewhere in
   back.
 - `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
   the blocker a usage limit with an unusable reset time produces.
+- `usage_limit_paused_since` and `usage_limit_reset_unknown`, which are on the
+  record only while a run is parked: every trace here records the run after
+  its pause was cleared, so neither is held by one. That both are written
+  before the wait begins is asserted in `internal/orchestrator/pipeline_test.go`,
+  and what reads them is `internal/readmodel`, which is not this pipeline.
 - The directive and dependency pauses of a run that is **already claimed**. The
   pause table above says the directive is read before the claim, before a
   resume, and at every round of the gate including the promotion; only the

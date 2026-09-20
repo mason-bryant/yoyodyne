@@ -66,12 +66,13 @@ type CapacityBlockedRun struct {
 	// by the provider's own name for it where it gave one, or a transient
 	// server overload.
 	RefusedBy string `json:"refused_by"`
-	// Since is when the record last said the run was waiting. For a blocked run
-	// that is the moment it stopped. For a waiting run it is the start of the
-	// probe it is sleeping, because each probe re-records the wait and the record
-	// does not keep when the first one began; WaitedSeconds below is how long the
-	// run has spent waiting in total, which is the figure the maximum pause is
-	// measured against.
+	// Since is when the run started waiting. For a blocked run that is the moment
+	// it stopped. For a waiting run it is when its pause began where the record
+	// kept that, and otherwise — every record written before the start was
+	// carried — the start of the probe it is sleeping, because each probe
+	// re-records the wait; WaitedSeconds below is how long the run has spent
+	// waiting in total, which is the figure the maximum pause is measured
+	// against.
 	Since time.Time `json:"since"`
 	// ResetsAt is the deadline the run is waiting out, and nil where there is
 	// none: a run that stopped rather than waited recorded no deadline, and one
@@ -262,6 +263,9 @@ func capacityBlockedRun(run runstate.State) (CapacityBlockedRun, bool) {
 	case run.Status.InFlight() && run.UsageLimitResetsAt != nil:
 		entry.State = CapacityStateWaiting
 		entry.Remedy = waitingRunRemedy
+		if run.UsageLimitPausedSince != nil {
+			entry.Since = run.UsageLimitPausedSince.UTC()
+		}
 	case run.Status.Terminal() && strings.TrimSpace(run.Blocker) != "":
 		entry.State = CapacityStateBlocked
 		entry.Remedy = blockedRunRemedy
