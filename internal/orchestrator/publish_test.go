@@ -2177,6 +2177,9 @@ type queuedFixture struct {
 	worktrees func(ReconcileWorktrees) ReconcileWorktrees
 	// sleep takes the backoff without taking the time.
 	sleep func(context.Context, time.Duration) error
+	// docket is the triage docket the sweep dockets and settles publications on,
+	// where a test reads it; a fixture that sets none sweeps without one.
+	docket *memoryDocket
 }
 
 func newQueuedFixture(t *testing.T) queuedFixture {
@@ -2238,13 +2241,17 @@ func (f queuedFixture) reconciler(t *testing.T) Reconciler {
 	if f.worktrees != nil {
 		worktrees = f.worktrees(worktrees)
 	}
-	return Reconciler{
+	reconciler := Reconciler{
 		Tracker:   f.tracker,
 		Worktrees: worktrees,
 		Store:     f.store,
 		Publisher: f.forge,
 		Sleep:     f.sleep,
 	}
+	if f.docket != nil {
+		reconciler.Docket = docketerOverStore(f.docket, f.store, docketConfig())
+	}
+	return reconciler
 }
 
 // A repository with no remote reports the same thing on every pass. A resumed

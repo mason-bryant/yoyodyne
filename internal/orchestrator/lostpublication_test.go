@@ -316,9 +316,10 @@ func TestReconcileRecoversAndArmsThePullRequestOfAPromotionThatRecordedNone(t *t
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
 	lost := loseThePublication(t, fixture)
-	// Before the sweep, nothing that reads publications can see this one.
-	if len(readmodel.AwaitingForge([]runstate.State{lost})) != 0 {
-		t.Fatal("a promotion with no recorded request counted as awaiting the forge before anything recorded the request")
+	// Counted as awaiting the forge from the record's own account, before the
+	// sweep has asked the forge anything.
+	if len(readmodel.AwaitingForge([]runstate.State{lost})) != 1 {
+		t.Fatal("a promotion with no recorded request was not counted as awaiting the forge before the sweep")
 	}
 	// The forge holds the request open with no merge queued for it, which is what
 	// a run that never asked leaves behind.
@@ -384,6 +385,155 @@ func TestReconcileRecoversAndArmsThePullRequestOfAPromotionThatRecordedNone(t *t
 		t.Fatalf("settled pull request = %#v, publish failure = %q; want the forge's merge confirmed and recorded", settled.PullRequest, settled.PublishFailure)
 	}
 	assertRemoteCarriesPromotion(t, fixture.repository, fixture.remote, "main", outcome.Integration.TargetCommit)
+}
+
+// The silence ended before the sweep, too: a promotion whose record holds no
+// request is on the docket and counted as awaiting the forge from the record's
+// own account of the loss, before anything has asked the forge — so a forge
+// that holds no request for the branch, on every sweep, leaves a promotion
+// every surface still names rather than one only reconcile's stderr does. The
+// entry is keyed to the run, since there is no number, and it is the same entry
+// the recovered request joins and the settlement of the armed merge closes.
+func TestAPromotionWithoutARequestIsDocketedAndCountedBeforeReconcileRuns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.docket = &memoryDocket{}
+	outcome := fixture.run(t)
+	lost := loseThePublication(t, fixture)
+
+	// Counted by the read model, which is what the status line and the heartbeat
+	// read; TestAPromotionAwaitingTheForgeNeedsAHuman holds the line it prints.
+	if awaiting := readmodel.AwaitingForge([]runstate.State{lost}); len(awaiting) != 1 {
+		t.Fatalf("awaiting the forge = %d run(s), want the requestless promotion counted before any sweep", len(awaiting))
+	}
+	// Docketed, keyed to the run alone, carrying the account and the branch.
+	build, err := docketerOverStore(fixture.docket, fixture.store, docketConfig()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if build.Added != 1 {
+		t.Fatalf("docket build = %#v, want the requestless publication docketed", build)
+	}
+	entries, _ := fixture.docket.List()
+	if len(entries) != 1 || entries[0].Class != triage.ClassPublication || entries[0].Key != triage.Key(triage.ClassPublication, pipelineRunID) {
+		t.Fatalf("docket = %#v, want one publication entry keyed to run %s alone", entries, pipelineRunID)
+	}
+	entry := entries[0]
+	if entry.Publication == nil || entry.Publication.Number != 0 || entry.Publication.Branch != outcome.Branch {
+		t.Fatalf("entry publication = %#v, want no number and the run's branch", entry.Publication)
+	}
+	if !strings.Contains(entry.Publication.Message, "nothing was asked of the forge") {
+		t.Errorf("entry publication = %#v, want the run's account of the loss", entry.Publication)
+	}
+	rendered := entry.Render()
+	for _, want := range []string{"Pull request: none recorded for branch " + outcome.Branch, "Publication outstanding"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the rendered entry does not say %q:\n%s", want, rendered)
+		}
+	}
+
+	// The recovery arms the merge and dockets nothing further: the request joins
+	// the entry the run already has rather than opening a second.
+	fixture.forge.queued = false
+	fixture.forge.merges = nil
+	if recoveries := fixture.recover(t); len(recoveries) != 1 || !recoveries[0].Armed {
+		t.Fatalf("recoveries = %#v, want the merge armed", recoveries)
+	}
+	if again, err := docketerOverStore(fixture.docket, fixture.store, docketConfig()).Build(); err != nil || again.Added != 0 {
+		t.Fatalf("docket build after recovery = %#v, %v; want nothing added beside the entry the run already has", again, err)
+	}
+	// The forge merges, the settlement finishes the publication, and the entry
+	// closes with it: nothing about the publication is outstanding any more.
+	fixture.forge.performQueuedMerge(t)
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].DocketProblem != "" {
+		t.Fatalf("reconciliation = %#v, want the armed merge settled and its entry closed", results)
+	}
+	entries, _ = fixture.docket.List()
+	if len(entries) != 1 || entries[0].Closed == nil {
+		t.Fatalf("docket after settlement = %#v, want the run's publication entry closed", entries)
+	}
+	if !strings.Contains(entries[0].Closed.Reason, "confirmed on main") {
+		t.Errorf("closure = %#v, want the confirmed merge named", entries[0].Closed)
+	}
+}
+
+// A merge somebody armed by hand on a recovered request needs no arming and
+// leaves the record saying so: the account of the loss goes, the merge is
+// recorded queued, and the next sweep settles the run on what the forge does.
+func TestReconcileSettlesARecoveredRequestSomebodyQueuedByHand(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	loseThePublication(t, fixture)
+	// The forge is still holding the merge the run queued, which from the record's
+	// side is a merge somebody else armed.
+	asked := len(fixture.forge.merges)
+
+	recoveries := fixture.recover(t)
+	if len(recoveries) != 1 || !recoveries[0].Recovered || recoveries[0].Armed || recoveries[0].Failure != "" {
+		t.Fatalf("recoveries = %#v, want the queued request recorded and nothing armed", recoveries)
+	}
+	if !strings.Contains(recoveries[0].Kept, "already holds a merge") || len(fixture.forge.merges) != asked {
+		t.Fatalf("kept = %q, merges = %#v; want the held merge named and no further request made", recoveries[0].Kept, fixture.forge.merges)
+	}
+	recovered, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recovered.PullRequest == nil || !recovered.PullRequest.MergeQueued || recovered.PullRequest.Number != outcome.PullRequest.Number {
+		t.Fatalf("recovered pull request = %#v, want #%d recorded with its merge queued", recovered.PullRequest, outcome.PullRequest.Number)
+	}
+	if recovered.PublishFailure != "" {
+		t.Fatalf("publish failure = %q on a merge the forge holds; want the account of the loss cleared", recovered.PublishFailure)
+	}
+	if !recovered.Outstanding() {
+		t.Fatal("the queued merge left the run settled, so nothing would finish the publication")
+	}
+	fixture.forge.performQueuedMerge(t)
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the hand-queued merge settled", results)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.PullRequest.Merged || settled.PullRequest.MergeQueued || settled.PublishFailure != "" {
+		t.Fatalf("settled = pull request %#v, publish failure %q; want the merge confirmed and nothing outstanding", settled.PullRequest, settled.PublishFailure)
+	}
+	assertRemoteCarriesPromotion(t, fixture.repository, fixture.remote, "main", outcome.Integration.TargetCommit)
+}
+
+// The merge is armed on the recorded verdict and not inferred from the
+// promotion: a record that does not say the reviewer approved is not selected,
+// and one that stops saying so under the lease is refused at the action.
+func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
+	t.Parallel()
+
+	unapproved := lostPublicationState()
+	unapproved.ReviewDecision = runstate.ReviewRepair
+	if lostPublicationRecord(unapproved) {
+		t.Error("a promotion whose record carries no approving verdict was selected for recovery")
+	}
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	forge := &fakeForge{number: 7}
+	reconciler := Reconciler{
+		Tracker:   newOutcomeTracker(),
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Publisher: forge,
+	}
+	recovery := reconciler.armRecoveredMerge(context.Background(), unapproved, runstate.PullRequest{Number: 7, HeadCommit: rearmedCommit}, PublicationRecovery{RunID: unapproved.RunID})
+	if recovery.Armed || len(forge.merges) != 0 {
+		t.Fatalf("recovery = %#v, merges = %#v; want nothing armed without an approving verdict", recovery, forge.merges)
+	}
+	if !strings.Contains(recovery.Failure, `review decision "repair"`) || !strings.Contains(recovery.Failure, "nothing authorizes the merge") {
+		t.Errorf("failure = %q, want the missing approval named", recovery.Failure)
+	}
 }
 
 // A merge the forge refuses is not forced: the recovered request is recorded

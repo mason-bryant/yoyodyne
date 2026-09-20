@@ -975,24 +975,37 @@ func TestAPromotionAwaitingTheForgeNeedsAHuman(t *testing.T) {
 	merged := promoted("run-merged", runstate.PullRequest{Number: 404, Merged: true}, nil)
 	running := promoted("run-running", runstate.PullRequest{Number: 405}, nil)
 	running.Status = runstate.StatusRunning
-	recorded := []runstate.State{dropped, queued, unasked, merged, running}
+	// The fourth: a promotion whose record holds no request at all, named from
+	// the record's own account of that before any sweep has asked the forge. A
+	// local promotion carries no such account and is not counted.
+	unrecorded := promoted("run-unrecorded", runstate.PullRequest{}, nil)
+	unrecorded.PullRequest = nil
+	unrecorded.Branch = "yoyodyne/item/unrecorded"
+	unrecorded.ReviewDecision = runstate.ReviewApprove
+	unrecorded.PublishFailure = runstate.LostPublication("run-unrecorded", "item-run-unrecorded", "main", unrecorded.Branch)
+	local := promoted("run-local", runstate.PullRequest{}, nil)
+	local.PullRequest = nil
+	local.Branch = "yoyodyne/item/local"
+	local.ReviewDecision = runstate.ReviewApprove
+	recorded := []runstate.State{dropped, queued, unasked, merged, running, unrecorded, local}
 
 	// The heartbeat's count and the attention line's entries are one derivation.
-	if awaiting := AwaitingForge(recorded); len(awaiting) != 3 {
-		t.Fatalf("AwaitingForge() = %d run(s), want the dropped, the queued, and the unasked and not the merged or the one still running", len(awaiting))
+	if awaiting := AwaitingForge(recorded); len(awaiting) != 4 {
+		t.Fatalf("AwaitingForge() = %d run(s), want the dropped, the queued, the unasked, and the unrecorded and not the merged, the local, or the one still running", len(awaiting))
 	}
 	sources := quietSources()
 	sources.Runs = fakeRuns{prices: map[string]runstate.ItemPrice{}, recorded: recorded}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.NeedsHuman) != 3 {
+	if len(standing.NeedsHuman) != 4 {
 		t.Fatalf("needs a human = %+v, want one entry per promotion awaiting the forge", standing.NeedsHuman)
 	}
 	for _, want := range []struct {
-		run, mover string
+		run, mover, what string
 	}{
-		{"run-dropped", "the development manager's"},
-		{"run-queued", "the forge's"},
-		{"run-unasked", "the operator's"},
+		{"run-dropped", "the development manager's", "pull request #"},
+		{"run-queued", "the forge's", "pull request #"},
+		{"run-unasked", "the operator's", "pull request #"},
+		{"run-unrecorded", "the harness's", "holds no pull request for branch yoyodyne/item/unrecorded"},
 	} {
 		found := false
 		for _, attention := range standing.NeedsHuman {
@@ -1000,8 +1013,8 @@ func TestAPromotionAwaitingTheForgeNeedsAHuman(t *testing.T) {
 				continue
 			}
 			found = true
-			if !strings.Contains(attention.What, "the forge has not published it") || !strings.Contains(attention.What, "pull request #") {
-				t.Errorf("what = %q, want the unpublished promotion and its pull request named", attention.What)
+			if !strings.Contains(attention.What, want.what) {
+				t.Errorf("what = %q, want the unpublished promotion named with %q", attention.What, want.what)
 			}
 			if !strings.HasPrefix(attention.Whose, want.mover) || !strings.Contains(attention.Whose, "yoyo reconcile") {
 				t.Errorf("whose for %s = %q, want %s and the sweep that settles it", want.run, attention.Whose, want.mover)

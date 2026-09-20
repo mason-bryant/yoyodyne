@@ -1094,25 +1094,35 @@ Before either of those, the sweep looks for the one publication neither can see:
 starts from the request on the record — the docket keys a publication entry to
 it, the heartbeat counts what awaits the forge from it, the re-arm repeats it —
 so a publishing run that promoted a change and recorded no request would be a
-change the forge holds that no surface reports. Two things close that. The run
+change the forge holds that no surface reports. Three things close that. The run
 itself refuses to be that record: a publishing run that reaches its promotion
 with no request on its record writes a `Publication outstanding` line naming the
 branch and saying nothing was asked of the forge, rather than finishing quietly,
-and a run whose summary names a request its durable record does not hold is
-refused completion outright and recorded as failed. And the sweep asks the forge
-by the run's branch, which is the one durable handle it has left, writes the
-request the forge holds onto the record — number, state, and whether a merge is
-queued for it — and then makes the merge request the run itself never made. That
-is the run's own merge made late, on the run's own evidence and through the
-run's own gate: the record has to carry the promotion and the approving verdict,
-the request's head has to be the promoted commit, the remote target has to pass
-the same pre-merge check the run's merge makes, and the request is pinned to
-that commit, made by the same method, under the target branch's promotion lease.
+and a run whose summary names a request its durable record does not hold — or
+holds in a different arming state — is refused completion outright and recorded
+as failed. That line is what the docket and the status line then read, before
+any sweep has asked the forge: the promotion is docketed as a publication keyed
+to the run alone, since there is no number, naming the branch and carrying the
+account, and it is counted as awaiting the forge with the harness named as the
+mover — so a forge that turns out to hold no request for the branch leaves a
+promotion every surface still names, not one only a sweep's stderr does. And the
+sweep asks the forge by the run's branch, which is the one durable handle it has
+left, writes the request the forge holds onto the record — number, state, and
+whether a merge is queued for it — and then makes the merge request the run
+itself never made. That is the run's own merge made late, on the run's own
+evidence and through the run's own gate: the record has to carry the promotion
+and the approving verdict, and the verdict is read off the record by the sweep
+before it asks rather than inferred from the promotion beside it; the request's
+head has to be the promoted commit; the remote target has to pass the same
+pre-merge check the run's merge makes; and the request is pinned to that commit,
+made by the same method, under the target branch's promotion lease.
 The forge's answer is recorded as a queued merge on either answer, exactly as a
 re-arm records one, and the next sweep settles the run on what the forge does
 with it — confirms the merge, records the merge commit, catches your local
-branch up, deletes the consumed branch. A request the forge has already merged,
-or already holds a merge for, needs no arming and is recorded as that; a request
+branch up, deletes the consumed branch, and closes the docket entry the
+promotion had open. A request the forge has already merged, or already holds a
+merge for, needs no arming and is recorded as that, with the account of the
+loss cleared because something has now asked the forge; a request
 whose head has moved, a remote target that no longer passes the check, or a
 merge the forge refuses is recorded as the dropped merge it is, which puts it on
 the docket for triage and holds the item exactly as a drop the run itself met.

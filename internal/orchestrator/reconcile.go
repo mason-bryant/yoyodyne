@@ -565,6 +565,18 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
 	result.Catchup = catchup
+	// A publication entry this merge had open — a promotion docketed with no
+	// request on its record, whose merge the recovering sweep then armed — is
+	// closed by the settlement that finished it, for the reason the finishing
+	// sweep closes its own: left open it would say a publication needs a person
+	// while the record says nothing about it is outstanding, and a docket rebuilt
+	// from the record would never re-derive it. A leftover the deletion wrote
+	// keeps the entry open, exactly as it does on the finishing sweep.
+	if err == nil && state.PublishFailure == "" && r.Docket != nil {
+		if _, docketErr := r.Docket.SettlePublication(state, settledPublicationReason(state)); docketErr != nil {
+			result.DocketProblem = docketErr.Error()
+		}
+	}
 	return result, err
 }
 

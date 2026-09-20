@@ -338,10 +338,11 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	// publication, and until yoyodyne-ifd.402 it returned nil over that: the run
 	// finished succeeded, nothing asked the forge to merge, and no surface said
 	// so, because every reading of an unfinished publication starts from the
-	// request. It is recorded as the outstanding publication it is, which holds
-	// the item out of the pull and puts the account on it; `yoyo reconcile` then
-	// looks the request up on the forge by the run's branch and records it, which
-	// is what puts the publication on the docket and the status line.
+	// request. It is recorded as the outstanding publication it is, in the one
+	// sentence the docket, the status line, and the recovering sweep all select
+	// on: the item is held out of the pull with the account on it, the docket and
+	// the status line name the promotion before anything has asked the forge, and
+	// `yoyo reconcile` looks the request up by the run's branch and arms it.
 	if a.outcome.PullRequest == nil {
 		a.recordPublishFailure(lostPublication(a.state.RunID, a.state.WorkItemID, integration.TargetBranch, a.worktree.Branch))
 		return nil
@@ -597,13 +598,11 @@ func (a *activeRun) recordPublishFailure(cause error) {
 }
 
 // lostPublication is what the record says about a promotion whose pull request
-// it does not hold. It names the branch because the branch is the one durable
-// handle the forge can still be asked by, and it names the sweep because the
-// sweep is what turns this line into a request on the docket and the status
-// line rather than an account only the work item carries.
+// it does not hold. The sentence is the durable schema's, because the docket,
+// the status line, and the recovering sweep all select on it: it is what tells
+// this record from a local promotion, which records no request and no failure.
 func lostPublication(runID, workItemID, targetBranch, branch string) error {
-	return fmt.Errorf("run %s promoted %s into %s and its record holds no pull request for branch %s, so nothing was asked of the forge; `yoyo reconcile` looks the request up on the forge by that branch and records it",
-		runID, workItemID, targetBranch, branch)
+	return errors.New(runstate.LostPublication(runID, workItemID, targetBranch, branch))
 }
 
 // publicationRecorded refuses to complete a run whose outcome names a pull

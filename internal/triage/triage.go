@@ -250,10 +250,12 @@ type Artifacts struct {
 }
 
 // Publication is an unfinished publication as the harness recorded it. There
-// are three of those and they are one thing here, because each is a change
+// are four of those and they are one thing here, because each is a change
 // whose promotion is local and whose publication is not: a merge the forge is
 // sitting on, a merge it dropped because a requirement of the base branch went
-// unmet, and a merge it performed that the harness could not then confirm.
+// unmet, a merge it performed that the harness could not then confirm, and a
+// promotion whose record holds no request at all — which names no number,
+// carries the branch the forge is asked by, and is keyed to the run alone.
 //
 // Nothing here is asked of the forge when an entry is made: it is what the run
 // or the reconciling sweep already observed, so building a docket costs no forge
@@ -995,7 +997,10 @@ func (e Entry) keys() []string {
 		return []string{AttemptKey(e.WorkItemID, e.Failure)}
 	}
 	derived := []string{Key(e.Class, e.RunID)}
-	if e.Class == ClassPublication && e.Publication != nil {
+	// A publication whose request is unrecorded has no number to key to, and is
+	// keyed to the run alone — the first shape above, which is also what an entry
+	// made before the request joined the key carries.
+	if e.Class == ClassPublication && e.Publication != nil && e.Publication.Number > 0 {
 		derived = append(derived, PublicationKey(e.RunID, e.Publication.Number))
 	}
 	return derived
@@ -1212,8 +1217,17 @@ func (e Entry) Validate() error {
 		if e.Publication == nil {
 			problems = append(problems, errors.New("a publication entry carries the publication it is about"))
 		} else {
+			// A publication whose request the record does not hold names no
+			// number; what it has to name instead is the branch the forge is asked
+			// by and the account of the loss, or the entry describes nothing a
+			// reader could go and look at.
 			if e.Publication.Number <= 0 {
-				problems = append(problems, errors.New("publication: number must be positive"))
+				if strings.TrimSpace(e.Publication.Branch) == "" {
+					problems = append(problems, errors.New("publication: a publication with no recorded request names the branch the forge is asked by"))
+				}
+				if strings.TrimSpace(e.Publication.Message) == "" {
+					problems = append(problems, errors.New("publication: a publication with no recorded request carries the account of why none is recorded"))
+				}
 			}
 			// A merged publication is finished work unless the harness recorded
 			// that finishing it did not complete — a merge it could not confirm
@@ -1764,6 +1778,16 @@ func (e Entry) renderArtifacts() string {
 func (e Entry) renderPublication() string {
 	published := *e.Publication
 	var rendered strings.Builder
+	// No number is the one publication the harness has no request to finish: the
+	// entry says so, names the branch the forge is asked by, and carries the
+	// account below rather than a forge state nothing has read.
+	if published.Number <= 0 {
+		fmt.Fprintf(&rendered, "      Pull request: none recorded for branch %s; `yoyo reconcile` looks it up on the forge by that branch, records it, and arms its merge\n", published.Branch)
+		if published.Message != "" {
+			rendered.WriteString(indented("Publication outstanding", published.Message))
+		}
+		return rendered.String()
+	}
 	fmt.Fprintf(&rendered, "      Pull request #%d %s\n", published.Number, published.URL)
 	merge := "the forge reports it unmerged"
 	switch {

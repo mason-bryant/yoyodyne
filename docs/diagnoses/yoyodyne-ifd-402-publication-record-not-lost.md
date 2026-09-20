@@ -104,45 +104,55 @@ on disk, and the request is already on disk by then.
 ## What this item changed anyway
 
 The shape the item describes has not occurred, and the code now refuses it in
-three places rather than trusting the argument above:
+four places rather than trusting the argument above:
 
 - `publishIntegration` no longer returns quietly over a promotion with no
   request on the record. A publishing run in that state records a
   `Publication outstanding` line naming the branch and saying nothing was asked
   of the forge, which holds the item out of the pull and puts the account on
-  it.
+  it. The sentence is the durable schema's (`runstate.LostPublication`), because
+  it is what tells this record from a local promotion and what every reader
+  below selects on (`State.PublicationUnrecorded`).
 - `complete` reads the record back from the store and refuses to complete a
   run whose outcome names a request the record does not hold, holds as a
   different number, or holds in a different arming state (merge queued, merged,
   merge method); the run is recorded failed with the reason.
+- The docket and the status line name the promotion from that record, before
+  any sweep has asked the forge: it is docketed as a publication keyed to the
+  run alone — there is no number — naming the branch and carrying the account,
+  and the read model counts it as awaiting the forge with the harness as the
+  mover. A forge that holds no request for the branch therefore leaves a
+  promotion every surface still names, on every sweep it stands.
 - `yoyo reconcile` gains a recovery sweep ahead of the publication refresh:
-  a terminal, promoted run whose record says it published and holds no request
-  is looked up on the forge by its branch, the request the forge holds is
-  written onto the record — number, URL, state, whether a merge is queued —
+  a terminal, promoted run whose record carries that account and the approving
+  verdict is looked up on the forge by its branch, the request the forge holds
+  is written onto the record — number, URL, state, whether a merge is queued —
   and the merge the run never asked for is armed. That is the run's own merge
-  made late, through the run's own gate: the record carries the promotion and
-  the approving verdict, the request's head must be the promoted commit, the
-  remote target must pass the same pre-merge check `publishIntegration` makes,
-  and the request is pinned to that commit, by the same method, under the
-  target branch's promotion lease. The forge's answer is recorded queued on
-  either answer, as a re-arm records one, and the next sweep's run settlement
-  finishes the publication. A request already merged or already holding a
-  merge is recorded as that and left to the sweeps that finish those; a moved
-  head, a remote target that no longer passes, or a forge refusal is recorded
-  as the dropped merge it is, which is what dockets it for triage. The sweep
-  never repeats a dropped merge — that stays `yoyo triage rearm`, a decision.
+  made late, through the run's own gate: the verdict is read off the record at
+  the action rather than inferred from the promotion beside it, the request's
+  head must be the promoted commit, the remote target must pass the same
+  pre-merge check `publishIntegration` makes, and the request is pinned to that
+  commit, by the same method, under the target branch's promotion lease. The
+  forge's answer is recorded queued on either answer, as a re-arm records one,
+  and the next sweep's run settlement finishes the publication and closes the
+  docket entry. A request already merged or already holding a merge is recorded
+  as that, with the account of the loss cleared, and left to the sweeps that
+  finish those; a moved head, a remote target that no longer passes, or a forge
+  refusal is recorded as the dropped merge it is, on the same docket entry. The
+  sweep never repeats a dropped merge — that stays `yoyo triage rearm`.
 - Every docket entry about a run that published — stopped, escalated, or a
   death — names the pull request beside the branch, so the development manager
   reads the open request where the run's other artifacts are.
 
-The recovery selects on the run's own account of the loss — the outstanding
-publication `publishIntegration` now writes — and not on the bare shape of a
-promotion with no request, because the record carries nothing that tells a
-local run from a publishing one and the reconciler is wired with forge access
-either way. The store held thirteen records of that bare shape when this was
-written, every one completed on 2026-08-15 or 2026-08-16 — before or on the
-day publishing landed (yoyodyne-ifd.29, merged 2026-08-16) — and every one a
-local promotion; they are out of scope, and nothing written since has the shape.
+The recovery, the docket, and the status line all select on the run's own
+account of the loss — the sentence `publishIntegration` now writes — and not on
+the bare shape of a promotion with no request, because the record carries
+nothing else that tells a local run from a publishing one and the reconciler is
+wired with forge access either way. The store held thirteen records of that
+bare shape when this was written, every one completed on 2026-08-15 or
+2026-08-16 — before or on the day publishing landed (yoyodyne-ifd.29, merged
+2026-08-16) — and every one a local promotion; they are out of scope, and
+nothing written since has the shape.
 
 ## Tests
 
@@ -151,7 +161,11 @@ local promotion; they are out of scope, and nothing written since has the shape.
 `TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge` for 141.3, the
 latter asserting the docket entry now names the request — and holds the rest:
 the completion refusal on a missing request and on a disagreeing arming state,
-the run-side account, and the reconcile recovery — the merge armed and then
-settled by the next sweep, a forge refusal docketed for triage, a request whose
-head moved left unarmed, a request already merged finished by the next sweep,
-and a forge that holds no request for the branch.
+the run-side account, the requestless promotion docketed and counted before any
+sweep runs (with `TestAPromotionAwaitingTheForgeNeedsAHuman` in `readmodel`
+holding the status line's words), and the reconcile recovery — the merge armed
+and then settled by the next sweep with the docket entry closed, a forge refusal
+docketed for triage, a request whose head moved left unarmed, a request already
+merged finished by the next sweep, a request somebody queued by hand settled by
+the next sweep, nothing armed without the recorded approval, and a forge that
+holds no request for the branch.

@@ -1011,7 +1011,12 @@ func unstartedRun(state runstate.State) bool {
 func stuckPublication(state runstate.State, now time.Time, stuckMergeAge time.Duration) bool {
 	published := state.PullRequest
 	if published == nil {
-		return false
+		// A promotion whose record holds no request is docketed from the record's
+		// own account of that, before anything has asked the forge: it is the one
+		// publication the harness has no request to finish, and an entry that
+		// waited for the request would wait for exactly the sweep whose failure
+		// leaves this standing.
+		return state.PublicationUnrecorded()
 	}
 	// A run still in flight owns its own publication, and a parked one is owed
 	// the rest of its own step. Neither is work that has stopped.
@@ -1200,13 +1205,21 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 	if err != nil {
 		return triage.Entry{}, err
 	}
-	published := *state.PullRequest
+	// The publication is keyed to the run and the pull request together, so what
+	// an entry is about is two durable facts a reader can check rather than
+	// something anybody has to infer from the state of the item. A record that
+	// holds no request is keyed to the run alone, which is the shape the re-arm
+	// and the docketed check both already read; the request the sweep recovers
+	// afterwards joins the same entry rather than opening a second.
+	var published runstate.PullRequest
+	key := triage.Key(triage.ClassPublication, state.RunID)
+	if state.PullRequest != nil {
+		published = *state.PullRequest
+		key = triage.PublicationKey(state.RunID, published.Number)
+	}
 	entry := triage.Entry{
 		SchemaVersion: triage.SchemaVersion,
-		// The publication is keyed to the run and the pull request together, so
-		// what an entry is about is two durable facts a reader can check rather
-		// than something anybody has to infer from the state of the item.
-		Key:           triage.PublicationKey(state.RunID, published.Number),
+		Key:           key,
 		Class:         triage.ClassPublication,
 		ProductID:     state.ProductID,
 		RunID:         state.RunID,
@@ -1217,9 +1230,11 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 		Findings:      docketFindings(state.ReviewFindingDetails),
 		Artifacts:     docketArtifacts(state),
 		Publication: &triage.Publication{
-			Number:      published.Number,
-			URL:         published.URL,
-			Branch:      published.Branch,
+			Number: published.Number,
+			URL:    published.URL,
+			// The branch is the run's own where no request is recorded: it is
+			// what the forge is asked by, and the one handle the entry can name.
+			Branch:      nonEmpty(published.Branch, state.Branch),
 			HeadCommit:  published.HeadCommit,
 			State:       published.State,
 			Merged:      published.Merged,
