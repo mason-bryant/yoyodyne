@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -410,6 +411,424 @@ func TestTheTranscriptSaysARefreshHappened(t *testing.T) {
 	if !strings.Contains(commandHelp, "/refresh") {
 		t.Fatalf("help does not list /refresh: %q", commandHelp)
 	}
+}
+
+// The CLAUDE.md case, replayed with the repository reachable. The product
+// manager's picture is 500 landings behind the target branch; before its reply
+// is answered the harness re-reads the repository, and what the role is handed
+// is the file as it stands rather than the copy in its month-old briefing. The
+// operator is told the re-read happened, and the record says how old the
+// picture was.
+func TestAPicturePastTheThresholdIsReReadBeforeTheTurnIsAnswered(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-11", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		{SessionID: "session-11", ResolvedModel: "claude-opus-5", FinalText: "CLAUDE.md already opens with that section; there is nothing to add."},
+	}}
+	ground := &fakeGround{briefing: Briefing{
+		Text:       "# Product context\n\nCLAUDE.md opens with a section saying a developer run never writes to the tracker.\n",
+		GatheredAt: fixedClock{}.Now(),
+		Commit:     "b2b2b2b2",
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Briefing.GatheredAt = gatheredAt
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "Remember that."); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if ground.gathers != 0 {
+		t.Fatalf("a picture nothing had moved under was re-read %d time(s)", ground.gathers)
+	}
+
+	ground.movement = Movement{Commits: 500, TrackerChanges: 40}
+	reply, err := session.Send(context.Background(), "Should CLAUDE.md say developer runs never use the tracker?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if ground.gathers != 1 {
+		t.Fatalf("the stale picture was re-read %d time(s), want once before the turn", ground.gathers)
+	}
+	// What the role was handed is the repository as it stands, framed as the
+	// harness's own re-read with the number that caused it.
+	prompt := provider.requests[1].Prompt
+	for _, required := range []string{
+		"# Refreshed product context",
+		"The harness re-read the repository and the tracker before answering this turn",
+		"500 landings behind the target branch, past the 20 this project allows",
+		"CLAUDE.md opens with a section saying a developer run never writes to the tracker.",
+		"Should CLAUDE.md say developer runs never use the tracker?",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("the turn over a stale picture = %q, want it to carry %q", prompt, required)
+		}
+	}
+	if strings.Contains(prompt, "Your picture of the repository is stale") {
+		t.Fatalf("a re-read picture was also delivered as stale: %q", prompt)
+	}
+	// The reply is answered from the new picture, so it carries no disclaimer,
+	// and the operator is told what the harness did.
+	if strings.Contains(reply.Text, "landings behind") {
+		t.Fatalf("a reply answered from a fresh picture disclaims its age: %q", reply.Text)
+	}
+	if reply.Picture == nil || reply.Picture.Outcome != PictureRefreshed || reply.Picture.Landings != 500 || reply.Picture.RefreshedBy != "harness" {
+		t.Fatalf("reply.Picture = %#v, want a harness refresh of a picture 500 landings old", reply.Picture)
+	}
+	rendered := reply.Picture.Render()
+	if !strings.Contains(rendered, "500 landings behind the target branch") || !strings.Contains(rendered, "re-read the repository and the tracker before answering") {
+		t.Fatalf("PictureAge.Render() = %q", rendered)
+	}
+	// The record says how old the picture was at each reply, and that this one
+	// was refreshed before it was answered.
+	measured := eventsOfType(t, root, session, execution.EventContextMeasured)
+	if len(measured) != 2 {
+		t.Fatalf("recorded measurements = %d, want one per reply", len(measured))
+	}
+	var first, second PictureAge
+	if err := json.Unmarshal(measured[0].Payload, &first); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if err := json.Unmarshal(measured[1].Payload, &second); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if first.Outcome != PictureCurrent || first.Landings != 0 || first.Threshold != DefaultRefreshAfterLandings {
+		t.Fatalf("first measurement = %#v, want current at the default threshold", first)
+	}
+	if second.Outcome != PictureRefreshed || second.Landings != 500 || second.TrackerChanges != 40 || second.Commit != "a1a1a1a1" || !second.GatheredAt.Equal(gatheredAt) {
+		t.Fatalf("second measurement = %#v, want a refresh of the recorded picture", second)
+	}
+	if counted := countEvents(t, root, session); counted[execution.EventContextRefreshed] != 1 {
+		t.Fatalf("recorded refresh events = %#v", counted)
+	}
+	// And the delivered picture is what the conversation works from now, so the
+	// next reply is measured against it rather than against the one it replaced.
+	ground.movement = Movement{}
+	provider.results = append(provider.results, backendapi.RunResult{SessionID: "session-11", ResolvedModel: "claude-opus-5", FinalText: "Still."})
+	if _, err := session.Send(context.Background(), "Anything else?"); err != nil {
+		t.Fatalf("third Send() error = %v", err)
+	}
+	if compared := ground.compared[len(ground.compared)-1]; compared.Commit != "b2b2b2b2" {
+		t.Fatalf("the third reply was measured against %#v, want the refreshed picture", compared)
+	}
+	if ground.gathers != 1 {
+		t.Fatalf("a current picture was re-read; gathers = %d", ground.gathers)
+	}
+}
+
+// The same case with the repository unreachable for the re-read. The reply is
+// still given — the operator asked a question — and it says in its own text
+// how many landings old the picture it was answered from is, whatever the role
+// itself chose to say. The role is told too, so its advice can say which claims
+// rest on the old picture.
+func TestAStalePictureTheHarnessCannotReReadSaysHowOldItIsInTheReply(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-12", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		{SessionID: "session-12", ResolvedModel: "claude-opus-5", FinalText: "Add a section to CLAUDE.md saying developer runs never use the tracker."},
+	}}
+	ground := &fakeGround{}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Briefing.GatheredAt = gatheredAt
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "Remember that."); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	ground.movement = Movement{Commits: 500}
+	ground.err = errors.New("bd list failed: the store is locked")
+	reply, err := session.Send(context.Background(), "Should CLAUDE.md say developer runs never use the tracker?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	// The reply's own text carries the age, ahead of the advice.
+	for _, required := range []string{
+		"500 landings behind the target branch, past the 20 this project allows",
+		"could not re-read it before answering",
+		"the store is locked",
+		"/refresh",
+	} {
+		if !strings.Contains(reply.Text, required) {
+			t.Fatalf("reply.Text = %q, want it to say %q", reply.Text, required)
+		}
+	}
+	if strings.Index(reply.Text, "500 landings") > strings.Index(reply.Text, "Add a section") {
+		t.Fatalf("the age follows the advice it qualifies: %q", reply.Text)
+	}
+	if reply.Picture == nil || reply.Picture.Outcome != PictureStated || reply.Picture.Landings != 500 || !strings.Contains(reply.Picture.RefreshProblem, "the store is locked") {
+		t.Fatalf("reply.Picture = %#v, want a stated age with the reason the re-read failed", reply.Picture)
+	}
+	// The role was told the same thing, in the turn, and asked to say so.
+	prompt := provider.requests[1].Prompt
+	for _, required := range []string{
+		"# Your picture of the repository is stale",
+		"500 landings since, past the 20 this project allows",
+		"the store is locked",
+		"say plainly in your reply how many landings old the picture is",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("the turn over an unrefreshable picture = %q, want it to carry %q", prompt, required)
+		}
+	}
+	if strings.Contains(prompt, "# Refreshed product context") {
+		t.Fatalf("a failed re-read reached the role as a refresh: %q", prompt)
+	}
+	// Nothing was adopted: the conversation still works from the old picture,
+	// and the record says the age was stated rather than refreshed.
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.ContextGatheredAt.Equal(gatheredAt) || recorded.ContextCommit != "a1a1a1a1" {
+		t.Fatalf("a failed re-read moved the recorded picture: %#v", recorded)
+	}
+	measured := eventsOfType(t, root, session, execution.EventContextMeasured)
+	if len(measured) != 2 {
+		t.Fatalf("recorded measurements = %d, want one per reply", len(measured))
+	}
+	var age PictureAge
+	if err := json.Unmarshal(measured[1].Payload, &age); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if age.Outcome != PictureStated || age.Landings != 500 || age.RefreshProblem == "" {
+		t.Fatalf("recorded measurement = %#v, want the stated age and why", age)
+	}
+	if !strings.Contains(reply.Picture.Render(), "could not re-read it") {
+		t.Fatalf("PictureAge.Render() = %q", reply.Picture.Render())
+	}
+}
+
+// A picture within the threshold is answered from as it stands. Nothing is
+// re-read, nothing is said in the reply, and the record still says how old it
+// was — every reply, not only the ones something was done about.
+func TestACurrentPictureIsMeasuredAndLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-13", ResolvedModel: "claude-opus-5", FinalText: "First."},
+		{SessionID: "session-13", ResolvedModel: "claude-opus-5", FinalText: "Second."},
+	}}
+	ground := &fakeGround{movement: Movement{Commits: 20, TrackerChanges: 2}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	session := openTestSession(t, options)
+	for _, message := range []string{"one", "two"} {
+		reply, err := session.Send(context.Background(), message)
+		if err != nil {
+			t.Fatalf("Send(%q) error = %v", message, err)
+		}
+		if reply.Picture == nil || reply.Picture.Outcome != PictureCurrent || reply.Picture.Landings != 20 {
+			t.Fatalf("reply.Picture = %#v, want a current picture 20 landings old", reply.Picture)
+		}
+		if reply.Picture.Render() != "" {
+			t.Fatalf("a current picture was reported: %q", reply.Picture.Render())
+		}
+		if strings.Contains(reply.Text, "landings") {
+			t.Fatalf("a current picture was disclaimed: %q", reply.Text)
+		}
+	}
+	if ground.gathers != 0 {
+		t.Fatalf("a picture at the threshold was re-read %d time(s); the threshold is exceeded, not met", ground.gathers)
+	}
+	if measured := eventsOfType(t, root, session, execution.EventContextMeasured); len(measured) != 2 {
+		t.Fatalf("recorded measurements = %d, want one per reply", len(measured))
+	}
+	for _, request := range provider.requests {
+		if strings.Contains(request.Prompt, "picture of the repository") {
+			t.Fatalf("a current picture was mentioned to the role: %q", request.Prompt)
+		}
+	}
+}
+
+// An age the repository would not give is not a current picture. The reply
+// says the age is unknown rather than nothing, because "nothing to say" from a
+// broken comparison is the confident staleness this whole thing exists to end.
+func TestAnUnmeasurableAgeIsStatedRatherThanReadAsCurrent(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-14", ResolvedModel: "claude-opus-5", FinalText: "Here is my advice."},
+	}}
+	ground := &fakeGround{
+		movement: Movement{RepositoryProblem: "the commit it was gathered at was not recorded"},
+		briefing: Briefing{Text: "# Product context\n\nNewer.\n", GatheredAt: fixedClock{}.Now()},
+	}
+	options := testOptions(t, provider)
+	options.Ground = ground
+	session := openTestSession(t, options)
+	reply, err := session.Send(context.Background(), "What should change?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if reply.Picture == nil || reply.Picture.Outcome != PictureUnmeasured {
+		t.Fatalf("reply.Picture = %#v, want an unmeasured age", reply.Picture)
+	}
+	for _, required := range []string{"could not measure how far behind the target branch", "was not recorded", "Here is my advice."} {
+		if !strings.Contains(reply.Text, required) {
+			t.Fatalf("reply.Text = %q, want it to say %q", reply.Text, required)
+		}
+	}
+	if !strings.Contains(provider.requests[0].Prompt, "# The age of your picture of the repository is unknown") {
+		t.Fatalf("the role was not told its picture's age is unknown: %q", provider.requests[0].Prompt)
+	}
+	// It is not refreshed either: a re-read taken on every turn because the
+	// repository cannot count is a re-read on every turn.
+	if ground.gathers != 0 {
+		t.Fatalf("an unmeasurable picture was re-read %d time(s)", ground.gathers)
+	}
+}
+
+// The threshold is a number a project sets, and it is not a switch. A value
+// past what the harness permits is held to the harness's bound, so a picture
+// hundreds of landings behind is re-read whatever the configuration says.
+func TestTheRefreshThresholdSelectsWhenAndCannotTurnTheReReadOff(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-15", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		{SessionID: "session-15", ResolvedModel: "claude-opus-5", FinalText: "Still noted."},
+		{SessionID: "session-15", ResolvedModel: "claude-opus-5", FinalText: "And again."},
+	}}
+	ground := &fakeGround{briefing: Briefing{Text: "# Product context\n\nNewer.\n", GatheredAt: fixedClock{}.Now(), Commit: "b2b2b2b2"}}
+	options := testOptions(t, provider)
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	options.RefreshAfterLandings = 1_000_000
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "first"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	// Within the harness's bound the configured number is not reached, and the
+	// bound is what the record names as the threshold.
+	ground.movement = Movement{Commits: MaxRefreshAfterLandings}
+	reply, err := session.Send(context.Background(), "second")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if reply.Picture.Outcome != PictureCurrent || reply.Picture.Threshold != MaxRefreshAfterLandings {
+		t.Fatalf("reply.Picture = %#v, want current at the harness's bound", reply.Picture)
+	}
+	// Past it the re-read happens, however large the configured number.
+	ground.movement = Movement{Commits: 500}
+	reply, err = session.Send(context.Background(), "third")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if reply.Picture.Outcome != PictureRefreshed || ground.gathers != 1 {
+		t.Fatalf("reply.Picture = %#v with %d re-read(s), want the picture re-read past the bound", reply.Picture, ground.gathers)
+	}
+	if !strings.Contains(provider.requests[2].Prompt, "past the 200 this project allows") {
+		t.Fatalf("the role was told a threshold other than the bound: %q", provider.requests[2].Prompt)
+	}
+}
+
+// A refresh the operator asked for is delivered on the next turn exactly as it
+// was, and is recorded as the operator's: the measurement says the turn was
+// answered from a refreshed picture without measuring the drift a second time,
+// and nothing is reported that /refresh did not already say.
+func TestAnOperatorsRefreshIsRecordedAsTheirsWhenTheTurnDeliversIt(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-16", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		{SessionID: "session-16", ResolvedModel: "claude-opus-5", FinalText: "Reconciled."},
+	}}
+	ground := &fakeGround{
+		movement: Movement{Commits: 3},
+		briefing: Briefing{Text: "# Product context\n\nNewer.\n", GatheredAt: fixedClock{}.Now(), Commit: "b2b2b2b2"},
+	}
+	options := testOptions(t, provider)
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "first"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if _, err := session.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	compared := len(ground.compared)
+	reply, err := session.Send(context.Background(), "second")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(ground.compared) != compared {
+		t.Fatalf("the turn delivering a refresh measured the drift again: %d comparisons, want %d", len(ground.compared), compared)
+	}
+	if reply.Picture == nil || reply.Picture.Outcome != PictureRefreshed || reply.Picture.RefreshedBy != "operator" || reply.Picture.Landings != 3 {
+		t.Fatalf("reply.Picture = %#v, want the operator's refresh of a picture 3 landings old", reply.Picture)
+	}
+	if reply.Picture.Render() != "" {
+		t.Fatalf("the operator's own refresh was reported back to them: %q", reply.Picture.Render())
+	}
+	if !strings.Contains(provider.requests[1].Prompt, "The operator had the harness re-read") {
+		t.Fatalf("an operator's refresh was framed as the harness's: %q", provider.requests[1].Prompt)
+	}
+}
+
+// The transcript of an interactive conversation says the harness re-read the
+// picture before answering, where it did. A re-read the operator never asked
+// for and is never told about is a briefing that changed under them.
+func TestTheTranscriptSaysTheHarnessReReadAStalePicture(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-17", ResolvedModel: "claude-opus-5", FinalText: "From the new picture."},
+	}}
+	root := t.TempDir()
+	first := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-17", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+	}})
+	first.Store = newTestStore(t, root)
+	first.Briefing.Commit = "a1a1a1a1"
+	if _, err := openTestSession(t, first).Send(context.Background(), "Remember that."); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Ground = &fakeGround{
+		movement: Movement{Commits: 41},
+		briefing: Briefing{Text: "# Product context\n\nNewer.\n", GatheredAt: fixedClock{}.Now(), Commit: "b2b2b2b2"},
+	}
+	session := openTestSession(t, options)
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("What now?\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	transcript := out.String()
+	for _, required := range []string{
+		"From the new picture.",
+		"[picture] 41 landings behind the target branch, past the 20 this project allows; the harness re-read the repository and the tracker before answering",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to say %q", transcript, required)
+		}
+	}
+}
+
+// eventsOfType is the conversation's recorded events of one type, in order.
+func eventsOfType(t *testing.T, root string, session *Session, eventType execution.EventType) []execution.Event {
+	t.Helper()
+
+	var matching []execution.Event
+	for _, event := range loadTestEvents(t, root, session) {
+		if event.Type == eventType {
+			matching = append(matching, event)
+		}
+	}
+	return matching
 }
 
 func TestAgeOfSaysHowLongAgoInTheCoarsestUnitThatIsTrue(t *testing.T) {

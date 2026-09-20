@@ -60,15 +60,20 @@ type Config struct {
 	Version int `yaml:"version" json:"version"`
 	// Extends names the built-in bundle this configuration inherits from, and
 	// is empty for a complete standalone configuration.
-	Extends   string                 `yaml:"extends,omitempty" json:"extends,omitempty"`
-	Product   Product                `yaml:"product" json:"product"`
-	Execution Execution              `yaml:"execution" json:"execution"`
-	Triage    Triage                 `yaml:"triage" json:"triage"`
-	Exchange  Exchange               `yaml:"exchange" json:"exchange"`
-	Research  Research               `yaml:"research,omitempty" json:"research,omitempty"`
-	Approvals Approvals              `yaml:"approvals" json:"approvals"`
-	Checks    []string               `yaml:"checks" json:"checks"`
-	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
+	Extends   string    `yaml:"extends,omitempty" json:"extends,omitempty"`
+	Product   Product   `yaml:"product" json:"product"`
+	Execution Execution `yaml:"execution" json:"execution"`
+	Triage    Triage    `yaml:"triage" json:"triage"`
+	Exchange  Exchange  `yaml:"exchange" json:"exchange"`
+	// Conversation is what a management conversation's picture of the
+	// repository is held to. It is always present, at the harness default where
+	// a project writes nothing, because the measurement it times is not
+	// something a project opts into.
+	Conversation Conversation           `yaml:"conversation" json:"conversation"`
+	Research     Research               `yaml:"research,omitempty" json:"research,omitempty"`
+	Approvals    Approvals              `yaml:"approvals" json:"approvals"`
+	Checks       []string               `yaml:"checks" json:"checks"`
+	Agents       map[string]AgentConfig `yaml:"agents" json:"agents"`
 	// Accounts are the provider accounts this project runs agents under, keyed by
 	// the alias each one is named by. It is top level rather than under `agents`
 	// because an account is a thing several agents share: which roles run on which
@@ -502,6 +507,47 @@ type Exchange struct {
 // amount before it reaches the operator.
 const defaultExchangeMaxRounds = exchange.DefaultMaxRounds
 
+// Conversation is what a management conversation's picture of the repository
+// is held to. The picture — specifications, tracker, and the rest of the
+// briefing — is gathered when a conversation opens and sent on its first turn,
+// and every later turn resumes a session that already holds it. Before each
+// reply the harness measures how far that picture has fallen behind the target
+// branch, in landings rather than hours, and past the threshold here it
+// re-reads the repository and the tracker before the turn is answered. Where
+// the re-read cannot be made, the reply says in its own text how many landings
+// old its picture is.
+//
+// The threshold is a project's judgement about its own pace: how many landings
+// a conversation may reason across before what it does not know it does not
+// know is worth the cost of re-briefing it. What it is not is a switch. No value
+// turns the measurement, the re-read, or the statement off, which is what the
+// upper bound below is for.
+type Conversation struct {
+	// RefreshAfterLandings is how many landings on the target branch the picture
+	// may fall behind before a turn re-reads it. A project that states nothing
+	// gets the harness default. Zero is refused rather than read as a choice,
+	// like the exchange rounds: a picture that may fall no landings behind is
+	// re-read on every turn, which is a threshold of nothing. A number above
+	// MaxRefreshAfterLandings is refused rather than accepted as a way of never
+	// refreshing.
+	RefreshAfterLandings int `yaml:"refresh_after_landings" json:"refresh_after_landings"`
+}
+
+// DefaultRefreshAfterLandings is a day or so of landings on a busy branch: a
+// conversation left open overnight is re-briefed before its first reply the
+// next morning, and one held over an afternoon is not re-briefed at all, since a
+// refresh carries the whole briefing into the turn again and is the most
+// expensive thing a conversation does short of a run.
+//
+// MaxRefreshAfterLandings bounds what a project may set. The case this exists
+// for was a picture roughly five hundred landings behind, and a threshold that
+// let one be advised from unrefreshed and unlabelled would be the configuration
+// disabling the statement it is only meant to time.
+const (
+	DefaultRefreshAfterLandings = 20
+	MaxRefreshAfterLandings     = 200
+)
+
 // Research is what this project permits the product manager to find out from
 // outside the repository, and what it is bounded by. Every part of it is a
 // judgement an operator makes about their own money, their own privacy, and
@@ -838,6 +884,16 @@ func (c Config) Validate() error {
 	// is.
 	if c.Exchange.MaxRounds < 1 {
 		problems = append(problems, "exchange.max_rounds must be at least 1")
+	}
+	// Zero is not a choice here either — a picture that may fall no landings
+	// behind is re-read on every turn, which is a threshold of nothing rather
+	// than a choice about pace — and neither is a number past the bound: the
+	// threshold times the re-read and does not switch it off.
+	if c.Conversation.RefreshAfterLandings < 1 {
+		problems = append(problems, "conversation.refresh_after_landings must be at least 1")
+	}
+	if c.Conversation.RefreshAfterLandings > MaxRefreshAfterLandings {
+		problems = append(problems, fmt.Sprintf("conversation.refresh_after_landings must be at most %d; the threshold times the re-read and cannot turn it off", MaxRefreshAfterLandings))
 	}
 	problems = append(problems, c.Research.problems()...)
 

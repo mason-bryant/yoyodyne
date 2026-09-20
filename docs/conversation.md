@@ -1090,8 +1090,8 @@ roles whatever the configuration says. It is also not a substitute for
 read samples what a role thinks to read, and what a stale picture costs is what
 it does not know it does not know. The case that admitted this — a product
 manager advising, from a month-old briefing, that CLAUDE.md gain a section it
-had opened with for weeks — is now a read before the advice, and the refresh
-discipline still stands beside it.
+had opened with for weeks — is now a read before the advice, and a picture that
+far behind is re-read by the harness before the turn is answered at all.
 
 ### Roles asking each other things
 
@@ -1963,6 +1963,10 @@ large to read to the end, are both reported as unknown rather than as unchanged,
 because a truncated comparison that answered "nothing moved" would be the same
 false confidence in a smaller place. A one-shot `--message` says the same line on
 stderr, where it cannot disturb the reply on stdout or the `--json` document.
+Where the commits are past the threshold below, the line says so and what
+follows from it — `That is past the 20 landings this project allows, so the next
+reply re-reads it first; /refresh reads it now.` — so nothing on it is left for
+you to decide that the next reply decides anyway.
 
 `/refresh` re-reads the repository and the tracker into the running
 conversation. It discards nothing: what has been said stays said, and the new
@@ -1972,6 +1976,41 @@ having it swapped underneath. The transcript says the refresh happened, the
 conversation's own log records it, and the durable record only says the
 conversation is working from the new picture once a turn has actually carried
 it — a refresh nobody was told about never reads as one that landed.
+
+**The harness refreshes on its own past a threshold.** The line above turned
+out not to be enough: on 2026-09-18 the product manager advised adding a
+section to CLAUDE.md that the file at HEAD had opened with for a month, from a
+picture roughly 500 landings old, and the freshness line had said so every time
+the conversation resumed. A line you have to act on is a line somebody
+eventually reads past. So before every reply — every one, the first included —
+the harness measures how far the picture has fallen behind the target branch,
+in landings rather than hours, and writes the answer to the conversation's log
+as a `context.measured` event: when the picture was gathered, against which
+commit, how many landings and tracker changes since, the threshold, and what
+was done about it. Past the threshold — `conversation.refresh_after_landings`,
+20 unless [you set it](configuration.md#how-far-behind-a-conversations-picture-may-fall)
+— the harness re-reads the repository and the tracker before the turn is
+answered, exactly as `/refresh` does and with the same framing to the role, and
+the transcript and `--json` (`picture`) tell you afterwards:
+
+```text
+[picture] 41 landings behind the target branch, past the 20 this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded.
+```
+
+Where the re-read cannot be made — the tracker is locked, the repository will
+not answer — the reply is still given, and it says in its own text, ahead of
+whatever the role goes on to say, how many landings old the picture it was
+answered from is and why it could not be brought current. The role is told the
+same thing in its turn and asked to say which of its claims rest on the old
+picture; the sentence in the reply is the harness's, so it is there whatever the
+role chose to say. An age the repository would not give at all — a conversation
+recorded before commits were, a `git` that fails — is stated the same way rather
+than read as current, and a `/refresh` that lands is what clears it.
+
+The threshold is a number about your project's pace and not a switch: it may
+not be zero, it may not be more than 200, and no value turns the measurement,
+the re-read, or the statement off. A picture within it is answered from as it
+stands, with nothing said and the age still on the record.
 
 It was never frozen entirely. Every turn carries what you did through the
 harness since the last reply — the runs you started, stopped, and redirected —
@@ -1984,7 +2023,9 @@ it rather than describing the copy in its briefing. Nothing outside those comman
 arrives on its own — an item something else created or closed reaches the
 conversation when the product manager asks, by surveying or by acting on it, and
 not before — and edits under `docs/product` do not reach it that way at all, since
-the tracker does not hold them. That is what `/refresh` is for.
+the tracker does not hold them. That is what `/refresh` is for, and what the
+harness's own refresh does once enough has landed; between the two, `/refresh`
+is how you bring an edit in before the threshold would.
 
 `--new` is a different tool rather than the answer to staleness. A refreshed
 conversation and a new one end up equally current; they differ in what they

@@ -423,9 +423,13 @@ type Options struct {
 	// Ground is the repository and the tracker the picture came from, kept so
 	// the conversation can say what has moved since and take a new picture when
 	// the operator asks. It is optional like the rest.
-	Ground       Ground
-	RedactValues []string
-	Timeout      time.Duration
+	Ground Ground
+	// RefreshAfterLandings is how many landings on the target branch the picture
+	// may fall behind before a turn re-reads it unasked. Zero takes the harness
+	// default, and nothing turns the re-read off: see refreshAfterLandings.
+	RefreshAfterLandings int
+	RedactValues         []string
+	Timeout              time.Duration
 	// StopGrace bounds how long stopping waits for a cancelled run to give up
 	// before reporting that it is still winding down.
 	StopGrace time.Duration
@@ -684,6 +688,13 @@ type Reply struct {
 	// research is: a read already happened and is recorded, and what a reply's
 	// advice rests on is something the operator reading it is owed.
 	RepositoryReads []RepositoryRound `json:"repository_reads,omitempty"`
+	// Picture is how old the picture of the repository this reply was answered
+	// from was, in landings on the target branch, and what the harness did about
+	// it: nothing where it was current, a re-read before the turn where it was
+	// past the threshold, and a statement in the reply's own text where the
+	// re-read could not be made. It is nil only where there was nothing to
+	// measure with: a conversation with no repository behind it.
+	Picture *PictureAge `json:"picture,omitempty"`
 	// Evaluation is the recommendation this reply recorded, where it recorded
 	// one. It is advice: nothing was admitted, approved, or changed by it, and it
 	// is here so the operator is told what went into the record.
@@ -980,7 +991,32 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// under a later message is told again rather than passed over as old news.
 	s.usageLimitWaited = 0
 	s.notedRefusal = ""
-	prompt := s.turnPrompt(trimmed)
+	// How old the picture this answer will rest on is, measured before the prompt
+	// is built because the answer to it changes what the prompt carries: a
+	// picture past the threshold is re-read here and delivered below, and one
+	// that could not be re-read is delivered with its age. A measurement the
+	// record would not take fails the message before the provider is asked, for
+	// the reason a refresh that could not be recorded does: an answer whose
+	// picture the record cannot say the age of is the exact gap this closes.
+	picture, err := s.measurePicture(ctx)
+	reply.Picture = picture
+	if err != nil {
+		reply.Evidence = s.Evidence()
+		return reply, err
+	}
+	// Where the harness could not bring the picture current, the reply says so
+	// in its own text, ahead of whatever the role goes on to say: the caveat on
+	// advice belongs before the advice. It is written to the screen now, where
+	// the reply is being shown as it forms, so the operator reads it in the same
+	// place either way.
+	if picture != nil {
+		if statement := picture.statement(); statement != "" {
+			reply.Text = statement
+			s.stream.write(statement + "\n")
+			s.stream.endMessage()
+		}
+	}
+	prompt := s.turnPrompt(trimmed, picture)
 	// chargeTo is the exchange the next invocation belongs to, set when a round of
 	// asking is delivered into it. asksTaken bounds how much asking one message
 	// may set off, which is a different question from how long one thread may run.
@@ -2216,6 +2252,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// reply that rests on a file is one the operator should be able to hold
 		// against the commit the file was read at.
 		s.reportRepositoryReads(out, reply)
+		// How old the picture the reply rests on was and what the harness did
+		// about it, where it did anything: a re-read the operator never asked for
+		// is a re-read they have to be told about, and a re-read that could not be
+		// made is why the reply above carries its own age.
+		s.reportPicture(out, reply)
 		s.reportEvaluation(out, reply)
 		// What one role asked another is reported beside it, for the same reason
 		// and one more: an exchange nobody is told about is exactly the side
@@ -2524,6 +2565,21 @@ func (s *Session) reportRepositoryReads(out io.Writer, reply Reply) {
 	for _, round := range reply.RepositoryReads {
 		fmt.Fprint(out, round.Render())
 	}
+	fmt.Fprintln(out)
+}
+
+// reportPicture tells the operator what the harness did about the age of the
+// picture the reply was answered from, where it did anything. A current
+// picture says nothing, for the reason the render says nothing.
+func (s *Session) reportPicture(out io.Writer, reply Reply) {
+	if reply.Picture == nil {
+		return
+	}
+	rendered := reply.Picture.Render()
+	if rendered == "" {
+		return
+	}
+	fmt.Fprint(out, rendered)
 	fmt.Fprintln(out)
 }
 
@@ -2922,11 +2978,14 @@ func (s *Session) pendingCards() []card {
 // any actions it has not been shown, because those are exactly what the resumed
 // session cannot know.
 //
-// A refresh the operator asked for is the one thing that puts the product
-// context back into a later turn, and it goes in framed as what it is: a new
-// picture, with what moved since the old one, for the product manager to
-// reconcile against what it already believes.
-func (s *Session) turnPrompt(message string) string {
+// A refresh — the operator's, or the harness's own because the picture had
+// fallen past the threshold — is the one thing that puts the product context
+// back into a later turn, and it goes in framed as what it is: a new picture,
+// with what moved since the old one, for the product manager to reconcile
+// against what it already believes. A picture the harness measured and could
+// not refresh goes in as its age instead, so the role can say which of its
+// advice rests on it.
+func (s *Session) turnPrompt(message string, picture *PictureAge) string {
 	var prompt strings.Builder
 	switch {
 	case s.refresh != nil && s.state.Turns == 0:
@@ -2942,6 +3001,9 @@ func (s *Session) turnPrompt(message string) string {
 		s.carried = &s.options.Briefing
 		prompt.WriteString(s.options.Briefing.Text)
 		prompt.WriteString("\n")
+	}
+	if picture != nil {
+		prompt.WriteString(picture.prompt())
 	}
 	prompt.WriteString(s.renderNotices())
 	// What other roles have proposed changing in this role's own documents, which
@@ -3168,6 +3230,23 @@ func (o Options) askRounds() int {
 		return o.AskRoundsPerMessage
 	}
 	return exchange.DefaultMaxRounds
+}
+
+// refreshAfterLandings is how far behind the target branch the picture may fall
+// before a turn re-reads it. A caller that states nothing gets the harness
+// default, and one that states more than the harness permits gets the most it
+// permits: the configuration is refused before it reaches here, and this is
+// the same bound held a second time where it is spent, so no caller of this
+// package can turn the refresh off by naming a number nothing reaches.
+func (o Options) refreshAfterLandings() int {
+	switch {
+	case o.RefreshAfterLandings <= 0:
+		return DefaultRefreshAfterLandings
+	case o.RefreshAfterLandings > MaxRefreshAfterLandings:
+		return MaxRefreshAfterLandings
+	default:
+		return o.RefreshAfterLandings
+	}
 }
 
 func (o Options) timeout() time.Duration {

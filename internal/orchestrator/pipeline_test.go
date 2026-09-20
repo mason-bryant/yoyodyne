@@ -3439,6 +3439,9 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			RepairGrantAttempts: 2,
 		},
 		Exchange: config.Exchange{MaxRounds: 10},
+		// And the conversation threshold, for the same reason: no run here holds
+		// a conversation, and a hand-built configuration is still validated.
+		Conversation: config.Conversation{RefreshAfterLandings: config.DefaultRefreshAfterLandings},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
 			WorkItems: domain.ApprovalHuman, Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,

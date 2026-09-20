@@ -230,6 +230,9 @@ func newResolution() *resolution {
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
 			Exchange: Exchange{MaxRounds: defaultExchangeMaxRounds},
+			// The picture's age is measured whether or not a project mentions it, so
+			// the threshold it is measured against is always present.
+			Conversation: Conversation{RefreshAfterLandings: DefaultRefreshAfterLandings},
 			// Publishing and work_items are the approvals with a harness default,
 			// because they are the ones added after configurations existed: a file
 			// mentioning neither loads rather than failing over a key that did not
@@ -295,6 +298,7 @@ func newResolution() *resolution {
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
 			"exchange.max_rounds":                                 OriginDefault,
+			"conversation.refresh_after_landings":                 OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -356,6 +360,9 @@ func (r *resolution) apply(applied layer) error {
 	}
 	if asks := document.Exchange; asks != nil {
 		setValue(r.origins, "exchange.max_rounds", asks.MaxRounds, &r.config.Exchange.MaxRounds, applied.origin)
+	}
+	if conversation := document.Conversation; conversation != nil {
+		setValue(r.origins, "conversation.refresh_after_landings", conversation.RefreshAfterLandings, &r.config.Conversation.RefreshAfterLandings, applied.origin)
 	}
 	if evidence := document.Research; evidence != nil {
 		// Copied rather than aliased, like the check list: a layer's own slice must

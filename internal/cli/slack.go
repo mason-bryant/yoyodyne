@@ -683,6 +683,15 @@ func sayToConversation(ctx context.Context, session *chat.Session, said string, 
 	// answer somebody asked for.
 	log("%s", session.Freshness(ctx))
 	reply, err := session.Send(ctx, said)
+	// And what the harness did about that age, where it did anything: a re-read
+	// it made unasked goes to the same log the caveat did. A reply whose picture
+	// could not be brought current says so in its own text and reaches the
+	// channel that way, so the answer somebody asked for carries its own age.
+	if reply.Picture != nil {
+		if rendered := strings.TrimSpace(reply.Picture.Render()); rendered != "" {
+			log("%s", rendered)
+		}
+	}
 	answer.Text = reply.Text
 	answer.ConversationID = reply.Evidence.ConversationID
 	answer.Turns = reply.Evidence.Turns
