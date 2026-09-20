@@ -28,7 +28,7 @@ import (
 // is what the ceiling exists to mark.
 //
 // Its history is why it is a ceiling with a margin below it rather than a
-// budget the set is held to. defaultMaxProductBytes was raised four times in
+// budget the set is held to. MaxProductBytes was raised four times in
 // three weeks — 512 to 640 to 768 to 896 KiB — and each time the eight shipped
 // documents stood within bytes of it, so documenting any new behaviour at all
 // failed make test on a sentence unrelated to the change that added it, and
@@ -73,14 +73,17 @@ const ShippedDocumentationMargin = 512 << 10
 // leaves them room to be several times what this repository holds today.
 const productContextReserve = 512 << 10
 
-// defaultMaxProductBytes bounds the product context. It is larger than a work
+// MaxProductBytes bounds the product context. It is larger than a work
 // item's bundle because it carries whole documents rather than one item, and
 // bounded for the same reason: a directory of specifications grows without
 // limit. It is the ceiling on the shipped documentation plus the reserve for
 // everything else, so a set that passes the gate is a set the briefing carries
 // whole, and it is not raised to make room for the documentation — the ceiling
 // is where that decision is made, and it is a product decision.
-const defaultMaxProductBytes = ShippedDocumentationCeiling + productContextReserve
+// It is exported because a conversation turn has to be able to carry it: the
+// backstop in internal/chat is sized from this rather than chosen beside it,
+// after the two were chosen separately and disagreed.
+const MaxProductBytes = ShippedDocumentationCeiling + productContextReserve
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
@@ -370,7 +373,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	}
 	maxBytes := request.MaxBytes
 	if maxBytes == 0 {
-		maxBytes = defaultMaxProductBytes
+		maxBytes = MaxProductBytes
 	}
 	if maxBytes < 1 {
 		return Bundle{}, errors.New("max context bytes must be greater than zero")

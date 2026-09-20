@@ -44,7 +44,24 @@ const proposedIssueType = "task"
 // MaxTurnInputBytes bounds one turn's system prompt and user prompt together.
 // The product context is bounded where it is assembled; this is the backstop
 // that keeps their sum bounded too.
-const MaxTurnInputBytes = 768 << 10
+//
+// A backstop sits above the thing it backstops. This one sat below it from
+// 2026-09-20 06:45, when yoyodyne-ifd.403 raised the shipped-documentation
+// ceiling and with it contextbundle.MaxProductBytes, until the change that
+// carries this comment. The assembled bundle was allowed to be three times
+// what a turn could hold, so the backstop stopped catching a runaway and
+// started refusing every ordinary turn: the product manager, the architect and
+// the development manager were each locked out of their own conversations
+// within the same day, and the development manager's hourly sweep failed with
+// them without anything saying why. Nothing had grown unreasonably -- the
+// bundle was inside the bound the product manager set for it twice, on
+// yoyodyne-ifd.240 and yoyodyne-ifd.403.
+//
+// So it is sized from the bundle's own bound rather than picked beside it: what
+// the bundle may be, plus the largest thing an operator may say, plus room for
+// the system prompt, which the failures above measured at well under 128 KiB.
+// TestTheTurnBackstopSitsAboveWhatItBackstops refuses any future drift apart.
+const MaxTurnInputBytes = 3 << 20
 
 // MaxOperatorMessageBytes bounds one thing an operator says. It is generous for
 // prose and small enough that a mis-piped file is refused rather than sent.

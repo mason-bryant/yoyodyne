@@ -549,7 +549,7 @@ func TestRecordedIntentFitsWhatIsReservedForIt(t *testing.T) {
 	// is rendered at more digits than a repository could reach: every included
 	// specification costs the context far more than one byte, so the default
 	// budget cannot hold this many of them.
-	total := maxRecordedIntentDocuments + defaultMaxProductBytes
+	total := maxRecordedIntentDocuments + MaxProductBytes
 	worst := recordedIntent{brief: make([]intentDocument, total), goals: make([]intentDocument, total)}
 	for index := range maxRecordedIntentDocuments {
 		worst.brief[index] = widest
@@ -574,7 +574,7 @@ func TestPlaceholderEntriesAreTheLongestOnesRendered(t *testing.T) {
 
 	path := "docs/product/goals/v1-goals.md"
 	placeholder := renderIntentDocuments([]intentDocument{{path: path, words: stubProseWords - 1, inline: true}})
-	counted := renderIntentDocuments([]intentDocument{{path: path, words: defaultMaxProductBytes, inline: true}})
+	counted := renderIntentDocuments([]intentDocument{{path: path, words: MaxProductBytes, inline: true}})
 	if len(placeholder) <= len(counted) {
 		t.Fatalf("a placeholder entry renders %d bytes and a counted one %d; the worst case is built from the wrong one",
 			len(placeholder), len(counted))
