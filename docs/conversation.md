@@ -1882,6 +1882,20 @@ moved the cursor to — because a region drawn past the top of the window could 
 longer be erased without taking the conversation above it. Only the drawing is
 bounded: the message you send is all of it.
 
+A paste is one message, newlines and all. The terminal is asked to bracket what
+is pasted — the `ESC[200~ … ESC[201~` that kitty, xterm, and Terminal.app all
+wrap a paste in — so a block of several lines, blank lines among them, lands in
+the region as one message with its lines where they were, and return then sends
+it; before this a paste of three lines sent the first and spilled the other two
+into the prompts that followed. There is no question a terminal answers about
+the mode, so it is asked for on every terminal rather than negotiated the way
+shift-return is, and one without the mode goes on handing a paste over as
+keystrokes, which is what every terminal did before. Only the newlines are kept exactly as they were: a tab in a paste
+becomes a space, because the region measures what it drew in columns and a tab
+is as wide as the terminal decides, and any other control character is dropped
+as it is when typed. The bracketing is turned off whenever the terminal changes
+hands, exactly as the keyboard is.
+
 Ctrl-C still interrupts the way it always did, and Ctrl-Z still stops the
 conversation. A terminal that has agreed to report shift-return stops raising
 the signal keys itself, so yoyo raises what it reports — to the same process
