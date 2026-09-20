@@ -112,26 +112,29 @@ nothing typed in the channel ever arrives.
 `im:write` is used for two classes of message and only those two, sent directly
 to whoever step 4 grants `direct-work`. The first is **the harness reporting
 itself degraded**: a session choosing work from a build the harness has moved
-well past, the harness having started nothing at all while work was ready, and
+well past, the harness having started nothing at all while work was ready,
 [the provider holding every role](../reporting.md#the-provider-holding-every-role)
-with nothing configured to fail over to. Beside them, and needing no `im:write`
+with nothing configured to fail over to, and
+[an item that sat claimed with nothing working on it](../reporting.md#an-item-claimed-with-nothing-working-on-it)
+until the harness gave it back. Beside them, and needing no `im:write`
 at all, [a provider nobody is logged into or nobody can reach](../reporting.md#a-provider-nobody-can-reach)
 is said once in the channel tagged to those same members by id, and once more
 when it answers again. The second is **advisory-once** — a
 fact said exactly once and never repeated, which today is a value the project's
-template has improved that this project never edited. The stale build and the
-improvement are sent once rather than repeated, and at most one improvement
-message goes per reading however many the reading found; the hold is sent when
-it is first seen and again with each heartbeat once it has stood past six hours,
-because it is the one state a person ends early; and the stall is sent again
-with every heartbeat it stands, tagged to those members by id in the channel as
-well, because a line that has stopped for reasons nobody can name is the one
-state that gets louder rather than quieter. A brake hold the development manager
-has handed to you is tagged the same way each hour, and sent directly once it
-has stood two hours. Removing the scope costs those direct messages and nothing
-else: the stale-build message, the hold, and the improvement are in the channel
-either way, the stall and the brake hold are still tagged there, and the stall
-is in the durable record `yoyo status` reads back.
+template has improved that this project never edited. The stale build, the
+released claim, and the improvement are sent once rather than repeated, and at
+most one improvement message goes per reading however many the reading found;
+the hold is sent when it is first seen and again with each heartbeat once it has
+stood past six hours, because it is the one state a person ends early; and the
+stall is sent again with every heartbeat it stands, tagged to those members by
+id in the channel as well, because a line that has stopped for reasons nobody
+can name is the one state that gets louder rather than quieter. A brake hold the
+development manager has handed to you is tagged the same way each hour, and
+sent directly once it has stood two hours. Removing the scope costs those direct
+messages and nothing else: the stale-build message, the hold, the released
+claim, and the improvement are in the channel either way, the stall and the
+brake hold are still tagged there, and the stall is in the durable record `yoyo
+status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -489,6 +492,13 @@ Into the work item's thread, as they happen:
 - every report an agent filed against that item, as the agent wrote it
 - every change an agent proposed to a document it does not own, with the
   argument it made for it
+- the item having sat claimed with nothing working on it until the harness gave
+  it back — a run killed with its claim still standing — said once as a
+  `warning`, shown at the top of the channel as well as in the thread, and sent
+  to whoever you grant `direct-work` too, because the item had left the ready
+  queue and nothing else in the record says the line was idle behind it. What
+  follows it is the run that starts again, which says so itself. See
+  [claims with nothing working on them](../operations.md#claims-with-nothing-working-on-them)
 
 At the top level of the channel, unthreaded, goes what is about the whole line
 rather than any one item: the operator holding and releasing intake, the
@@ -829,11 +839,13 @@ the top of the channel, whatever severity it was filed at.
 
 Concretely: a held intake, a braked line, a parked run, a provider that ran out of
 capacity, a merge the forge will not make, a directive that paused work, a stall,
-a stale session, a refused block of tracker actions, a change an agent proposed to
-a document it does not own, a cap the development manager crossed on his own
-authority, and every turn of an ask exchange are all at the
-channel level — the crossing because it is a veto by reading, in force as it is
-recorded and yours to undo only if you see it; the last because an exchange is a
+a stale session, a claim the harness gave back, a refused block of tracker
+actions, a change an agent proposed to a document it does not own, a cap the
+development manager crossed on his own authority, and every turn of an ask
+exchange are all at the channel level — the released claim because the line was
+idle behind it for as long as it stood; the crossing because it is a veto by
+reading, in force as it is recorded and yours to undo only if you see it; the
+last because an exchange is a
 question waiting on you, and a
 question shown only inside a thread while its answer is shown at the top would be
 the two ends of one ask surfaced opposite ways round. A run starting, checks
@@ -1284,7 +1296,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the ones that report the harness itself degraded — a stale session build, the harness having started nothing at all, the provider holding every role, and a brake hold that has waited on you for two hours — and all of them are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the ones that report the harness itself degraded — a stale session build, the harness having started nothing at all, the provider holding every role, a brake hold that has waited on you for two hours, and a claim the harness gave back — and all of them are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |

@@ -729,6 +729,17 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Outages:     parts.outages,
 		Provider:    pipelineFrom(parts).Backend,
 		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
+		// The audit that gives back a claim with nothing alive behind it. It is
+		// wired into the pull rather than into a run for the reason the escalation
+		// is, and a sharper one: the state it catches is a run that is not there, so
+		// there is no run to put it in. The watch loop is the only thing that outlives
+		// the process whose death made the claim dead.
+		Claims: orchestrator.ClaimAuditor{
+			Tracker:   tracker,
+			Runs:      parts.store,
+			Releases:  parts.releasedClaims,
+			ProductID: parts.config.Product.ID,
+		},
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
@@ -892,6 +903,28 @@ the role's own next turn, whenever one happens.
 A pause covers it like any other provider call and --budget
 counts what it spent; holding intake does not stop it, because it chooses no work
 and starts no run.
+
+Every pull also audits the claims the tracker holds against the runs the harness
+actually has. An item the tracker calls in progress with no run alive behind it
+for half an hour is given back to the queue, with the reason on its notes, and
+the record of the run that left it is ended so the developer slot it was filling
+comes back with it -- a killed process leaves its item claimed and its slot taken
+forever otherwise, and a claimed item has left the ready queue, so a machine
+stuck behind one looks exactly like a drained one. Both halves happen before the
+intake hold and the machine's own capacity are even consulted, because a held or
+full session is exactly where a dead claim hides and neither pass gets as far as
+reading the queue.
+
+Alive means the run's own record still moving rather than its status saying it is
+in flight, and it is settled under that run's lease, which a live process holds
+and the operating system drops when it dies. A run that is owed a continuation
+keeps its claim however quiet it has gone -- one waiting out a provider, one
+parked by "yoyo pause", one held up by a directive or by work it depends on --
+and so does a claim with no recorded run behind it, which is somebody else's
+rather than the harness's to take back. The ended run is recorded as cancelled
+rather than failed: nothing about its change was judged, and the branch and
+worktree it left are untouched. Each release is on the pass and sent to the
+operators once.
 
 Only one session watches a product at a time. A second one is refused as it
 starts, naming the session that holds the watch and the process running it,

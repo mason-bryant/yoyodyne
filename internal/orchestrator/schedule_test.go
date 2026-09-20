@@ -2430,6 +2430,16 @@ type scheduleHarness struct {
 	// every other test's pass cannot see it — which is what every pass was before.
 	paused    bool
 	seePaused bool
+	// audit stands in for the claim audit, with the claimed items the pull read,
+	// and claims is the real one where a test drives it end to end. A pull is
+	// wired with at most one of them and only where a test asks, so every other
+	// test's pass is what it always was.
+	audits int
+	audit  func(*scheduleHarness, []beads.WorkItem) (ClaimSweep, error)
+	claims ScheduleClaims
+	// finished is every run this harness has recorded an ending for, which is what
+	// a claim audit settling a dead run produces.
+	finished []runstate.State
 
 	pulls      int
 	order      []string
@@ -2562,12 +2572,17 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if !h.unroutable {
 		docket = h
 	}
+	claims := h.claims
+	if h.audit != nil {
+		claims = h
+	}
 	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
 		Stoppages: stoppages, Decisions: decisions,
 		Capacity: capacity, Slots: slots, Start: h.start, Escalations: escalations,
 		Tree: tree, Triage: docket, Recurring: recurring, CarryOut: carryOut, Holds: holds,
+		Claims: claims,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -2602,6 +2617,17 @@ func (h *scheduleHarness) Escalate(context.Context) (EscalationSweep, error) {
 	passes, escalate := h.escalations, h.escalate
 	h.mu.Unlock()
 	return escalate(h, passes)
+}
+
+// Audit stands in for auditing the claims the tracker holds against the runs the
+// harness has, which is the one thing in a pull that writes to the tracker
+// without starting anything.
+func (h *scheduleHarness) Audit(_ context.Context, claimed []beads.WorkItem) (ClaimSweep, error) {
+	h.mu.Lock()
+	h.audits++
+	audit := h.audit
+	h.mu.Unlock()
+	return audit(h, claimed)
 }
 
 // sleep stands in for waiting out a poll interval. It spends no time at all: a
