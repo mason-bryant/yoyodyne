@@ -250,17 +250,20 @@ func TestOneParentIsNotDecomposedTwiceIntoTheSameChild(t *testing.T) {
 	}
 }
 
-// Losing an admission to a tracker that would not answer is worse than admitting
-// a duplicate: the duplicate is caught by whoever reads the queue, and the lost
-// admission is caught by nobody. So the work is admitted and the gap is stated.
-func TestAnAdmissionSaysWhenTheDuplicateCheckCouldNotRun(t *testing.T) {
+// The 2026-09-18 shape: the listing the duplicate check needs timed out under an
+// admission, and the admission went in unchecked. The guard cost two runs to
+// earn, and a listing that still fails once the recovery rule has retried it is
+// not a tracker that was briefly unavailable — so the creation is refused with
+// the reason rather than written on the strength of a guard that never ran. The
+// role can ask again once the tracker answers; a duplicate cannot be un-admitted.
+func TestAnAdmissionIsRefusedWhenTheDuplicateCheckCouldNotRun(t *testing.T) {
 	t.Parallel()
 
-	tracker := &fakeTracker{listErr: errors.New("bd list failed: the store is locked")}
+	tracker := &fakeTracker{listErr: errors.New("bd list failed with status timed_out and exit code -1: ")}
 	provider := &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Admitting it.",
 			`{"action":"create","title":"Something worth doing","description":"d","goal":"`+theGoal+`","reason":"r"}`)},
-		{SessionID: "session-1", FinalText: "It is in the backlog."},
+		{SessionID: "session-1", FinalText: "The tracker would not answer, so nothing was admitted."},
 	}}
 	options := testOptions(t, provider)
 	options.Tracker = tracker
@@ -271,14 +274,57 @@ func TestAnAdmissionSaysWhenTheDuplicateCheckCouldNotRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	if len(tracker.created) != 1 {
-		t.Fatalf("created work items = %#v, want the admission to survive an unreadable tracker", tracker.created)
+	if len(tracker.created) != 0 {
+		t.Fatalf("created work items = %#v, want nothing admitted past a check that did not run", tracker.created)
 	}
-	if !reply.Actions[0].Applied {
-		t.Fatalf("action = %#v, want it applied", reply.Actions[0])
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the creation refused", reply.Actions)
 	}
-	if !strings.Contains(reply.Actions[0].Summary, "nothing checked whether this is already in it") {
-		t.Fatalf("summary = %q, want the unrun check stated rather than passed over", reply.Actions[0].Summary)
+	// The listing was retried under the recovery rule before the refusal, and the
+	// refusal says so, with the reason the tracker gave.
+	if len(tracker.listed) < 2 {
+		t.Fatalf("listings = %#v, want the listing asked for again before the creation was refused", tracker.listed)
+	}
+	for _, want := range []string{"nothing checked whether this is already in it", "did not outlast it", "timed_out"} {
+		if !strings.Contains(reply.Actions[0].Failure, want) {
+			t.Fatalf("failure = %q, want it to say %q", reply.Actions[0].Failure, want)
+		}
+	}
+}
+
+// The other door, the same guard. A proposal the goals would have admitted
+// unasked is admitted on the strength of the duplicate check as much as of the
+// goal, so a listing the recovery rule could not get an answer from puts the
+// proposal to the operator with the gap named rather than into the queue with
+// nobody looking.
+func TestAProposalIsPutToTheOperatorWhenTheDuplicateCheckCouldNotRun(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{listErr: errors.New("bd list failed with status timed_out and exit code -1: ")}
+	proposal := `{"items":[{"title":"Something worth doing","description":"d","rationale":"r","goal":"` + theGoal + `"}]}`
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "I suggest this.\n\n```yoyodyne-proposal\n" + proposal + "\n```"},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Goals = recordedGoals(theGoal)
+	options.Admission = Admission{WorkItems: domain.ApprovalAutomatic}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "What is worth doing?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Admitted) != 0 || len(tracker.created) != 0 {
+		t.Fatalf("admitted = %#v, created = %#v, want the proposal put to the operator instead", reply.Admitted, tracker.created)
+	}
+	if len(reply.Proposals) != 1 {
+		t.Fatalf("proposals = %#v, want one awaiting a decision", reply.Proposals)
+	}
+	for _, want := range []string{"nothing checked whether this is already in it", "timed_out"} {
+		if !strings.Contains(reply.Proposals[0].Asking, want) {
+			t.Fatalf("asking = %q, want the unrun check named with its reason", reply.Proposals[0].Asking)
+		}
 	}
 }
 

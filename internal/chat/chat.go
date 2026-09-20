@@ -374,8 +374,9 @@ type Options struct {
 	// the harness takes for itself is given, since those pace themselves on the
 	// refusal rather than sleeping through the window.
 	UsageLimitPause UsageLimitPause
-	// Sleep waits out a usage limit. It is a field so a test can drive a wait
-	// without spending it; a conversation leaves it alone and sleeps for real.
+	// Sleep waits out a usage limit, and a tracker call that failed on something a
+	// later attempt may survive. It is a field so a test can drive a wait without
+	// spending it; a conversation leaves it alone and sleeps for real.
 	Sleep func(ctx context.Context, duration time.Duration) error
 	// Persona is the effective product-manager persona from configuration. It
 	// may specialize how the product manager works; it is placed after the
@@ -566,6 +567,14 @@ type Session struct {
 	// its own would let a provider that keeps refusing walk one message far past
 	// what the operator configured, one acceptable-looking wait at a time.
 	usageLimitWaited time.Duration
+	// trackerRetries is what this message has waited out at the tracker, one
+	// entry per wait, and is what its recovery window is measured against. It is
+	// per message for the reason the budget above is, and it is one record for
+	// every call rather than one per call for the reason a run's tracker writes
+	// share one boundary: a `bd` that could not be run for one call could not be
+	// run for the next, and forty calls each waiting a whole window is a message
+	// nobody gets an answer from. See trackerrecovery.go.
+	trackerRetries []runstate.Retry
 	// notedRefusal is the provider refusal this message has already written down,
 	// as the limit, the model, and the reset time together. It is kept for the
 	// same span as the budget above and for a related reason: the probes a wait
@@ -773,6 +782,10 @@ func Open(options Options) (*Session, error) {
 		deliveredAmendments: map[string]bool{},
 		deliveredReports:    map[string]bool{},
 	}
+	// Every call the conversation makes to the tracker is made under the
+	// operator's recovery rule, and it is wrapped here, once, so that no call site
+	// opts out and none written later can forget to.
+	session.options.Tracker = session.recovering(options.Tracker)
 	existing, err := options.Store.Load(options.identity())
 	switch {
 	case err == nil:
@@ -1019,6 +1032,9 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// under a later message is told again rather than passed over as old news.
 	s.usageLimitWaited = 0
 	s.notedRefusal = ""
+	// And what it may spend waiting out a tracker that would not answer, over the
+	// same span: every tracker call the message makes shares one window.
+	s.trackerRetries = nil
 	// How old the picture this answer will rest on is, measured before the prompt
 	// is built because the answer to it changes what the prompt carries: a
 	// picture past the threshold is re-read here and delivered below, and one
@@ -1871,6 +1887,9 @@ func (s *Session) Approve(ctx context.Context, proposalID string) (CreatedItem, 
 	if s.options.Tracker == nil {
 		return CreatedItem{}, errors.New("no work tracker is configured; an approved proposal cannot be created")
 	}
+	// An approval is the operator's own ask, made between messages, so it is given
+	// a recovery window of its own rather than whatever the last message left.
+	s.trackerRetries = nil
 	// The goal is checked again where the item is actually created. It was
 	// checked before the operator was asked, and the goals are read from the
 	// repository rather than from the conversation, so between the two the goal
@@ -2028,8 +2047,8 @@ func (s *Session) proposalGate(proposal Proposal, resembling string) string {
 
 // resemblanceAt is what one proposal looked like, from a list judged for the
 // whole turn. It tolerates a short list rather than indexing into one: a caller
-// that judged nothing is a caller that could not read the tracker, and that costs
-// the sentence rather than the proposal.
+// with no tracker to judge against judges nothing, and that costs the sentence
+// rather than the proposal.
 func resemblanceAt(resembling []string, at int) string {
 	if at < 0 || at >= len(resembling) {
 		return ""

@@ -3327,8 +3327,16 @@ rather than going quiet: what the boundary would have produced is produced — a
 outstanding publication, a blocker on the item — with the attempts and the time
 in front of it.
 
+A role's conversation reaches the same store, and its calls are under the same
+rule with the same numbers: a triage decision, an admission, a note, a closure,
+and the reads that gate them are waited out and asked again, with one window per
+operator message shared by every call in it, each wait recorded on the
+conversation as a `tracker.retried` event, and only a call that spent the
+window reported the way it always was. Nothing about that is configured either.
+
 [Waiting out a network that dropped](operations.md#waiting-out-a-network-that-dropped)
-in the operations guide is the same thing said for an operator reading a run.
+in the operations guide is the same thing said for an operator reading a run,
+and says what the conversation shows on screen while it waits.
 
 ## Losing a race for the target branch
 

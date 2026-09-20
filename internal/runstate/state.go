@@ -951,6 +951,18 @@ const (
 	// failed run, which is the same loss the forge boundaries carried and is why
 	// the product manager joined them to this item's set.
 	RetryTrackerWrite = "writing to the tracker"
+	// RetryTracker is the same boundary met from a conversation rather than from
+	// a run: every call a role's conversation makes to the tracker, the reads
+	// that gate its writes and the writes themselves. It is one boundary rather
+	// than a read and a write one for the reason the run's three writes are one —
+	// a `bd` that could not be run for the read could not be run for the write —
+	// and for one more: a write that spent the window is read back afterwards
+	// under a context nothing can cancel, and that read has to find the window
+	// already spent rather than a fresh one to wait out. It is recorded on the
+	// conversation's event log rather than on a run's state, since a
+	// conversation has no run, and it is named here so the record speaks one
+	// vocabulary wherever a wait was taken.
+	RetryTracker = "reaching the tracker"
 )
 
 // MaxRetries bounds how many recoverable failures one run records. The window

@@ -1288,6 +1288,9 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		outcome.Failure = refusal
 		return
 	}
+	// Where in the message's record of tracker waits this action starts, so what
+	// it reports about waiting is its own rather than the message's.
+	waitsBefore := s.trackerRetryAttempts()
 	if outcome.Action.readsTargetFirst() {
 		s.readActionTarget(ctx, outcome)
 		if refusal := refuseWhenClosed(outcome.Action.Action, strings.TrimSpace(outcome.Action.ID), outcome.TargetStatus); refusal != "" {
@@ -1298,6 +1301,7 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 	s.carryOutTrackerAction(ctx, outcome)
 	outcome.noteAttribution(attribution)
 	outcome.noteTarget()
+	outcome.noteRetries(s.trackerRetriesSince(waitsBefore))
 }
 
 // admissionRefusal says why work an action would admit to the backlog does not
@@ -1508,12 +1512,20 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// the target branch cannot contain work that branch already carries, so the
 		// run spends its repair attempts and its review rounds discovering that.
 		// What is found is named rather than summarised, because acting on the item
-		// this already is needs its identifier.
-		matches, unchecked := s.alreadyAdmitted(ctx, admission.Candidate{
+		// this already is needs its identifier. A check that could not be made is a
+		// refusal too, with the reason: the listing it needs has already been
+		// retried under the recovery rule, so a tracker that still would not list
+		// the work is not one this creation should be written to on the strength of
+		// a guard that never ran.
+		matches, err := s.alreadyAdmitted(ctx, admission.Candidate{
 			Title:   strings.TrimSpace(action.Title),
 			Parent:  action.parent(),
 			Sources: admissionSources(prompting.ID, cited.ID),
 		})
+		if err != nil {
+			outcome.fail(err)
+			return
+		}
 		if len(matches) > 0 {
 			outcome.Failure = duplicateRefusal(creation, matches)
 			return
@@ -1599,23 +1611,18 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		if action.Parked.Parked() {
 			parked = ", parked so nothing selects it until it is released: " + singleLine(action.Parked.Reason(), maxTrackerFailureBytes)
 		}
-		// Where the duplicate check could not run, the admission still happened and
-		// says so: refusing work for a tracker that would not answer would lose the
-		// admission to something that has nothing to do with it, and a duplicate
-		// nobody checked for is caught by whoever reads the queue.
-		checked := uncheckedClause(unchecked)
 		from := citedClause(cited)
 		// Labels applied at admission are said where the admission is reported, in
 		// the words the survey uses, because the label is what a seat watches for
 		// and the operator reads this line rather than the item.
 		labelled := labelsLabel(created.Labels)
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s%s%s%s%s%s%s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating, checked)
+			outcome.applied("%s at priority %d: %s%s%s%s%s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating)
 			return
 		}
-		outcome.applied("%s: %s%s%s%s%s%s%s",
-			creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating, checked)
+		outcome.applied("%s: %s%s%s%s%s%s",
+			creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), labelled, parked, from, answering, gating)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -1807,6 +1814,20 @@ func (o *TrackerOutcome) noteTarget() {
 	case o.TargetStatus != "" && o.TargetStatus != openWorkItemStatus:
 		o.Summary += fmt.Sprintf("; %s is %s as the tracker holds it now", o.WorkItemID, o.TargetStatus)
 	}
+}
+
+// noteRetries adds to an action that was applied the waits it took to get there.
+// It is said on the applied action only: a failed one either spent the window,
+// and its failure line already names the attempts and the time in front of the
+// cause, or failed on something no wait would have changed, and the waits it
+// took before that are in the event log where every wait is. What it is for is
+// the action that succeeded: a store that had to be asked three times is a
+// store somebody should hear about before it has to be asked twenty.
+func (o *TrackerOutcome) noteRetries(retries []runstate.Retry) {
+	if !o.Applied {
+		return
+	}
+	o.Summary += retriedClause(retries)
 }
 
 // noteAttribution says that a goal an action recorded was not checked against

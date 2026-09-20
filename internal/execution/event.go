@@ -104,6 +104,15 @@ const (
 	// harness having already tried. It carries both refusals and whether the
 	// harness woke the conversation for the first.
 	EventTrackerRefusalUnresolved EventType = "tracker.refusal.unresolved"
+	// A tracker call a conversation waited out and asked again, recorded before
+	// the wait is taken. It is the conversation's copy of the retry a run writes
+	// into its own state: a turn that took two minutes because the store was
+	// contended is otherwise indistinguishable from one that took two minutes
+	// thinking, and the reason four runs' worth of lost work took a day to
+	// diagnose is that nothing anywhere said a connection had been reset. It
+	// carries the boundary, which attempt this was, the wait in seconds, and the
+	// failure in the tracker's own words, bounded.
+	EventTrackerRetried EventType = "tracker.retried"
 	// What an agent reports while its work continues is recorded in that
 	// invocation's own log as well as in the collected pile: the run or
 	// conversation says a report was made, and the pile says what it was. A

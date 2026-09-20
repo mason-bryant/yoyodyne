@@ -1355,6 +1355,11 @@ func testOptions(t *testing.T, provider Backend) Options {
 		RepositoryID: "yoyodyne",
 		Briefing:     Briefing{Text: testBriefing, GatheredAt: fixedClock{}.Now()},
 		Clock:        fixedClock{},
+		// No test sleeps for real. A tracker fake that fails the way a killed bd
+		// does is waited out under the recovery rule, and a wait it did not drive
+		// would be the whole two-hour window taken on the wall clock; the tests about
+		// the waits themselves replace this with one that records what it was asked.
+		Sleep: func(context.Context, time.Duration) error { return nil },
 		// These conversations are held under the policy the shipped bundle
 		// configures: work that traces to a goal the operator approved is admitted
 		// without asking them. The tests about the other policy set it themselves.

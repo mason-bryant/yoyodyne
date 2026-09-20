@@ -21,6 +21,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -28,18 +29,23 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
-// alreadyAdmitted reports the admitted work a candidate looks like, and says why
-// the question went unanswered where it did.
+// alreadyAdmitted reports the admitted work a candidate looks like, or why the
+// question could not be answered.
 //
-// The two are separate returns because they are separate things to do. Matches
-// are acted on; an unanswered question is not, and must not be: losing an
-// admission to a tracker that was briefly unavailable is worse than admitting a
-// duplicate, since the duplicate is caught by whoever reads the queue and the
-// lost admission is caught by nobody. So the caller carries on and says the check
-// did not run, which is the same shape every other unread thing here takes.
-func (s *Session) alreadyAdmitted(ctx context.Context, candidate admission.Candidate) ([]admission.Match, string) {
+// An unanswered question is a refusal, not a pass. Until yoyodyne-ifd.366 it was
+// the other way — the caller carried on and said the check did not run, on the
+// argument that losing an admission to a tracker that was briefly unavailable is
+// worse than admitting a duplicate — and on 2026-09-18 the listing timed out
+// under an admission and the admission went in unchecked, against a guard that
+// had cost two runs to earn. What changed the answer is that the listing is now
+// retried under the recovery rule: a tracker that still would not answer after
+// that is not briefly unavailable, and a creation written to it on the strength
+// of a guard that never ran is the duplicate the guard exists to stop. The
+// refusal carries the reason, so the role can ask again once the tracker answers
+// rather than describing work as admitted that was not.
+func (s *Session) alreadyAdmitted(ctx context.Context, candidate admission.Candidate) ([]admission.Match, error) {
 	if s.options.Tracker == nil {
-		return nil, "no work tracker is configured, so nothing checked whether this work is already admitted"
+		return nil, errors.New("no work tracker is configured, so nothing could check whether this work is already admitted")
 	}
 	// Every item rather than the open queue. The duplicate that costs a run is a
 	// duplicate of work that has already landed — a diff against the target branch
@@ -47,11 +53,15 @@ func (s *Session) alreadyAdmitted(ctx context.Context, candidate admission.Candi
 	// work is exactly what an open-queue listing leaves out.
 	admitted, err := s.options.Tracker.List(ctx, "")
 	if err != nil {
-		return nil, "the tracker would not list the admitted work, so nothing checked whether this is already in it: " +
-			singleLine(err.Error(), maxTrackerFailureBytes)
+		return nil, fmt.Errorf("%s: %w", unlistedAdmittedWork, err)
 	}
-	return admission.Resembling(candidate, admitted), ""
+	return admission.Resembling(candidate, admitted), nil
 }
+
+// unlistedAdmittedWork is how both doors say the duplicate check could not be
+// made, so the refusal a creation carries and the question a proposal puts to
+// the operator name the same gap in the same words.
+const unlistedAdmittedWork = "the tracker would not list the admitted work, so nothing checked whether this is already in it and it is not admitted on a guard that never ran"
 
 // admissionSources are the records a candidate says the work came from, as those
 // records hold their identifiers rather than as anything typed them. A reference
@@ -110,17 +120,6 @@ func duplicateRemedy(matches []admission.Match) string {
 	return remedy
 }
 
-// uncheckedClause is what an admission that happened says about a duplicate check
-// that did not run. It is folded into the same line the admission is reported on,
-// so the operator's account and the role's results say it once and in the same
-// words.
-func uncheckedClause(unchecked string) string {
-	if unchecked == "" {
-		return ""
-	}
-	return ", and " + unchecked
-}
-
 // citedReport is the collected report an admission says the work came from, and
 // is the zero report where it names none, which is most admissions.
 //
@@ -177,10 +176,15 @@ func citedClause(cited report.Report) string {
 // turn proposing three items asks the tracker one question, and every proposal in
 // it is judged against the same answer.
 //
-// A proposal that cannot be judged is judged as resembling nothing rather than
-// held back. The operator is being asked about it either way; what a failed check
-// costs there is the sentence naming a match, and what refusing would cost is the
-// proposal.
+// A proposal that cannot be judged is put to the operator rather than admitted.
+// Nothing is refused, for the reason a resemblance refuses nothing — the proposal
+// is already on its way to somebody — but a proposal the goals would otherwise
+// have admitted unasked is admitted on the strength of this check as much as of
+// the goal, and a listing the recovery rule could not get an answer from is a
+// check that did not run. So the gap is written where a match would be, which
+// stops the admission and puts the proposal in front of the operator with the
+// reason named: what the failed check costs is their decision, and what
+// admitting would have cost is the duplicate the guard exists to stop.
 func (s *Session) resemblingProposals(ctx context.Context, proposals []Proposal) []string {
 	resembling := make([]string, len(proposals))
 	if len(proposals) == 0 || s.options.Tracker == nil {
@@ -188,6 +192,10 @@ func (s *Session) resemblingProposals(ctx context.Context, proposals []Proposal)
 	}
 	admitted, err := s.options.Tracker.List(ctx, "")
 	if err != nil {
+		unchecked := unlistedAdmittedWork + ": " + singleLine(err.Error(), maxTrackerFailureBytes)
+		for i := range resembling {
+			resembling[i] = unchecked
+		}
 		return resembling
 	}
 	for i, proposal := range proposals {
