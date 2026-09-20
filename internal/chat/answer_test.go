@@ -213,22 +213,41 @@ func TestAConcernOutlivesTheProcessThatRaisedItSoALaterMessageCanAnswerIt(t *tes
 	if !strings.Contains(payload, `"answer":"Retire the work"`) {
 		t.Fatalf("answer event = %s", payload)
 	}
-	// And the agent hears it on its next turn, in whichever process that is.
-	if _, err := resumed.Send(context.Background(), "so?"); err != nil {
-		t.Fatalf("Send() error = %v", err)
+	// The process that answered exits without taking a turn, which is what a
+	// one-shot message always does. The record it left has to carry the answer
+	// itself and not only the question's absence: what the next process keeps
+	// of the concerns is the unanswered ones, so an answer conveyed only through
+	// this process's memory of the concern would be gone by the next turn, and
+	// the product manager would find its question cleared and never hear what
+	// was decided.
+	if answering.Backend.(*fakeBackend).requests != nil {
+		t.Fatalf("answering the question spent a turn on the product manager")
 	}
-	told := answering.Backend.(*fakeBackend).requests[0].Prompt
-	if !strings.Contains(told, "answered concern c1.1") || !strings.Contains(told, "Retire the work") {
-		t.Fatalf("the next turn was told %q, want the answer to its question", told)
-	}
-
-	// A third process finds nothing waiting and refuses a second answer out
-	// loud rather than saying it to the agent.
-	third := openTestSession(t, perItemApprovalOptions(t, root, tracker, "nothing to say"))
+	speaking := perItemApprovalOptions(t, root, tracker, "Retired, then.")
+	third := openTestSession(t, speaking)
 	if open := third.Concerns(); len(open) != 0 {
 		t.Fatalf("an answered concern came back as waiting: %#v", open)
 	}
-	decided, settled, err = third.Decide(context.Background(), "answer c1.1 the other one")
+	if _, err := third.Send(context.Background(), "so?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	told := speaking.Backend.(*fakeBackend).requests[0].Prompt
+	if !strings.Contains(told, "answered concern c1.1") || !strings.Contains(told, "Retire the work") {
+		t.Fatalf("the next turn, taken by a different process, was told %q; want the answer to its question", told)
+	}
+	// Told once: a fourth process finds the account delivered rather than
+	// delivering it again.
+	fourth := perItemApprovalOptions(t, root, tracker, "nothing to say")
+	again := openTestSession(t, fourth)
+	if _, err := again.Send(context.Background(), "and?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if retold := fourth.Backend.(*fakeBackend).requests[0].Prompt; strings.Contains(retold, "answered concern c1.1") {
+		t.Fatalf("the answer was delivered a second time: %q", retold)
+	}
+	// And a second answer to the same question is refused out loud rather than
+	// said to the agent.
+	decided, settled, err = again.Decide(context.Background(), "answer c1.1 the other one")
 	if !settled || err == nil || !strings.Contains(err.Error(), "c1.1") {
 		t.Fatalf("Decide() = %#v, %t, %v; want the answered concern refused by name", decided, settled, err)
 	}
