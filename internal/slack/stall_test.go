@@ -13,11 +13,157 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// The window this whole thing exists for, as this surface now meets it: on
-// 2026-09-01 the watch session died at 06:05 and nothing started for seven and a
-// half hours. What notices that is the checker, wherever it runs; what this does
-// is take the record of it to somebody's phone, exactly once.
-func TestAStallInTheRecordIsTakenToTheOperatorsOnce(t *testing.T) {
+// The night this exists for, replayed: on 2026-09-07 the alarm fired at 02:48Z
+// and by design said nothing more while the stall stood, so a line fully
+// stopped for over four hours had produced one message, four hours old. What
+// notices a stall is the checker, wherever it runs; what this does is take the
+// record of it to somebody's phone — and keep taking it, louder, until it
+// clears. Four silent hours replayed produce a rising sequence rather than one
+// message.
+func TestAStandingStallIsSaidAgainAndLouderUntilItClears(t *testing.T) {
+	t.Parallel()
+
+	fired := time.Date(2026, 9, 7, 2, 48, 0, 0, time.UTC)
+	since := fired.Add(-readmodel.DefaultStallThreshold)
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", since)
+
+	// Nothing is in the record yet, so this surface says nothing about it however
+	// quiet the product looks from here. Deciding that a quiet product has stalled
+	// is not the sink's, and after yoyodyne-ifd.295 it is not the sink's to record
+	// either.
+	harness.now = fired
+	cursors := harness.quietPass(t, harness.start())
+	if events := harness.stallsRecorded(t, stalls); len(events) != 0 {
+		t.Fatalf("List() = %+v, want a sink that records nothing", events)
+	}
+
+	// The checker records one, and this says it: to the operators directly and
+	// tagged to them by member id, because a harness that has stopped doing
+	// anything is the sharpest case there is of a degraded harness, and it is
+	// theirs to act on. Ten minutes in it is a warning.
+	harness.stalled(t, stalls, since, 3, harness.now)
+	first := harness.stallDelivery(t, cursors)
+	if !first.Direct || !first.Tag {
+		t.Fatalf("direct = %t, tag = %t, want the operators told directly and tagged", first.Direct, first.Tag)
+	}
+	if first.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("severity = %q, want a young stall said as a warning", first.Notification.Event.Severity)
+	}
+	cursors = harness.poll(t, cursors, notify.KindStallNoticed)
+
+	// And then the four hours, at the sink's own poll: quiet between beats, and at
+	// every beat said again to the operators directly and tagged, still naming
+	// whose move it is. The first repetition is the warning once more; from the
+	// one after that, with two hours stood and nobody having acted on it, the
+	// stall is critical.
+	repetitions := 0
+	var sequence []report.Severity
+	for harness.now.Before(fired.Add(4 * time.Hour)) {
+		for check := 0; check < 8; check++ {
+			harness.now = harness.now.Add(7 * time.Minute)
+			cursors = harness.quietPass(t, cursors)
+		}
+		harness.now = harness.now.Add(4 * time.Minute)
+		again := harness.stallDelivery(t, cursors)
+		if !again.Direct || !again.Tag {
+			t.Fatalf("repetition %d: direct = %t, tag = %t, want the operators told directly and tagged every time", repetitions, again.Direct, again.Tag)
+		}
+		want := report.SeverityCritical
+		if stood := harness.now.Sub(since); stood < DefaultStallEscalation {
+			want = report.SeverityWarning
+		}
+		if again.Notification.Event.Severity != want {
+			t.Fatalf("repetition %d: severity = %q, want a stall that has stood %s said as %q", repetitions, again.Notification.Event.Severity, harness.now.Sub(since), want)
+		}
+		said, err := notify.Render(again.Notification.Topic, again.Notification.Speaker, again.Notification.Event)
+		if err != nil {
+			t.Fatalf("the stall could not be said: %v", err)
+		}
+		if !strings.Contains(said.Body, "Next: the operator's") {
+			t.Fatalf("repetition %d: body %q does not say whose move follows it", repetitions, said.Body)
+		}
+		cursors = harness.poll(t, cursors, notify.KindStallNoticed)
+		sequence = append(sequence, again.Notification.Event.Severity)
+		repetitions++
+	}
+	if repetitions != 4 {
+		t.Fatalf("the stall was said again %d times over four hours, want once an hour", repetitions)
+	}
+	// The rising sequence the four silent hours produce, after the warning that
+	// opened it: warning, critical, critical, critical.
+	if want := []report.Severity{report.SeverityWarning, report.SeverityCritical, report.SeverityCritical, report.SeverityCritical}; !equalSeverities(sequence, want) {
+		t.Fatalf("the four hours were said as %v, want %v", sequence, want)
+	}
+	if events := harness.stallsRecorded(t, stalls); len(events) != 1 {
+		t.Fatalf("List() = %d stalls, want the one the checker recorded", len(events))
+	}
+
+	// The checker closes it, and the line goes quiet. What cleared it said so
+	// itself, as the run that started.
+	harness.cleared(t, stalls, "1 developer run(s) are in flight and still moving", harness.now)
+	cursors = harness.quietPass(t, cursors)
+	if standing := cursors.Streams[stallStream].Standing; standing != "" {
+		t.Fatalf("the stall stream is still standing on %q after the stall cleared", standing)
+	}
+	harness.now = harness.now.Add(3 * time.Hour)
+	harness.quietPass(t, cursors)
+}
+
+func equalSeverities(got, want []report.Severity) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// The repetition is on the heartbeat's clock, so an operator who set the cadence
+// for the waiting line set it for this too, and a stall said as critical is
+// critical from the bar this surface holds rather than from the hour.
+func TestAStallEscalatesOnTheConfiguredIntervals(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.feed.Heartbeat = 20 * time.Minute
+	harness.feed.StallEscalation = 50 * time.Minute
+	harness.ready(2)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+
+	harness.now = moment.Add(readmodel.DefaultStallThreshold)
+	harness.stalled(t, stalls, moment, 2, harness.now)
+	cursors := harness.poll(t, harness.start(), notify.KindStallNoticed)
+
+	for _, beat := range []struct {
+		at   time.Duration
+		want report.Severity
+	}{
+		{30 * time.Minute, report.SeverityWarning},
+		{50 * time.Minute, report.SeverityCritical},
+		{70 * time.Minute, report.SeverityCritical},
+	} {
+		harness.now = moment.Add(beat.at - time.Minute)
+		cursors = harness.quietPass(t, cursors)
+		harness.now = moment.Add(beat.at)
+		delivery := harness.stallDelivery(t, cursors)
+		if delivery.Notification.Event.Severity != beat.want {
+			t.Fatalf("at %s: severity = %q, want %q", beat.at, delivery.Notification.Event.Severity, beat.want)
+		}
+		cursors = harness.poll(t, cursors, notify.KindStallNoticed)
+	}
+}
+
+// A stall that is already old when this sink first sees it is critical from the
+// first word. The age is the stall's, not the sink's: a four-hour stop is not
+// the same message as a twenty-minute one whoever has been listening.
+func TestAStallFirstSeenOldIsCriticalAtOnce(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
@@ -25,44 +171,20 @@ func TestAStallInTheRecordIsTakenToTheOperatorsOnce(t *testing.T) {
 	harness.ready(3)
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 
-	// Nothing is in the record yet, so this surface says nothing about it however
-	// quiet the product looks from here. Deciding that a quiet product has stalled
-	// is not the sink's, and after yoyodyne-ifd.295 it is not the sink's to record
-	// either.
 	harness.now = moment.Add(7*time.Hour + 30*time.Minute)
-	cursors := harness.quietPass(t, harness.start())
-	if events := harness.stallsRecorded(t, stalls); len(events) != 0 {
-		t.Fatalf("List() = %+v, want a sink that records nothing", events)
-	}
-
-	// The checker records one, and this says it: to the operators directly,
-	// because a harness that has stopped doing anything is the sharpest case there
-	// is of a degraded harness and a channel is somewhere somebody chooses to look.
 	harness.stalled(t, stalls, moment, 3, harness.now)
-	delivery := harness.stallDelivery(t, cursors)
-	if !delivery.Direct {
-		t.Fatal("the stall was posted to the channel alone, want the operators told directly")
-	}
-	if delivery.Notification.Event.Severity != report.SeverityWarning {
-		t.Fatalf("severity = %q, want a stall said as a degraded harness", delivery.Notification.Event.Severity)
-	}
-	cursors = harness.poll(t, cursors, notify.KindStallNoticed)
-
-	// And then the rest of the window, at the sink's own fifteen-second poll. It is
-	// said once per stall and never once per check.
-	for check := 0; check < 60; check++ {
-		harness.now = harness.now.Add(7 * time.Minute)
-		cursors = harness.quietPass(t, cursors)
-	}
-	if events := harness.stallsRecorded(t, stalls); len(events) != 1 {
-		t.Fatalf("List() = %d stalls, want the one the checker recorded", len(events))
+	delivery := harness.stallDelivery(t, harness.start())
+	if delivery.Notification.Event.Severity != report.SeverityCritical {
+		t.Fatalf("severity = %q, want a stall that has stood seven hours said as critical", delivery.Notification.Event.Severity)
 	}
 }
 
-// A fresh sink over a stall that is already open re-says nothing, because what
-// makes once mean once is the record rather than any process's cursor. This is
-// the crash and the restart, which is the case a cursor alone cannot hold.
-func TestARestartedSinkDoesNotSayAStandingStallAgain(t *testing.T) {
+// A fresh sink over a stall that is already open says it again. This is the
+// crash and the restart: the stall is the present state of the line rather than
+// history the watermark reads past, and a sink that came back silent over it
+// would be silent for exactly the thing it exists to say. Repetition is the
+// point now, and a restart is one more.
+func TestARestartedSinkSaysAStandingStallAgain(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
@@ -75,16 +197,46 @@ func TestARestartedSinkDoesNotSayAStandingStallAgain(t *testing.T) {
 	harness.poll(t, harness.start(), notify.KindStallNoticed)
 
 	// A sink that comes back with no memory at all, on a watermark taken when it
-	// came back. A stall that was already open before that is history to it, read
-	// past exactly as every other record filed before a watermark is — not
-	// announced a second time to somebody who was told about it an hour ago.
+	// came back, over the same stall still standing.
 	harness.now = harness.now.Add(time.Hour)
 	restarted := Cursors{SchemaVersion: CursorsSchemaVersion, Since: harness.now, Streams: map[string]Cursor{}}
 	harness.now = harness.now.Add(2 * time.Hour)
-	harness.quietPass(t, restarted)
+	delivery := harness.stallDelivery(t, restarted)
+	if !delivery.Direct || !delivery.Tag {
+		t.Fatalf("direct = %t, tag = %t, want the restarted sink to take the standing stall to the operators", delivery.Direct, delivery.Tag)
+	}
 	events := harness.stallsRecorded(t, stalls)
 	if len(events) != 1 || !events[0].Open() {
 		t.Fatalf("List() = %+v, want the one stall still open and untouched", events)
+	}
+}
+
+// A cursor from before the stall was said again while it stood carries the
+// stall as a delivered mark meaning said once. It is read as a stall this sink
+// has not yet said, so a stall standing when the harness is deployed is said
+// rather than left to the mark, and the mark is dropped rather than carried for
+// the life of the product.
+func TestACursorFromBeforeTheRepetitionSaysTheStandingStall(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	stalls := harness.watchesForStalls(t)
+	harness.ready(2)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+
+	harness.now = moment.Add(time.Hour)
+	harness.stalled(t, stalls, moment, 2, harness.now)
+	events := harness.stallsRecorded(t, stalls)
+	cursors := harness.start()
+	cursors.Streams[stallStream] = Cursor{Delivered: []string{stallMark + events[0].EventID}}
+
+	harness.now = harness.now.Add(time.Hour)
+	delivery := harness.stallDelivery(t, cursors)
+	if delivery.Cursor.Standing != stallMark+events[0].EventID {
+		t.Fatalf("standing = %q, want the cursor standing on the stall", delivery.Cursor.Standing)
+	}
+	if mark, said := delivery.Cursor.Marked(stallMark); said {
+		t.Fatalf("the cursor still carries the delivered mark %q", mark)
 	}
 }
 

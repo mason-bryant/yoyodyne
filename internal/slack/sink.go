@@ -867,10 +867,11 @@ type poster struct {
 	// somebody is this surface's.
 	mention string
 	// tags is the member ids this message names in the channel, empty for every
-	// message that is for whoever is reading it. It is set on the one class of
+	// message that is for whoever is reading it. It is set on the class of
 	// message that is both important and the operators' to act on — the provider
-	// answering nobody — because the communication rule says a message that is
-	// theirs to act on is tagged to them, and a member id is what makes the
+	// answering nobody, a line stopped for reasons no record names, a brake hold
+	// handed to the operator — because the communication rule says a message that
+	// is theirs to act on is tagged to them, and a member id is what makes the
 	// workspace notify a person rather than only print their name.
 	tags []string
 	// direct is the member ids this message is also said to privately, empty for

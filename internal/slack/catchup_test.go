@@ -128,7 +128,7 @@ func TestADeepProductBacklogDigestsToTheTopOfTheChannel(t *testing.T) {
 				Stopped: "intake is held",
 				Since:   now.Add(-12 * time.Hour),
 				Ready:   4,
-			}, recorded),
+			}, report.SeverityNote, recorded),
 		})
 	}
 

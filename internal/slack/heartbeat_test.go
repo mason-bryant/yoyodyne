@@ -41,6 +41,190 @@ func TestAHeldLineWithReadyWorkSaysSoAgainWhileItStands(t *testing.T) {
 	harness.poll(t, cursors, notify.KindLineWaiting)
 }
 
+// The hold of 2026-09-19, replayed: the brake tripped at 17:56Z and held intake
+// for nearly two hours with a free developer slot idle, and nothing reached the
+// operator. A brake hold that waits on a person is a stopped line, and the line
+// gets louder as it stands rather than repeating at the same pitch: tagged to
+// the operators every hour, a warning while it is young, and critical and taken
+// to them directly once it has stood past the bar — until intake is released.
+func TestABrakeHoldWaitingOnAPersonGetsLouderAndTagsTheOperator(t *testing.T) {
+	t.Parallel()
+
+	tripped := time.Date(2026, 9, 19, 17, 56, 0, 0, time.UTC)
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(3)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", tripped)
+	// A brake hold written before the brake summoned anybody, which waits on a
+	// person exactly as it always did.
+	if _, err := harness.intake.Hold(runstate.IntakeHolderBrake, "3 runs blocked in a row", tripped); err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+
+	harness.now = tripped
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+
+	harness.now = tripped.Add(time.Hour)
+	first := harness.line(t, cursors)
+	if !first.Tag {
+		t.Fatal("the held line was posted without naming the operators, want them tagged")
+	}
+	if first.Direct {
+		t.Fatal("a hold an hour old was taken to the operators directly, want the channel with them tagged")
+	}
+	if first.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("severity = %q, want a young brake hold said as a warning", first.Notification.Event.Severity)
+	}
+	said, err := notify.Render(first.Notification.Topic, first.Notification.Speaker, first.Notification.Event)
+	if err != nil {
+		t.Fatalf("the line could not be said: %v", err)
+	}
+	if !strings.Contains(said.Body, "Next: the operator's") || !strings.Contains(said.Body, "yoyo release") {
+		t.Fatalf("body %q does not name the operator's move and what lifts it", said.Body)
+	}
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+
+	// The second hour, and every hour after it: critical, tagged, and to them
+	// directly as well.
+	for hour := 2; hour <= 4; hour++ {
+		harness.now = tripped.Add(time.Duration(hour) * time.Hour)
+		again := harness.line(t, cursors)
+		if !again.Tag || !again.Direct {
+			t.Fatalf("hour %d: tag = %t, direct = %t, want the operators tagged and told directly", hour, again.Tag, again.Direct)
+		}
+		if again.Notification.Event.Severity != report.SeverityCritical {
+			t.Fatalf("hour %d: severity = %q, want a standing brake hold said as critical", hour, again.Notification.Event.Severity)
+		}
+		cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+	}
+
+	// Released, and the hold is no longer what the line says. What it says next —
+	// the stopped session over ready work — is the ordinary hourly note, tagged
+	// to nobody: the tagging was the brake hold's and went with it.
+	if _, _, err := harness.intake.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	cursors = harness.poll(t, cursors, notify.KindIntakeReleased)
+	harness.now = harness.now.Add(3 * time.Hour)
+	after := harness.line(t, cursors)
+	if after.Tag || after.Direct || after.Notification.Event.Severity != report.SeverityNote {
+		t.Fatalf("tag = %t, direct = %t, severity = %q after the release, want the ordinary note", after.Tag, after.Direct, after.Notification.Event.Severity)
+	}
+}
+
+// A brake hold the development manager has escalated is the other hold that
+// waits on the operator, and it is said the same way, naming her escalation as
+// what makes it his.
+func TestAnEscalatedBrakeHoldIsTaggedToTheOperator(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.braked(t, moment)
+	if _, err := harness.intake.DecideBrake(runstate.BrakeDecisionEscalate, "the checks fail on main", "chat-1", moment.Add(5*time.Minute)); err != nil {
+		t.Fatalf("DecideBrake() error = %v", err)
+	}
+
+	harness.now = moment.Add(10 * time.Minute)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	harness.now = moment.Add(time.Hour + 10*time.Minute)
+	delivery := harness.line(t, cursors)
+	if !delivery.Tag || delivery.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("tag = %t, severity = %q, want the operators tagged at warning", delivery.Tag, delivery.Notification.Event.Severity)
+	}
+	said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+	if err != nil {
+		t.Fatalf("the line could not be said: %v", err)
+	}
+	if !strings.Contains(said.Body, "Next: the operator's — the development manager escalated it") {
+		t.Fatalf("body %q does not say the hold is the operator's by her escalation", said.Body)
+	}
+}
+
+// A brake hold the harness is working itself asks a person for nothing, and the
+// line says so at the pitch it always had: an hourly note, tagged to nobody,
+// naming the development manager's move. She is summoned about it separately,
+// and tagging the operator over a hold that is not his is the nagging that gets
+// a channel muted. The operator's own hold is a state he chose to sit with, and
+// is said the same way.
+func TestAHoldThatIsNotTheOperatorsIsNotTaggedToHim(t *testing.T) {
+	t.Parallel()
+
+	for _, held := range []struct {
+		name  string
+		place func(t *testing.T, harness *testHarness)
+		mover string
+	}{
+		{"the brake's, with the development manager deciding", func(t *testing.T, harness *testHarness) {
+			harness.braked(t, moment)
+		}, "Next: the development manager's"},
+		{"the operator's own", func(t *testing.T, harness *testHarness) {
+			harness.hold(t, "reordering the backlog first", moment)
+		}, "Next: the operator's — nothing new is chosen until `yoyo release` lifts it"},
+	} {
+		t.Run(held.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newTestHarness(t, time.Time{})
+			harness.ready(2)
+			harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+			held.place(t, harness)
+
+			cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+			harness.now = moment.Add(5 * time.Hour)
+			delivery := harness.line(t, cursors)
+			if delivery.Tag || delivery.Direct {
+				t.Fatalf("tag = %t, direct = %t, want a hold that is not the operator's said in the channel alone", delivery.Tag, delivery.Direct)
+			}
+			if delivery.Notification.Event.Severity != report.SeverityNote {
+				t.Fatalf("severity = %q, want a note", delivery.Notification.Event.Severity)
+			}
+			said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+			if err != nil {
+				t.Fatalf("the line could not be said: %v", err)
+			}
+			if !strings.Contains(said.Body, held.mover) {
+				t.Fatalf("body %q does not name the hold's own move %q", said.Body, held.mover)
+			}
+		})
+	}
+}
+
+// braked places the brake's hold with its own record attached, the way the
+// poll that trips it does: the runs that blocked, and a cooldown after which a
+// probe starts by itself.
+func (h *testHarness) braked(t *testing.T, at time.Time) {
+	t.Helper()
+	if _, err := h.intake.Brake(runstate.IntakeBrake{
+		Blocked: []runstate.BrakeBlockedRun{
+			{WorkItemID: "yoyodyne-ifd.398", RunID: "run-1", Reason: "the reviewer returned it"},
+			{WorkItemID: "yoyodyne-ifd.401", RunID: "run-2", Reason: "the checks failed"},
+			{WorkItemID: "yoyodyne-ifd.402", RunID: "run-3", Reason: "the merge was refused"},
+		},
+		CooldownEndsAt: at.Add(30 * time.Minute),
+	}, "3 runs blocked in a row", at); err != nil {
+		t.Fatalf("Brake() error = %v", err)
+	}
+}
+
+// line makes one pass and returns the delivery the heartbeat stream produced,
+// which is where a test reads the parts a rendered message does not carry:
+// whether the operators were tagged or told directly.
+func (h *testHarness) line(t *testing.T, cursors Cursors) Delivery {
+	t.Helper()
+	batch, err := h.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream == heartbeatStream && !delivery.Silent() {
+			return delivery
+		}
+	}
+	t.Fatal("nothing was said about the line")
+	return Delivery{}
+}
+
 // What it says is what somebody woken by it has to act on: which state, how long
 // it has stood, and how much work is waiting behind it.
 func TestTheHeartbeatNamesTheStateItsAgeAndWhatIsWaiting(t *testing.T) {

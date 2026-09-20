@@ -230,10 +230,13 @@ const (
 	// process is left to announce; on 2026-09-01 it ran seven and a half hours and
 	// was found by a person rather than by anything here.
 	//
-	// It is said once per stall rather than again while it stands. The repetition
-	// the line above needs is for a state somebody may have to sit with; this one
-	// is either acted on or it is not, and the durable stall record is what makes
-	// once mean once across restarts.
+	// It is said again while it stands, and louder as it ages. It used to be said
+	// once, on the reasoning that a stopped machine is either acted on or it is
+	// not; on 2026-09-07 it was not, and four stopped hours had produced one
+	// message four hours old. A line that is completely stopped is the most
+	// serious thing this vocabulary carries, so the sink repeats it on its
+	// heartbeat, raises it to critical as it stands, and tags the operators each
+	// time. How often and how loud are the sink's; this is what is said.
 	KindStallNoticed Kind = "stall.noticed"
 	// The harness waiting out the provider's usage window. It is the same silence
 	// the stall above reports and the opposite fact about it: nothing has started,
@@ -742,6 +745,9 @@ type Detail struct {
 	// KindCapacityHold reads Mover alone: whose move ends a hold early is worded by
 	// the read model beside the hold itself, so the sentence a terminal prints on
 	// its attention line and the clause this message ends on are one wording.
+	// KindLineWaiting reads it the same way, for the intake hold above all: the
+	// brake's hold is the development manager's while she decides and the
+	// operator's once she has escalated it, and the hold's own record words which.
 	Cause string `json:"cause,omitempty"`
 	Mover string `json:"mover,omitempty"`
 	// Waiting is what a provider's refusal stopped, read by

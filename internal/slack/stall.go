@@ -16,7 +16,8 @@ package slack
 // process it is about, which is the whole point — a dead scheduler cannot file a
 // report about being dead, and a wedged one files that it is watching. It is
 // taken by internal/watchdog and written down against the product, and what this
-// file does is say the one message the record is worth.
+// file does is say what the record is worth — and keep saying it, louder, for as
+// long as the record says the line is still stopped.
 //
 // The sink says it and does not produce it, and that division is the whole of
 // what yoyodyne-ifd.295 moved. The sink's loop was chosen originally because it
@@ -57,11 +58,27 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// stallDeliveries says the stall the record holds, once, and the provider's
-// usage window where one accounts for the quiet instead.
+// DefaultStallEscalation is how long a line may stand stopped on a person
+// before it stops being a warning and is said as critical.
+//
+// Two hours is two heartbeats: the warning is said, said once more an hour on
+// for a reader who was away for the first, and the repetition after that is
+// critical. That is well short of the capacity hold's bar and deliberately so. A
+// capacity hold has a timer that ends it and a person only ends it early; a
+// stall has no timer at all — nothing the record holds accounts for it, so
+// nothing but a person ends it — and a brake hold the development manager has
+// escalated is a hold she has already decided is a person's. A stopped line
+// that has stood through two intervals with nobody acting on the warning is past
+// being one.
+const DefaultStallEscalation = 2 * time.Hour
+
+// stallDeliveries says the stall the record holds, again while it stands and
+// louder as it ages, and the provider's usage window where one accounts for the
+// quiet instead.
 //
 // It costs nothing but a read of the product's own stall log: what is ready to
 // pull, when anything last started and what accounts for it are the checker's
@@ -70,15 +87,18 @@ import (
 // would be exactly that — so this reads the answer rather than repeating the
 // work.
 //
-// It is said once per stall rather than again while it stands, which is the
-// opposite of the heartbeat and deliberately so. An hourly repetition is right
-// for a state somebody may have to sit with — a hold they placed, a queue they
-// have not filled — and wrong for this one: a machine that has stopped doing
-// anything is either looked at or it is not, and a second message adds nothing
-// to the first except a reason to mute the channel. What makes once mean once
-// across a restart is the durable record rather than this cursor: the record
-// says a stall is already open, so a fresh sink on a fresh cursor re-says
-// nothing.
+// It used to be said once per stall and then nothing while it stood, on the
+// reasoning that a machine that has stopped is either looked at or it is not.
+// On 2026-09-07 it was not: the alarm fired at 02:48Z, said nothing more by
+// design, and a line fully stopped for over four hours had produced one message,
+// four hours old, by the time anybody read it. The operator's direction inverted
+// the design. A line that is completely stopped is the most serious thing this
+// surface reports, so it gets louder rather than quieter: said again every
+// heartbeat while the stall stands, as a warning while it is young and critical
+// once it has stood past the bar above, to the operators directly and tagged to
+// them by member id every time. The repetition is also a re-reading — the cause
+// and the next mover are taken fresh from the record each time — so a louder
+// message is a more current one rather than only a more frequent one.
 func (f *HarnessFeed) stallDeliveries(ctx context.Context, cursors Cursors, sessions []runstate.WatchTransition, streams map[string]struct{}) ([]Delivery, error) {
 	if f.Stalls == nil {
 		return nil, nil
@@ -146,13 +166,23 @@ func windowKey(window readmodel.ProviderWindow) string {
 	}
 }
 
-// stallSaid is the one message, and the cursor that records having said it.
+// stallSaid is the message, and the cursor that records which stall it is
+// standing on and when it last said so.
 //
-// The mark names the stall rather than the state, so a second stall is a second
-// thing to say and the same one is not. It is dropped the moment that stall is
-// no longer standing, which keeps the cursor from growing a line for every night
+// The stall is the cursor's standing state, marked by the stall rather than by
+// the condition, so a second stall is a second thing to say afresh and the same
+// one is said again on the clock. Both are forgotten the moment no stall is
+// standing, which keeps the cursor from carrying a line for every night
 // something went quiet — and is safe because a stall that has closed is history
 // and is never said again.
+//
+// A standing stall is said the first time this sink sees it whatever its age
+// against the watermark. The watermark reads past history, and a stall that is
+// still open is not history: it is the present state of the line, and a sink
+// that read it past would be silent for a whole interval over the one thing it
+// exists to say. That is also what a restart does now — a sink that comes back
+// over a standing stall says it again, which is the repetition the operator
+// asked for rather than a message he was owed once.
 //
 // The provider's usage window is the other thing this can say, and it is here
 // rather than beside this because the two are one decision: they are read from
@@ -163,10 +193,11 @@ func windowKey(window readmodel.ProviderWindow) string {
 func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *runstate.StallEvent, window readmodel.ProviderWindow, cause readmodel.Cause, now time.Time) []Delivery {
 	cursor := cursors.Streams[stallStream]
 	advanced := cursor
+	// A delivered stall mark is what the cursor held before the stall was said
+	// again while it stood. It meant said once, means nothing now, and is dropped
+	// so the cursor does not carry it for the life of the product.
 	if mark, said := advanced.Marked(stallMark); said {
-		if standing == nil || mark != stallMark+standing.EventID {
-			advanced = advanced.Without(mark)
-		}
+		advanced = advanced.Without(mark)
 	}
 	// The window is marked by the deadline the provider named, so a second window
 	// is a second thing to say and the same one is not. It is forgotten the moment
@@ -174,6 +205,12 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 	// from growing a line for every window a product ever waited out.
 	if mark, said := advanced.Marked(windowMark); said && mark != windowMark+windowKey(window) {
 		advanced = advanced.Without(mark)
+	}
+	if standing == nil {
+		// Nothing is standing. What cleared it said so itself — the run that
+		// started, the hold that went on — so there is nothing to say here beyond
+		// forgetting which stall the cursor was standing on.
+		advanced.Standing, advanced.Said = "", time.Time{}
 	}
 	switch {
 	case standing == nil && window.Waiting:
@@ -197,45 +234,60 @@ func (f *HarnessFeed) stallSaid(ctx context.Context, cursors Cursors, standing *
 			}, now),
 		}}
 	case standing == nil:
-		// Nothing is standing. What cleared it said so itself — the run that
-		// started, the hold that went on — so there is nothing to say here beyond
-		// forgetting the mark.
-	case advanced.Has(stallMark + standing.EventID):
-		// Already said, once. This is every pass after the first for as long as the
-		// stall lasts, which is the case the whole record exists for, and nothing
-		// about it has moved: the mark is the same and there is nothing to persist.
+	case advanced.Standing == stallMark+standing.EventID && now.Sub(advanced.Said) < f.heartbeat():
+		// Said, and not yet due again. This is nearly every pass for as long as the
+		// stall lasts, and nothing about it has moved: there is nothing to persist.
 		return nil
-	case predates(cursors.Since, standing.OpenedAt):
-		// Open before this product's reporting began. It is read past on age as
-		// every stream here is, and marked so it is read past once rather than on
-		// every pass.
-		advanced = advanced.With(stallMark + standing.EventID)
 	default:
+		advanced.Standing, advanced.Said = stallMark+standing.EventID, now
+		// A warning while it is young, and critical once it has stood past the bar.
+		// Age is measured from when anything last started, which is the age the
+		// message itself states: a four-hour stop is not the same message as a
+		// twenty-minute one.
+		severity := report.SeverityWarning
+		if now.Sub(standing.Since) >= f.stallEscalation() {
+			severity = report.SeverityCritical
+		}
 		return []Delivery{{
 			Stream: stallStream,
-			Cursor: advanced.With(stallMark + standing.EventID),
+			Cursor: advanced,
 			// The class of message this surface takes to somebody directly is a
 			// harness that is degraded rather than work that is going badly, and a
 			// harness doing nothing at all is the sharpest case there is of it. A
 			// channel is somewhere somebody chooses to look, and this is exactly what
-			// they would not think to look for.
+			// they would not think to look for. It is tagged to them by member id as
+			// well, every time, because a stopped line is theirs to act on and a
+			// name in the channel is what makes the workspace notify a person rather
+			// than only print their name — which the operator has asked for over
+			// urgent items before, and this is the most urgent one there is.
 			Direct: true,
+			Tag:    true,
 			Notification: notify.FromStall(notify.Stall{
 				Since:   standing.Since,
 				Ready:   standing.Ready,
 				Chooser: standing.Chooser,
 				// The cause the last poll recorded and whose move follows it, both
-				// worded by the read model that derived them. A stall with no poll to
-				// read leaves both empty, and the message says what it always said:
-				// that nothing the record holds accounts for the silence.
+				// worded by the read model that derived them and read afresh on every
+				// repetition. A stall with no poll to read leaves both empty, and the
+				// message says what it always said: that nothing the record holds
+				// accounts for the silence.
 				Cause:    cause.Says(),
 				Mover:    cause.Whose(),
 				Standing: f.standing(ctx),
-			}, now),
+			}, severity, now),
 		}}
 	}
-	if len(advanced.Delivered) == len(cursor.Delivered) {
+	if len(advanced.Delivered) == len(cursor.Delivered) && advanced.Standing == cursor.Standing {
 		return nil
 	}
 	return []Delivery{{Stream: stallStream, Cursor: advanced}}
+}
+
+// stallEscalation is how long a stopped line stands before it is said as
+// critical.
+func (f *HarnessFeed) stallEscalation() time.Duration {
+	if f.StallEscalation > 0 {
+		return f.StallEscalation
+	}
+	return DefaultStallEscalation
 }

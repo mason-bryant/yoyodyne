@@ -1379,7 +1379,7 @@ func TestALineWaitingSaysWhatStoppedItHowLongAndWhatIsWaiting(t *testing.T) {
 		Stopped: "intake is held, so nothing new is being chosen",
 		Since:   moment,
 		Ready:   3,
-	}, moment.Add(10*time.Hour))
+	}, report.SeverityNote, moment.Add(10*time.Hour))
 	if waiting.Topic.Kind != TopicProduct || !waiting.Speaker.IsHarness() {
 		t.Fatalf("a waiting line was addressed to %q and spoken by %q", waiting.Topic.Key(), waiting.Speaker.Key())
 	}
@@ -1415,7 +1415,7 @@ func TestTheAgeOfAWaitingLineIsSaidInTheLargestHonestUnit(t *testing.T) {
 		{stood: 10*time.Hour + 3*time.Minute, want: "10 hours"},
 		{stood: 50 * time.Hour, want: "2 days"},
 	} {
-		waiting := FromLine(Line{Stopped: "no watch session is running", Since: moment, Ready: 1}, moment.Add(spoken.stood))
+		waiting := FromLine(Line{Stopped: "no watch session is running", Since: moment, Ready: 1}, report.SeverityNote, moment.Add(spoken.stood))
 		message, err := Render(waiting.Topic, Harness(), waiting.Event)
 		if err != nil {
 			t.Fatalf("render a line waiting %s: %v", spoken.stood, err)
@@ -1426,7 +1426,7 @@ func TestTheAgeOfAWaitingLineIsSaidInTheLargestHonestUnit(t *testing.T) {
 	}
 	// A state with no recorded start says so rather than reading as one that began
 	// at the zero time, which would be an age nobody could believe.
-	unrecorded := FromLine(Line{Stopped: "no watch session is running", Ready: 1}, moment)
+	unrecorded := FromLine(Line{Stopped: "no watch session is running", Ready: 1}, report.SeverityNote, moment)
 	message, err := Render(unrecorded.Topic, Harness(), unrecorded.Event)
 	if err != nil {
 		t.Fatalf("render a line with no recorded start: %v", err)

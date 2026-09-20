@@ -1549,8 +1549,9 @@ counted as activity would silence this for exactly the crash it exists to catch.
 
 Reporting has nothing to do with either. A product that never turned Slack on
 records its stalls and reads them back here, and a product that did gets the same
-record [taken to the operators once](reporting.md#reporting-into-slack) by a sink
-that reads it rather than produces it. That was the other way round until
+record [taken to the operators](reporting.md#reporting-into-slack) — again every
+heartbeat and louder as it stands — by a sink that reads it rather than produces
+it. That was the other way round until
 `yoyodyne-ifd.295`, and it meant the products least able to notice a stopped
 harness were the ones with no stall history at all.
 

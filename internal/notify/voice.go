@@ -702,7 +702,9 @@ var nextMoves = map[Kind]string{
 	// start a session would be handing them a move they do not have — once per
 	// deploy, which is exactly the standing chore self-redeployment removes.
 	KindWatchRedeploying: "nobody's — the session is coming back on the build that was deployed, and the queue is read again when it does.",
-	KindLineWaiting:      "the operator's — this stands until somebody clears what stopped it.",
+	// The line carries the read model's own wording of whose move it is in Mover,
+	// so this is what a line that carried none would say.
+	KindLineWaiting: "the operator's — this stands until somebody clears what stopped it.",
 	// A stall names the machine rather than the state, because there is no state:
 	// what has to be looked at is the thing that chooses work, and whether it is
 	// dead or merely wedged is in the message above this clause.
@@ -802,10 +804,13 @@ func nextMove(event Event) (string, bool) {
 	// where the table says a decision or nothing. Each is one kind of message
 	// covering two situations that send a reader to different people, so the
 	// clause is the read model's — derived beside the fact the message states, so
-	// the two cannot disagree.
+	// the two cannot disagree. The waiting line is the same shape over the
+	// intake hold: the brake's is the development manager's while she decides
+	// and the operator's once she has escalated it, and the line is repeated to
+	// the operator exactly when it is his.
 	if strings.TrimSpace(event.Detail.Mover) != "" {
 		switch event.Kind {
-		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage, KindWatchBraked, KindIntakeHeld:
+		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage, KindWatchBraked, KindIntakeHeld, KindLineWaiting:
 			return ended(strings.TrimSpace(event.Detail.Mover)), true
 		}
 	}

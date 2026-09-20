@@ -119,14 +119,19 @@ at all, [a provider nobody is logged into or nobody can reach](../reporting.md#a
 is said once in the channel tagged to those same members by id, and once more
 when it answers again. The second is **advisory-once** — a
 fact said exactly once and never repeated, which today is a value the project's
-template has improved that this project never edited. The first two degraded
-states and the improvement are sent once rather than repeated, and at most one
-improvement message goes per reading however many the reading found; the hold is
-sent when it is first seen and again with each heartbeat once it has stood past
-six hours, because it is the one state a person ends early. Removing the scope
-costs those direct messages and nothing else: the stale-build message, the hold,
-and the improvement are in the channel either way, and the stall is in the
-durable record `yoyo status` reads back.
+template has improved that this project never edited. The stale build and the
+improvement are sent once rather than repeated, and at most one improvement
+message goes per reading however many the reading found; the hold is sent when
+it is first seen and again with each heartbeat once it has stood past six hours,
+because it is the one state a person ends early; and the stall is sent again
+with every heartbeat it stands, tagged to those members by id in the channel as
+well, because a line that has stopped for reasons nobody can name is the one
+state that gets louder rather than quieter. A brake hold the development manager
+has handed to you is tagged the same way each hour, and sent directly once it
+has stood two hours. Removing the scope costs those direct messages and nothing
+else: the stale-build message, the hold, and the improvement are in the channel
+either way, the stall and the brake hold are still tagged there, and the stall
+is in the durable record `yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -579,9 +584,16 @@ the forge to publish them:
 
 Four states count: the operator holding all harness activity, a held intake
 (whoever held it), a watch session that has found nothing it can start, and no
-watch session running at all. It stops the moment the state clears, and says
-nothing about the clearing — the release, the session opening, or the run it
-starts says that itself.
+watch session running at all. Each closes on whose move it is, in the words
+`yoyo status` puts on its attention line — for a held intake, the hold's own:
+yours for one you placed, the development manager's or the harness's for one
+the brake is working, and yours once she has escalated it. That last one is the
+one state here that gets louder as it stands: a brake hold that waits on you is
+tagged to you by member id every hour, a `warning` while it is young and
+`critical` and sent to you directly once it has stood two hours, until intake is
+released. It stops the moment the state clears, and says nothing about the
+clearing — the release, the session opening, or the run it starts says that
+itself.
 
 The count of promotions is the second thing that makes it speak, and it is there
 because a **dropped merge** is said once, as it happens. A reader who was away
@@ -614,8 +626,10 @@ for it. That is recorded against the product by the two commands that take the
 reading — [`yoyo work --watch`](../work.md#letting-the-harness-choose-the-work) as
 it polls, and [`yoyo reconcile`](../operations.md#recovering-interrupted-runs) on
 every sweep — rather than by this process, and the sink sends the record to
-whoever you grant `direct-work` as a direct message, once per stall and never once
-per check:
+whoever you grant `direct-work` as a direct message, tagged to them by member id
+in the channel — and again every `--heartbeat` while the stall stands, never
+once per check, as a warning while it is young and critical once nothing has
+started for two hours:
 
 > Nothing at all has started on this product for 1 hour, with 47 items ready to
 > pull: 33 of the 47 admitted items are awaiting carry-out of decisions already
@@ -1270,7 +1284,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the three that report the harness itself degraded — a stale session build, the harness having started nothing at all, and the provider holding every role — and all three are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the ones that report the harness itself degraded — a stale session build, the harness having started nothing at all, the provider holding every role, and a brake hold that has waited on you for two hours — and all of them are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
