@@ -269,6 +269,30 @@ func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing
 	}
 }
 
+// The named repository read is the one conversation authority granted after the
+// conversion, by the architect's ruling of 2026-09-18, and it is granted to the
+// three management roles alone: the developer's and the reviewer's
+// conversations are exactly as they were.
+func TestRepositoryReadsAreTheManagementRoles(t *testing.T) {
+	t.Parallel()
+
+	for role, want := range map[domain.AgentRole]bool{
+		domain.RoleProductManager:     true,
+		domain.RoleArchitect:          true,
+		domain.RoleDevelopmentManager: true,
+		domain.RoleDeveloper:          false,
+		domain.RoleReviewer:           false,
+	} {
+		authority, known := chat.AuthorityFor(role)
+		if !known {
+			t.Fatalf("AuthorityFor(%s) reports no authority", role)
+		}
+		if authority.RepositoryReads != want {
+			t.Errorf("the %s's RepositoryReads = %t, want %t", role, authority.RepositoryReads, want)
+		}
+	}
+}
+
 // A role outside the harness's five holds nothing in a conversation, which is the
 // answer the map lookup gave and the answer a bundle lookup has to keep: an
 // authority invented at the point of use is how authority leaks.

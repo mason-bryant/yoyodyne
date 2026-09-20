@@ -557,7 +557,11 @@ any other part of the persona.
 product ships today.** That last part is the documentation your project names,
 and the help every command prints. It is carried in a section of its own,
 labeled as description of the implementation as built and never as authority
-about intent. No source, no design document, and no way to run a command.
+about intent. That is the whole of what is delivered in its context: no source
+and no design document arrives there, and nothing runs a command. What it may
+additionally do is [read one named path at a recorded commit](#reading-the-repository-from-a-conversation)
+— a source file or a design among them — which arrives under the same
+description-not-intent label, one path at a time, and only when it asks.
 
 **Which documents those are is `product.shipped_documentation`**, a list of
 Markdown files relative to the repository:
@@ -634,9 +638,13 @@ what it reads now is narrower than that: the design document and the decision
 records are not there, because they say how the product is built and are the
 half of `docs/` that made description reachable as intent in the first place.
 Reconciling accumulated documentation against the code belongs to a role that
-reads the code, and the harness still does not have one. Point `specifications`
-at a wider directory if you would rather have the breadth than the authority;
-the confinement rule is the only limit on where it points.
+reads the code, and the harness still does not have one. What it has since
+gained is narrower: a management role can [read one named path at a recorded
+commit](#reading-the-repository-from-a-conversation), which lets the product
+manager check a document before it advises about it rather than sweep the tree
+for contradictions. Point `specifications` at a wider directory if you would
+rather have the breadth than the authority; the confinement rule is the only
+limit on where it points.
 
 The documentation is read **after** the specifications have taken what they need
 of the context budget, so a repository too large for both keeps the half that is
@@ -3418,6 +3426,53 @@ What the product manager does with the evidence is an evaluation, which is
 advice and nothing else: recording one admits no work, changes no document, and
 approves nothing. That path, and how to read the evaluations back, is described
 in [the conversation guide](conversation.md#bringing-it-an-idea-rather-than-a-work-item).
+
+## Reading the repository from a conversation
+
+The three management roles — product manager, architect, development manager —
+can have the harness read one repository path for them, or list the names one
+directory holds, at a recorded commit. It is here beside research because it is
+the same shape and the opposite arrangement: research is evidence from outside
+the repository, run by a command you wrote and off until you name one; this is
+evidence from inside it, run by the harness's own Git, and **there is nothing to
+configure**. No key switches it on, none switches it off, and none moves a
+bound. [The conversation guide](conversation.md#reading-the-repository-at-a-recorded-commit)
+says how a role uses it; what belongs here is why the file you are reading has
+no say in it.
+
+**Which roles hold it is the role-capability registry's, in Go.** The three
+management bundles hold `repository.read` and `repository.list`; the developer's
+and the reviewer's hold `repository.read` alone, which is the harness reading a
+change or a context bundle on their behalf rather than a path they name. `yoyo
+config show` reports both under each agent's `capabilities`, and — as with every
+capability — the set is read off the role and never written: a `capabilities`
+key in this file is refused like any other key that does not exist. A persona
+cannot widen it either, because the block is refused where the reply is read
+whatever the persona said.
+
+**The bounds are the protocol's rather than yours**, for the reason
+`max_queries_per_turn` cannot be raised past four: what is bounded is the size
+of a prompt. One reply names at most six paths; one read returns at most 48 KiB
+of a file and one reply's reads together at most 96 KiB, a file beyond that
+being cut with the cut declared and its whole size named rather than split
+across reads; a listing returns at most 400 names; one message reads at most
+twice. A `research`-style block for it would be a bound a project could
+configure past, which is the thing this section exists to say there is not.
+
+**Every read is against the tree of the commit `HEAD` names at that moment**, in
+the repository this configuration's `product.repository` resolves to — the
+primary checkout, never a worktree — and never the working tree, so an edit you
+have not committed is not what a role is shown. That is also what makes the read
+confined without a check: a committed tree has no link to follow and no path
+that leaves it. The content is redacted with the same values every other
+provider-facing path is redacted with, and each read is recorded on the
+conversation as the commit, the path, and the time.
+
+**What the product manager is handed is labelled as description, never intent**
+— the same label its [shipped documentation](#what-the-product-manager-sees-besides-them-and-what-it-does-not)
+carries, applied on every delivery, with the same rule: where a file contradicts
+a specification, the conflict is reported rather than resolved. The
+specifications remain the only statement of what the product is for.
 
 ## Triage thresholds
 

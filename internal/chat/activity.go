@@ -19,13 +19,14 @@ import (
 // provider's. They are deliberately coarse: what the operator needs is whether
 // the turn is alive and roughly what it is doing, not an event log.
 const (
-	phaseSending   = "sending your message"
-	phaseThinking  = "thinking about it"
-	phaseWriting   = "writing the reply"
-	phaseTracker   = "carrying out the tracker actions it asked for"
-	phaseExchange  = "putting its question to the other role"
-	phaseResearch  = "gathering evidence from the sources it named"
-	phaseRecording = "recording the turn"
+	phaseSending    = "sending your message"
+	phaseThinking   = "thinking about it"
+	phaseWriting    = "writing the reply"
+	phaseTracker    = "carrying out the tracker actions it asked for"
+	phaseExchange   = "putting its question to the other role"
+	phaseResearch   = "gathering evidence from the sources it named"
+	phaseRepository = "reading the repository paths it named"
+	phaseRecording  = "recording the turn"
 )
 
 // turnActivity is the display fed by a turn's own events. It keeps the last

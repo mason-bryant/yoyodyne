@@ -35,6 +35,15 @@ func bundles() []Bundle {
 				capability.WorkItemRead,
 				capability.WorkItemMutate,
 				capability.RepositoryRead,
+				// The three management roles may name a repository path and have the
+				// harness read it for them at a recorded commit, or be told one
+				// directory's names. Holding the list beside the read is what makes the
+				// named read theirs: the two run-gated roles hold the read alone,
+				// because their repository evidence is supplied to them — the change,
+				// the context bundle — rather than named by them. It is the
+				// configurable-workflows design's authority-model section, per the
+				// architect's ruling of 2026-09-18.
+				capability.RepositoryList,
 				// Every role's work is carried out by provider invocations, so every
 				// bundle holds this. What stops a role spending is the runtime envelope —
 				// budgets, holds, pauses — which is not a capability and must not become
@@ -81,6 +90,7 @@ func bundles() []Bundle {
 				// proposed to the product manager instead.
 				capability.WorkItemRead,
 				capability.RepositoryRead,
+				capability.RepositoryList,
 				capability.ProviderInvoke,
 				capability.ArtifactDesignMutate,
 				capability.InvariantMutate,
@@ -95,6 +105,7 @@ func bundles() []Bundle {
 				capability.WorkItemRead,
 				capability.WorkItemMutate,
 				capability.RepositoryRead,
+				capability.RepositoryList,
 				capability.ProviderInvoke,
 				capability.WorkDecompose,
 				capability.WorkTriage,

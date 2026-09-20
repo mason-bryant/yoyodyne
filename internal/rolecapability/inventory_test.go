@@ -57,7 +57,8 @@ var expresses = map[string]expression{
 			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
 			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
 			capability.ProposalRaise, capability.ConcernRaise, capability.ResearchCommission,
-			capability.EvaluationRecord, capability.ExchangeAsk,
+			capability.EvaluationRecord, capability.ExchangeAsk, capability.RepositoryRead,
+			capability.RepositoryList,
 		},
 		gap: "the contract and the title are still written beside the derivation: what a role is sent and what it is called are not authority anybody holds",
 	},
@@ -74,7 +75,9 @@ var expresses = map[string]expression{
 		asks: []capability.Capability{
 			capability.ProposalRaise, capability.ConcernRaise, capability.ResearchCommission,
 			capability.EvaluationRecord, capability.ExchangeAsk, capability.WorkItemMutate,
+			capability.RepositoryRead, capability.RepositoryList,
 		},
+		gap: "the repository block is refused unless the role holds both the read and the list; that the named read is the pair is a rule of the derivation rather than a capability either half states",
 	},
 	"conversation.tracker-action": {
 		question: "does the role hold the capability the action it asked for belongs to?",

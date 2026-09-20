@@ -95,10 +95,52 @@ func TestWhatTellsTheRolesApart(t *testing.T) {
 		{"writing inside a run's worktree", capability.WorktreeMutate, []domain.AgentRole{domain.RoleDeveloper}},
 		{"the inter-role ask channel", capability.ExchangeAsk, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager}},
 		{"reading the tracker", capability.WorkItemRead, domain.Roles()},
+		{"having repository content read on its behalf", capability.RepositoryRead, domain.Roles()},
+		{"naming a repository path to be read or listed", capability.RepositoryList, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager}},
 	}
 	for _, expected := range cases {
 		if holding := registry.RolesHolding(expected.who); !slices.Equal(holding, expected.holds) {
 			t.Errorf("%s (%q) is held by %v, want %v", expected.what, expected.who, holding, expected.holds)
+		}
+	}
+}
+
+// TestTheRunGatedBundlesAreUnchangedByTheRepositoryRead pins the developer's
+// and the reviewer's bundles verbatim. The architect's ruling that gave the
+// management roles a named repository read left both of these alone — the
+// reviewer stays tool-less and diff-scoped, the developer is unchanged — and a
+// capability arriving in either of them is a widening nobody ruled on.
+func TestTheRunGatedBundlesAreUnchangedByTheRepositoryRead(t *testing.T) {
+	t.Parallel()
+
+	registry := mustBuild(t)
+	for role, want := range map[domain.AgentRole][]capability.Capability{
+		domain.RoleDeveloper: {
+			capability.WorkItemRead,
+			capability.RepositoryRead,
+			capability.WorktreeMutate,
+			capability.ProviderInvoke,
+			capability.ChecksExecute,
+			capability.ForgePublish,
+			capability.RunStateMutate,
+		},
+		domain.RoleReviewer: {
+			capability.WorkItemRead,
+			capability.RepositoryRead,
+			capability.ProviderInvoke,
+			capability.RunStateMutate,
+			capability.ReviewVerdict,
+		},
+	} {
+		bundle, described := registry.Bundle(role)
+		if !described {
+			t.Fatalf("no bundle describes the %s", role.Title())
+		}
+		if !slices.Equal(bundle.Holds, want) {
+			t.Errorf("the %s holds %v, want exactly %v", role.Title(), bundle.Holds, want)
+		}
+		if registry.Holds(role, capability.RepositoryList) {
+			t.Errorf("the %s holds %q, which the ruling reserved to the management roles", role.Title(), capability.RepositoryList)
 		}
 	}
 }
