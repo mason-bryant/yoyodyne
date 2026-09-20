@@ -196,10 +196,11 @@ execution:
   # wherever it sits in the order, and the rest of the backlog only when none of
   # it is ready. One entry per slot, in slot order; the list may be shorter than
   # the capacity, and the slots it does not name prefer nothing. The example is
-  # Yoyodyne's own: its first slot is dedicated to the reliability label, which
-  # means bugs, anything that keeps the system from stalling, and anything that
-  # keeps the system from making mistakes. Delete the leading "# " to give slot
-  # 1 the same preference.
+  # the seat Yoyodyne's operator directed for its own project on 2026-09-19: a
+  # first slot preferring the reliability label, which means bugs, anything
+  # that keeps the system from stalling, and anything that keeps the system
+  # from making mistakes. Delete the leading "# " to give slot 1 the same
+  # preference.
   # developer_slots:
   #   - prefer: [reliability]   # developer slot 1 pulls reliability-labelled work first
   repair_attempts_before_replan: %d

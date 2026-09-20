@@ -2031,8 +2031,10 @@ slot can instead prefer a **label** — the tracker's own labels, which the
 product manager and the development manager put on work items — and then it
 pulls the ready work carrying that label first, wherever that sits in the
 order, and the rest of the backlog only when none of its label's work is ready.
-Yoyodyne's own project dedicates one developer slot to the `reliability` label,
-on the operator's direction of 2026-09-19, and this is the block that does it:
+On 2026-09-19 the operator directed that one of Yoyodyne's own developer slots
+be dedicated to the `reliability` label, and this is the block that does it,
+pasted into the project's configuration by hand because `.yoyodyne/` is a
+[protected path](#protected-paths-in-a-developers-change) no run may write:
 
 ```yaml
 execution:
@@ -2045,8 +2047,9 @@ execution:
 The reliability label means, in the operator's words, bugs, anything that
 keeps the system from stalling, and anything that keeps the system from making
 mistakes — and every item admitted under that directive, every bug, and every
-stall or mistake fix carries it from admission, which is
-[how the product manager labels work](conversation.md#backlog-state-that-has-stopped-being-true).
+stall or mistake fix carries it from admission, which the conversation guide
+describes with the rest of an item's tracker state under
+[backlog state that has stopped being true](conversation.md#backlog-state-that-has-stopped-being-true).
 
 `developer_slots` is one entry per slot, in slot order, and it may be shorter
 than the capacity — the slots it does not name prefer nothing — and never

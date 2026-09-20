@@ -537,7 +537,7 @@ func TestScaffoldedDeveloperSlotsExampleLoadsWhenUncommented(t *testing.T) {
 	for _, want := range []string{
 		"  # developer_slots:\n",
 		"  #   - prefer: [reliability]",
-		"reliability label, which\n  # means bugs, anything that keeps the system from stalling, and anything that\n  # keeps the system from making mistakes",
+		"the reliability label, which means bugs, anything\n  # that keeps the system from stalling, and anything that keeps the system\n  # from making mistakes",
 	} {
 		if !strings.Contains(string(rendered), want) {
 			t.Errorf("generated configuration does not show %q:\n%s", want, rendered)
