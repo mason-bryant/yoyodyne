@@ -1048,6 +1048,14 @@ the only thing that can close this. A run in flight is never interrupted for it,
 and the queue is re-read from scratch on the way back in exactly as it is at
 every poll.
 
+The product's supervisor holds to that. Its
+[maintenance pass](operations.md#the-maintenance-pass) is what builds and
+installs a build that landed on the checkout, and it never stops a watch session
+to make it take one up: the session is left to take the build up itself between
+the runs it hosts, while the pass restarts the sink and the supervisor
+re-executes itself. What the supervisor restarts is a session that died, within
+its bounds — never one that is running.
+
 **The restart is given a minute, and a session you ask to stop stops.** A
 re-execution that is going to happen happens at once, so a session still waiting
 on one a minute later is not restarting slowly — it is not restarting. It exits

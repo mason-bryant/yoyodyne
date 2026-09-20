@@ -106,11 +106,15 @@ disagree about the shape of the report. Say so, and offer to read plain
    is already true, what setup would do, and what it says it cannot do itself.
 2. **`yoyo setup --yes --json`**, once they agree. It carries out every step it
    can and stops short of the ones it cannot: a `handed-off` or `skipped` step
-   afterwards is one whose `remedy` is now the thing to act on. Two of them are
-   ordinary rather than a failure: Slack reporting is declined unless the
+   afterwards is one whose `remedy` is now the thing to act on. Three of them
+   are ordinary rather than a failure: Slack reporting is declined unless the
    operator names a channel, since an installation reports nothing and runs work
-   exactly the same; and storing a Slack token is always left to a terminal they
-   are watching, because the keychain asks for the token itself.
+   exactly the same; storing a Slack token is always left to a terminal they
+   are watching, because the keychain asks for the token itself; and the
+   `launch-agent` step — the macOS job that starts the product with the machine
+   — is declined unless `--launch-agent` was given, because a resident that
+   starts with the machine is a change to it the operator asks for by name. Ask
+   them, and add `--launch-agent` when they say yes.
 3. **`yoyo doctor --json`**. If `status` is `ok` you are finished. Otherwise take
    the findings **in the order they are given** — the tools, then the project,
    then what the project turns on, so the first problem is usually why the ones

@@ -120,6 +120,18 @@ func (b *Binary) Replaced() (bool, error) {
 	return !info.ModTime().Equal(b.modTime) || info.Size() != b.size, nil
 }
 
+// InstalledAt is when the file this process was started from was last written,
+// as it stands now rather than as it was at the start. A resident deciding
+// whether a child it started predates a deploy compares the child's start
+// against this.
+func (b *Binary) InstalledAt() (time.Time, error) {
+	info, err := os.Stat(b.path)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the executable at %s: %w", b.path, err)
+	}
+	return info.ModTime(), nil
+}
+
 // Take re-executes this process from the same path, as the invocation given and
 // with the environment it was started with. It does not return when it succeeds:
 // the process image is replaced where it stands, keeping the process identifier,

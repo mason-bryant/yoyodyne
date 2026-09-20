@@ -75,12 +75,16 @@ const (
 	// past the bounds, or it cannot be started at all, and it is left down with
 	// the reason until somebody acts on it.
 	ChildDegraded ChildState = "degraded"
+	// ChildScheduled is a part that is a pass the supervisor takes itself on a
+	// cadence rather than a process it starts: the maintenance pass. The reason
+	// carries its cadence and what its last pass came to.
+	ChildScheduled ChildState = "scheduled"
 )
 
 // Valid reports whether the state is one this harness names.
 func (s ChildState) Valid() bool {
 	switch s {
-	case ChildOff, ChildNotYet, ChildRunning, ChildDown, ChildDegraded:
+	case ChildOff, ChildNotYet, ChildRunning, ChildDown, ChildDegraded, ChildScheduled:
 		return true
 	}
 	return false

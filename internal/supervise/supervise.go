@@ -15,6 +15,15 @@
 // loop. The supervisor invents no verb: `yoyo start` and `yoyo stop` are the
 // operator's, and stopping work is still `yoyo pause` and the intake hold.
 //
+// It is also the resident: the process a launchd agent starts with the
+// machine, and the one a deploy replaces in place. The maintenance pass is the
+// supervisor's own rather than a child — a periodic pass it takes on the
+// configured cadence between its looks at the children — and when that pass
+// finds a build installed over the one running, the supervisor writes what it
+// knows, lets its lease go, and re-executes itself from the new file, keeping
+// its process id and whatever started it. It holds no runs, so it has nothing
+// to drain; the scheduler drains itself and is never stopped for a deploy.
+//
 // What it is not. It is not a second invoker of roles: nothing here asks a
 // provider anything, and the children it starts are the harness's own
 // processes, each of which passes every gate it passed when started by hand.
@@ -111,6 +120,35 @@ type Records interface {
 	Save(runstate.Supervision) error
 }
 
+// Pass is the supervisor's periodic maintenance pass. The supervisor asks
+// whether it is due on every look, takes it when it is, and does afterwards
+// what the outcome asks. It is an interface so the tests drive the supervisor
+// with a pass that records what it was asked and asks for a restart on cue.
+type Pass interface {
+	Due(now time.Time) bool
+	Run(ctx context.Context) PassOutcome
+	// Describe is the pass's line in the record: its cadence and its last pass.
+	Describe() string
+}
+
+// PassOutcome is what one pass leaves for the supervisor to do.
+type PassOutcome struct {
+	// TakeUpDeploy asks the supervisor to restart itself into the build
+	// installed over the one it is running, now that the pass is recorded.
+	TakeUpDeploy bool
+	// Skipped reports that no pass was taken: it was not due after all.
+	Skipped bool
+}
+
+// Deployment is the binary this supervisor is executing, as far as restarting
+// into a newer one needs: the invocation to carry across, and the re-execution
+// itself. It is satisfied by *redeploy.Binary, and left nil where the platform
+// cannot replace a running process.
+type Deployment interface {
+	Args() []string
+	Take(args []string) error
+}
+
 // Supervisor drives one product's children.
 type Supervisor struct {
 	Records Records
@@ -123,6 +161,11 @@ type Supervisor struct {
 	// shows the product's whole shape.
 	NotYet []NotYet
 	Off    []config.ServiceName
+	// Pass is the maintenance pass, where the configuration enables it, and
+	// Deployment is what the pass's redeploy step restarts the supervisor
+	// through.
+	Pass       Pass
+	Deployment Deployment
 	// Poll is how often each child is looked at; zero takes DefaultPoll.
 	Poll time.Duration
 	// Now and Sleep are the clock, injectable so a test drives the bounds
@@ -169,11 +212,91 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	s.log("supervising %s as pid %d", s.Product, s.PID)
 	for {
 		s.Tick(ctx)
+		if s.Pass != nil && ctx.Err() == nil && s.Pass.Due(s.now()) {
+			outcome := s.Pass.Run(ctx)
+			// The pass may have stopped a child for the new build, and the record
+			// says so before anything else happens.
+			s.record(s.now())
+			if outcome.TakeUpDeploy {
+				// The lease goes before the re-execution rather than being left to
+				// the descriptor closing as the image is replaced, so the build this
+				// becomes takes it as it starts; and it is taken again where the
+				// restart did not happen, because a supervisor holding no lease is
+				// one a second start would run beside.
+				if err := lease.Release(); err != nil {
+					s.log("%v", err)
+				}
+				s.takeUp()
+				again, held, err := s.Records.Lease()
+				if err != nil {
+					return err
+				}
+				if !held {
+					return ErrAlreadyRunning
+				}
+				lease = again
+			}
+		}
 		if !s.sleep(ctx, s.poll()) {
 			s.log("the supervisor for %s is stopping; its children are left running, and `yoyo stop` is what stops them", s.Product)
 			return nil
 		}
 	}
+}
+
+// takeUp re-executes this process from the binary installed over the one it
+// is running. It returns only where the restart did not happen, which is then
+// said: the supervisor carries on as the build it is, and the next pass asks
+// again.
+func (s *Supervisor) takeUp() {
+	if s.Deployment == nil {
+		s.log("a build is installed over the one this supervisor is running, and this platform cannot replace a running process; `yoyo stop` and `yoyo start` bring the new build up")
+		return
+	}
+	s.log("a build is installed over the one this supervisor is running; restarting into it as pid %d, with the children left running to be reattached", s.PID)
+	err := s.Deployment.Take(s.Deployment.Args())
+	s.log("the restart into the installed build did not happen, so this supervisor carries on as the build it is and the next pass asks again: %v", err)
+}
+
+// ChildState is what the supervisor last knew about one child, for the pass.
+func (s *Supervisor) ChildState(name config.ServiceName) (runstate.SupervisedChild, bool) {
+	state, known := s.states[name]
+	if !known {
+		return runstate.SupervisedChild{}, false
+	}
+	return *state, true
+}
+
+// Restart stops a running child so the supervisor's next look starts it again,
+// which is how the pass has a child take up an installed build. It is a stop
+// on purpose rather than a death: the child's failures are not counted and no
+// backoff is earned, and the reason is recorded until the child is back.
+func (s *Supervisor) Restart(ctx context.Context, name config.ServiceName, reason string) (runstate.SupervisedChild, error) {
+	for _, child := range s.Children {
+		if child.Name() != name {
+			continue
+		}
+		state, known := s.states[name]
+		if !known || state.State != runstate.ChildRunning {
+			return runstate.SupervisedChild{}, fmt.Errorf("the %s service is not running, so there is nothing to restart", name)
+		}
+		stopped, err := child.Stop(ctx)
+		if err != nil {
+			return *state, err
+		}
+		if !stopped.WasRunning {
+			s.log("the %s service was asked to stop for a restart and was not running", name)
+		}
+		// The pid is kept: a child that turns out still to be holding its lease
+		// at the next look is taken back as the process it was, and one that
+		// stopped is started as a new one, which records its own.
+		state.State = runstate.ChildDown
+		state.Reason = reason
+		state.NextStartAt = time.Time{}
+		s.log("the %s service was stopped to be started again: %s", name, reason)
+		return *state, nil
+	}
+	return runstate.SupervisedChild{}, fmt.Errorf("the %s service is not a child of this supervisor", name)
 }
 
 // Tick looks at every child once and does what the bounds say: starts what is
@@ -371,6 +494,12 @@ func (s *Supervisor) Supervision(now time.Time) runstate.Supervision {
 			children = append(children, runstate.SupervisedChild{Service: name, State: runstate.ChildNotYet, Reason: reason})
 			continue
 		}
+		if name == config.ServiceMaintenance && s.Pass != nil {
+			// The pass is the supervisor's own rather than a process, so what
+			// the record says about it is its cadence and its last pass.
+			children = append(children, runstate.SupervisedChild{Service: name, State: runstate.ChildScheduled, Reason: s.Pass.Describe()})
+			continue
+		}
 		for _, off := range s.Off {
 			if off == name {
 				children = append(children, runstate.SupervisedChild{Service: name, State: runstate.ChildOff, Reason: "not enabled in the services section"})
@@ -526,6 +655,8 @@ func DescribeChild(child runstate.SupervisedChild) string {
 		fmt.Fprintf(&said, "down, %s", child.Reason)
 	case runstate.ChildNotYet:
 		fmt.Fprintf(&said, "enabled, and not yet a child of the supervisor: %s", child.Reason)
+	case runstate.ChildScheduled:
+		fmt.Fprintf(&said, "the supervisor's own periodic pass, %s", child.Reason)
 	case runstate.ChildOff:
 		fmt.Fprintf(&said, "off; set services.%s.enabled to start it with the product", child.Service)
 	default:

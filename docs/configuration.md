@@ -428,8 +428,9 @@ Up to three layers produce the effective configuration, later ones winning:
    `services.slack.enabled` (`false`), `services.dashboard.enabled` (`false`),
    `services.dashboard.port` (8765), `services.dashboard.bind` (`127.0.0.1`),
    `services.dashboard.allowed_hosts` (empty), `services.dashboard.token`
-   (`generated`), `services.scheduler.enabled` (`true`), and
-   `services.maintenance.enabled` (`true`).
+   (`generated`), `services.scheduler.enabled` (`true`),
+   `services.maintenance.enabled` (`true`), and `services.maintenance.every`
+   (`10m`).
    `triage.repair_grant_attempts` is filled in too, but as a derivation rather
    than a fixed default: it takes the size of the effective
    `execution.repair_attempts_before_replan`, read after every layer has been
@@ -4690,6 +4691,7 @@ services:
     enabled: true
   maintenance:
     enabled: true
+    every: 10m
 ```
 
 **Every service is present whether or not a project mentions it.** The section is
@@ -4705,7 +4707,7 @@ has; a fifth is refused when the file loads, and the refusal names the four.
 | `slack` | the reporting sink, the `yoyo slack` process that holds this product's two tokens | off |
 | `dashboard` | the read-only projection of the read model, served to a browser | off |
 | `scheduler` | the watch loop — `yoyo work --watch` — that reads the queue and starts what is ready | on |
-| `maintenance` | the periodic pass that keeps the installation converged: reconciling interrupted runs, catching the checkout up, restarting what stopped | on |
+| `maintenance` | the supervisor's own periodic pass, every `every`: `yoyo reconcile`, a rebuild and a redeploy when the checkout moved past the running build, the sink kept up, and every restart held while the provider is not answering | on, every 10m |
 
 The two that are on need nothing that is not already in the file: they are the
 harness's own loop and its self-maintenance, and a product started with neither
@@ -4713,6 +4715,15 @@ starts nothing. The two that are off each need something arranged outside it
 first — Slack a workspace, an app, and two stored tokens; the dashboard a port
 somebody means to open — and each is switched on by the operator who arranged
 it, as reporting itself is.
+
+**`services.maintenance.every` is the pass's cadence**, measured from the last
+pass rather than against a wall-clock grid, as a recurring task's is. Its floor
+is a minute: every pass runs `yoyo reconcile`, which reads the tracker and asks
+the forge about every unsettled publication, so a cadence below that is load
+rather than maintenance and is refused when the file loads. What the pass does
+and records is [the maintenance pass](operations.md#the-maintenance-pass); the
+name `maintenance` is reserved for it in the sweep log, so a
+[recurring task](#recurring-tasks) written under that name is refused.
 
 **The section declares and never widens.** There is no key here for a
 capability, a tool, an account, or an authority. A part started from this
@@ -4788,15 +4799,15 @@ carrying the command that stores it.
 **[`yoyo start`](operations.md#starting-the-product-and-stopping-it) is what
 acts on this section.** It starts the product's supervisor, which reads the
 section and starts every enabled part it knows how to: the Slack sink as
-`yoyo slack ensure` starts it, and the scheduler as `yoyo work --watch` under
-its own watch lease. Two parts are declared here ahead of the supervisor
-knowing how to start them, and `yoyo start` says so for each: the dashboard's
-adoption as a child is `yoyodyne-ifd.414`, and until it lands `yoyo dashboard`
-is started by hand and still binds loopback on its `--port` rather than reading
-this entry; the maintenance pass is the resident item, `yoyodyne-ifd.413`, and
-until it lands `yoyo reconcile` is scheduled by hand. Declaring the whole
-section now is what lets that command and the resident that starts with the
-machine read one statement rather than two.
+`yoyo slack ensure` starts it, the scheduler as `yoyo work --watch` under its
+own watch lease, and the maintenance pass as its own periodic pass on the
+cadence above. One part is declared here ahead of the supervisor knowing how to
+start it, and `yoyo start` says so: the dashboard's adoption as a child is
+`yoyodyne-ifd.414`, and until it lands `yoyo dashboard` is started by hand and
+still binds loopback on its `--port` rather than reading this entry. On macOS
+the [launch agent](operations.md#starting-with-the-machine-the-launch-agent)
+`yoyo setup` installs starts the same supervisor with the machine, reading this
+same section.
 
 ## Recurring tasks
 

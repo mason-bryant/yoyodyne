@@ -31,7 +31,9 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,7 +50,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/launchd"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
@@ -65,6 +69,7 @@ const (
 	stepArtifactReadmes = "artifact-readmes"
 	stepSlack           = "slack"
 	stepSlackSecrets    = "slack-secrets"
+	stepLaunchAgent     = "launch-agent"
 )
 
 // setupStatus is what became of one step. Four values rather than two, because
@@ -119,6 +124,7 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	directory := flags.String("directory", ".", "project directory to set up")
 	product := flags.String("product", "", "product id (default: the project directory name)")
 	channel := flags.String("slack-channel", "", "Slack channel to report into, which is also how the optional Slack walk is answered without being asked")
+	launchAgent := flags.Bool("launch-agent", false, "install the launch agent that starts the product with the machine, which is how that step is answered yes without being asked")
 	assumeYes := flags.Bool("yes", false, "answer every question setup asks with the answer it proposes")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON, asking nothing and, without --yes, changing nothing")
 	if err := flags.Parse(args); err != nil {
@@ -149,12 +155,16 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		directory:    root,
 		product:      *product,
 		slackChannel: strings.TrimSpace(*channel),
+		launchAgent:  *launchAgent,
 		version:      version,
 		runner:       execution.OSProcessRunner{},
 		lookPath:     exec.LookPath,
 		getenv:       os.Getenv,
 		homeDir:      os.UserHomeDir,
 		goos:         runtime.GOOS,
+		executable:   os.Executable,
+		environ:      os.Environ(),
+		getuid:       os.Getuid,
 		stdin:        stdin,
 		ask:          &questioner{reader: bufio.NewReader(stdin), out: stdout, defaults: *assumeYes},
 	}
@@ -201,13 +211,21 @@ type setup struct {
 	directory    string
 	product      string
 	slackChannel string
-	version      string
+	// launchAgent is the operator asking for the resident on the command line,
+	// which is what answers that step yes on a walk answering itself.
+	launchAgent bool
+	version     string
 
 	runner   execution.ProcessRunner
 	lookPath func(string) (string, error)
 	getenv   func(string) string
 	homeDir  func() (string, error)
 	goos     string
+	// executable is the binary the launch agent is written to run, environ
+	// what it is given, and getuid the launchd domain it is loaded into.
+	executable func() (string, error)
+	environ    []string
+	getuid     func() int
 
 	// stdin is the operator's own input, handed to a child process that prompts
 	// for a credential itself. It is deliberately the same stream the questions
@@ -265,6 +283,10 @@ func (s *setup) converge(ctx context.Context) setupReport {
 		if reloaded, err := s.load(); err == nil && reloaded.Config.Slack.Enabled {
 			s.record(s.ensureSlackSecrets(ctx, reloaded.Config.Product.ID))
 		}
+		// Last, because it starts the product: the agent it installs runs the
+		// supervisor, which starts every part the section above enables from
+		// whatever the steps above stored.
+		s.record(s.ensureLaunchAgent(ctx, resolved))
 	}
 
 	report := setupReport{SchemaVersion: setupSchemaVersion, Steps: s.steps}
@@ -856,6 +878,140 @@ func (s *setup) ensureSlackSecrets(ctx context.Context, productID domain.Product
 	}
 }
 
+// ensureLaunchAgent installs the per-user launchd agent that starts the
+// product's supervisor with the machine and starts it again if it dies. It is
+// the one step here that leaves something running: once it is loaded, the
+// product is up, and `yoyo start` is never typed on this machine again.
+//
+// The agent is a property list this walk renders whole, so it is compared whole:
+// one on disk that reads exactly as this would write it is already installed,
+// and one that reads differently — an older binary path, a moved checkout — is
+// replaced with the question asked, because a job pointing at a binary that is
+// not there starts nothing with the machine. The job is loaded where it is not,
+// and reloaded where the file changed, which restarts the supervisor and leaves
+// its children running to be reattached.
+func (s *setup) ensureLaunchAgent(ctx context.Context, resolved config.Resolved) setupStep {
+	productID := resolved.Config.Product.ID
+	if s.goos != "darwin" {
+		return setupStep{
+			Step:    stepLaunchAgent,
+			Status:  setupHandedOff,
+			Summary: fmt.Sprintf("this platform has no launchd, so nothing starts %s with the machine; start it once by hand", productID),
+			Detail:  "a systemd user unit is the equivalent on Linux, and this harness does not write one yet",
+			Remedy:  "yoyo start",
+		}
+	}
+	agent := launchd.AgentFor(productID, launchd.Controller{Runner: s.runner, UserHomeDir: s.homeDir, Getuid: s.getuid})
+	program, err := s.executable()
+	if err != nil || agent.Path == "" {
+		if err == nil {
+			err = errors.New("the home directory could not be resolved")
+		}
+		return setupStep{
+			Step:    stepLaunchAgent,
+			Status:  setupHandedOff,
+			Summary: "the launch agent could not be described, so it was not written",
+			Detail:  err.Error(),
+			Remedy:  "yoyo start",
+		}
+	}
+	store, err := runstate.NewSupervisionStore(s.stateRoot(), productID)
+	if err != nil {
+		return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "where the supervisor logs could not be resolved, so the launch agent was not written", Detail: err.Error(), Remedy: "yoyo start"}
+	}
+	logRoot, logPath := store.SupervisorLog()
+	wanted := launchd.Render(launchd.Spec{
+		Label:            agent.Label,
+		Program:          program,
+		Args:             []string{"start", "--foreground", "--config", resolved.Path},
+		WorkingDirectory: config.ProjectDirectory(resolved.Path),
+		Log:              filepath.Join(logRoot, filepath.FromSlash(logPath)),
+		Environment:      launchd.Environment(s.environ),
+	})
+	installed, found, err := agent.Installed()
+	if err != nil {
+		return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "the launch agent on this machine could not be read", Detail: err.Error(), Remedy: "ls -l " + shellQuote(agent.Path)}
+	}
+	current := found && bytes.Equal(installed, wanted)
+	loaded, err := agent.Loaded(ctx)
+	if err != nil {
+		return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "whether the launch agent is loaded could not be read", Detail: err.Error(), Remedy: agent.BootstrapCommand()}
+	}
+	uninstall := "it is removed with: " + agent.UninstallCommand()
+	if current && loaded {
+		return setupStep{
+			Step:    stepLaunchAgent,
+			Status:  setupAlready,
+			Summary: fmt.Sprintf("%s already starts with the machine: the launch agent %s runs its supervisor", productID, agent.Label),
+			Detail:  agent.Path + "; " + uninstall,
+		}
+	}
+
+	question := fmt.Sprintf("Install the launch agent %s, so %s starts with the machine and its supervisor is restarted if it dies?", agent.Label, productID)
+	switch {
+	case current:
+		question = fmt.Sprintf("Load the launch agent %s, which is written and not loaded, so %s starts with the machine?", agent.Label, productID)
+	case found:
+		question = fmt.Sprintf("Replace the launch agent %s, which no longer reads as this binary and configuration would write it, and reload it?", agent.Label)
+	}
+	// Proposed yes to a person, because a product that starts with the machine
+	// is what this walk is for. A walk answering itself takes it only where
+	// --launch-agent asked: that walk is a script or an agent session, and a
+	// resident that starts with the machine — and runs the product from
+	// wherever this directory is — is a change to the machine somebody should
+	// have asked for by name, not one a scratch walk leaves behind.
+	byDefault := true
+	if s.ask.defaults {
+		byDefault = s.launchAgent
+	}
+	s.ask.say("The launch agent runs `yoyo start --foreground` from %s at every login and\nstarts it again if it dies, so %s and every part its services section\nenables come up with the machine and nothing is typed by hand.", program, productID)
+	if !s.ask.confirm(question, byDefault) {
+		return setupStep{
+			Step:    stepLaunchAgent,
+			Status:  setupSkipped,
+			Summary: fmt.Sprintf("%s does not start with the machine; `yoyo start` starts it by hand", productID),
+			Detail:  "the launch agent would run `yoyo start --foreground` from " + program,
+			Remedy:  s.setupCommand() + " --launch-agent",
+		}
+	}
+	if !current {
+		if err := agent.Install(wanted); err != nil {
+			return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "the launch agent could not be written", Detail: err.Error(), Remedy: s.setupCommand()}
+		}
+	}
+	if loaded {
+		// A loaded job reads the file it was loaded from, so a changed file is
+		// taken up by unloading and loading again. The supervisor it ran exits
+		// and its children survive it, to be reattached by the one that starts.
+		if err := agent.Bootout(ctx); err != nil {
+			return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "the launch agent was rewritten and could not be unloaded to take the change up", Detail: err.Error(), Remedy: agent.UninstallCommand() + " && " + s.setupCommand()}
+		}
+	}
+	if err := agent.Bootstrap(ctx); err != nil {
+		return setupStep{Step: stepLaunchAgent, Status: setupHandedOff, Summary: "the launch agent is written and could not be loaded", Detail: err.Error(), Remedy: agent.BootstrapCommand()}
+	}
+	detail := fmt.Sprintf("%s runs `yoyo start --foreground` from %s, now and at every login; %s", agent.Path, program, uninstall)
+	if running, err := store.Running(); err == nil && running && !loaded {
+		detail += "; a supervisor started by hand is running, and the agent's takes over from the next `yoyo stop`, `yoyo start`, or restart"
+	}
+	return setupStep{
+		Step:    stepLaunchAgent,
+		Status:  setupDone,
+		Summary: fmt.Sprintf("%s now starts with the machine: the launch agent %s runs its supervisor", productID, agent.Label),
+		Detail:  detail,
+	}
+}
+
+// stateRoot is where the supervisor's log is, resolved as every verb resolves
+// it, so the agent's log is the one `yoyo start` names.
+func (s *setup) stateRoot() string {
+	root, err := runstate.SystemDefaultRoot(s.getenv, s.homeDir)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
 // storeKeychainSecret hands the terminal to the keychain. `-w` with no value is
 // what makes it prompt, and the prompt is the whole point: setup is not in the
 // path the token takes, so there is nothing here for it to leak.
@@ -1334,11 +1490,20 @@ report. Anything it could not do -- a flag it does not have, a directory that is
 not there, a report it could not write -- exits 2 instead, says why on standard
 error, and reports nothing.
 
+It ends, on macOS, by offering to install the launch agent that starts the
+product with the machine: a per-user launchd job whose program is the supervisor
+verb, `+"`yoyo start --foreground`"+`, from this binary, which then brings up every part
+the services section enables and starts it again if it dies. A walk answering
+itself with `+"`--yes`"+` installs it only where `+"`--launch-agent`"+` asked for it.
+
 Options:
   --directory <path>        project directory to set up (default: here)
   --product <id>            product id (default: the project directory name)
   --slack-channel <id>      the channel reporting goes into, which also answers
                             the optional Slack walk without being asked
+  --launch-agent            install the launch agent that starts the product
+                            with the machine, which also answers that step yes
+                            on a walk answering itself
   --yes                     answer every question setup asks with the answer it
                             proposes. The keychain's own prompt is not one of
                             them: it still waits for each token to be typed

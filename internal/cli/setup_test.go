@@ -665,12 +665,131 @@ func unfinishedSetups() map[string]func(*setupWorld) {
 			w.goos = "linux"
 			w.answers = "\ny\ny\nC0123456789\n"
 		},
+		"the operator declines the launch agent": func(w *setupWorld) {
+			w.answers = "\n\nn\n"
+		},
+		"launchd will not load the agent": func(w *setupWorld) {
+			w.runner.refuse("launchctl bootstrap")
+			w.answers = "\n\n\n"
+		},
 		"nothing can be asked": func(w *setupWorld) {
 			// A setup with no operator behind it -- a pipe, a CI job -- must
 			// change nothing rather than take silence for consent.
 			w.trackerReady = false
 			w.answers = ""
 		},
+	}
+}
+
+// The last step is the resident: a launch agent whose program is the
+// supervisor verb from this binary, loaded so the product is up now and at
+// every login, restarted by launchd if it dies, with the process group
+// abandoned so the children it started survive its exit. Run again, the step
+// is already true; asked to install over a plist that no longer matches, it
+// replaces and reloads.
+func TestSetupInstallsTheLaunchAgentThatRunsTheSupervisor(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	// The tracker remote, the Slack tier declined, and the agent proposed yes.
+	world.answers = "\n\n\n"
+	report := world.walk()
+
+	step := world.step(report, stepLaunchAgent)
+	if step.Status != setupDone {
+		t.Fatalf("launch-agent step = %s (%s), want it installed:%s", step.Status, step.Summary, renderSetupReport(report))
+	}
+	if !strings.Contains(step.Detail, "launchctl bootout gui/$(id -u)/com.yoyodyne.calc") {
+		t.Errorf("detail = %q, want the uninstall command in it", step.Detail)
+	}
+	rendered, err := os.ReadFile(world.agentPath())
+	if err != nil {
+		t.Fatalf("the agent was not written: %v", err)
+	}
+	plist := string(rendered)
+	for _, want := range []string{
+		"<key>Label</key>\n  <string>com.yoyodyne.calc</string>",
+		"<string>/opt/yoyo/bin/yoyo</string>\n    <string>start</string>\n    <string>--foreground</string>\n    <string>--config</string>\n    <string>" + filepath.Join(world.project, ".yoyodyne", "config.yaml") + "</string>",
+		"<key>RunAtLoad</key>\n  <true/>",
+		"<key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>",
+		"<key>AbandonProcessGroup</key>\n  <true/>",
+		"<key>StandardOutPath</key>\n  <string>" + filepath.Join(world.stateRoot, "products", "calc", "supervisor", "supervisor.log") + "</string>",
+		"<key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/bin:/bin</string>",
+	} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("the agent does not carry %q:\n%s", want, plist)
+		}
+	}
+	if strings.Contains(plist, "SLACK_BOT_TOKEN") || strings.Contains(plist, "xoxb") {
+		t.Errorf("the agent carries a Slack token:\n%s", plist)
+	}
+	if !world.runner.ran("launchctl bootstrap gui/501 "+world.agentPath()) || !world.agentLoaded {
+		t.Errorf("setup did not load the agent; ran %v", world.runner.commands)
+	}
+
+	// Again: nothing asked, nothing changed, and the step already true.
+	world.answers = ""
+	world.runner.commands = nil
+	report = world.walk()
+	if step := world.step(report, stepLaunchAgent); step.Status != setupAlready {
+		t.Fatalf("second launch-agent step = %s (%s), want it already installed", step.Status, step.Summary)
+	}
+	if world.runner.ran("launchctl bootstrap") || world.runner.ran("launchctl bootout") {
+		t.Errorf("a second walk reloaded the agent; ran %v", world.runner.commands)
+	}
+
+	// A plist that no longer reads as this binary would write it -- an older
+	// install -- is replaced with the question asked, and reloaded.
+	if err := os.WriteFile(world.agentPath(), []byte("<plist><dict><key>Label</key><string>com.yoyodyne.calc</string></dict></plist>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	world.answers = "\n\n" // the Slack tier declined again, then the agent
+	world.runner.commands = nil
+	report = world.walk()
+	if step := world.step(report, stepLaunchAgent); step.Status != setupDone {
+		t.Fatalf("third launch-agent step = %s (%s), want the stale agent replaced", step.Status, step.Summary)
+	}
+	if !world.runner.ran("launchctl bootout gui/501/com.yoyodyne.calc") || !world.runner.ran("launchctl bootstrap gui/501 ") {
+		t.Errorf("the rewritten agent was not reloaded; ran %v", world.runner.commands)
+	}
+	if again, _ := os.ReadFile(world.agentPath()); !bytes.Equal(again, rendered) {
+		t.Error("the stale agent was not rewritten to what this binary writes")
+	}
+}
+
+// A walk answering itself installs the agent only where it was asked for by
+// name: `--yes` is a script or an agent session, and a resident that starts
+// with the machine from a scratch directory is not something a scratch walk
+// leaves behind. `--launch-agent` is the asking.
+func TestSetupLeavesTheLaunchAgentToAWalkThatAskedForIt(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.defaults = true
+	report := world.walk()
+	step := world.step(report, stepLaunchAgent)
+	if step.Status != setupSkipped || !strings.Contains(step.Remedy, "--launch-agent") {
+		t.Fatalf("launch-agent step under --yes = %s (%s) remedy %q, want it skipped with the flag as the remedy", step.Status, step.Summary, step.Remedy)
+	}
+	if world.runner.ran("launchctl bootstrap") || world.runner.ran("launchctl bootout") {
+		t.Errorf("a walk answering itself touched launchd; ran %v", world.runner.commands)
+	}
+	if _, err := os.Stat(world.agentPath()); !os.IsNotExist(err) {
+		t.Error("a walk answering itself wrote the agent without being asked")
+	}
+
+	world.launchAgent = true
+	report = world.walk()
+	if step := world.step(report, stepLaunchAgent); step.Status != setupDone {
+		t.Fatalf("launch-agent step under --yes --launch-agent = %s (%s), want it installed", step.Status, step.Summary)
+	}
+
+	// Elsewhere there is no launchd, and the step says what to type instead.
+	linux := newSetupWorld(t)
+	linux.goos = "linux"
+	linux.defaults = true
+	if step := linux.step(linux.walk(), stepLaunchAgent); step.Status != setupHandedOff || step.Remedy != "yoyo start" {
+		t.Errorf("launch-agent step on linux = %s (%s) remedy %q, want it handed off to `yoyo start`", step.Status, step.Summary, step.Remedy)
 	}
 }
 
@@ -1042,7 +1161,11 @@ type setupWorld struct {
 	trackerRemote string
 	gitRemote     string
 	slackChannel  string
-	defaults      bool
+	launchAgent   bool
+	// agentLoaded is whether launchd holds the product's job, which the fake
+	// launchctl answers and the walk's bootstrap and bootout move.
+	agentLoaded bool
+	defaults    bool
 	// closed is the walk with nobody behind it: what `--json` without `--yes`
 	// puts the questioner in, and what an input that has run out reaches.
 	closed bool
@@ -1089,12 +1212,16 @@ func (w *setupWorld) walk() setupReport {
 	walk := &setup{
 		directory:    w.project,
 		slackChannel: w.slackChannel,
+		launchAgent:  w.launchAgent,
 		version:      "test",
 		runner:       w.runner,
 		lookPath:     w.lookPath,
 		getenv:       w.getenv,
 		homeDir:      func() (string, error) { return w.project, nil },
 		goos:         w.goos,
+		executable:   func() (string, error) { return "/opt/yoyo/bin/yoyo", nil },
+		environ:      []string{"PATH=/opt/homebrew/bin:/usr/bin:/bin", "HOME=" + w.project, "SLACK_BOT_TOKEN=xoxb-secret"},
+		getuid:       func() int { return 501 },
 		stdin:        strings.NewReader(w.answers),
 		unattended:   w.unattended,
 		ask:          &questioner{reader: bufio.NewReader(strings.NewReader(w.answers)), out: &w.out, defaults: w.defaults, closed: w.closed},
@@ -1232,8 +1359,21 @@ func (r *setupRunner) Run(_ context.Context, command execution.Command, _ execut
 		}
 	case strings.HasPrefix(joined, "security add-generic-password"):
 		r.keychain[secretNameOf(command.Args)] = true
+	case strings.HasPrefix(joined, "launchctl print"):
+		if !r.world.agentLoaded {
+			return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 113, Stderr: "Could not find service"}, nil
+		}
+	case strings.HasPrefix(joined, "launchctl bootstrap"):
+		r.world.agentLoaded = true
+	case strings.HasPrefix(joined, "launchctl bootout"):
+		r.world.agentLoaded = false
 	}
 	return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
+}
+
+// agentPath is where the walk writes the product's launch agent on this world.
+func (w *setupWorld) agentPath() string {
+	return filepath.Join(w.project, "Library", "LaunchAgents", "com.yoyodyne.calc.plist")
 }
 
 func secretNameOf(args []string) string {
