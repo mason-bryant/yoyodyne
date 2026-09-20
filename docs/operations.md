@@ -328,13 +328,22 @@ a developer told to unblock the queue and reaching for `yoyo release`, or
 approving the goals it was about to admit work against — which until it
 existed was stopped by nothing but this page saying nobody does that. The
 honest boundary is that an environment variable identifies an agent that is
-being one: a shell can strip its own environment, and what stands against an
-agent that means to is the sandbox a run is confined to, which grants no write
-to the state root the holds live under, and the protected-path gate, which
-refuses a change to the goals document an approval is written into. A person
-at a shell an agent opened clears the variable and the verbs are theirs again.
-The same refusal is what `yoyo gate record` will give, once the human gate
-(`yoyodyne-ifd.209.20`) lands.
+being one: a shell can strip its own environment, and the refusal is then
+gone. What stands behind it is different for the two kinds of record. An
+approval is written into the goals document, and that document is a protected
+path: a run's change carrying it is refused before any check runs or any
+reviewer sees it, whatever wrote it, and that is tested end to end
+(`TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed` in
+`internal/orchestrator`, with the join to the path `approve` writes pinned
+beside the refusal tests in `internal/cli`). The holds live under the state
+root, outside any worktree, and nothing the harness tests stands between a
+stripped environment and a write there: a developer run enables Claude Code's
+OS-level sandbox over its shell (`sandbox.enabled`, failing if it is
+unavailable), and that sandbox's write policy is the provider's own rather
+than anything the harness declares or verifies, so it is not counted on here.
+A person at a shell an agent opened clears the variable and the verbs are
+theirs again. The same refusal is what `yoyo gate record` will give, once the
+human gate (`yoyodyne-ifd.209.20`) lands.
 
 **A hold the brake placed asks a person for nothing unless the development
 manager has escalated it.** That was not always so: the brake tripped on

@@ -828,7 +828,9 @@ process the harness launches for a role carries `YOYODYNE_AGENT_ROLE`, and
 developer: a person approves an artifact, and an agent's process is not one` —
 as [`yoyo pause`, `yoyo resume`, and `yoyo release`](operations.md#pausing-everything-and-resuming-it)
 do. Behind that, the write it would have made is to a protected path, which the
-harness refuses in a run's change whatever ran the command.
+harness refuses in a run's change whatever ran the command — tested end to end
+by a developer run whose change carries a forged approval in
+`docs/product/goals`, refused with nothing reaching the target branch.
 
 **The approval names the revision it was given for**, which is the index into the
 revision log above it. The log is append-only, so that index means one change

@@ -17,10 +17,13 @@ package cli
 // this is rather than with a permission error. What that catches is a mistake
 // the system could make on its own -- a developer told to unblock the queue and
 // reaching for `yoyo release`. An agent that means to defeat it can strip its
-// own environment; what stands against that is the sandbox a run is confined
-// to, which grants no write to the state root the holds live under, and the
-// protected-path gate, which refuses a change to the document an approval is
-// written into. `yoyo gate record`, when it lands, refuses here as well.
+// own environment. Behind that, an approval is a write to a protected path,
+// which the gate refuses in a run's change whatever wrote it and which is
+// tested end to end; the holds are under the state root, where the only thing
+// between a stripped environment and a write is the provider's own sandbox,
+// which the harness enables for a developer run and neither declares the
+// policy of nor verifies. `yoyo gate record`, when it lands, refuses here as
+// well.
 
 import (
 	"fmt"

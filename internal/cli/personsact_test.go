@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -159,5 +161,58 @@ func TestTheVerbLaunchedFromADevelopersEnvironmentIsRefused(t *testing.T) {
 	}
 	if _, held, err := holds.Held(); err != nil || !held {
 		t.Fatalf("Held() after a person's pause = %t, %v, want the hold placed", held, err)
+	}
+}
+
+// The other half of what goal-level approval rests on. A person's approval is
+// written into the goals document, and that document is a path the
+// protected-path gate refuses in a run's change with no grant -- so a developer
+// that wrote an approval into its worktree by any means, `yoyo artifact approve`
+// with the marker stripped included, is refused before any reviewer sees the
+// change. What is pinned here is the join: the path `approve` actually writes,
+// as the configuration a run reads resolves it, is one the same Set the pipeline
+// builds (orchestrator.gateProtectedPaths) refuses. The end-to-end case -- a
+// developer run whose change carries a forged approval in docs/product/goals,
+// refused with nothing reaching the target branch -- is
+// TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed in
+// internal/orchestrator, and it is what `docs/configuration.md`'s sentence about
+// the write being refused whatever ran the command rests on.
+func TestTheDocumentAnApprovalIsWrittenIntoIsAPathARunsChangeIsRefused(t *testing.T) {
+	// Not parallel: the marker is cleared in this process's environment, so the
+	// approval is a person's.
+	t.Setenv(execution.AgentRoleVariable, "")
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md", artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"}))
+
+	stdout, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "--json", "v1-goals",
+		"--reason", "approved by the operator in conversation on 2026-09-20")
+	if code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	var written struct {
+		Artifacts []struct {
+			Path string `json:"path"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &written); err != nil || len(written.Artifacts) != 1 || written.Artifacts[0].Path == "" {
+		t.Fatalf("approve --json = %q (err = %v), want the written path named", stdout, err)
+	}
+	approved := written.Artifacts[0].Path
+
+	// The gate is built from the configuration exactly as the pipeline builds
+	// it, and refuses the path the approval landed on with no grant -- and a
+	// grant is the only thing that admits it, which no run writes for itself.
+	resolved, err := config.LoadResolved(configPath)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	gate := protectedpath.Protect(resolved.Config)
+	if refused := gate.Refused([]string{approved, "internal/feature.go"}, nil); len(refused) != 1 || refused[0] != approved {
+		t.Fatalf("Refused() = %v, want exactly the approved document %q refused", refused, approved)
+	}
+	if refused := gate.Refused([]string{approved}, protectedpath.Grants(protectedpath.GrantMarker+" "+approved)); len(refused) != 0 {
+		t.Fatalf("Refused() under a grant of the document = %v, want nothing, so that the item's own grant is the one door", refused)
 	}
 }

@@ -27,10 +27,13 @@ import (
 // system could make on its own looks like: a developer told to unblock the
 // queue and reaching for `yoyo release`. It is not a boundary against an agent
 // that means to defeat it -- a shell can strip its own environment -- and the
-// documentation says so rather than claiming more. What stands against an agent
-// that means it is the sandbox a run is confined to, which grants no write to
-// the state root the holds live under, and the protected-path gate, which
-// refuses a change to the document an approval is written into.
+// documentation says so rather than claiming more. What stands behind it is the
+// protected-path gate, which refuses a run's change carrying the document an
+// approval is written into whatever wrote it, and is tested end to end. The
+// holds live under the state root, and nothing the harness tests stands between
+// a stripped environment and a write there: a developer run enables the
+// provider's own sandbox over its shell, whose write policy is the provider's
+// rather than anything declared or verified here.
 
 // AgentRoleVariable names the role a process was launched for. It is under the
 // harness's own prefix, so the explicit environment carries it through to
