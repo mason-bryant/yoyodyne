@@ -1715,3 +1715,41 @@ func TestClientDoesNotReopenAnItemThatHasMovedSinceTheRefusal(t *testing.T) {
 		t.Fatalf("bd was called %d time(s), want the claim and the re-read only: %#v", len(runner.args), runner.args)
 	}
 }
+
+// The revision the harness closed a conversation-carried item on is written
+// onto the item and read back, so a reopened item still says what it was closed
+// on — and a record bd did not store must not read as recorded, because that is
+// exactly the item the next pull closes a second time.
+func TestClientRecordsAndReadsBackALanding(t *testing.T) {
+	t.Parallel()
+
+	landing := "docs/designs/management-and-supervision.md@2026-09-07T05:30:00Z"
+	stored := fmt.Sprintf(`[{"id":"yoyodyne-1","title":"The architect designs it","status":"open","priority":2,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation:architect","yoyodyne_landed":%q}}]`, landing)
+	runner := &fakeRunner{responses: []string{stored}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.RecordLanding(context.Background(), "yoyodyne-1", landing)
+	if err != nil {
+		t.Fatalf("RecordLanding() error = %v", err)
+	}
+	if item.Landing != landing {
+		t.Fatalf("RecordLanding() landing = %q, want %q", item.Landing, landing)
+	}
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--set-metadata=yoyodyne_landed=" + landing, "--json"}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-1","title":"The architect designs it","status":"open","priority":2,"issue_type":"task","metadata":{}}]`}}
+	if _, err := (Client{Runner: unstored}).RecordLanding(context.Background(), "yoyodyne-1", landing); err == nil ||
+		!strings.Contains(err.Error(), "after being recorded") {
+		t.Fatalf("RecordLanding() unstored error = %v", err)
+	}
+	// Clearing is the same write with nothing in it, and reads back as nothing.
+	cleared := &fakeRunner{responses: []string{`[{"id":"yoyodyne-1","title":"The architect designs it","status":"open","priority":2,"issue_type":"task","metadata":{"yoyodyne_landed":""}}]`}}
+	if item, err := (Client{Runner: cleared}).RecordLanding(context.Background(), "yoyodyne-1", ""); err != nil || item.Landing != "" {
+		t.Fatalf("RecordLanding() cleared = %#v, %v", item, err)
+	}
+	if _, err := (Client{Runner: &fakeRunner{}}).RecordLanding(context.Background(), "../escape", landing); err == nil {
+		t.Fatal("RecordLanding() on an invalid id = nil error")
+	}
+}

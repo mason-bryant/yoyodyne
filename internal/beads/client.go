@@ -75,6 +75,13 @@ type WorkItem struct {
 	// than harness metadata, so whatever else reads the tracker — bd's own
 	// listing filters first among it — reads the same labels the harness wrote.
 	Labels []string
+	// Landing is the revision the harness closed this item on, where it closed
+	// one that a conversation carries: the document and the revision's time, as
+	// RecordLanding wrote them. It is empty for everything else. It is what
+	// keeps that close from being made twice — an item somebody reopened after
+	// it still carries the landing it was closed on, and the sweep that reads
+	// the same revision again reads this and leaves the item open.
+	Landing string
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -125,6 +132,13 @@ const executorKey = "yoyodyne_executor"
 // written the same way everything else here is written — one value set on the
 // item — rather than needing the tracker to forget a key.
 const parkedKey = "yoyodyne_parked"
+
+// LandingKey is where the tracker records the revision the harness closed a
+// conversation-carried item on. It is metadata for the reason the parking is:
+// the sweep that closes reads it, and a reopen appends a note without touching
+// it, which is exactly what lets a reopened item stay open. It is exported so
+// a problem the sweep reports can name what a person would have to clear.
+const LandingKey = "yoyodyne_landed"
 
 // witnessValue is what the witness holds for one goal: the statement itself
 // where it fits, and a bare "1" where it does not. The bound is the one a goals
@@ -1129,6 +1143,31 @@ func (c Client) RecordCost(ctx context.Context, id string, cost Cost) (WorkItem,
 	return item, nil
 }
 
+// RecordLanding stores the revision the harness is closing a conversation-carried
+// item on, or clears it with an empty value. It is written before the close so
+// the item carries it whatever becomes of the close, and it is read back for the
+// reason a parking is: what rests on it is that a reopened item is not closed
+// again on the same revision, and a marker reported as set and not stored is
+// exactly the item the next pull closes a second time.
+func (c Client) RecordLanding(ctx context.Context, id, landing string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	landing = strings.TrimSpace(landing)
+	data, err := c.run(ctx, "update", id, "--set-metadata="+LandingKey+"="+landing, "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Landing != landing {
+		return WorkItem{}, fmt.Errorf("work item %s landing is %q after being recorded, want %q", item.ID, item.Landing, landing)
+	}
+	return item, nil
+}
+
 func formatCost(total float64) string {
 	return strconv.FormatFloat(total, 'f', costPrecision, 64)
 }
@@ -1365,7 +1404,22 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 	item.GoalWitness = goalWitnessIn(raw.Metadata)
 	item.Executor = executorIn(raw.Metadata)
 	item.Parking = parkingIn(raw.Metadata)
+	item.Landing = metadataString(raw.Metadata, LandingKey)
 	return item, nil
+}
+
+// metadataString reads one string-valued metadata key, trimmed, and nothing
+// for a key that is absent or is not a string.
+func metadataString(metadata map[string]json.RawMessage, key string) string {
+	raw, present := metadata[key]
+	if !present {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 // HasLabel reports whether the item carries one label, compared exactly: bd

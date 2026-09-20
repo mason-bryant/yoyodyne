@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
@@ -469,6 +470,95 @@ func TestSchedulerCarriesOnPastParkedWork(t *testing.T) {
 	}
 	if schedule.Stopped != ScheduleDrained {
 		t.Fatalf("stopped = %q, want the pass to have drained", schedule.Stopped)
+	}
+}
+
+// landedOnPull is a landing sweep that reports the given items landed, closing
+// them in the harness's tracker as the real one closes them in bd, and refuses
+// to say anything about the rest.
+type landedOnPull struct {
+	harness *scheduleHarness
+	landed  map[string]bool
+	settles int
+}
+
+func (l *landedOnPull) Settle(_ context.Context, entries []backlog.Entry) (LandingSweep, error) {
+	l.settles++
+	var sweep LandingSweep
+	for _, entry := range entries {
+		if !l.landed[entry.ID] {
+			continue
+		}
+		l.harness.mu.Lock()
+		for index := range l.harness.items {
+			if l.harness.items[index].ID == entry.ID {
+				l.harness.items[index].Status = "closed"
+			}
+		}
+		l.harness.mu.Unlock()
+		sweep.Landed = append(sweep.Landed, LandedConversation{
+			WorkItemID: entry.ID, Executor: entry.Executor,
+			Document:  "docs/designs/management-and-supervision.md",
+			RevisedAt: time.Date(2026, 9, 7, 5, 30, 0, 0, time.UTC),
+			Reason:    entry.ID + " - side conversations designed",
+		})
+	}
+	return sweep, nil
+}
+
+// yoyodyne-ifd.330 replayed to its end: the architect's item, its design already
+// in the tree, read by a pass. It is closed on the pull rather than passed over
+// as work waiting on somebody opening a conversation, the pass says so, and the
+// item beside it whose design has not landed is passed over exactly as before.
+func TestAConversationsItemWhoseDesignLandedIsClosedOnThePullRatherThanPassedOver(t *testing.T) {
+	t.Parallel()
+
+	landed := beads.WorkItem{
+		ID: "yoyodyne-ifd.330", Title: "The architect designs side conversations with merge-back", Status: "open", Priority: 2,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
+	}
+	waiting := beads.WorkItem{
+		ID: "yoyodyne-ifd.306", Title: "The architect designs conversation account failover", Status: "open", Priority: 2,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
+	}
+	ordinary := beads.WorkItem{ID: "yoyodyne-ifd.367", Title: "Close on landing", Status: "open", Priority: 3}
+	harness := newScheduleHarness(landed, waiting, ordinary)
+	sweep := &landedOnPull{harness: harness, landed: map[string]bool{landed.ID: true}}
+	harness.landings = sweep
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Landed) != 1 || schedule.Landed[0].WorkItemID != landed.ID {
+		t.Fatalf("landed = %#v, want 330 closed on its landing", schedule.Landed)
+	}
+	if schedule.LandingProblem != "" {
+		t.Fatalf("landing problem = %q, want none", schedule.LandingProblem)
+	}
+	// The closed item is off the queue this pull chose from: not passed over,
+	// not counted among the admitted.
+	for _, deferred := range schedule.Deferred {
+		if deferred.WorkItemID == landed.ID {
+			t.Fatalf("deferred = %#v, want the closed item not passed over as still waiting on a conversation", schedule.Deferred)
+		}
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != waiting.ID {
+		t.Fatalf("deferred = %#v, want the item whose design has not landed passed over as before", schedule.Deferred)
+	}
+	// The counts are the last pull's, which found the ordinary item done and the
+	// closed one gone: one admitted item, the one still waiting on its design.
+	if schedule.Admitted != 1 || schedule.Pullable != 0 {
+		t.Fatalf("backlog = %d admitted, %d pullable, want only the item whose design has not landed", schedule.Admitted, schedule.Pullable)
+	}
+	if len(schedule.Landed) != 1 || sweep.settles < 2 {
+		t.Fatalf("landed = %#v after %d sweeps, want the close recorded once across every pull", schedule.Landed, sweep.settles)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ordinary.ID {
+		t.Fatalf("started = %#v, want the ordinary item pulled as ever", schedule.Started)
+	}
+	if !strings.Contains(schedule.Render(), landed.ID+" was closed: its architect landed as the 2026-09-07 05:30:00Z revision of docs/designs/management-and-supervision.md") {
+		t.Fatalf("rendered = %q, want the close said where the pass is read", schedule.Render())
 	}
 }
 
@@ -2440,6 +2530,10 @@ type scheduleHarness struct {
 	// finished is every run this harness has recorded an ending for, which is what
 	// a claim audit settling a dead run produces.
 	finished []runstate.State
+	// landings stands in for the landing sweep. A pull is wired with one only
+	// where a test asks, so every other test's pass closes nothing — which is
+	// what every pass did before this existed.
+	landings ScheduleLandings
 
 	pulls      int
 	order      []string
@@ -2582,7 +2676,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Stoppages: stoppages, Decisions: decisions,
 		Capacity: capacity, Slots: slots, Start: h.start, Escalations: escalations,
 		Tree: tree, Triage: docket, Recurring: recurring, CarryOut: carryOut, Holds: holds,
-		Claims: claims,
+		Claims: claims, Landings: h.landings,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.

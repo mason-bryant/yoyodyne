@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // defaultHomes is the homes a project on the recommended layout gets, owning
@@ -97,7 +98,7 @@ func TestAGrantAdmitsTheConditionItCovers(t *testing.T) {
 	// And the grant is read as the item writes it, through Grants, so the two
 	// halves of the item agree about what was admitted.
 	granted := description + "\n\n" + GrantMarker + " docs/designs/slack-reporting-design.md\n"
-	if problems := defaultHomes().ConditionProblems(granted, "", Grants(granted)); len(problems) != 0 {
+	if problems := defaultHomes().ConditionProblems(Subject{Description: granted, Granted: Grants(granted)}); len(problems) != 0 {
 		t.Fatalf("ConditionProblems() on a granted item = %v, want nothing", problems)
 	}
 }
@@ -246,5 +247,163 @@ func TestOwnedDocumentsAreTheArtifactStores(t *testing.T) {
 	homes := ArtifactHomes(config.Config{Product: product}, documents...)
 	if conditions := homes.Ungranted("Done means the malformed design records the rule.", "", nil); len(conditions) != 1 {
 		t.Fatalf("Ungranted() naming a refused document = %#v, want it refused", conditions)
+	}
+}
+
+// yoyodyne-ifd.330, as the product manager admitted it at turn 468: the
+// architect's design work by its title and by its done-means, naming no
+// document, and naming no executor. Nothing refused it, it read as ready, and
+// the developer run it was handed could only report that the design had
+// already landed. Read now, both the title and the done-condition say whose
+// work it is, and an item that says so without the marker is refused with the
+// marker named — and admitted as it stands once the marker is on it.
+func TestConversationShapedWorkWithoutAnExecutorIsRefusedWithTheMarkerNamed(t *testing.T) {
+	t.Parallel()
+
+	item330 := Subject{
+		Title:       "The architect designs side conversations with merge-back",
+		Description: "Operator capability direction, 2026-09-07, design routed to the architect as directed: a persona can hold a side conversation concurrent with its main thread. Done means the design is recorded in the governed documents - the stream shape, the merge write, the action-authority answer, the config knob - and implementation items can cite it.",
+	}
+	problems := defaultHomes().ConditionProblems(item330)
+	if len(problems) != 2 {
+		t.Fatalf("ConditionProblems() on 330 = %v, want the done-condition and the title each refused", problems)
+	}
+	for _, problem := range problems {
+		for _, want := range []string{`executor "conversation:architect"`, "never selected for a developer run", "closed by the harness once a revision"} {
+			if !strings.Contains(problem.Error(), want) {
+				t.Fatalf("refusal %q never says %q", problem, want)
+			}
+		}
+	}
+	if !strings.Contains(problems[0].Error(), "the design is recorded in the governed documents") {
+		t.Fatalf("refusal %q never quotes the clause", problems[0])
+	}
+	if !strings.Contains(problems[1].Error(), "its title says the architect does the work") {
+		t.Fatalf("refusal %q never names the title", problems[1])
+	}
+
+	// Marked, the same item is that conversation's work stated correctly.
+	item330.Executor = domain.ConversationWith(domain.RoleArchitect)
+	if problems := defaultHomes().ConditionProblems(item330); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() on 330 marked = %v, want nothing", problems)
+	}
+
+	// Each reading fires on its own: a ruling recorded with a plain title, and
+	// an architect title with a done-means naming nothing of the kind.
+	for _, shape := range []Subject{
+		{Title: "Slack renders role prose", Description: "Done means her ruling is recorded on the design, the sink renders role prose per it, and the token never reaches an agent process."},
+		{Title: "The architect ratifies the portable-configuration baseline", Description: "Done means the manual's claims match the baseline."},
+		{Title: "The architect rules on the release push", AcceptanceCriteria: "The ruling is recorded where the release machinery can cite it."},
+	} {
+		if problems := defaultHomes().ConditionProblems(shape); len(problems) == 0 {
+			t.Fatalf("ConditionProblems() on %q = nothing, want the shape refused", shape.Title)
+		}
+	}
+}
+
+// The readings are narrow on purpose: "decision" is what triage records on an
+// item, "the design" is cited by nearly every developer item, and "The
+// architect's" opens a developer item about the ruling rather than one the
+// architect does. None of these is conversation work, and none is refused.
+func TestOrdinaryDeveloperWorkIsNotReadAsConversationWork(t *testing.T) {
+	t.Parallel()
+
+	for _, shape := range []Subject{
+		{Title: "Stopped work reaches the development manager", Description: "Done means stopped work reaches the development manager, its decision is recorded on the item, and the docket entry is settled."},
+		{Title: "The architect's ruling is enforced by the gate", Description: "Done means the gate refuses what the design forbids, with a test pinning it."},
+		{Title: "The architect loop: windowed drift review", Description: "Done means the loop runs on the recurring-tasks machinery."},
+		{Title: "Add the capacity-blocked state", Description: "The design says lower-level gates are configurable. Done means the read model exposes the state and the design is cited in the test."},
+		{Title: "Retire the design note", Description: "Done means the design is retired from the manual's table of contents."},
+	} {
+		if problems := defaultHomes().ConditionProblems(shape); len(problems) != 0 {
+			t.Fatalf("ConditionProblems() on %q = %v, want nothing", shape.Title, problems)
+		}
+	}
+	// A grant under a home is somebody's decision that a run writes there, so
+	// the recorded ruling is the run's work and not the architect's.
+	granted := Subject{
+		Title:       "Record the ruling the operator approved",
+		Description: "Done means the ruling is recorded on the slack-reporting design as the architect's revision.\n\n" + GrantMarker + " docs/designs/slack-reporting-design.md\n",
+	}
+	granted.Granted = Grants(granted.Description)
+	if problems := defaultHomes().ConditionProblems(granted); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() on a granted recording = %v, want nothing", problems)
+	}
+	// And a project with no home the architect writes reads nothing as the
+	// architect's: there is nowhere such work could land.
+	productOnly := ArtifactHomes(config.Config{Product: config.Product{Specifications: config.DefaultSpecifications}})
+	if problems := productOnly.ConditionProblems(Subject{Title: "The architect designs the thing", Description: "Done means the design is recorded."}); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() with no architect home = %v, want nothing", problems)
+	}
+}
+
+// An item a conversation carries is judged as that conversation's work. A
+// done-condition naming a document its role owns is admitted — that is the
+// condition stated correctly, and what the landing is later read from — and one
+// naming another role's document is refused as that role's, without the marker
+// offered as the fix, because the item already carries one.
+func TestAConversationsItemMayNameTheDocumentsItsRoleOwns(t *testing.T) {
+	t.Parallel()
+
+	ruling := Subject{
+		Title:       "The architect rules on agent voices in threads",
+		Description: "Done means the ruling is recorded on the slack-reporting design as her revision, and the implementation can cite it.",
+		Executor:    domain.ConversationWith(domain.RoleArchitect),
+	}
+	if problems := defaultHomes().ConditionProblems(ruling); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() on the architect's own document = %v, want nothing", problems)
+	}
+	brief := Subject{
+		Title:       "The architect rules on the brief",
+		Description: "Done means docs/product/brief.md states the new scope.",
+		Executor:    domain.ConversationWith(domain.RoleArchitect),
+	}
+	problems := defaultHomes().ConditionProblems(brief)
+	if len(problems) != 1 {
+		t.Fatalf("ConditionProblems() on another role's document = %v, want the one condition refused", problems)
+	}
+	for _, want := range []string{"docs/product/brief.md", "the product-manager's to write", "not the architect conversation's"} {
+		if !strings.Contains(problems[0].Error(), want) {
+			t.Fatalf("refusal %q never says %q", problems[0], want)
+		}
+	}
+	if strings.Contains(problems[0].Error(), "mark the item") {
+		t.Fatalf("refusal %q offers the marker to an item that carries one", problems[0])
+	}
+	// The product manager's conversation is judged the same way round.
+	scope := Subject{
+		Title:       "Scope team mode",
+		Description: "Done means the document is on disk in docs/product, the operator has approved it, and the design child can cite it.",
+		Executor:    domain.ConversationWith(domain.RoleProductManager),
+	}
+	if problems := defaultHomes().ConditionProblems(scope); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() on the product manager's own home = %v, want nothing", problems)
+	}
+	// An executor the harness does not recognize is judged as a developer run,
+	// which is the direction that refuses rather than the one that waves through.
+	unknown := ruling
+	unknown.Executor = "conversation"
+	if problems := defaultHomes().ConditionProblems(unknown); len(problems) == 0 {
+		t.Fatal("ConditionProblems() with a bare conversation marker = nothing, want it judged as a run")
+	}
+}
+
+// A clause that both names a document and reads as conversation work is one
+// refusal, not two: the document refusal already names the marker among its
+// fixes, and the same clause quoted twice is one instruction too many.
+func TestAClauseRefusedForItsDocumentIsNotRefusedAgainForItsShape(t *testing.T) {
+	t.Parallel()
+
+	problems := defaultHomes().ConditionProblems(Subject{
+		Title:       "Slack renders role prose",
+		Description: "Done means her ruling is recorded on the slack-reporting design, and the sink renders role prose per it.",
+	})
+	if len(problems) != 1 {
+		t.Fatalf("ConditionProblems() = %v, want the one clause refused once", problems)
+	}
+	for _, want := range []string{"docs/designs/slack-reporting-design.md", `executor "conversation:architect"`, GrantMarker} {
+		if !strings.Contains(problems[0].Error(), want) {
+			t.Fatalf("refusal %q never says %q", problems[0], want)
+		}
 	}
 }

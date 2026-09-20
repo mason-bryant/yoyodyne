@@ -826,10 +826,49 @@ marker steers what the harness chooses rather than what you may ask for.
 
 The marker is not retroactive, which is the part worth knowing before you rely
 on it: it covers exactly the items that carry it, so work admitted before you
-started marking carries none and is chosen as ordinary developer work. Nothing
-infers it — no reading of an item tells a conversation from a diff — so bringing
+started marking carries none and is chosen as ordinary developer work. Bringing
 an existing queue under the guard means marking its conversation-executed items,
 one `update` each, in the product manager's conversation.
+
+Two things now read the shape of conversation work, so an item left unmarked by
+mistake is caught before a run is spent on it rather than by the run. On
+2026-09-07 yoyodyne-ifd.330 — "The architect designs side conversations with
+merge-back", done when "the design is recorded in the governed documents" — was
+admitted with no executor; nothing refused it, the tracker called it ready, and
+a developer run was handed it after its design had already merged.
+[The diagnosis](diagnoses/yoyodyne-ifd-367-conversation-item-dispatched.md)
+traces it. So admission refuses a creation or update whose done-means says a
+design or a ruling is recorded, published, promoted, or ratified, or whose title
+has the architect as its subject, when the item names no executor — with the
+marker named as the fix — and the run asks the same question of the item it is
+handed, before it claims it, for items that reached the queue some other way.
+The reading is narrow on purpose: "decision" is what triage records on an item,
+"the design" is cited by nearly every developer item, and neither fires. A
+grant under an artifact home turns the reading off, because a grant is
+somebody's decision that a run writes there.
+
+A marked item also closes when its work lands, rather than by hand. A
+design-only item's landing is a revision in a document the marked role owns,
+and until now the only thing that carried that back to the tracker was the
+product manager closing the item on evidence some turns later — twice, once
+after a developer run had been spent. Now every pull reads the documents the
+marked role owns, and an item whose identifier opens the reason of a revision
+in one of them, made by that role — `yoyodyne-ifd.330 - side conversations
+designed` in a design's revision log — is closed at that pull, with the
+document, the revision, and the revision's own words in the close reason. The
+convention is that the reason *opens* with the identifier: a revision that
+mentions an item further in — "published under yoyodyne-ifd.280 after three
+reviewer reports" — is about something else and closes nothing, so an item with
+two deliverables is not closed on a revision that carries one. A close you
+disagree with is one you can read and reopen with a note, and the reopen
+holds: the revision the item was closed on is written onto the item, as
+`yoyodyne_landed` in its metadata, before the close, and a pull that finds an
+open item still carrying that revision leaves it where you put it rather than
+closing it again a minute later. What closes it again is a later revision
+opening with its identifier, which is a new landing. The development manager's
+conversation owns no document, so an item it carries is never read for a
+landing; and an item nobody marked is a developer run, whose landing is its
+merge.
 
 **Parked work is out of reach until somebody puts it back.** Some admitted work
 is work you still want and do not want started: deferred by a scope decision,

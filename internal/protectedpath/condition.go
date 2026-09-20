@@ -50,6 +50,33 @@ package protectedpath
 // reason the artifact store excludes them from its identity scheme: an invariant
 // is delivered to every run by its id and cited by it in nearly every item, and
 // a done-condition that edited one would name its path.
+//
+// # Who executes the item changes the answer
+//
+// The question above has a second half, and it was not asked until
+// yoyodyne-ifd.330 cost a run: not only which document a done-condition names,
+// but who the item says carries it out. An item whose executor is a role's
+// conversation is that role's work, and a done-condition naming a document the
+// role owns is the condition stated correctly — "the ruling is recorded on the
+// slack-reporting design" is exactly what the architect's conversation does —
+// so it is admitted, and it is what the harness later reads to close the item
+// when the revision lands. The same clause on an item nobody marked is refused,
+// because that item is a developer run and no run can write it.
+//
+// And the shape itself is read, without any document named. 330 was admitted
+// with "Done means the design is recorded in the governed documents" and no
+// executor, and selection had nothing to go on: no document was named, the
+// tracker called the item ready, and a developer run was spent finding out
+// that the design had already landed. So a done-condition that says a design
+// or a ruling is recorded, published, promoted, or ratified is read as the
+// design owner's conversation work, and so is a title whose subject is that
+// role — "The architect designs …", "The architect rules …" — because the
+// architect executes nothing in a run. Measured over the 596 items this
+// tracker held when this was written, the two readings together fire on 27
+// items: 24 that carry the executor already, 330, and two admitted before the
+// marker existed (yoyodyne-ifd.68.1 and .68.25) whose clause a run indeed
+// could not meet. An item that reads so and names no executor is refused with
+// the marker named as the fix.
 
 import (
 	"errors"
@@ -60,7 +87,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 // Document is one document an artifact home owns, as an item may name it: by
@@ -78,6 +108,12 @@ type Document struct {
 type Homes struct {
 	directories []string
 	documents   []ownedDocument
+	// owners is which role's conversation writes each home, keyed by the home's
+	// normalized path. It is read from the artifact ownership table rather than
+	// stated here, so "the architect owns designs" stays one sentence in one
+	// place; a home whose kind no single role owns is in directories and not
+	// here, and a condition naming it is refused whoever executes the item.
+	owners map[string]domain.AgentRole
 }
 
 // ownedDocument is a document with the shape its id is looked for in, compiled
@@ -94,10 +130,23 @@ type ownedDocument struct {
 // is about the harness's own settings rather than about a document another role
 // owns, and this gate is about the second.
 func ArtifactHomes(cfg config.Config, documents ...Document) Homes {
-	homes := Homes{}
-	for _, directory := range []string{cfg.Product.Specifications, cfg.Product.Designs, cfg.Product.Decisions, cfg.Product.Invariants} {
-		if clean, ok := normalize(directory); ok {
-			homes.directories = appendUnique(homes.directories, clean)
+	homes := Homes{owners: map[string]domain.AgentRole{}}
+	for _, home := range []struct {
+		directory string
+		owner     domain.AgentRole
+	}{
+		{cfg.Product.Specifications, artifactOwner(artifact.KindBrief)},
+		{cfg.Product.Designs, artifactOwner(artifact.KindDesign)},
+		{cfg.Product.Decisions, artifactOwner(artifact.KindDecision)},
+		{cfg.Product.Invariants, invariantOwner()},
+	} {
+		clean, ok := normalize(home.directory)
+		if !ok {
+			continue
+		}
+		homes.directories = appendUnique(homes.directories, clean)
+		if home.owner != "" {
+			homes.owners[clean] = home.owner
 		}
 	}
 	sort.Strings(homes.directories)
@@ -115,6 +164,28 @@ func ArtifactHomes(cfg config.Config, documents ...Document) Homes {
 	}
 	sort.Slice(homes.documents, func(i, j int) bool { return homes.documents[i].Path < homes.documents[j].Path })
 	return homes
+}
+
+// artifactOwner is the role whose conversation writes a kind of artifact, or
+// empty where no single role does. It is the ownership table's answer and not
+// one made here.
+func artifactOwner(kind artifact.Kind) domain.AgentRole {
+	owner, placed := artifact.Owner(kind)
+	if !placed {
+		return ""
+	}
+	return owner
+}
+
+// invariantOwner is the role that may write an invariant, read the same way:
+// the one holder of the capability, or nobody where the registry names more or
+// fewer than one.
+func invariantOwner() domain.AgentRole {
+	holders := rolecapability.MustDefault().RolesHolding(capability.InvariantMutate)
+	if len(holders) != 1 {
+		return ""
+	}
+	return holders[0]
 }
 
 // idShape is the shape an id is looked for in, and whether the id is one that
@@ -191,6 +262,11 @@ type Condition struct {
 	Named string
 	// Clause is the clause itself, folded to one line and bounded.
 	Clause string
+	// Owner is the role whose conversation writes the home the path is under,
+	// or empty where no single role does. It is what decides whether an item
+	// some conversation carries may state this condition, and what the refusal
+	// of one nobody marked names as the executor to mark it with.
+	Owner domain.AgentRole
 }
 
 // ConditionInstruction is what a refused role is told to do about it. It names
@@ -203,6 +279,20 @@ const ConditionInstruction = "No developer run may write there, so a run handed 
 	"Either take the clause out of the done-condition and say that the document's owner — the architect for a design or a decision record, the product manager for a product artifact — amends the document through the governed path, with the run's summary naming what there is to record; " +
 	"or, where a grant is permitted for that path because the change behind it is already decided, carry one on a line beginning \"" + GrantMarker + "\" that names it."
 
+// executorInstruction is the third fix, named where the document has an owner
+// whose conversation is what the item is really for: mark the item as that
+// conversation's, and it is never selected for a run and closes when the
+// owner's revision naming it lands. It is said only where there is a role to
+// name, because the instruction is the marker's value and the marker is refused
+// without a role.
+func executorInstruction(owner domain.AgentRole) string {
+	if owner == "" {
+		return ""
+	}
+	return fmt.Sprintf(" Or, where the condition is that role's own work rather than a run's, mark the item as carried by its conversation, with executor %q: an item so marked keeps its place in the order, is never selected for a developer run, and is closed by the harness once a revision of a document the %s owns opens with the item's identifier.",
+		domain.ConversationWith(owner), owner)
+}
+
 // Refusal is what admission says about one condition it will not admit: what the
 // clause names and where that is, the clause itself, and what to do instead.
 func (c Condition) Refusal() string {
@@ -210,8 +300,25 @@ func (c Condition) Refusal() string {
 	if c.Named != c.Path {
 		where = fmt.Sprintf("%s (%s)", c.Named, c.Path)
 	}
-	return fmt.Sprintf("a done-condition names %s, which is under a protected artifact home and no %q line in the item admits: %q. %s",
-		where, GrantMarker, c.Clause, ConditionInstruction)
+	return fmt.Sprintf("a done-condition names %s, which is under a protected artifact home and no %q line in the item admits: %q. %s%s",
+		where, GrantMarker, c.Clause, ConditionInstruction, executorInstruction(c.Owner))
+}
+
+// anotherRolesRefusal is what is said of a condition on an item some
+// conversation does carry, naming a document that conversation's role does not
+// own. The marker is not the fix here — the item already carries one — so what
+// is named is whose document it is, and the two fixes that remain.
+func (c Condition) anotherRolesRefusal(executor domain.WorkItemExecutor) string {
+	where := c.Path
+	if c.Named != c.Path {
+		where = fmt.Sprintf("%s (%s)", c.Named, c.Path)
+	}
+	whose := "no single role's"
+	if c.Owner != "" {
+		whose = "the " + string(c.Owner) + "'s"
+	}
+	return fmt.Sprintf("a done-condition names %s, which is %s to write and not the %s conversation's this item is carried by, and no %q line in the item admits it: %q. %s",
+		where, whose, executor.Role(), GrantMarker, c.Clause, ConditionInstruction)
 }
 
 // maxConditions bounds how many conditions one reading reports. Whoever is told
@@ -249,7 +356,7 @@ func (h Homes) Ungranted(description, acceptanceCriteria string, granted []strin
 			return
 		}
 		seen[key] = true
-		conditions = append(conditions, Condition{Path: path, Named: named, Clause: fold(clause, maxClauseBytes)})
+		conditions = append(conditions, Condition{Path: path, Named: named, Clause: fold(clause, maxClauseBytes), Owner: h.ownerOf(path)})
 	}
 	for _, span := range doneConditions(description, acceptanceCriteria) {
 		for _, clause := range clauses(span) {
@@ -274,17 +381,176 @@ func (h Homes) Ungranted(description, acceptanceCriteria string, granted []strin
 	return conditions
 }
 
-// ConditionProblems is Ungranted as the errors an admission joins, one per
-// condition, each carrying its refusal. It is one predicate every door into the
-// queue asks rather than each deciding for itself, for the reason GrantProblems
-// is: a door that asked a weaker question is the door such an item would arrive
-// through.
-func (h Homes) ConditionProblems(description, acceptanceCriteria string, granted []string) []error {
+// ownerOf is the role whose conversation writes the home a path is under, or
+// empty where the path is under no home or under one no single role owns.
+func (h Homes) ownerOf(path string) domain.AgentRole {
+	for directory, owner := range h.owners {
+		if within(path, []string{directory}) {
+			return owner
+		}
+	}
+	return ""
+}
+
+// Subject is one item as its done-conditions are judged: the fields a condition
+// is read from, the fields a grant is honoured from, and what the item says
+// carries it out. The executor is part of the question rather than a filter on
+// the answer, because the same clause is right on an item a conversation
+// carries and unmeetable on one a run does.
+type Subject struct {
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+	// Granted is the paths the item admits, as Grants reads them from whichever
+	// of its fields the caller honours a grant from.
+	Granted []string
+	// Executor is what carries the item, and empty for a developer run.
+	Executor domain.WorkItemExecutor
+}
+
+// ConditionProblems is the errors an admission joins about an item's
+// done-conditions, one per condition, each carrying its refusal. It is one
+// predicate every door into the queue asks rather than each deciding for itself,
+// for the reason GrantProblems is: a door that asked a weaker question is the
+// door such an item would arrive through.
+//
+// An item a conversation carries is judged as that conversation's work: a
+// condition naming a document the executor's role owns is admitted, and one
+// naming another role's document is refused as another role's. An item nobody
+// marked is a developer run, and is refused both for a condition naming a
+// document — as it always was — and for reading as conversation work with no
+// executor to say so, which is the shape a run was spent on.
+func (h Homes) ConditionProblems(subject Subject) []error {
 	var problems []error
-	for _, condition := range h.Ungranted(description, acceptanceCriteria, granted) {
-		problems = append(problems, errors.New(condition.Refusal()))
+	if subject.Executor.DeveloperRun() || subject.Executor.Role() == "" {
+		// A clause refused for the document it names is refused once: the
+		// document refusal already names the marker as a fix, and the same clause
+		// quoted twice with two instructions is one instruction too many.
+		refused := map[string]bool{}
+		for _, condition := range h.Ungranted(subject.Description, subject.AcceptanceCriteria, subject.Granted) {
+			refused[condition.Clause] = true
+			problems = append(problems, errors.New(condition.Refusal()))
+		}
+		for _, work := range h.ConversationWork(subject.Title, subject.Description, subject.AcceptanceCriteria, subject.Granted) {
+			if work.Field == "done-condition" && refused[work.Text] {
+				continue
+			}
+			problems = append(problems, errors.New(work.Refusal()))
+		}
+		return problems
+	}
+	role := subject.Executor.Role()
+	for _, condition := range h.Ungranted(subject.Description, subject.AcceptanceCriteria, subject.Granted) {
+		if condition.Owner == role {
+			continue
+		}
+		problems = append(problems, errors.New(condition.anotherRolesRefusal(subject.Executor)))
 	}
 	return problems
+}
+
+// ConversationWork is one reading of an item that says a role's conversation
+// carries it: a done-condition whose subject is the role's judgement recorded,
+// or a title whose subject is the role itself.
+type ConversationWork struct {
+	// Role is whose conversation the reading says the work is.
+	Role domain.AgentRole
+	// Field is where it was read — "title" or "done-condition".
+	Field string
+	// Text is what was read, folded to one line and bounded.
+	Text string
+}
+
+// Refusal is what admission says about conversation-shaped work that names no
+// executor: what was read and where, and the two fixes — mark the item, or
+// rewrite it as the change a run makes.
+func (w ConversationWork) Refusal() string {
+	switch w.Field {
+	case "title":
+		return fmt.Sprintf("its title says the %s does the work, which no developer run carries, and the item names no executor: %q. Either mark the item as carried by that conversation, with executor %q, so it is never selected for a developer run and is closed by the harness once a revision of a document the %s owns opens with the item's identifier; or retitle it as the change a run makes.",
+			w.Role, w.Text, domain.ConversationWith(w.Role), w.Role)
+	default:
+		return fmt.Sprintf("a done-condition says a design or a ruling is recorded, which is the %s's conversation's work and no developer run's, and the item names no executor: %q. Either mark the item as carried by that conversation, with executor %q, so it is never selected for a developer run and is closed by the harness once a revision of a document the %s owns opens with the item's identifier; or take the clause out of the done-condition and say that the %s amends the document through the governed path, with the run's summary naming what there is to record.",
+			w.Role, w.Text, domain.ConversationWith(w.Role), w.Role, w.Role)
+	}
+}
+
+// recordedJudgement is a done-condition whose subject is a design or a ruling
+// and whose predicate is that it is recorded: "the design is recorded in the
+// governed documents", "her ruling is recorded on the design", "the baseline
+// ratified". The subjects are the two words this tracker's conversation items
+// are written with, and only those two: "decision" is also what triage records
+// on an item and "rule" is what a gate enforces, and both fire on developer
+// items, so they are left out. The verbs are the ones a revision performs.
+var recordedJudgement = regexp.MustCompile(`(?i)\b(?:designs?|rulings?)\b[^.;\n]{0,60}?\b(?:is|are|be|being|was|were|gets?)\s+(?:recorded|published|promoted|ratified)\b`)
+
+// architectSubject is a title whose subject is the architect doing something:
+// "The architect designs …", "The architect rules …", "The architect
+// ratifies …". The verb is what makes it the architect acting rather than the
+// architect's — "The architect's ruling is enforced" is a developer item about
+// the ruling, and the apostrophe keeps it out of this. Only the architect is
+// read this way: it is the one role that executes nothing in a run, where "the
+// product manager" and "the development manager" open developer items about
+// those roles' machinery as often as not.
+var architectSubject = regexp.MustCompile(`(?i)^\s*the architect\s+[a-z]+s\b`)
+
+// ConversationWork reads an item for the shape that says a role's conversation
+// carries it, without any document being named. It reads the same
+// done-conditions Ungranted reads, and the title, and it says which role the
+// shape names: the design owner for a recorded design or ruling, and the
+// architect for a title with the architect as its subject. An item that reads
+// so and carries the executor is that role's work stated correctly; one that
+// reads so and carries none is what ConditionProblems refuses.
+//
+// An item that grants a path under one of these homes is read as nothing of
+// the kind. A grant is somebody's decision that a run writes there — the change
+// behind it already decided — so "the ruling is recorded on the design" on
+// such an item is the run's work, exactly as the named-document reading treats
+// it.
+func (h Homes) ConversationWork(title, description, acceptanceCriteria string, granted []string) []ConversationWork {
+	if h.Empty() {
+		return nil
+	}
+	for _, grant := range normalizeAll(granted) {
+		for _, directory := range h.directories {
+			if within(grant, []string{directory}) || within(directory, []string{grant}) {
+				return nil
+			}
+		}
+	}
+	var found []ConversationWork
+	if designer := artifactOwner(artifact.KindDesign); h.writes(designer) {
+		for _, span := range doneConditions(description, acceptanceCriteria) {
+			for _, clause := range clauses(span) {
+				if !recordedJudgement.MatchString(clause) {
+					continue
+				}
+				found = append(found, ConversationWork{Role: designer, Field: "done-condition", Text: fold(clause, maxClauseBytes)})
+			}
+		}
+	}
+	if h.writes(domain.RoleArchitect) && architectSubject.MatchString(title) {
+		found = append(found, ConversationWork{Role: domain.RoleArchitect, Field: "title", Text: fold(title, maxClauseBytes)})
+	}
+	if len(found) > maxConditions {
+		found = found[:maxConditions]
+	}
+	return found
+}
+
+// writes reports a role whose conversation writes one of these homes. A project
+// configured without any home that role owns has nowhere its work could land,
+// and nothing on such a project is read as that role's.
+func (h Homes) writes(role domain.AgentRole) bool {
+	if role == "" {
+		return false
+	}
+	for _, holder := range h.owners {
+		if holder == role {
+			return true
+		}
+	}
+	return false
 }
 
 // doneMarker is where a description's done-conditions begin. The phrasings are

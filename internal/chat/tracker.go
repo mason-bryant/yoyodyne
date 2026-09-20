@@ -297,7 +297,7 @@ const providerPathClause = `A work item's text can admit one of the harness's pr
 // beside the clause above for the same reason that one is: the rule is decided
 // in one predicate, and a role told a weaker version of it writes the item that
 // predicate refuses.
-const documentConditionClause = `A done-condition is never written against a document a developer run may not write. The harness refuses a creation, an update, or a proposal whose "Done means" clauses or acceptance criteria name a path under the product, designs, or decisions homes, or a document one of those homes owns by its name — "the slack-reporting design", "docs/designs/observability-and-dashboard.md" — unless the item grants that path; the refusal quotes the clause. Three items in one week were admitted with such a clause — a design's query list to mark, a design's status entry to reconcile, a ruling to record on a design — and each spent a run before anybody found the condition no diff could meet. Cite those documents freely elsewhere in the item, as the design the work builds against or the ruling it obeys; what is refused is a condition. Where the work needs the document changed, either take that clause out of what done means and say that the document's owner amends it through the governed path once the run's summary names what there is to record, or, where the change is already decided, carry the grant. A run reads the same clauses of the item it is handed, including its design guidance and acceptance criteria, and refuses to start rather than parking on the condition afterwards.`
+const documentConditionClause = `A done-condition is never written against a document a developer run may not write. The harness refuses a creation, an update, or a proposal whose "Done means" clauses or acceptance criteria name a path under the product, designs, or decisions homes, or a document one of those homes owns by its name — "the slack-reporting design", "docs/designs/observability-and-dashboard.md" — unless the item grants that path or names the executor whose conversation owns that document; the refusal quotes the clause. Three items in one week were admitted with such a clause — a design's query list to mark, a design's status entry to reconcile, a ruling to record on a design — and each spent a run before anybody found the condition no diff could meet. Cite those documents freely elsewhere in the item, as the design the work builds against or the ruling it obeys; what is refused is a condition. Where the work needs the document changed, either take that clause out of what done means and say that the document's owner amends it through the governed path once the run's summary names what there is to record, or, where the change is already decided, carry the grant. Where the work IS the document's owner recording something — a design, a ruling — the item is that owner's conversation's, and it says so with "executor": the same clause is right on an item marked "conversation:architect" and unmeetable on one marked nothing. The harness reads that shape too, with no document named: a "Done means" clause saying a design or a ruling is recorded, published, promoted, or ratified, or a title whose subject is the architect acting — "The architect designs …", "The architect rules …" — is refused on an item that names no executor, because yoyodyne-ifd.330 was admitted exactly so and spent a developer run finding out the design had already landed. A run reads the same clauses of the item it is handed, including its design guidance and acceptance criteria, and refuses to start rather than parking on the condition afterwards.`
 
 // TrackerAction is one bounded operation on the work tracker. It carries
 // authority, unlike a proposal: the harness runs it as asked, so every argument
@@ -1522,8 +1522,12 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// which is the only moment refusing it costs a sentence rather than a run.
 		// A creation carries two of the four fields a grant is read from, and no
 		// design guidance or acceptance criteria, so those two are the whole of
-		// what there is to read.
-		if refusal := s.conditionRefusal(action.Description, "", action.Title, action.Description); refusal != "" {
+		// what there is to read. It is judged with the executor the creation
+		// names, because the same clause is right on a conversation's item and
+		// unmeetable on a run's — and an item shaped as a conversation's with no
+		// executor is refused here rather than found out by the run it costs.
+		executor := domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor)))
+		if refusal := s.conditionRefusal(action.Title, action.Description, "", executor, action.Title, action.Description); refusal != "" {
 			outcome.Failure = refusal
 			return
 		}
@@ -1553,7 +1557,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// because the harness may choose an item the moment it is in the queue: a
 			// marker added by a second action is a window in which the item can be
 			// pulled for a run that cannot execute it.
-			Executor: domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor))),
+			Executor: executor,
 			// The parking is set here for the same reason and against the same
 			// window. It is the one part of an admission whose whole purpose is that
 			// nothing pulls the item, so admitting it unparked and parking it on the

@@ -18,10 +18,11 @@ package landing_test
 // has to consult is the question over both of them rather than either half.
 //
 // So every call that closes an item is listed below with what makes it safe, and
-// this fails on one that is not listed. Two kinds are safe and the audit says
+// this fails on one that is not listed. Three kinds are safe and the audit says
 // which each is: a run's own settlement, which must ask whether the change
-// discharges the item, and an act a person took, which is neither a landing nor
-// a review and has nothing to consult.
+// discharges the item; an act a person took, which is neither a landing nor a
+// review and has nothing to consult; and a landing the document's owner
+// recorded for an item no run carried, which consults that record.
 // The consult is checked mechanically rather than taken from the row — a row can
 // claim a guard the declaration lost — so a settlement that stops asking fails
 // here even though its row still reads correctly.
@@ -72,6 +73,14 @@ const (
 	// no developer claimed anything, and the decision is the one the operator's
 	// role is for.
 	kindHuman closureKind = "human"
+	// kindRecordedLanding is the harness closing an item no run ever carried, on
+	// the landing its owner recorded: a revision of a document the item's
+	// conversation role owns, made by that role, whose reason opens with the
+	// item's identifier. There is no developer claim and no review to consult,
+	// because there was no run; what is consulted is the owner's own record that
+	// the item's work is in the document, which is what the product manager read
+	// by hand before yoyodyne-ifd.367.
+	kindRecordedLanding closureKind = "recorded-landing"
 	// kindUnrelated is a call the sweep's shape catches that closes no work item.
 	// There are none today, and the row exists so that the next one is excluded by
 	// somebody writing down why rather than by the sweep quietly not seeing it.
@@ -123,6 +132,11 @@ var auditedClosures = []closureSite{
 		File: "internal/orchestrator/reconcile.go", Declaration: "(Reconciler) completeIntegrated", Calls: 1,
 		ConsultsDischarge: true, Kind: kindSettlement,
 		Why: "the sweep finishing a run somebody interrupted after its change was promoted. It decides the same way the run itself would have, from the same durable record, so an interrupted run and a finished one leave the item in the same place.",
+	},
+	{
+		File: "internal/orchestrator/conversationlanding.go", Declaration: "(ConversationLander) Settle", Calls: 1,
+		ConsultsDischarge: false, Kind: kindRecordedLanding,
+		Why: "the pass closing an item a conversation carries, which no run ever claimed and no reviewer ever judged, so there is no landing claim to read. What it reads instead is the landing the owner recorded: a revision of a document the item's role owns, by that role, whose reason opens with the item's identifier — the architect saying the item's work is in the document. It closes only on that, never on a revision that mentions the item further in, and the close reason cites the revision so a person can reopen it with a note — which holds, because the revision is recorded on the item ahead of the close and an open item still carrying it is not closed on it again.",
 	},
 }
 

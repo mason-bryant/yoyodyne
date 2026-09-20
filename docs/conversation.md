@@ -480,13 +480,35 @@ Naming an item yourself with `yoyo run` is unaffected, because that is you
 deciding. Work that says nothing is a developer run, which is nearly all of it —
 and which is why the marker is not retroactive: everything admitted before you
 start marking says nothing, and is chosen as ordinary developer work. Which
-queued items need one is a product judgement the harness cannot infer, so
-bringing an existing queue under the guard is a pass over it with `update`.
-Before this the harness could not tell, and it cost a whole run and two review
-rounds on an item no developer could execute — with those rounds counted against
-the item's cap, so a second mis-selection would have escalated work nobody had
-started. [How work flows](work.md#letting-the-harness-choose-the-work) is the
+queued items need one is a product judgement, so bringing an existing queue
+under the guard is a pass over it with `update`. Before this the harness could
+not tell, and it cost a whole run and two review rounds on an item no developer
+could execute — with those rounds counted against the item's cap, so a second
+mis-selection would have escalated work nobody had started.
+[How work flows](work.md#letting-the-harness-choose-the-work) is the
 selection side of it.
+
+Two things follow from the marker that did not at first. The harness reads the
+shape of conversation work at admission and refuses it unmarked: a creation or
+update whose "Done means" says a design or a ruling is recorded, published,
+promoted, or ratified, or whose title has the architect as its subject — "The
+architect designs …", "The architect rules …" — is refused when it names no
+executor, with the marker named as the fix. yoyodyne-ifd.330 was admitted
+exactly so, at turn 468, with the marker left off, and was handed to a developer
+run that could only report the design had already landed;
+[the diagnosis](diagnoses/yoyodyne-ifd-367-conversation-item-dispatched.md)
+is the whole of it. The reading is deliberately narrow — "decision" is what
+triage records on an item, "the design" is cited by nearly every developer
+item, and neither is read — so an item it does not fire on is still yours to
+mark. And a marked item closes on its own once its work lands: the pass reads
+the documents the marked role owns, and an item whose identifier opens the
+reason of a revision in one of them — `yoyodyne-ifd.330 - side conversations
+designed` in a design's revision log, made by that role — is closed with the
+document and the revision cited, at the first pull after the revision is in the
+tree. Reopen it with a note if the close was wrong: the item carries the
+revision it was closed on and is not closed on that revision again. The same
+clause that is refused on an unmarked item is what a marked one says: "Done means the ruling is recorded on the slack-reporting design" is
+admitted with `executor: conversation:architect`, and refused with none.
 
 An item also says whether it is to be started at all. Work you still want and do
 not want picked up yet — deferred by a scope decision, waiting on something

@@ -163,6 +163,12 @@ type Entry struct {
 	// not in the queue is a parking the queue's readers do not share, and what
 	// they do instead is pull the work.
 	Parking domain.WorkItemParking `json:"parking,omitempty"`
+	// Landing is the revision the harness already closed this item on, where it
+	// did and somebody has since reopened it, and is empty for everything else.
+	// It is on the entry because the sweep that closes conversation-carried work
+	// reads the queue, and an entry that did not carry it would be closed again
+	// on the same revision at the next pull.
+	Landing string `json:"landing,omitempty"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
@@ -276,6 +282,7 @@ func Order(items []beads.WorkItem, ready []string, held Holds) Queue {
 			Status:   item.Status,
 			Executor: item.Executor,
 			Parking:  item.Parking,
+			Landing:  item.Landing,
 			Awaiting: awaiting,
 			// Only ever true beside a reason: a decision recorded about an item
 			// nothing is holding says nothing about why it is not being pulled, and

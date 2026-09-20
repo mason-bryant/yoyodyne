@@ -190,6 +190,57 @@ func TestARunRefusesToStartOnAnItemWhoseAcceptanceCriteriaNameAnUngrantedDesign(
 	}
 }
 
+// yoyodyne-ifd.330 as run-f9e67240 was handed it: the architect's design work by
+// its title and its done-means, naming no document and no executor, in a queue
+// the tracker called ready. The run spent itself finding the design already
+// landed. Now it is refused before it is claimed, with the marker named as the
+// fix — and the same item carrying the marker is not refused on that account,
+// because it is then the architect's work stated correctly.
+func TestARunRefusesToStartOnConversationShapedWorkThatNamesNoExecutor(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:          "yoyodyne-ifd.330",
+		Title:       "The architect designs side conversations with merge-back",
+		Description: "Operator capability direction, 2026-09-07, design routed to the architect as directed. Done means the design is recorded in the governed documents - the stream shape, the merge write, the action-authority answer, the config knob - and implementation items can cite it.",
+		Status:      "open",
+	}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() on 330's shape = nil error, want it refused before it started")
+	}
+	for _, want := range []string{
+		"the design is recorded in the governed documents",
+		"The architect designs side conversations",
+		`executor "conversation:architect"`,
+		"never selected for a developer run",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q never says %q", err, want)
+		}
+	}
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+		t.Fatalf("developer invocations = %d, want none", developers)
+	}
+	if tracker.claimed {
+		t.Fatal("the item was claimed by a run that could never discharge it")
+	}
+
+	// Marked, the operator naming it is the operator deciding, and the condition
+	// gate has nothing to refuse: whatever else stops such a run, it is not this.
+	tracker.item.Executor = domain.ConversationWith(domain.RoleArchitect)
+	homes := protectedpath.ArtifactHomes(pipeline.Config)
+	if problems := homes.ConditionProblems(protectedpath.Subject{Title: tracker.item.Title, Description: tracker.item.Description, Executor: tracker.item.Executor}); len(problems) != 0 {
+		t.Fatalf("ConditionProblems() on the marked item = %v, want nothing", problems)
+	}
+}
+
 // goalsRepository is a checkout whose branch already carries the product's
 // goals, which is the state every real one is in. It matters here because what
 // the gate has to catch is then a modification of a tracked document rather than
