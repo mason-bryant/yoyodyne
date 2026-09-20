@@ -2161,6 +2161,10 @@ Three outcomes look similar in a listing and are not the same thing:
   prose without the block the harness reads. It is never shown as a quiet pass.
 - **A pass stopped by its turn bound** is recorded as partial, naming the bound,
   so a truncated pass is never mistaken for a finished one.
+- **A pass whose reply carried more than one block** shows the last block as its
+  account and says beside it that more than one was sent. It is an account, not
+  a lost pass: the role slipped on the one-block contract, and the decisions it
+  took are on the record rather than thrown away over the shape of the reply.
 
 One turn may report at most twenty findings and five questions, and a whole
 firing holds what its turns come to. A pass that ran past even that says so in

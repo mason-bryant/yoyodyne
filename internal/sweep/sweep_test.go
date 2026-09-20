@@ -13,7 +13,7 @@ const completeBlock = "I looked at the stopped work.\n\n" +
 func TestExtractReadsTheAccountAndLeavesTheProse(t *testing.T) {
 	t.Parallel()
 
-	prose, result, err := Extract(completeBlock)
+	prose, result, note, err := Extract(completeBlock)
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
@@ -32,6 +32,64 @@ func TestExtractReadsTheAccountAndLeavesTheProse(t *testing.T) {
 	if strings.Contains(prose, "yoyodyne-sweep") {
 		t.Errorf("prose = %q, want the block taken out of it", prose)
 	}
+	// A single block is the contract kept, and there is nothing to note about it.
+	if note != "" {
+		t.Errorf("note = %q, want nothing said about a reply with one block", note)
+	}
+}
+
+// The contract is one block per reply, and a role that sends two has slipped;
+// but the slip is the model's and recurs, and the pass's decisions were taken
+// whether or not its record survives. So the last block is the account and the
+// note says the reply carried more than one — rather than the pass being thrown
+// away, which is what happened on 2026-09-14 to a triage pass that wrote "more"
+// and then "complete".
+func TestAReplyWithMoreThanOneBlockRecordsTheLast(t *testing.T) {
+	t.Parallel()
+
+	reply := "I worked the pile.\n\n" +
+		"```yoyodyne-sweep\n" +
+		`{"status":"more","summary":"twelve decided, more behind them"}` +
+		"\n```\n\nOn reflection that was all of it.\n\n" +
+		"```yoyodyne-sweep\n" +
+		`{"status":"complete","summary":"twelve decided, nothing behind them","findings":[{"issue":"a stale report","disposition":"filed","filed":["yoyodyne-ifd.400"]}]}` +
+		"\n```\n"
+	prose, result, note, err := Extract(reply)
+	if err != nil {
+		t.Fatalf("Extract() refused a reply with two blocks: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Extract() found no result in a reply that carries two")
+	}
+	if result.Status != StatusComplete || len(result.Findings) != 1 {
+		t.Errorf("result = %+v, want the last block's account", result)
+	}
+	if note == "" || !strings.Contains(note, "2 sweep blocks") {
+		t.Errorf("note = %q, want it to say the reply carried two blocks", note)
+	}
+	if strings.Contains(prose, "yoyodyne-sweep") || strings.Contains(prose, `"status"`) {
+		t.Errorf("prose = %q, want every block taken out of it", prose)
+	}
+	for _, want := range []string{"I worked the pile.", "On reflection that was all of it."} {
+		if !strings.Contains(prose, want) {
+			t.Errorf("prose = %q, want what the role said around the blocks", prose)
+		}
+	}
+}
+
+// Tolerating a second block is not tolerating a broken one: a block that cannot
+// be read is refused wherever it sits in the reply.
+func TestAMalformedBlockAmongSeveralIsStillRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, reply := range map[string]string{
+		"the last is not JSON": "```yoyodyne-sweep\n" + `{"status":"more","summary":"started"}` + "\n```\n\n```yoyodyne-sweep\nnot json\n```\n",
+		"the last is unclosed": "```yoyodyne-sweep\n" + `{"status":"more","summary":"started"}` + "\n```\n\n```yoyodyne-sweep\n" + `{"status":"complete","summary":"done"}` + "\n",
+	} {
+		if _, result, _, err := Extract(reply); err == nil {
+			t.Errorf("%s: Extract() accepted %q as %+v", name, reply, result)
+		}
+	}
 }
 
 // Most replies in this harness carry no block of any given kind, and a turn that
@@ -40,7 +98,7 @@ func TestExtractReadsTheAccountAndLeavesTheProse(t *testing.T) {
 func TestReplyWithoutABlockIsNotAFailure(t *testing.T) {
 	t.Parallel()
 
-	prose, result, err := Extract("I found nothing worth reporting.")
+	prose, result, _, err := Extract("I found nothing worth reporting.")
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}

@@ -4871,6 +4871,15 @@ to `max_turns`. A pass that still had more to do when the bound ran out is
 recorded as partial, so a truncated pass and a finished one are never the same
 short report.
 
+**A reply with more than one account keeps the last.** The contract is one
+sweep block per reply, and a role that answers with two — a `more` and then a
+`complete`, which is the shape the slip takes — has slipped rather than failed.
+The last block is recorded as the pass's account, and the record notes beside
+it that more than one was sent, rather than the pass being thrown away over
+the shape of its reply after its decisions were taken. A block that cannot be
+read is still refused wherever it sits, and a reply with one block is recorded
+exactly as before.
+
 **A firing that failed waits for its next cadence.** It is not retried at once:
 the next pass looks at everything this one would have, and retrying immediately
 would spend turns against whatever was already failing. What stopped it is

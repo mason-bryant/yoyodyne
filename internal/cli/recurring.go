@@ -135,16 +135,27 @@ func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, messa
 	if err != nil {
 		return turn, notWoken(err)
 	}
-	_, result, err := sweep.Extract(reply.Text)
+	turn.Result, turn.ResultProblem = readSweep(role, reply.Text)
+	return turn, nil
+}
+
+// readSweep reads the account a role gave of its pass out of what it answered,
+// and what the record should say about it. The two are not exclusive: a reply
+// that carried more than one block is read — the last block is its account —
+// and the problem says so beside it, because a pass whose decisions were taken
+// must not lose its record over a slip in the shape of the reply.
+func readSweep(role domain.AgentRole, reply string) (*sweep.Result, string) {
+	_, result, note, err := sweep.Extract(reply)
 	switch {
 	case err != nil:
-		turn.ResultProblem = fmt.Sprintf("the %s answered with a sweep block the harness cannot read, so what the pass found is only in the conversation: %v", role, err)
+		return nil, fmt.Sprintf("the %s answered with a sweep block the harness cannot read, so what the pass found is only in the conversation: %v", role, err)
 	case result == nil:
-		turn.ResultProblem = fmt.Sprintf("the %s answered in prose without a sweep block, so what the pass found is only in the conversation", role)
+		return nil, fmt.Sprintf("the %s answered in prose without a sweep block, so what the pass found is only in the conversation", role)
+	case note != "":
+		return result, fmt.Sprintf("the %s answered with more than one sweep block: %s", role, note)
 	default:
-		turn.Result = result
+		return result, ""
 	}
-	return turn, nil
 }
 
 // notWoken marks the failures where the turn asked the role nothing, so what is

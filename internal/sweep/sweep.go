@@ -346,19 +346,31 @@ func noteDropped(summary string, findings, questions int) string {
 // prose, which is a thing a person reading the conversation can still make sense
 // of; what it costs is the structure, and the caller says so rather than losing
 // the turn over it.
-func Extract(reply string) (string, *Result, error) {
-	block, err := fenced.Split(reply, Fence, "sweep")
+//
+// A reply carrying more than one block is not a failure either, and this is
+// where the sweep differs from the other channels, which refuse a second block.
+// The contract is one block per reply and a role that sent two has slipped, but
+// the slip is the model's and recurs, and a pass whose decisions were taken and
+// whose record was then thrown away is the report-pile problem in miniature. So
+// the last block is the account — a role that wrote "more" and then "complete"
+// settled on the second — and the note says the reply carried more than one, for
+// the record to state beside the account rather than in place of it.
+func Extract(reply string) (prose string, result *Result, note string, err error) {
+	block, count, err := fenced.SplitLast(reply, Fence, "sweep")
 	if err != nil {
-		return block.Before, nil, err
+		return block.Before, nil, "", err
 	}
 	if !block.Found {
-		return block.Before, nil, nil
+		return block.Before, nil, "", nil
 	}
-	result, err := Decode(block.Payload)
+	result, err = Decode(block.Payload)
 	if err != nil {
-		return block.Before, nil, err
+		return block.Before, nil, "", err
 	}
-	return block.Rest, result, nil
+	if count > 1 {
+		note = fmt.Sprintf("the reply carried %d sweep blocks where the contract asks for one, and the last of them is the account recorded", count)
+	}
+	return block.Rest, result, note, nil
 }
 
 // Decode strictly decodes the block payload. Unknown fields, trailing content,
