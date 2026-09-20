@@ -195,12 +195,12 @@ execution:
   # manager put on work items -- and then pulls that label's ready work first,
   # wherever it sits in the order, and the rest of the backlog only when none of
   # it is ready. One entry per slot, in slot order; the list may be shorter than
-  # the capacity, and the slots it does not name prefer nothing. The example is
-  # the seat Yoyodyne's operator directed for its own project on 2026-09-19: a
-  # first slot preferring the reliability label, which means bugs, anything
-  # that keeps the system from stalling, and anything that keeps the system
-  # from making mistakes. Delete the leading "# " to give slot 1 the same
-  # preference.
+  # the capacity, and the slots it does not name prefer nothing. The example
+  # dedicates the first slot to a "reliability" label -- one a project might
+  # put on bugs, on anything that keeps the system from stalling, and on
+  # anything that keeps it from making mistakes, so that work is never queued
+  # behind features. Delete the leading "# " to give slot 1 that preference,
+  # or name a label of your own.
   # developer_slots:
   #   - prefer: [reliability]   # developer slot 1 pulls reliability-labelled work first
   repair_attempts_before_replan: %d

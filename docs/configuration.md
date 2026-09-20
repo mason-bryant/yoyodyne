@@ -2046,10 +2046,13 @@ execution:
 
 The reliability label means, in the operator's words, bugs, anything that
 keeps the system from stalling, and anything that keeps the system from making
-mistakes — and every item admitted under that directive, every bug, and every
-stall or mistake fix carries it from admission, which the conversation guide
-describes with the rest of an item's tracker state under
-[backlog state that has stopped being true](conversation.md#backlog-state-that-has-stopped-being-true).
+mistakes. The admission practice that goes with it, from the same day: every
+item admitted under the reliability directive, every bug, and every stall or
+mistake fix carries the `reliability` label from admission, put on by the
+product manager's `labels` field in the same write that admits the item, so the
+item never exists unlabelled. The [conversation guide](conversation.md#backlog-state-that-has-stopped-being-true)
+states the same practice where it describes the `labels` and `label` actions,
+in the section on an item's tracker state.
 
 `developer_slots` is one entry per slot, in slot order, and it may be shorter
 than the capacity — the slots it does not name prefer nothing — and never
