@@ -129,6 +129,9 @@ func openTerminal(in, out *os.File, env func(string) string) (*terminal, error) 
 	// prompt is drawn, because it decides both what shift-return does and what
 	// /help is allowed to claim it does.
 	terminal.negotiateKeyboard(keyboardReplyTimeout)
+	// A paste is asked to arrive bracketed for the same span, so a block of
+	// several lines is one message rather than the first of them and a spill.
+	io.WriteString(out, pasteOn)
 	return terminal, nil
 }
 
@@ -715,7 +718,7 @@ func (t *terminal) suspend() {
 	if t.closed {
 		return
 	}
-	io.WriteString(t.out, t.eraseRegion()+t.restoreKeyboard)
+	io.WriteString(t.out, t.eraseRegion()+pasteOff+t.restoreKeyboard)
 	t.restoreKeyboard = ""
 	if t.restore != nil {
 		t.restore()
@@ -732,6 +735,9 @@ func (t *terminal) suspend() {
 		// stopped it, so it carries on and the region is drawn on what there is.
 	}
 	t.negotiateKeyboard(keyboardReplyTimeout)
+	// Bracketing is asked for again for the reason the keyboard is: the shell
+	// that had the terminal in between may have turned it off.
+	io.WriteString(t.out, pasteOn)
 	t.redraw()
 }
 
@@ -801,6 +807,13 @@ func (t *terminal) apply(pressed key) {
 		t.insert(pressed.value)
 	case keyNewline:
 		t.insert('\n')
+	case keyPaste:
+		// A paste lands where the cursor is, whole, its newlines composed in the
+		// region exactly as typed ones are. Nothing in it sends: return after it
+		// is what sends, as it always was.
+		for _, value := range pressed.text {
+			t.insert(value)
+		}
 	case keyBackspace:
 		if t.cursor > 0 {
 			t.line = append(t.line[:t.cursor-1], t.line[t.cursor:]...)
@@ -1067,7 +1080,9 @@ func (t *terminal) Close() error {
 	out.WriteString(t.eraseRegion())
 	// Whatever was negotiated about the keyboard is handed back before the modes
 	// are, so a shell that gets the terminal back is not left with a protocol
-	// this conversation turned on for itself.
+	// this conversation turned on for itself. The bracketing asked for around a
+	// paste goes the same way, for the same reason.
+	out.WriteString(pasteOff)
 	out.WriteString(t.restoreKeyboard)
 	t.restoreKeyboard = ""
 	// A part-line held back is written rather than dropped. It is something the

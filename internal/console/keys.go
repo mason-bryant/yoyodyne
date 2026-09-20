@@ -31,12 +31,18 @@ const (
 	// which a negotiated keyboard reports as a key instead. It is not an edit:
 	// the console raises what the terminal stopped raising.
 	keySignal
+	// keyPaste is a block the terminal bracketed rather than a key at all: what
+	// the operator pasted, whole, with its newlines still in it. It carries text
+	// rather than a rune, and a newline in it is a newline in the message rather
+	// than the return that would have sent it.
+	keyPaste
 )
 
 type key struct {
 	code   keyCode
 	value  rune
 	signal signalKey
+	text   string
 }
 
 // maxEscapeBytes bounds how long an escape sequence may be before it is taken
@@ -104,6 +110,12 @@ func decodeEscape(buffer []byte) (key, int, bool) {
 	if buffer[1] != '[' && buffer[1] != 'O' {
 		// Escape followed by something else is not a sequence this understands.
 		return key{code: keyIgnored}, 1, true
+	}
+	if pasted, size, complete, ok := decodePaste(buffer); ok {
+		// A paste is read whole rather than as the sequence that opens it, so
+		// the block between the brackets is one thing to the message rather than
+		// a stream of keystrokes with a return in it.
+		return pasted, size, complete
 	}
 	for index := 2; index < len(buffer); index++ {
 		if buffer[index] < 0x40 || buffer[index] > 0x7e {
