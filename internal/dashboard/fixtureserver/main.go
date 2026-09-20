@@ -53,12 +53,34 @@ var scenarios = map[string]scenario{
 	"refused":    {refused: "the state root could not be resolved: open /Users/somebody/Library/Application Support/Yoyodyne/state: permission denied"},
 }
 
-// fixtureReader is a read model that answers from fixtures.
+// fixtureReader is a read model that answers from fixtures. A work item is
+// answered from the item fixtures by id — `item-<id>.json` — so every card a
+// scenario's page can open has a fixture behind it, and an id with none is the
+// tracker holding nothing under it.
 type fixtureReader struct {
+	dir        string
 	standing   readmodel.Standing
 	throughput readmodel.Throughput
 	pending    bool
 	refused    error
+}
+
+func (r fixtureReader) WorkItem(ctx context.Context, id string) (readmodel.WorkItem, error) {
+	if r.pending {
+		<-ctx.Done()
+		return readmodel.WorkItem{}, ctx.Err()
+	}
+	if r.refused != nil {
+		return readmodel.WorkItem{}, r.refused
+	}
+	var item readmodel.WorkItem
+	if err := load(r.dir, "item-"+id, &item); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return readmodel.WorkItem{}, fmt.Errorf("%w: no fixture item-%s.json", readmodel.ErrNoSuchWorkItem, id)
+		}
+		return readmodel.WorkItem{}, err
+	}
+	return item, nil
 }
 
 func (r fixtureReader) Standing(ctx context.Context) (readmodel.Standing, error) {
@@ -86,7 +108,7 @@ func load(dir, name string, into any) error {
 }
 
 func reader(dir string, s scenario) (dashboard.Reader, error) {
-	r := fixtureReader{pending: s.pending}
+	r := fixtureReader{dir: dir, pending: s.pending}
 	if s.refused != "" {
 		r.refused = errors.New(s.refused)
 	}

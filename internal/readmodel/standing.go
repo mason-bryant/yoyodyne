@@ -338,6 +338,14 @@ type Refused struct {
 	Kind backlog.HoldKind `json:"kind"`
 }
 
+// WorkItemRef names one admitted work item, by id and title, for a surface that
+// lists a grouping of the queue rather than counting it. It carries no more than
+// that: what an item is in full is ReadWorkItem's answer, one item at a time.
+type WorkItemRef struct {
+	WorkItemID string `json:"work_item_id"`
+	Title      string `json:"title,omitempty"`
+}
+
 // Attention is one thing waiting on a person: what it is, and whose move it is.
 // The move is half the fact — a thread that says something is waiting without
 // saying who on is the silence this whole surface exists to end.
@@ -421,8 +429,18 @@ type Standing struct {
 	// four lines say it by the absence of a refusal — and is carried for the
 	// surface that shows the pipeline, so that surface reads the count rather
 	// than subtracting one list from another.
-	Startable           int    `json:"startable"`
-	NotStartableProblem string `json:"not_startable_problem,omitempty"`
+	Startable int `json:"startable"`
+	// AdmittedItems and StartableItems name the items behind Admitted and
+	// Startable, each in the product manager's order, so a surface that opens a
+	// grouping of the queue lists the same items the count counts rather than
+	// assembling a list of its own from the lines. The refusals above already
+	// name the held-back items, so with these three every item Admitted counts is
+	// named exactly once, and an item a run is carrying is in AdmittedItems and
+	// on the running line and nowhere else. Both are nil where the queue could
+	// not be read, as NotStartable is, and empty rather than absent otherwise.
+	AdmittedItems       []WorkItemRef `json:"admitted_items"`
+	StartableItems      []WorkItemRef `json:"startable_items"`
+	NotStartableProblem string        `json:"not_startable_problem,omitempty"`
 
 	NeedsHuman        []Attention `json:"needs_human"`
 	NeedsHumanProblem string      `json:"needs_human_problem,omitempty"`
@@ -499,7 +517,9 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.Admitted = len(queue.Entries)
 	standing.AwaitingDecision = waits.awaitingDecision
 	standing.AwaitingCarryOut = waits.awaitingCarryOut
-	standing.Startable = waits.startable
+	standing.Startable = len(waits.startable)
+	standing.StartableItems = waits.startable
+	standing.AdmittedItems = waits.admitted
 	standing.NotStartableProblem = notStartableProblem
 	// The provider's usage window is read out of the same stall the refusals are
 	// worded from, rather than derived a second time here: one reading of one
@@ -909,9 +929,10 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	// a state of the machine rather than something waiting on a person, and the
 	// attention line must not be given one.
 	stalled := false
-	var waits heldWork
+	waits := heldWork{admitted: make([]WorkItemRef, 0, len(queue.Entries)), startable: []WorkItemRef{}}
 	refused := make([]Refused, 0, len(queue.Entries))
 	for _, entry := range queue.Entries {
+		waits.admitted = append(waits.admitted, WorkItemRef{WorkItemID: entry.ID, Title: entry.Title})
 		if _, carried := inFlight[entry.ID]; carried {
 			continue
 		}
@@ -930,7 +951,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 			stalled = true
 		default:
 			// Nothing refuses it: this is the work the harness starts next.
-			waits.startable++
+			waits.startable = append(waits.startable, WorkItemRef{WorkItemID: entry.ID, Title: entry.Title})
 		}
 	}
 	if !stalled {
@@ -949,8 +970,12 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 type heldWork struct {
 	awaitingDecision int
 	awaitingCarryOut int
-	// startable is the other side of the same count: the entries nothing refuses.
-	startable int
+	// startable is the other side of the same count: the entries nothing
+	// refuses, named rather than counted so the surface that lists them lists
+	// the entries the count was taken over. admitted is every entry the reading
+	// saw, in the same order, for the same reason.
+	startable []WorkItemRef
+	admitted  []WorkItemRef
 }
 
 func (h *heldWork) count(entry backlog.Entry) {

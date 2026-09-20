@@ -1,0 +1,25 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.212",
+  "title": "Recurring tasks say when a firing was skipped",
+  "status": "in_progress",
+  "priority": 2,
+  "labels": [],
+  "parent": "",
+  "description": "A firing due while the provider is away moves its cadence and records the wait; the sweep listing should say so.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "",
+  "run": {
+    "run_id": "run-5035c832b1e04d7fa9c3e2b8d1f06a11",
+    "outcome": "running",
+    "phase": "integrating",
+    "resuming_integration": true,
+    "in_flight": true,
+    "preserved": false,
+    "branch": "yoyodyne/yoyodyne-ifd-212/5035c832",
+    "started_at": "2026-09-19T11:20:00Z",
+    "elapsed": 9909000000000,
+    "cost_usd": 12.8
+  }
+}

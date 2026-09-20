@@ -1,0 +1,26 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.230",
+  "title": "The sweep names the ref it preserved work on",
+  "status": "in_progress",
+  "priority": 2,
+  "labels": [
+    "reconcile"
+  ],
+  "parent": "",
+  "description": "The retirement sweep captures uncommitted work on a ref; the work item should name the ref and the command that opens it.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "",
+  "run": {
+    "run_id": "run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90",
+    "outcome": "running",
+    "phase": "developing",
+    "in_flight": true,
+    "preserved": false,
+    "branch": "yoyodyne/yoyodyne-ifd-230/7e2c19d4",
+    "started_at": "2026-09-19T13:10:00Z",
+    "elapsed": 3309000000000,
+    "cost_usd": 5.1
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.201",
+  "title": "The heartbeat names the forge when a merge is queued",
+  "status": "in_progress",
+  "priority": 2,
+  "labels": [
+    "slack"
+  ],
+  "parent": "",
+  "description": "The hourly line counts promotions awaiting the forge; it should name the forge holding each.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Goal served: the harness's surfaces read clearly.",
+  "run": {
+    "run_id": "run-49839de311bd6b4d06fbfb41f22abdf1",
+    "outcome": "running",
+    "phase": "reviewing",
+    "in_flight": true,
+    "preserved": false,
+    "branch": "yoyodyne/yoyodyne-ifd-201/49839de3",
+    "started_at": "2026-09-19T14:02:00Z",
+    "elapsed": 189000000000,
+    "cost_usd": 0,
+    "unknown_cost": "its event log is gone"
+  }
+}

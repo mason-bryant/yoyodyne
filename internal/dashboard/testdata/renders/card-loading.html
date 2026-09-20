@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="loading">
+      <div id="card-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="card-heading" class="popup-title">yoyodyne-ifd.201</h2>
+            <p id="card-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="card-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-loading">
+          <p class="waiting">
+            <span class="pulse" aria-hidden="true"></span>
+            Reading the work item…
+          </p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="error">
+      <div id="card-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="card-heading" class="popup-title">yoyodyne-ifd.230</h2>
+            <p id="card-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="card-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-error" role="alert">
+          <p id="card-problem" class="problem">Could not be read: the work item could not be read: bd show failed with status failed and exit code 1: failed to open database: embeddeddolt: openat LOCK: operation not permitted</p>
+          <p id="card-remedy" class="remedy">The card asks once, when it is opened; close it and open it again to ask again. yoyo status yoyodyne-ifd.230 says the same thing at the terminal, and bd show yoyodyne-ifd.230 prints the item itself.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

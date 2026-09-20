@@ -12,6 +12,11 @@
       "cancelled": 0,
       "timed_out": 0,
       "failed": 0,
+      "landed_items": [
+        {"run_id": "run-3b1e7c92d4f04a1b8e6c0d5f2a9b7e13", "work_item_id": "yoyodyne-ifd.439", "title": "A one-shot chat message answers a pending concern and never approves a proposal", "landed_at": "2026-09-19T13:41:00Z"},
+        {"run_id": "run-9d4a2f7be0c14b3d9f8a1c6e5b2d0a77", "work_item_id": "yoyodyne-ifd.440", "title": "The heartbeat says which part of the product is degraded", "landed_at": "2026-09-19T11:58:00Z"},
+        {"run_id": "run-6f0c8e3a1b7d4e2f9a5c3b1d8e7f0a24", "work_item_id": "yoyodyne-ifd.436", "title": "Release notes carry every item's description", "landed_at": "2026-09-19T09:12:00Z"}
+      ],
       "cost_usd": 92.0,
       "invocations": 31,
       "kinds": [
@@ -45,6 +50,30 @@
       "cancelled": 3,
       "timed_out": 1,
       "failed": 2,
+      "landed_items": [
+        {"run_id": "run-3b1e7c92d4f04a1b8e6c0d5f2a9b7e13", "work_item_id": "yoyodyne-ifd.439", "title": "A one-shot chat message answers a pending concern and never approves a proposal", "landed_at": "2026-09-19T13:41:00Z"},
+        {"run_id": "run-9d4a2f7be0c14b3d9f8a1c6e5b2d0a77", "work_item_id": "yoyodyne-ifd.440", "title": "The heartbeat says which part of the product is degraded", "landed_at": "2026-09-19T11:58:00Z"},
+        {"run_id": "run-6f0c8e3a1b7d4e2f9a5c3b1d8e7f0a24", "work_item_id": "yoyodyne-ifd.436", "title": "Release notes carry every item's description", "landed_at": "2026-09-19T09:12:00Z"},
+        {"run_id": "run-78dde6c4000000000000000000007bbc", "work_item_id": "yoyodyne-ifd.435", "title": "yoyo start says which parts the supervisor does not yet start", "landed_at": "2026-09-18T21:30:00Z"},
+        {"run_id": "run-17156075000000000000000000009aab", "work_item_id": "yoyodyne-ifd.434", "title": "The supervisor keeps each part running within bounds", "landed_at": "2026-09-18T18:05:00Z"},
+        {"run_id": "run-b54cda2600000000000000000000b99a", "work_item_id": "yoyodyne-ifd.433", "title": "yoyo doctor gets a line per declared service", "landed_at": "2026-09-18T15:47:00Z"},
+        {"run_id": "run-538453d700000000000000000000d889", "work_item_id": "yoyodyne-ifd.431", "title": "The brake summons the development manager's sweep", "landed_at": "2026-09-18T12:20:00Z"},
+        {"run_id": "run-f1bbcd8800000000000000000000f778", "work_item_id": "yoyodyne-ifd.430", "title": "A provider nobody can reach is a named wait that spends nothing", "landed_at": "2026-09-18T08:55:00Z"},
+        {"run_id": "run-8ff34739000000000000000000011667", "work_item_id": "yoyodyne-ifd.428", "title": "The outage record says which channel the refusal came on", "landed_at": "2026-09-17T22:14:00Z"},
+        {"run_id": "run-2e2ac0ea000000000000000000013556", "work_item_id": "yoyodyne-ifd.427", "title": "A recurring task records the wait rather than a failed turn", "landed_at": "2026-09-17T19:40:00Z"},
+        {"run_id": "run-cc623a9b000000000000000000015445", "work_item_id": "yoyodyne-ifd.425", "title": "The watch probes a login that expired", "landed_at": "2026-09-17T16:02:00Z"},
+        {"run_id": "run-6a99b44c000000000000000000017334", "work_item_id": "yoyodyne-ifd.424", "title": "yoyo status names the provider outage above the four lines", "landed_at": "2026-09-17T11:31:00Z"},
+        {"run_id": "run-08d12dfd000000000000000000019223", "work_item_id": "yoyodyne-ifd.421", "title": "The channel says once when the provider answers again", "landed_at": "2026-09-16T23:09:00Z"},
+        {"run_id": "run-a708a7ae00000000000000000001b112", "work_item_id": "yoyodyne-ifd.420", "title": "Reconcile finishes a publication the remote now confirms", "landed_at": "2026-09-16T17:45:00Z"},
+        {"run_id": "run-4540215f00000000000000000001d001", "work_item_id": "yoyodyne-ifd.418", "title": "A held item says which of two waits it is in", "landed_at": "2026-09-16T13:12:00Z"},
+        {"run_id": "run-e3779b1000000000000000000001eef0", "work_item_id": "yoyodyne-ifd.416", "title": "The held count is read from the repository rather than the flags", "landed_at": "2026-09-15T20:58:00Z"},
+        {"run_id": "run-81af14c1000000000000000000020ddf", "work_item_id": "yoyodyne-ifd.415", "title": "yoyo release says what the harness was in the middle of", "landed_at": "2026-09-15T15:33:00Z"},
+        {"run_id": "run-1fe68e72000000000000000000022cce", "work_item_id": "yoyodyne-ifd.412", "title": "The services section declares each part", "landed_at": "2026-09-15T10:04:00Z"},
+        {"run_id": "run-be1e0823000000000000000000024bbd", "work_item_id": "yoyodyne-ifd.410", "title": "The dashboard's token comes from the keychain or a file", "landed_at": "2026-09-14T21:16:00Z"},
+        {"run_id": "run-5c5581d4000000000000000000026aac", "work_item_id": "yoyodyne-ifd.409", "title": "The sweep retires leftover checkouts past the tail", "landed_at": "2026-09-14T14:50:00Z"},
+        {"run_id": "run-fa8cfb8500000000000000000002899b", "work_item_id": "yoyodyne-ifd.407", "title": "A dead claim is given back on the same pass", "landed_at": "2026-09-13T19:27:00Z"},
+        {"run_id": "run-98c4753600000000000000000002a88a", "work_item_id": "yoyodyne-ifd.406", "title": "The spend report groups rows by local day", "landed_at": "2026-09-13T09:41:00Z"}
+      ],
       "cost_usd": 1232.58,
       "invocations": 452,
       "kinds": [

@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.188",
+  "title": "The goals document gains a legibility clause",
+  "status": "open",
+  "priority": 2,
+  "labels": [
+    "goals"
+  ],
+  "parent": "",
+  "description": "Carried by the product manager's conversation rather than a developer run.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Executor: product-manager-conversation."
+}
