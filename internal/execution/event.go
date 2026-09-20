@@ -41,10 +41,18 @@ const (
 	// of every phase. Where a terminal sits relative to the others is not a
 	// substitute — that is a fact about the order the harness happened to do
 	// things in, and anything reading it as a phase is guessing.
-	EventRunCompleted     EventType = "run.completed"
-	EventRunFailed        EventType = "run.failed"
-	EventProcessOutput    EventType = "process.output"
-	EventAgentMessage     EventType = "agent.message"
+	EventRunCompleted  EventType = "run.completed"
+	EventRunFailed     EventType = "run.failed"
+	EventProcessOutput EventType = "process.output"
+	EventAgentMessage  EventType = "agent.message"
+	// The other side of a conversation's exchange: what the operator said, as the
+	// harness recorded it before asking the role to answer. It is the harness's
+	// event rather than the backend's because no provider ever sees the message
+	// as anything but prompt, and a log holding only agent.message is half a
+	// conversation — a rebuild from it, on another provider or after the session
+	// expired, read the questions off the answers. The payload is the same shape
+	// as agent.message, "text", redacted and cut to the same bound.
+	EventOperatorMessage  EventType = "operator.message"
 	EventCommandStarted   EventType = "command.started"
 	EventCommandCompleted EventType = "command.completed"
 	EventFileChanged      EventType = "file.changed"
@@ -160,6 +168,22 @@ const (
 	// that was refused is recorded with the refusal rather than left out.
 	EventRepositoryRead EventType = "repository.read"
 )
+
+// MaxEventTextBytes bounds the text one recorded event carries — a message either
+// side of a conversation said, a command's output, a provider's result. Every
+// backend parser cuts to it, and so does the harness where it records text of its
+// own, because the two halves of an exchange held to two bounds is a record that
+// cannot be read back as one exchange.
+const MaxEventTextBytes = 16 << 10
+
+// TruncateEventText cuts text to MaxEventTextBytes and marks the cut where it
+// made one, so a reader is never shown a truncated record as a complete one.
+func TruncateEventText(value string) string {
+	if len(value) <= MaxEventTextBytes {
+		return value
+	}
+	return value[:MaxEventTextBytes] + "…[truncated]"
+}
 
 type Event struct {
 	SchemaVersion int             `json:"schema_version"`

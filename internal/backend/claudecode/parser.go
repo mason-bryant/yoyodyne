@@ -11,7 +11,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
-const maxEventTextBytes = 16 << 10
+// The bound is the harness's, shared with the operator's side of a conversation
+// it records itself, so the two halves of one exchange are cut to one rule.
+const maxEventTextBytes = execution.MaxEventTextBytes
 
 type streamParser struct {
 	runID string
@@ -721,8 +723,5 @@ func (p *streamParser) SawUsageLimit() bool {
 const domainBackend = "claude-code"
 
 func truncate(value string) string {
-	if len(value) <= maxEventTextBytes {
-		return value
-	}
-	return value[:maxEventTextBytes] + "…[truncated]"
+	return execution.TruncateEventText(value)
 }

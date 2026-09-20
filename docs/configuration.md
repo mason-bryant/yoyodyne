@@ -3075,12 +3075,15 @@ What happens on a refused turn:
   the role has said. A session belongs to the provider that issued it, so a turn
   served on another provider has nothing to resume. What it is handed instead is
   assembled from the conversation's own durable record — the picture it is working
-  from, and the replies its event log holds — with no session identifier anywhere.
-  The reconstruction is framed to the role as what it is: the harness records what
-  the role said and not what the operator asked, so the role is told to say when
-  that leaves it unsure rather than to fill the gap in. A crossing that could not
-  be rebuilt is refused before it is attempted, and the turn takes the refusal it
-  already met.
+  from, and the exchange its event log holds — with no session identifier anywhere.
+  The log carries both sides: each of the operator's messages is recorded by the
+  harness before the role is asked to answer it, redacted and bounded exactly as
+  the reply is, so the reconstruction replays the exchange in order with each side
+  named. A conversation begun before the operator's side was kept has replies with
+  no message before them, and the reconstruction says so and tells the role to say
+  when that leaves it unsure rather than to fill the gap in. A crossing that could
+  not be rebuilt is refused before it is attempted, and the turn takes the refusal
+  it already met.
   The turn after a crossing crosses back the same way: the session on the record
   belongs to the provider that served the crossing, so it is not sent, and the
   context is rebuilt again for the provider the agent is configured for.

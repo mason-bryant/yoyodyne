@@ -26,7 +26,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
-const maxEventTextBytes = 16 << 10
+// The bound is the harness's, shared with the operator's side of a conversation
+// it records itself, so the two halves of one exchange are cut to one rule.
+const maxEventTextBytes = execution.MaxEventTextBytes
 
 // sourceName is what this adapter's normalized events are recorded as, and what
 // its dialect calls itself.
@@ -591,8 +593,5 @@ func rawOrNil(raw json.RawMessage) any {
 }
 
 func truncate(value string) string {
-	if len(value) <= maxEventTextBytes {
-		return value
-	}
-	return value[:maxEventTextBytes] + "…[truncated]"
+	return execution.TruncateEventText(value)
 }
