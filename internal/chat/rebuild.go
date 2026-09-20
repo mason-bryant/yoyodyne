@@ -19,12 +19,14 @@ package chat
 // rather than somebody else's session.
 //
 // What the rebuild can say is bounded by what the record holds, and it says so
-// rather than implying otherwise. The event log carries what the role said,
-// which is the half of the conversation the provider produced; the operator's own
-// messages are not in it, so the reconstruction is framed as an account of the
-// conversation rather than presented as a transcript of it. A role that is told
-// which it is reading can say it is missing something; one that is handed a gap
-// dressed as a transcript will fill it in.
+// rather than implying otherwise. The event log carries both sides of the
+// exchange — what the operator said, recorded by the harness before each turn,
+// and what the role answered, recorded by the provider as it wrote — so the
+// reconstruction replays them in order, each side named. A conversation begun
+// before the operator's side was kept has replies with no message before them,
+// and the framing says what that absence means. A role that is told which it is
+// reading can say it is missing something; one that is handed a gap dressed as a
+// transcript will fill it in.
 
 import (
 	"encoding/json"
@@ -43,11 +45,13 @@ import (
 // failing in a way that reads as the operator's message being too long.
 const maxRebuiltContextBytes = 256 << 10
 
-// maxRebuiltMessages bounds how many of the role's recorded messages the rebuild
-// carries. The most recent are the ones a continuation needs, and a conversation
-// somebody has held for days is one whose earliest turns are further from what is
-// being said now than the budget above is worth spending on.
-const maxRebuiltMessages = 40
+// maxRebuiltMessages bounds how many recorded messages, either side's, the
+// rebuild carries. The most recent are the ones a continuation needs, and a
+// conversation somebody has held for days is one whose earliest turns are further
+// from what is being said now than the budget above is worth spending on. A turn
+// is two messages — the operator's and the reply — so this is around forty turns'
+// worth, which is what it was when only the reply was recorded.
+const maxRebuiltMessages = 80
 
 // servingEndpoint is where a turn was actually served, as the record should say
 // it. The failover answers it where it resolved an endpoint, and this
@@ -157,6 +161,10 @@ func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequ
 	if err != nil {
 		return request, fmt.Errorf("read what this conversation has recorded: %w", err)
 	}
+	// What the turn in flight has recorded of itself is not history yet. Its
+	// operator message is already the prompt, and a refused attempt's events are
+	// the attempt this rebuild is replacing rather than something said before it.
+	events = recordedBefore(events, s.turnBegan)
 	// The turn's own prompt was redacted before it reached here, and this is
 	// assembled afterwards out of the briefing and the event log, so it is redacted
 	// here rather than inheriting a pass it was not part of. Anything recognizably
@@ -197,13 +205,40 @@ func (s *Session) rebuiltContext(events []execution.Event) string {
 		rebuilt.WriteString("\n")
 	}
 	if said != "" {
-		rebuilt.WriteString("## What you have said so far\n\n")
-		rebuilt.WriteString("These are your own replies, in order, as the harness recorded them. The operator's messages are not recorded, so what they asked has to be read from what you answered. Where that leaves you unsure what was asked, say so rather than assuming.\n\n")
+		rebuilt.WriteString("## What has been said so far\n\n")
+		rebuilt.WriteString("This is the exchange in order, as the harness recorded it: what the operator said, and what you replied. A reply with no operator message before it answers one the harness did not record, which is how conversations begun before the operator's side was kept read; where that leaves you unsure what was asked, say so rather than assuming.\n\n")
 		rebuilt.WriteString(said)
 		rebuilt.WriteString("\n")
 	}
 	return rebuilt.String()
 }
+
+// recordedBefore is the part of the log recorded up to and including sequence
+// through — the record as it stood when the turn in flight began. The log is
+// read back in sequence order, so this is a prefix of it.
+func recordedBefore(events []execution.Event, through uint64) []execution.Event {
+	for index, event := range events {
+		if event.Sequence > through {
+			return events[:index]
+		}
+	}
+	return events
+}
+
+// recordedMessage is one thing one side said, as the event log holds it.
+type recordedMessage struct {
+	operator bool
+	text     string
+}
+
+// How the rebuild names each side of the exchange. The operator's messages and
+// the role's replies are the same event shape, so the order they were recorded in
+// is the order they were said in, and a line naming the side is all the rebuild
+// adds to each.
+const (
+	operatorSaid = "**The operator said:**"
+	roleReplied  = "**You replied:**"
+)
 
 // workingBriefing is the picture this conversation is working from: the one a
 // refresh replaced it with where the operator asked for one, and the one it was
@@ -224,19 +259,27 @@ func (s *Session) workingBriefing() string {
 	return strings.TrimSpace(s.options.Briefing.Text)
 }
 
-// recordedMessages is what the role has said, read back out of the conversation's
-// event log in the order it was recorded and bounded twice: to the most recent
-// messages, and to the byte budget a rebuild may spend. An account that dropped
-// something says so, because a role told it has everything and given part of it
-// will reason as though the missing part never happened.
+// recordedMessages is what has been said on both sides, read back out of the
+// conversation's event log in the order it was recorded and bounded twice: to the
+// most recent messages, and to the byte budget a rebuild may spend. Both bounds
+// count the operator's messages and the role's replies alike, because the two are
+// one exchange and a budget spent on one side alone would keep answers whose
+// questions were dropped. An account that dropped something says so, because a
+// role told it has everything and given part of it will reason as though the
+// missing part never happened.
 func recordedMessages(events []execution.Event) string {
-	spoken := make([]string, 0, len(events))
+	spoken := make([]recordedMessage, 0, len(events))
 	for _, event := range events {
-		if event.Type != execution.EventAgentMessage {
+		var fromOperator bool
+		switch event.Type {
+		case execution.EventAgentMessage:
+		case execution.EventOperatorMessage:
+			fromOperator = true
+		default:
 			continue
 		}
 		if text := messageText(event); text != "" {
-			spoken = append(spoken, text)
+			spoken = append(spoken, recordedMessage{operator: fromOperator, text: text})
 		}
 	}
 	if len(spoken) == 0 {
@@ -249,32 +292,38 @@ func recordedMessages(events []execution.Event) string {
 	}
 	// The budget is spent from the most recent backwards, so what a long
 	// conversation keeps is the part nearest to what is being said now.
-	kept, budget := make([]string, 0, len(spoken)), maxRebuiltContextBytes
+	kept, budget := make([]recordedMessage, 0, len(spoken)), maxRebuiltContextBytes
 	for index := len(spoken) - 1; index >= 0; index-- {
-		if len(spoken[index]) > budget {
+		if len(spoken[index].text) > budget {
 			dropped += index + 1
 			break
 		}
-		budget -= len(spoken[index])
-		kept = append([]string{spoken[index]}, kept...)
+		budget -= len(spoken[index].text)
+		kept = append([]recordedMessage{spoken[index]}, kept...)
 	}
 	if len(kept) == 0 {
 		return ""
 	}
 	var rendered strings.Builder
 	if dropped > 0 {
-		rendered.WriteString(fmt.Sprintf("- %d earlier repl(ies) are not carried here.\n\n", dropped))
+		rendered.WriteString(fmt.Sprintf("- %d earlier message(s) are not carried here.\n\n", dropped))
 	}
-	for _, text := range kept {
-		rendered.WriteString(text)
+	for _, message := range kept {
+		if message.operator {
+			rendered.WriteString(operatorSaid)
+		} else {
+			rendered.WriteString(roleReplied)
+		}
+		rendered.WriteString("\n\n")
+		rendered.WriteString(message.text)
 		rendered.WriteString("\n\n")
 	}
 	return rendered.String()
 }
 
-// messageText is the prose one recorded agent message carries. An event whose
-// payload is not one the harness wrote is skipped rather than guessed at: what a
-// rebuild puts in front of a role has to be what the record actually says.
+// messageText is the prose one recorded message carries, either side's. An event
+// whose payload is not one the harness wrote is skipped rather than guessed at:
+// what a rebuild puts in front of a role has to be what the record actually says.
 func messageText(event execution.Event) string {
 	if len(event.Payload) == 0 {
 		return ""

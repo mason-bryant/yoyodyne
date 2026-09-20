@@ -388,8 +388,22 @@ func TestConversationResumesAcrossProcessRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEvents() error = %v", err)
 	}
-	if len(events) != 2 || events[0].Sequence != 1 || events[1].Sequence != 2 {
-		t.Fatalf("conversation events = %#v", events)
+	// Both sides of both turns, numbered in the order they were said: the
+	// operator's message ahead of the reply that answered it, and the resumed
+	// turn's pair after the first's rather than renumbered from one.
+	if len(events) != 4 {
+		t.Fatalf("conversation events = %#v, want both sides of both turns", events)
+	}
+	for index, want := range []execution.EventType{
+		execution.EventOperatorMessage, execution.EventAgentMessage,
+		execution.EventOperatorMessage, execution.EventAgentMessage,
+	} {
+		if events[index].Sequence != uint64(index+1) || events[index].Type != want {
+			t.Fatalf("conversation events = %#v, want %s at sequence %d", events, want, index+1)
+		}
+	}
+	if !strings.Contains(string(events[2].Payload), "What did I say?") {
+		t.Fatalf("resumed turn's operator message = %s, want what the operator said", events[2].Payload)
 	}
 }
 

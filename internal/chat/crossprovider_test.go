@@ -10,6 +10,8 @@ package chat
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -553,5 +555,161 @@ func TestTheReconstructionIsNeverSentTwiceInOnePrompt(t *testing.T) {
 				t.Fatalf("%s was asked turn %d carrying %d reconstructions, want at most one", who, index+1, count)
 			}
 		}
+	}
+}
+
+// The record carries the operator's side of the exchange as well as the role's,
+// so a crossing hands the second provider both halves, in the order they were
+// said and each side named. Before this the rebuild read the questions off the
+// answers, and said so; a role handed the exchange can answer the message it is
+// actually continuing from.
+func TestACrossingReplaysBothSidesOfTheExchangeFromTheRecord(t *testing.T) {
+	t.Parallel()
+
+	held := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "claude-session-1", FinalText: "Two goals, then."},
+		{SessionID: "claude-session-1", FinalText: "The second one first."},
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour"},
+		},
+	}}
+	crossed := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "second-session-1", FinalText: "Because it unblocks the other."},
+	}}
+	options := crossingOptions(t, held, crossed)
+	options.UsageLimits = newTestUsageLimits(t)
+	session := openTestSession(t, options)
+
+	for _, message := range []string{"what should we do?", "and after that?", "why that order?"} {
+		if _, err := session.Send(context.Background(), message); err != nil {
+			t.Fatalf("Send(%q) error = %v", message, err)
+		}
+	}
+	if len(crossed.requests) != 1 {
+		t.Fatalf("the other provider was asked %d times, want the one turn it served", len(crossed.requests))
+	}
+	prompt := crossed.requests[0].Prompt
+
+	// The exchange, in the order it happened: each of the operator's earlier
+	// messages ahead of the reply that answered it.
+	var last int
+	for _, next := range []string{
+		operatorSaid, "what should we do?",
+		roleReplied, "Two goals, then.",
+		operatorSaid, "and after that?",
+		roleReplied, "The second one first.",
+	} {
+		at := strings.Index(prompt[last:], next)
+		if at < 0 {
+			t.Fatalf("prompt = %q, want %q after what precedes it in the exchange", prompt, next)
+		}
+		last += at + len(next)
+	}
+	// The turn's own message is the turn, not the record: it appears once, as the
+	// operator message the turn answers, and not again as history.
+	if count := strings.Count(prompt, "why that order?"); count != 1 {
+		t.Fatalf("the turn's own message appears %d times in the crossed prompt, want once", count)
+	}
+	// The framing no longer says the operator's side is missing, because it is not.
+	if strings.Contains(prompt, "The operator's messages are not recorded") {
+		t.Fatalf("prompt = %q, want the reconstruction framed as the exchange it now is", prompt)
+	}
+}
+
+// The operator's message goes into the record before the provider is asked, and
+// under the rules a reply is recorded under: redacted, and cut to the same bound.
+// A turn the provider then failed still has its question on the record.
+func TestTheOperatorsMessageIsRecordedRedactedAndBoundedWhateverBecameOfTheTurn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{
+		results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Noted."}, {}},
+		errs:    []error{nil, errors.New("the provider went away")},
+	}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.RedactValues = []string{"sk-secret-value"}
+	session := openTestSession(t, options)
+
+	long := "the token is sk-secret-value " + strings.Repeat("x", execution.MaxEventTextBytes)
+	if _, err := session.Send(context.Background(), long); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if _, err := session.Send(context.Background(), "still there?"); err == nil {
+		t.Fatal("Send() error = nil, want the provider's failure")
+	}
+
+	events := loadTestEvents(t, root, session)
+	var operator []execution.Event
+	for _, event := range events {
+		if event.Type == execution.EventOperatorMessage {
+			operator = append(operator, event)
+		}
+	}
+	if len(operator) != 2 {
+		t.Fatalf("operator messages recorded = %d of %d events, want one per turn including the failed one", len(operator), len(events))
+	}
+	// Ahead of the reply, and by the harness rather than the provider.
+	if events[0].Type != execution.EventOperatorMessage || events[0].Source != "harness.chat" || events[1].Type != execution.EventAgentMessage {
+		t.Fatalf("events = %#v, want the operator's message first, from the harness, and the reply after it", events)
+	}
+	first := messageText(operator[0])
+	if strings.Contains(first, "sk-secret-value") {
+		t.Fatal("the operator's message reached the record unredacted")
+	}
+	if !strings.HasSuffix(first, "…[truncated]") || len(first) > execution.MaxEventTextBytes+len("…[truncated]") {
+		t.Fatalf("recorded message is %d bytes ending %q, want it cut to the bound a reply is cut to and marked", len(first), first[len(first)-20:])
+	}
+	if got := messageText(operator[1]); got != "still there?" {
+		t.Fatalf("the failed turn's operator message = %q, want what the operator said", got)
+	}
+}
+
+// The rebuild's budgets count both sides. A bound that counted only replies
+// would keep answers whose questions it had dropped, and one that says something
+// was dropped says it of messages rather than of replies alone.
+func TestTheRebuildBudgetCountsBothSidesOfTheExchange(t *testing.T) {
+	t.Parallel()
+
+	var events []execution.Event
+	say := func(eventType execution.EventType, text string) {
+		event, err := execution.NewEvent("chat-test", uint64(len(events)+1), fixedClock{}.Now(), eventType, "test", map[string]any{"text": text})
+		if err != nil {
+			t.Fatalf("NewEvent() error = %v", err)
+		}
+		events = append(events, event)
+	}
+	// One more exchange than the count bound holds, so exactly the oldest pair is
+	// dropped and the account says two messages went rather than one reply.
+	for turn := 0; turn <= maxRebuiltMessages/2; turn++ {
+		say(execution.EventOperatorMessage, fmt.Sprintf("question %d", turn))
+		say(execution.EventAgentMessage, fmt.Sprintf("answer %d", turn))
+	}
+
+	rendered := recordedMessages(events)
+	if !strings.HasPrefix(rendered, "- 2 earlier message(s) are not carried here.") {
+		t.Fatalf("rendered = %q, want the dropped pair accounted for as messages", rendered[:min(len(rendered), 80)])
+	}
+	if strings.Contains(rendered, "question 0\n") || strings.Contains(rendered, "answer 0\n") {
+		t.Fatalf("rendered = %q, want the oldest exchange dropped whole", rendered[:min(len(rendered), 200)])
+	}
+	if !strings.Contains(rendered, operatorSaid+"\n\nquestion 1\n\n"+roleReplied+"\n\nanswer 1\n\n") {
+		t.Fatalf("rendered = %q, want each side named and the question ahead of its answer", rendered[:min(len(rendered), 200)])
+	}
+	// The byte budget is spent on both sides too: an operator message that alone
+	// overruns it drops everything before it, reply and all.
+	events = nil
+	say(execution.EventAgentMessage, "an early reply")
+	say(execution.EventOperatorMessage, strings.Repeat("y", maxRebuiltContextBytes))
+	say(execution.EventAgentMessage, "the latest reply")
+	rendered = recordedMessages(events)
+	if !strings.HasPrefix(rendered, "- 2 earlier message(s) are not carried here.") || strings.Contains(rendered, "an early reply") {
+		t.Fatalf("rendered = %q, want the oversized message and everything before it dropped", rendered[:min(len(rendered), 200)])
+	}
+	if !strings.Contains(rendered, "the latest reply") {
+		t.Fatalf("rendered = %q, want the most recent reply kept", rendered)
 	}
 }

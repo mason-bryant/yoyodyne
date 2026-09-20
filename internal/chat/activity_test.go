@@ -73,8 +73,8 @@ func TestATurnSaysWhatItIsDoingWhileTheOperatorWaits(t *testing.T) {
 	// None of it is anything but display. The reply is what the product manager
 	// said, and the event stream is what it was already recording.
 	events := loadTestEvents(t, root, session)
-	if len(events) != 5 {
-		t.Fatalf("recorded events = %d, want the five the provider emitted", len(events))
+	if len(events) != 6 {
+		t.Fatalf("recorded events = %d, want the operator's message and the five the provider emitted", len(events))
 	}
 	for _, event := range events {
 		if strings.Contains(string(event.Payload), "refusing requests") {

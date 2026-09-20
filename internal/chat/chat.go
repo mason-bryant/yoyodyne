@@ -548,6 +548,13 @@ type Session struct {
 	// already answered, and throwing that away to report that the log missed
 	// would cost the operator the answer as well as the record.
 	failoverProblem string
+	// turnBegan is where the event log had reached when the turn in flight began,
+	// before anything the turn itself recorded. A rebuild replays the record up to
+	// it and no further: the turn's own operator message is recorded ahead of the
+	// invocation and is also the prompt the invocation carries, and a rebuild that
+	// read it back would hand the provider the question twice — once as history
+	// and once as the thing to answer.
+	turnBegan uint64
 	// lastInvocationCostUSD is what the provider charged for the invocation just
 	// taken, kept apart from both totals because an exchange is charged per
 	// invocation rather than per message: the round that carried an answer back
@@ -1056,8 +1063,13 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// repositoryRounds counts the rounds that read the repository, its own budget
 	// for the same reason.
 	repositoryRounds := 0
+	// The operator's side of this message is recorded with the first round, which
+	// is the one built around it. The rounds after it are the harness handing back
+	// what that round asked for, and record nothing as the operator's.
+	operatorMessage := trimmed
 	for {
-		answer, err := s.takeTurn(ctx, prompt)
+		answer, err := s.takeTurn(ctx, prompt, operatorMessage)
+		operatorMessage = ""
 		// The invocation is charged to the exchange whose answer it was carrying,
 		// before anything is decided about what it said: it was paid for either way.
 		s.chargeExchange(chargeTo, s.lastInvocationCostUSD)
@@ -1285,7 +1297,14 @@ Carry on answering the operator using these results. Say what you did, including
 // takeTurn runs one provider invocation and records everything it changed about
 // the conversation. The record advances whether or not the turn succeeded,
 // because the events it emitted exist either way.
-func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
+//
+// operatorMessage is the operator's side of this turn where the turn has one — the
+// message the prompt was built around — and empty on the further rounds one
+// message takes, whose prompts are the harness handing back what the role asked
+// for. It is recorded before the provider is asked, so the log holds the question
+// ahead of its answer; the prompt itself is not recorded, because the picture and
+// the notices it carries are recorded already, elsewhere, and once.
+func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) (string, error) {
 	// The operator's pause is read before every turn, including the further rounds
 	// one message takes: each of them is its own invocation, and a pause placed
 	// while the product manager was working on tracker results has to reach the
@@ -1303,6 +1322,17 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	prompt = execution.NewRedactor(s.options.RedactValues...).Redact(prompt)
 	if inputBytes := len(systemPrompt) + len(prompt); inputBytes > MaxTurnInputBytes {
 		return "", fmt.Errorf("conversation turn is %d bytes, limit is %d", inputBytes, MaxTurnInputBytes)
+	}
+	// The operator's side goes into the record here, after the checks that would
+	// refuse the turn without asking anybody and before the invocation whose
+	// events follow it. A turn the provider then fails still has its question on
+	// the record, exactly as it has whatever the provider managed to say. Where
+	// the record stood before it is what a rebuild of this turn replays up to.
+	s.turnBegan = s.state.LastSequence
+	if operatorMessage != "" {
+		if err := s.recordOperatorMessage(operatorMessage); err != nil {
+			return "", err
+		}
 	}
 
 	lastSequence := s.state.LastSequence
@@ -1581,6 +1611,17 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		return result.FinalText, err
 	}
 	return result.FinalText, nil
+}
+
+// recordOperatorMessage writes what the operator said into the conversation's
+// event log, where until now only the role's replies went. It is held to the
+// rules a reply is held to on its way into the same log: redacted by the same
+// redactor, and cut to the same bound the backends cut a reply to, so the two
+// halves of an exchange are read back under one rule and neither is where a
+// secret or a mis-piped file gets into the record.
+func (s *Session) recordOperatorMessage(message string) error {
+	text := execution.NewRedactor(s.options.RedactValues...).Redact(message)
+	return s.emit(execution.EventOperatorMessage, map[string]any{"text": execution.TruncateEventText(text)})
 }
 
 // parsedReply is one answer taken apart: the prose the operator reads, the
