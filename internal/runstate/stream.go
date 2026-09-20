@@ -316,7 +316,7 @@ func (s *StreamStore) entries(kind StreamKind, match string) ([]streamEntry, err
 // asks all of that of every row it prints.
 func (s *StreamStore) describe(entry streamEntry, current map[string]ConversationIdentity, priced bool) (Stream, streamScan, error) {
 	stream := Stream{ID: entry.id, Kind: entry.kind, Path: entry.path, Status: StreamStatusUnknown, Updated: entry.updated}
-	scanned, err := scanStreamLog(entry.path, priced)
+	scanned, err := scanStreamLog(entry.path, entry.kind, priced)
 	if err != nil {
 		return Stream{}, streamScan{}, fmt.Errorf("%s %s: %w", entry.kind, entry.id, err)
 	}
@@ -431,7 +431,7 @@ type streamScan struct {
 // scanStreamLog reads an event log once. A log that is gone is empty rather than
 // unreadable: a stream removed between being listed and being read is a race
 // with cleanup, not a failure of the answer.
-func scanStreamLog(path string, priced bool) (streamScan, error) {
+func scanStreamLog(path string, kind StreamKind, priced bool) (streamScan, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return streamScan{}, nil
@@ -442,6 +442,10 @@ func scanStreamLog(path string, priced bool) (streamScan, error) {
 	defer file.Close()
 
 	var scanned streamScan
+	// reviewing is the review bracket the ledger keeps for a run log recorded
+	// before a terminal named its own role, kept here for the same logs and the
+	// same reason. It decides nothing for a terminal that names itself.
+	reviewing := false
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
 	for scanner.Scan() {
@@ -467,15 +471,22 @@ func scanStreamLog(path string, priced bool) (streamScan, error) {
 		if !priced || !carriesSpendEvidence(line) {
 			continue
 		}
-		var terminal invocationEvent
+		var terminal pricedEvent
 		if err := json.Unmarshal(line, &terminal); err != nil {
 			return streamScan{}, fmt.Errorf("decode event log to price it: %w", err)
+		}
+		if terminal.Type == execution.EventReviewStarted {
+			reviewing = true
+			continue
 		}
 		if !terminal.priced() {
 			continue
 		}
+		announced := reviewing
+		reviewing = false
 		scanned.invocations = append(scanned.invocations, Invocation{
 			At:      terminal.Timestamp,
+			Role:    invocationRole(kind, terminal, announced),
 			CostUSD: terminal.Payload.TotalCostUSD,
 			Usage:   terminal.tokens(),
 		})
@@ -486,53 +497,37 @@ func scanStreamLog(path string, priced bool) (streamScan, error) {
 	return scanned, nil
 }
 
-// Invocation is one provider call a stream recorded: when it ended, what the
-// provider said it cost, and what it consumed. Cost is what the provider
-// reported rather than an estimate, and a call that failed is one of these too —
-// it was made and it was paid for, and leaving it out would understate every
-// total it belonged in. The usage is the same TokenUsage the ledger sums, so an
-// invocation whose terminal carried no usage object is counted as unmeasured
-// there rather than as having read nothing.
+// invocationRole is whose invocation a terminal ended, for a log of any kind.
+// A run log is read by the ledger's rule, bracket and all. A branch review's
+// terminals are the reviewer's whether or not they said so, because nothing
+// else ever writes into one; a conversation's terminal that did not name its
+// role is nobody's, because the log does not say which role's conversation it
+// is and a guess here would be a guess about money.
+func invocationRole(kind StreamKind, terminal pricedEvent, announced bool) domain.AgentRole {
+	switch kind {
+	case StreamRun:
+		return terminal.role(announced)
+	case StreamReview:
+		return domain.RoleReviewer
+	default:
+		return domain.AgentRole(strings.TrimSpace(terminal.Payload.Role))
+	}
+}
+
+// Invocation is one provider call a stream recorded: when it ended, whose it
+// was, what the provider said it cost, and what it consumed. Cost is what the
+// provider reported rather than an estimate, and a call that failed is one of
+// these too — it was made and it was paid for, and leaving it out would
+// understate every total it belonged in. The usage is the same TokenUsage the
+// ledger sums, so an invocation whose terminal carried no usage object is
+// counted as unmeasured there rather than as having read nothing.
 type Invocation struct {
-	At      time.Time  `json:"at,omitzero"`
-	CostUSD float64    `json:"cost_usd"`
-	Usage   TokenUsage `json:"usage"`
-}
-
-// invocationEvent is the little of an event a spend row needs: which event it
-// is, when it happened, and what the provider said the invocation it ended cost
-// and read. The usage is decoded in the provider's own field names, as the
-// ledger decodes it, and for the same reason: it is what the backend wrote.
-type invocationEvent struct {
-	Type      execution.EventType `json:"type"`
-	Timestamp time.Time           `json:"timestamp"`
-	Payload   struct {
-		TotalCostUSD float64      `json:"total_cost_usd"`
-		Usage        *usageTokens `json:"usage"`
-	} `json:"payload"`
-}
-
-func (e invocationEvent) tokens() TokenUsage {
-	usage := e.Payload.Usage
-	if usage == nil {
-		return TokenUsage{Unreported: 1}
-	}
-	return TokenUsage{
-		InputTokens:         usage.InputTokens,
-		CacheReadTokens:     usage.CacheReadTokens,
-		CacheCreationTokens: usage.CacheCreationTokens,
-		OutputTokens:        usage.OutputTokens,
-		Measured:            1,
-	}
-}
-
-func (e invocationEvent) priced() bool {
-	for _, candidate := range pricedEvents {
-		if e.Type == candidate {
-			return true
-		}
-	}
-	return false
+	At time.Time `json:"at,omitzero"`
+	// Role is the role whose invocation this was, and empty where the terminal
+	// named none.
+	Role    domain.AgentRole `json:"role,omitempty"`
+	CostUSD float64          `json:"cost_usd"`
+	Usage   TokenUsage       `json:"usage"`
 }
 
 // UndatedDay is where spend whose moment could not be read is grouped. It still
@@ -595,6 +590,38 @@ type SpendRow struct {
 	// added into a day's token total as though it had used none.
 	Usage   *TokenUsage `json:"usage,omitempty"`
 	CostUSD float64     `json:"cost_usd"`
+	// Roles is the same spend split by whose invocations it was, with each
+	// role's cost apportioned across what its invocations were billed for. A
+	// run's row mixes the developer's session with the reviewer's one-shot
+	// invocations, and those two are not cached alike: the split is what says
+	// whether a role is reading the cache it writes, which the row's one share
+	// cannot. An exchange's row carries none, for the reason it carries no usage.
+	Roles []RoleSpend `json:"roles,omitempty"`
+}
+
+// RoleSpend is one role's part of a row or of a report: how many invocations,
+// what they cost, what they used, and that cost apportioned by what it was
+// billed for. The role is empty where the terminals named none.
+type RoleSpend struct {
+	Role    domain.AgentRole `json:"role,omitempty"`
+	Calls   int              `json:"calls"`
+	CostUSD float64          `json:"cost_usd"`
+	Usage   TokenUsage       `json:"usage"`
+	Split   CostSplit        `json:"split"`
+}
+
+func (r *RoleSpend) add(invocation Invocation) {
+	r.Calls++
+	r.CostUSD += invocation.CostUSD
+	r.Usage.Merge(invocation.Usage)
+	r.Split.Merge(invocation.Usage.Split(invocation.CostUSD))
+}
+
+func (r *RoleSpend) merge(other RoleSpend) {
+	r.Calls += other.Calls
+	r.CostUSD += other.CostUSD
+	r.Usage.Merge(other.Usage)
+	r.Split.Merge(other.Split)
 }
 
 // SpendReport is what the selected streams spent, one row per stream per day,
@@ -663,6 +690,12 @@ type SpendTotals struct {
 	// ByKind carries only the kinds that have a row, in the order
 	// EveryPricedKind prices them.
 	ByKind []KindTotal
+	// ByRole carries only the roles whose invocations the rows recorded, in the
+	// order roleOrder ranks them, each with its cost apportioned across what its
+	// invocations were billed for. It is the figure that says whether a role is
+	// paying to write a cache it reads back or one it does not, which the total's
+	// one cache-read share hides behind whichever role reads the most.
+	ByRole []RoleSpend
 }
 
 // KindTotal is one kind's share of a report's total.
@@ -672,10 +705,17 @@ type KindTotal struct {
 	CostUSD float64
 }
 
+// roleOrder is the order roles are reported in: the two a run is made of
+// first, then the conversation roles, then anything else by name, and the
+// invocations that named no role last. The order is fixed so that two reports
+// over different windows put the same role on the same line.
+var roleOrder = []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer, domain.RoleProductManager, domain.RoleDevelopmentManager, domain.RoleArchitect}
+
 // Totals sums the rows the report holds.
 func (r SpendReport) Totals() SpendTotals {
 	var totals SpendTotals
 	byKind := make(map[StreamKind]*KindTotal, len(EveryPricedKind))
+	byRole := make(map[domain.AgentRole]*RoleSpend)
 	var unpriced []StreamKind
 	for _, row := range r.Rows {
 		totals.Calls += row.Calls
@@ -693,6 +733,14 @@ func (r SpendReport) Totals() SpendTotals {
 		}
 		share.Calls += row.Calls
 		share.CostUSD += row.CostUSD
+		for _, spent := range row.Roles {
+			part, seen := byRole[spent.Role]
+			if !seen {
+				part = &RoleSpend{Role: spent.Role}
+				byRole[spent.Role] = part
+			}
+			part.merge(spent)
+		}
 	}
 	// A kind the pricing does not name still spent, so it is not dropped: it
 	// follows the priced kinds, in the order its rows came.
@@ -701,7 +749,35 @@ func (r SpendReport) Totals() SpendTotals {
 			totals.ByKind = append(totals.ByKind, *share)
 		}
 	}
+	totals.ByRole = orderedRoles(byRole)
 	return totals
+}
+
+// orderedRoles lays the roles out in roleOrder, then any role the order does
+// not name alphabetically, then the unnamed role last.
+func orderedRoles(byRole map[domain.AgentRole]*RoleSpend) []RoleSpend {
+	ordered := make([]RoleSpend, 0, len(byRole))
+	placed := make(map[domain.AgentRole]bool, len(byRole))
+	for _, role := range roleOrder {
+		if part, seen := byRole[role]; seen {
+			ordered = append(ordered, *part)
+			placed[role] = true
+		}
+	}
+	var others []domain.AgentRole
+	for role := range byRole {
+		if !placed[role] && role != "" {
+			others = append(others, role)
+		}
+	}
+	sort.Slice(others, func(i, j int) bool { return others[i] < others[j] })
+	for _, role := range others {
+		ordered = append(ordered, *byRole[role])
+	}
+	if part, seen := byRole[""]; seen {
+		ordered = append(ordered, *part)
+	}
+	return ordered
 }
 
 func isPricedKind(kind StreamKind) bool {
@@ -850,12 +926,28 @@ func spendByDay(stream Stream, invocations []Invocation) []SpendRow {
 		row.Calls++
 		row.CostUSD += invocation.CostUSD
 		row.Usage.Merge(invocation.Usage)
+		row.addToRole(invocation)
 	}
 	grouped := make([]SpendRow, 0, len(order))
 	for _, day := range order {
 		grouped = append(grouped, *rows[day])
 	}
 	return grouped
+}
+
+// addToRole puts one invocation on its role's part of the row, opening the
+// part on the role's first invocation. The parts are kept in the order the
+// roles first spent, which the report's totals reorder into roleOrder.
+func (r *SpendRow) addToRole(invocation Invocation) {
+	for index := range r.Roles {
+		if r.Roles[index].Role == invocation.Role {
+			r.Roles[index].add(invocation)
+			return
+		}
+	}
+	part := RoleSpend{Role: invocation.Role}
+	part.add(invocation)
+	r.Roles = append(r.Roles, part)
 }
 
 // LocalDay is the day a moment falls on in the timezone the operator's day

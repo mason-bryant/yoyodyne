@@ -926,11 +926,55 @@ func TestStoreReadsTheProvidersUsageObjectAsItIsActuallyRecorded(t *testing.T) {
 		t.Fatalf("Price() error = %v", err)
 	}
 	tokens := price.Runs[0].Tokens
-	if tokens != (TokenUsage{InputTokens: 114, CacheReadTokens: 7796697, CacheCreationTokens: 187181, OutputTokens: 58231, Measured: 1}) {
-		t.Fatalf("tokens = %#v, want the object's own top-level figures and nothing counted twice", tokens)
+	if tokens != (TokenUsage{InputTokens: 114, CacheReadTokens: 7796697, CacheCreationTokens: 187181, CacheWrite1hTokens: 187181, OutputTokens: 58231, Measured: 1}) {
+		t.Fatalf("tokens = %#v, want the object's own top-level figures, the write split by lifetime, and nothing counted twice", tokens)
 	}
 	if price.Runs[0].CostUSD != 9.41 {
 		t.Fatalf("cost = %v, want the recorded invocation's own price", price.Runs[0].CostUSD)
+	}
+}
+
+// A reported cost is apportioned across what the invocation was billed for at
+// the provider's rate multiples, so the parts add up to the provider's figure
+// and a model's base rate never enters it. The fixture is the recorded review
+// invocation the multiples were checked against: at a base rate of $5 per
+// million the four weighted parts price to $0.615218, which is what the
+// provider reported, so the split is exact rather than approximate.
+func TestTokenUsageSplitsAReportedCostAtTheProvidersMultiples(t *testing.T) {
+	t.Parallel()
+
+	// run-f37599de6a6f36427ab9e94114f93e7c, sequence 955: a review that read its
+	// six-thousand-token prefix and wrote the rest for an hour.
+	usage := TokenUsage{InputTokens: 2, CacheReadTokens: 6076, CacheCreationTokens: 39517, CacheWrite1hTokens: 39517, OutputTokens: 8680, Measured: 1}
+	split := usage.Split(0.615218)
+	near := func(got, want float64) bool { return got > want-0.000001 && got < want+0.000001 }
+	if !near(split.FreshUSD, 0.00001) || !near(split.CacheReadUSD, 0.003038) || !near(split.CacheWriteUSD, 0.39517) || !near(split.OutputUSD, 0.217) || split.UnsplitUSD != 0 {
+		t.Fatalf("split = %+v, want the parts priced at 1x, 0.1x, 2x, and 5x of $5 per million", split)
+	}
+	if sum := split.FreshUSD + split.CacheReadUSD + split.CacheWriteUSD + split.OutputUSD; !near(sum, 0.615218) {
+		t.Fatalf("the parts add up to %v, want the provider's own figure", sum)
+	}
+
+	// A write whose lifetime was not recorded is weighted as the shorter one, so
+	// the same tokens written for five minutes cost a quarter over rather than
+	// double, and a terminal recorded before the split existed is never charged
+	// the higher premium on a guess.
+	short := TokenUsage{CacheCreationTokens: 1000, Measured: 1}.Split(1.25)
+	if !near(short.CacheWriteUSD, 1.25) || short.UnsplitUSD != 0 {
+		t.Fatalf("an unlifetimed write splits to %+v, want all of it on the write", short)
+	}
+	fiveMinute := TokenUsage{InputTokens: 1000, CacheCreationTokens: 1000, CacheWrite5mTokens: 1000, Measured: 1}.Split(2.25)
+	if !near(fiveMinute.FreshUSD, 1) || !near(fiveMinute.CacheWriteUSD, 1.25) {
+		t.Fatalf("a five-minute write beside fresh input splits to %+v, want 1 : 1.25", fiveMinute)
+	}
+
+	// An invocation nothing measured, or one measured at nothing, still cost what
+	// it cost; the money is carried whole rather than placed by guesswork.
+	if unmeasured := (TokenUsage{Unreported: 1}).Split(3); unmeasured != (CostSplit{UnsplitUSD: 3}) {
+		t.Fatalf("an unmeasured invocation splits to %+v, want its cost unsplit", unmeasured)
+	}
+	if nought := (TokenUsage{Measured: 1}).Split(3); nought != (CostSplit{UnsplitUSD: 3}) {
+		t.Fatalf("an invocation that used nothing splits to %+v, want its cost unsplit", nought)
 	}
 }
 

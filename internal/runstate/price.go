@@ -181,7 +181,16 @@ type TokenUsage struct {
 	InputTokens         int64 `json:"input_tokens,omitempty"`
 	CacheReadTokens     int64 `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
-	OutputTokens        int64 `json:"output_tokens,omitempty"`
+	// CacheWrite5mTokens and CacheWrite1hTokens split the cache writes by the
+	// lifetime they were written at, as the provider reports the split beside
+	// the total. The two lifetimes are billed at different multiples of the base
+	// rate, so a cost split by what the input was billed as needs them apart;
+	// they are kept beside the total rather than replacing it because a terminal
+	// recorded before the provider reported the split carries the total alone,
+	// and that total is still every token written.
+	CacheWrite5mTokens int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	OutputTokens       int64 `json:"output_tokens,omitempty"`
 	// Measured counts the priced invocations whose terminal carried a usage
 	// object, and Unreported the ones that carried none. Both are kept because
 	// the count is the only thing that tells them apart once they are summed: an
@@ -233,9 +242,86 @@ func (t *TokenUsage) Merge(other TokenUsage) {
 	t.InputTokens += other.InputTokens
 	t.CacheReadTokens += other.CacheReadTokens
 	t.CacheCreationTokens += other.CacheCreationTokens
+	t.CacheWrite5mTokens += other.CacheWrite5mTokens
+	t.CacheWrite1hTokens += other.CacheWrite1hTokens
 	t.OutputTokens += other.OutputTokens
 	t.Measured += other.Measured
 	t.Unreported += other.Unreported
+}
+
+// The provider prices each kind of token at a fixed multiple of the model's
+// base input rate, and the multiples are the same across its models: a cache
+// read at a tenth, a write kept for five minutes at a quarter over, a write
+// kept for an hour at double, and output at five times. They are what lets a
+// reported cost be split by what it was billed for without a price table: the
+// split is a share of the provider's own figure, so a model's base rate never
+// enters it and a change to that rate moves nothing here. What would move it is
+// a model priced off these multiples, which shifts the split and never the
+// total. Every terminal recorded on this machine was checked against them
+// before they were written down: 1,317 of 1,399 opus-5 invocations and 484 of
+// 485 fable-5 invocations price to a single base rate within one per cent
+// under exactly these weights (docs/diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md).
+// A cache write whose lifetime the terminal did not record is weighted as the
+// shorter one, which is the provider's default lifetime and the lower of the
+// two premiums.
+const (
+	cacheReadWeight    = 0.1
+	cacheWrite5mWeight = 1.25
+	cacheWrite1hWeight = 2.0
+	outputWeight       = 5.0
+)
+
+// CostSplit is a reported cost apportioned across what the provider billed the
+// invocation for. It answers the question a cache-read share cannot: not what
+// fraction of the input was served from the cache, but what the cache actually
+// cost — a prompt written into the cache at the write premium and never read
+// back is money the share does not show, because the share counts reads.
+//
+// Every figure is a share of the cost the provider reported, so the four add
+// up to it exactly. Unsplit is the part nothing could apportion: an invocation
+// whose terminal carried no usage, or reported using nothing at all, still cost
+// what it cost and is carried whole rather than placed by guesswork.
+type CostSplit struct {
+	FreshUSD      float64 `json:"fresh_usd,omitempty"`
+	CacheReadUSD  float64 `json:"cache_read_usd,omitempty"`
+	CacheWriteUSD float64 `json:"cache_write_usd,omitempty"`
+	OutputUSD     float64 `json:"output_usd,omitempty"`
+	UnsplitUSD    float64 `json:"unsplit_usd,omitempty"`
+}
+
+// Merge adds another invocation's split into this one.
+func (c *CostSplit) Merge(other CostSplit) {
+	c.FreshUSD += other.FreshUSD
+	c.CacheReadUSD += other.CacheReadUSD
+	c.CacheWriteUSD += other.CacheWriteUSD
+	c.OutputUSD += other.OutputUSD
+	c.UnsplitUSD += other.UnsplitUSD
+}
+
+// Split apportions one invocation's reported cost across the usage its
+// terminal recorded, at the multiples above. It is per invocation on purpose:
+// a split over usage merged across invocations of differently priced models
+// would weight one model's tokens at another's rate, and the sum of per-
+// invocation splits has no such problem.
+func (t TokenUsage) Split(costUSD float64) CostSplit {
+	written5m, written1h := t.CacheWrite5mTokens, t.CacheWrite1hTokens
+	if written5m+written1h == 0 {
+		written5m = t.CacheCreationTokens
+	}
+	fresh := float64(t.InputTokens)
+	read := cacheReadWeight * float64(t.CacheReadTokens)
+	written := cacheWrite5mWeight*float64(written5m) + cacheWrite1hWeight*float64(written1h)
+	output := outputWeight * float64(t.OutputTokens)
+	weighted := fresh + read + written + output
+	if !t.Reported() || weighted == 0 {
+		return CostSplit{UnsplitUSD: costUSD}
+	}
+	return CostSplit{
+		FreshUSD:      costUSD * fresh / weighted,
+		CacheReadUSD:  costUSD * read / weighted,
+		CacheWriteUSD: costUSD * written / weighted,
+		OutputUSD:     costUSD * output / weighted,
+	}
 }
 
 // RunPrice is what one recorded run cost, as its own event log reports it.
@@ -675,7 +761,10 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 type pricedEvent struct {
 	SchemaVersion int                 `json:"schema_version"`
 	Type          execution.EventType `json:"type"`
-	Payload       struct {
+	// Timestamp is when the invocation ended, which is the day its money is
+	// counted on by the readers that group spend by day.
+	Timestamp time.Time `json:"timestamp"`
+	Payload   struct {
 		Role         string  `json:"role"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
 		// Usage is the provider's own usage object, recorded verbatim on every
@@ -704,6 +793,15 @@ type usageTokens struct {
 	OutputTokens        int64 `json:"output_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_input_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+	// CacheCreation is the one nested object that is descended into: the
+	// provider's split of the write above by the lifetime it was written at,
+	// which is what a cost split needs because the two lifetimes carry different
+	// premiums. It is a pointer so a terminal recorded before the provider
+	// reported the split is told apart from one that reported a split of nothing.
+	CacheCreation *struct {
+		Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+		Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 // tokens is what this invocation read and wrote, or an invocation counted as
@@ -713,13 +811,35 @@ func (p pricedEvent) tokens() TokenUsage {
 	if usage == nil {
 		return TokenUsage{Unreported: 1}
 	}
-	return TokenUsage{
+	tokens := TokenUsage{
 		InputTokens:         usage.InputTokens,
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
 		OutputTokens:        usage.OutputTokens,
 		Measured:            1,
 	}
+	if usage.CacheCreation != nil {
+		tokens.CacheWrite5mTokens = usage.CacheCreation.Ephemeral5m
+		tokens.CacheWrite1hTokens = usage.CacheCreation.Ephemeral1h
+	}
+	return tokens
+}
+
+// role is whose invocation this terminal ended, by the rule phase applies: a
+// terminal names its own role from TerminalRoleSchemaVersion on, and one
+// recorded before that is read the way it was written, with the review bracket
+// deciding between the only two roles that ever wrote into a run's log. A
+// terminal that could have named itself and did not is nobody's, which is what
+// the empty role says.
+func (p pricedEvent) role(announced bool) domain.AgentRole {
+	named := domain.AgentRole(strings.TrimSpace(p.Payload.Role))
+	if named != "" || p.SchemaVersion >= execution.TerminalRoleSchemaVersion {
+		return named
+	}
+	if announced {
+		return domain.RoleReviewer
+	}
+	return domain.RoleDeveloper
 }
 
 // invocationPhase is which part of a run one priced invocation served. Its zero
@@ -746,19 +866,11 @@ const (
 // front of it -- is what decides. That fallback reaches nothing written since,
 // so it can never place a terminal that could have named itself and did not.
 func (p pricedEvent) phase(announced bool) invocationPhase {
-	switch domain.AgentRole(strings.TrimSpace(p.Payload.Role)) {
+	switch p.role(announced) {
 	case domain.RoleDeveloper:
 		return phaseDevelopment
 	case domain.RoleReviewer:
 		return phaseReview
-	case "":
-		if p.SchemaVersion >= execution.TerminalRoleSchemaVersion {
-			return phaseUnattributed
-		}
-		if announced {
-			return phaseReview
-		}
-		return phaseDevelopment
 	default:
 		return phaseUnattributed
 	}

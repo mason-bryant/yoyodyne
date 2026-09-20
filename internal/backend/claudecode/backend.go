@@ -123,6 +123,57 @@ var readOnlyTools = []string{}
 // docs/experiments/yoyodyne-ifd-205-review-prompt-cache.md.
 const stableSystemPromptFlag = "--exclude-dynamic-system-prompt-sections"
 
+// promptCacheLifetimeVariable is how Claude Code is told how long what an
+// invocation writes into the provider's cache is kept: "5m" or "1h". Unset, the
+// provider chooses an hour on a subscription, and an hour is billed at double
+// the fresh rate against a quarter over for five minutes.
+//
+// singleTurnCacheLifetime is what the reviewer's invocations are given. A
+// review is one turn nobody resumes, and what it writes into the cache is
+// almost all the patch it is judging — unique to that review and never read
+// back by anything. The after-window measurement of yoyodyne-ifd.205 found the
+// flag above doing what it was meant to: every review reads its shared prefix,
+// which is the provider's own static system prompt plus the appended contract
+// and persona, some six thousand tokens. Everything past that, tens of
+// thousands to a hundred and thirty thousand tokens a review, was written at
+// the hour's premium for nobody. The shorter lifetime cuts that premium from
+// double to a quarter over and keeps the prefix read where the next review
+// follows inside five minutes, which one in five does; modelled over the 638
+// reviews of that window it is a seventh of the review phase's cost
+// (docs/diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md).
+//
+// It is the reviewer's alone. The conversation roles resume a session whose
+// whole transcript is the cached prefix, and an hour is what keeps that warm
+// between an operator's messages; the developer's session is the same. Nothing
+// here sets a lifetime for them, so they keep the provider's choice.
+const (
+	promptCacheLifetimeVariable = "CLAUDE_CODE_PROMPT_CACHE_TTL"
+	singleTurnCacheLifetime     = "5m"
+)
+
+// singleTurnRole reports a role whose every invocation is one turn nobody
+// resumes, which is the reviewer: a review is a separate provider invocation
+// with no session to resume, by the contract in internal/review.
+func singleTurnRole(role domain.AgentRole) bool {
+	return role == domain.RoleReviewer
+}
+
+// withPromptCacheLifetime sets the lifetime on an invocation's environment,
+// replacing one the harness's own environment carried through: the lifetime is
+// this adapter's decision about the invocation's shape, and an operator's
+// setting for their own interactive sessions is not a decision about the
+// harness's reviews.
+func withPromptCacheLifetime(environment []string, lifetime string) []string {
+	kept := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, promptCacheLifetimeVariable+"=") {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return append(kept, promptCacheLifetimeVariable+"="+lifetime)
+}
+
 // readOnlyRole reports whether a role reasons over supplied evidence rather than
 // reaching outside it. Such a role gets no tools and cannot be given them.
 //
@@ -396,6 +447,10 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if strings.TrimSpace(configDir) == "" {
 		configDir = b.ConfigDir
 	}
+	environment := environmentFor(configDir)
+	if singleTurnRole(request.Role) {
+		environment = withPromptCacheLifetime(environment, singleTurnCacheLifetime)
+	}
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name: b.binary(),
 		Args: args,
@@ -405,7 +460,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		// the project's checks, and the default cache is under the user's home,
 		// which the sandbox this run is confined to does not grant: without the
 		// redirect the probe dies at setup and reads as a broken toolchain.
-		Env:   execution.WithGoBuildCache(environmentFor(configDir), request.WorkingDirectory),
+		Env:   execution.WithGoBuildCache(environment, request.WorkingDirectory),
 		Stdin: strings.NewReader(request.Prompt),
 		// The stream this invocation is asked for is the liveness signal: every
 		// line the process writes is an event, so the gap between lines is

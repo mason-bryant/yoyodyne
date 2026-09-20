@@ -4,8 +4,13 @@ Work item: yoyodyne-ifd.205, from the structural finding
 [yoyodyne-ifd.84](yoyodyne-ifd-84-prompt-prefix-stability.md) left behind.
 
 **Status: the cause is established from the provider's own prompt assembly, the
-change is landed, and the before window is below. The after window is not: it
-has to be taken from runs made with the change, and there are none yet.**
+change is landed, and the before window is below. The after window was taken by
+yoyodyne-ifd.424 on 2026-09-20, over the 638 review invocations recorded since
+this change merged: the review phase's cache-read share rose from 0.50% to
+27.45%, every review reads its shared prefix back, and what it goes on writing
+for nobody is the patch it is judging.
+[`docs/diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md`](../diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md)
+is the measurement, the cost of that write, and the lifetime change made on it.**
 
 ## What was wrong
 
@@ -58,7 +63,9 @@ The provider reports its cache writes split by lifetime, and the harness records
 the usage object verbatim, so the split is already in the event logs. Every cache
 write the harness has made — developer, reviewer, conversation — is
 `ephemeral_1h_input_tokens`, with `ephemeral_5m_input_tokens` at nought. Reviews
-already write at the one-hour lifetime.
+wrote at the one-hour lifetime when this was written; since yoyodyne-ifd.424 the
+reviewer writes at the five-minute one, for the reason the last paragraph of this
+section gives.
 
 Against that, the gaps between consecutive review invocations, over the 33
 reviews whose terminals name their own role: median 548s, quartiles 356s and

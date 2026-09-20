@@ -678,6 +678,95 @@ func (b *syncBuffer) String() string {
 	return b.written.String()
 }
 
+// The one cache-read share under the total is decided by whichever role reads
+// the most, so a role writing its whole prompt into the cache and reading none
+// of it back is invisible there. The report says what each role paid to write
+// the cache and what it paid to read it, apportioned from the provider's own
+// figure, and the same split travels on every row of the machine-readable
+// report.
+func TestStatusSpendSaysWhatEachRolePaidToWriteAndReadTheCache(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	today := time.Now()
+	state := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-ifd.424", today.Add(-time.Hour))
+	appendStreamEvent(t, store, state.RunID, 1, execution.EventRunStarted, today.Add(-time.Hour), map[string]any{"session_id": "session-developer"})
+	// The developer read nearly everything from the cache; the reviewer read a
+	// six-thousand-token prefix and wrote the rest for an hour, which at the
+	// provider's multiples is two thirds of what it cost.
+	appendStreamEvent(t, store, state.RunID, 2, execution.EventRunCompleted, today.Add(-time.Hour), roleCost("developer", 5, 0, 1000, 100000, 900000))
+	appendStreamEvent(t, store, state.RunID, 3, execution.EventRunCompleted, today.Add(-time.Hour), roleCost("reviewer", 0.615218, 2, 8680, 39517, 6076))
+
+	stdout, stderr, code := runCLI(t, "status", "--spend", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"by role, each role's cost apportioned across what its invocations were billed for",
+		"cache_w USD", "cache_r USD",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+	rows := map[string]string{}
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 8 && (fields[0] == "developer" || fields[0] == "reviewer") {
+			rows[fields[0]] = line
+		}
+	}
+	reviewer, developer := strings.Fields(rows["reviewer"]), strings.Fields(rows["developer"])
+	if len(reviewer) != 8 || reviewer[1] != "1" || reviewer[2] != "39,517" || reviewer[3] != "$0.40" || reviewer[4] != "6,076" || reviewer[5] != "$0.00" || reviewer[6] != "13.3%" || reviewer[7] != "$0.62" {
+		t.Fatalf("the reviewer's line = %q, want its calls, cache writes and what they cost, cache reads and what they cost, its read share, and its total", rows["reviewer"])
+	}
+	if len(developer) != 8 || developer[6] != "90.0%" || developer[7] != "$5.00" {
+		t.Fatalf("the developer's line = %q", rows["developer"])
+	}
+
+	stdout, stderr, code = runCLI(t, "status", "--spend", "--json", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	var priced spendOutput
+	if err := json.Unmarshal([]byte(stdout), &priced); err != nil {
+		t.Fatalf("Unmarshal() error = %v: %q", err, stdout)
+	}
+	if len(priced.Report.Rows) != 1 || len(priced.Report.Rows[0].Roles) != 2 {
+		t.Fatalf("the report's rows = %+v, want one row carrying both roles", priced.Report.Rows)
+	}
+	split := priced.Report.Rows[0].Roles[1]
+	if split.Role != domain.RoleReviewer || split.Split.CacheWriteUSD < 0.395 || split.Split.CacheWriteUSD > 0.3952 {
+		t.Fatalf("the reviewer's part of the row = %+v", split)
+	}
+}
+
+// roleCost is a terminal that names its role and splits its cache write by
+// lifetime, as the backend records one.
+func roleCost(role string, cost float64, input, output, cacheWrite, cacheRead int64) map[string]any {
+	return map[string]any{
+		"session_id":     "session-" + role,
+		"role":           role,
+		"total_cost_usd": cost,
+		"usage": map[string]any{
+			"input_tokens":                input,
+			"output_tokens":               output,
+			"cache_creation_input_tokens": cacheWrite,
+			"cache_read_input_tokens":     cacheRead,
+			"cache_creation": map[string]any{
+				"ephemeral_1h_input_tokens": cacheWrite,
+				"ephemeral_5m_input_tokens": 0,
+			},
+		},
+	}
+}
+
 func recordStreamRun(t *testing.T, stateRoot string, status runstate.Status, startedAt time.Time, cost float64) string {
 	t.Helper()
 	store, err := runstate.NewStore(stateRoot, "yoyodyne")
