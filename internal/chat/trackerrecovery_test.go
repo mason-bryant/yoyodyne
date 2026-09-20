@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,27 +22,39 @@ import (
 // write on yoyodyne-ifd.142 failed with, message and all.
 const killedWrite = "bd update failed with status timed_out and exit code -1: "
 
-// contendedTracker fails the first few calls of one verb the way a contended
-// store does and then answers, which is the shape the recovery rule exists for:
-// a failure the next attempt survives. Every other verb answers at once, so the
-// waits a test counts are the contended verb's own.
+// contendedTracker fails the first few calls of the named verbs the way a
+// contended store does and then answers, which is the shape the recovery rule
+// exists for: a failure the next attempt survives. A verb not named answers at
+// once, so the waits a test counts are the contended verbs' own, and every call
+// is counted by verb whether it answered or not.
 type contendedTracker struct {
 	*fakeTracker
-	verb     string
+	// verbs are the calls that fail; none named means every one of them does.
+	verbs    []string
 	failures int
 	failure  error
-	calls    int
+	calls    map[string]int
 }
 
 func (c *contendedTracker) contended(verb string) error {
-	if verb != c.verb {
+	if c.calls == nil {
+		c.calls = map[string]int{}
+	}
+	if len(c.verbs) > 0 && !slices.Contains(c.verbs, verb) {
 		return nil
 	}
-	c.calls++
-	if c.calls <= c.failures {
+	c.calls[verb]++
+	if c.calls[verb] <= c.failures {
 		return c.failure
 	}
 	return nil
+}
+
+func (c *contendedTracker) Show(ctx context.Context, id string) (beads.WorkItem, error) {
+	if err := c.contended("show"); err != nil {
+		return beads.WorkItem{}, err
+	}
+	return c.fakeTracker.Show(ctx, id)
 }
 
 func (c *contendedTracker) List(ctx context.Context, status string) ([]beads.WorkItem, error) {
@@ -80,7 +93,7 @@ func TestAConversationTrackerWriteThatFailsRecoverablyIsAskedAgainOnTheBackoff(t
 		}},
 		// The read that precedes the write answers; the write itself fails three
 		// times and then lands.
-		verb:     "update",
+		verbs:    []string{"update"},
 		failures: 3,
 		failure:  errors.New(killedWrite),
 	}
@@ -108,8 +121,8 @@ func TestAConversationTrackerWriteThatFailsRecoverablyIsAskedAgainOnTheBackoff(t
 	if want := []time.Duration{time.Second, time.Second, 2 * time.Second}; !equalDurations(sleeps, want) {
 		t.Fatalf("waits = %v, want the Fibonacci series %v", sleeps, want)
 	}
-	if tracker.calls != 4 {
-		t.Fatalf("writes = %d, want the write asked for four times", tracker.calls)
+	if tracker.calls["update"] != 4 {
+		t.Fatalf("writes = %d, want the write asked for four times", tracker.calls["update"])
 	}
 	// The operator is told the store had to be asked again, in the action's own
 	// line, because a store that had to be asked three times is one they should
@@ -150,7 +163,7 @@ func TestAConversationTrackerReadThatFailsRecoverablyIsAskedAgain(t *testing.T) 
 
 	tracker := &contendedTracker{
 		fakeTracker: &fakeTracker{},
-		verb:        "list",
+		verbs:       []string{"list"},
 		failures:    2,
 		failure:     errors.New("bd list failed with status timed_out and exit code -1: "),
 	}
@@ -172,8 +185,8 @@ func TestAConversationTrackerReadThatFailsRecoverablyIsAskedAgain(t *testing.T) 
 	if len(reply.Actions) != 1 || !reply.Actions[0].Applied || len(tracker.created) != 1 {
 		t.Fatalf("actions = %#v, created = %#v, want the admission made once the listing answered", reply.Actions, tracker.created)
 	}
-	if tracker.calls != 3 || len(sleeps) != 2 {
-		t.Fatalf("listings = %d, waits = %v, want the listing asked for again after each wait", tracker.calls, sleeps)
+	if tracker.calls["list"] != 3 || len(sleeps) != 2 {
+		t.Fatalf("listings = %d, waits = %v, want the listing asked for again after each wait", tracker.calls["list"], sleeps)
 	}
 }
 
@@ -300,7 +313,7 @@ func TestATrackerFailureNoLaterAttemptCouldSurviveIsNotRetried(t *testing.T) {
 		fakeTracker: &fakeTracker{items: map[string]beads.WorkItem{
 			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "open"},
 		}},
-		verb:     "update",
+		verbs:    []string{"update"},
 		failures: 100,
 		failure:  errors.New("bd update failed with status failed and exit code 1: the item is locked"),
 	}
@@ -321,55 +334,106 @@ func TestATrackerFailureNoLaterAttemptCouldSurviveIsNotRetried(t *testing.T) {
 	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v, want the refusal reported", reply.Actions)
 	}
-	if len(sleeps) != 0 || tracker.calls != 1 {
-		t.Fatalf("waits = %v, writes = %d, want the refusal taken as the answer", sleeps, tracker.calls)
+	if len(sleeps) != 0 || tracker.calls["update"] != 1 {
+		t.Fatalf("waits = %v, writes = %d, want the refusal taken as the answer", sleeps, tracker.calls["update"])
 	}
 	if strings.Contains(reply.Actions[0].Failure, "retr") {
 		t.Fatalf("failure = %q, want no retry claimed where none was taken", reply.Actions[0].Failure)
 	}
 }
 
-// The operator stopping the turn ends the wait, and the call is left as it
-// failed rather than asked again under a context that has already ended.
+// stoppedStoreTracker is a store that never takes the write and, once the
+// operator has stopped the turn, will not answer a read either. It is the shape
+// the settling read meets: the write timed out, the turn was stopped during the
+// wait, and the read that would settle what the write left behind runs under a
+// context nothing can cancel against a store that is still contended.
+type stoppedStoreTracker struct {
+	*fakeTracker
+	stopped  *bool
+	shows    int
+	updates  int
+	refusals int
+}
+
+func (s *stoppedStoreTracker) Show(ctx context.Context, id string) (beads.WorkItem, error) {
+	s.shows++
+	if *s.stopped {
+		s.refusals++
+		return beads.WorkItem{}, errors.New("bd show failed with status timed_out and exit code -1: ")
+	}
+	return s.fakeTracker.Show(ctx, id)
+}
+
+func (s *stoppedStoreTracker) Update(context.Context, string, beads.WorkItemChange) (beads.WorkItem, error) {
+	s.updates++
+	return beads.WorkItem{}, errors.New(killedWrite)
+}
+
+// The operator stopping the turn ends the waiting — all of it. The call being
+// waited on is left as it failed rather than asked again under a context that
+// has ended, and so is every call after it in the message: the settling read a
+// failed triage write is followed by runs under a context nothing can cancel,
+// and a wait taken there would be one the operator had already stopped and
+// could not stop again.
 func TestAStoppedTurnEndsTheTrackerWait(t *testing.T) {
 	t.Parallel()
 
-	tracker := &contendedTracker{
+	stopped := false
+	tracker := &stoppedStoreTracker{
 		fakeTracker: &fakeTracker{items: map[string]beads.WorkItem{
 			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item that keeps coming back", Status: "open"},
 		}},
-		verb:     "update",
-		failures: 100,
-		failure:  errors.New(killedWrite),
+		stopped: &stopped,
 	}
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sleeps := 0
-	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
-		{SessionID: "session-1", FinalText: trackerReply("Noting it.",
-			`{"action":"update","id":"yoyodyne-ifd.142","note":"n","reason":"r"}`)},
-		{SessionID: "session-1", FinalText: "It did not land."},
-	}})
-	options.Tracker = tracker
+	options := triageOptions(t, tracker, budgets, trackerReply("Its ground moved, so it starts over.",
+		`{"action":"triage","id":"yoyodyne-ifd.142","run":"`+stoppedRun+`","decision":"rerun","reason":"the change is right and the branch it was written against has moved under it"}`))
+	options.Reports = &fakeReports{}
 	options.Sleep = func(ctx context.Context, _ time.Duration) error {
 		sleeps++
 		// The operator stops the turn during the second wait.
 		if sleeps == 2 {
+			stopped = true
 			cancel()
 		}
 		return ctx.Err()
 	}
 	session := openTestSession(t, options)
 
-	reply, _ := session.Send(ctx, "note it")
+	reply, _ := session.Send(ctx, "Work the docket.")
 	if sleeps != 2 {
-		t.Fatalf("waits = %d, want the wait ended where the turn was stopped", sleeps)
+		t.Fatalf("waits = %d, want the waiting ended where the turn was stopped, with none taken for the settling read", sleeps)
 	}
-	if tracker.calls != 2 {
-		t.Fatalf("writes = %d, want no write asked for under a context that had ended", tracker.calls)
+	if tracker.updates != 2 {
+		t.Fatalf("writes = %d, want no write asked for under a context that had ended", tracker.updates)
 	}
-	if len(reply.Actions) == 1 && reply.Actions[0].Applied {
-		t.Fatalf("action = %#v, want it left as it failed", reply.Actions[0])
+	// The settling read was still taken — it is what says whether the timed-out
+	// write landed — and when the store would not answer it, it was not waited
+	// on: the operator had stopped waiting, and that read cannot be stopped.
+	if tracker.refusals != 1 {
+		t.Fatalf("reads refused after the stop = %d, want the settling read asked once and not waited on", tracker.refusals)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the write left as it failed", reply.Actions)
+	}
+	outcome := reply.Actions[0]
+	// What is reported says the turn was stopped, rather than that a two-hour
+	// window ran out: the two ask different things of whoever reads them.
+	if !strings.Contains(outcome.Failure, "the turn was stopped while waiting to ask again, after 2 retr(ies)") {
+		t.Fatalf("failure = %q, want the stop named rather than a window that ran out", outcome.Failure)
+	}
+	if strings.Contains(outcome.Failure, "did not outlast it") {
+		t.Fatalf("failure = %q, want no claim that the window ran out", outcome.Failure)
+	}
+	// And 327's account still follows it: the spend stands, and the write is not
+	// known to have landed because the read that would say so was not answered.
+	if !outcome.PartlyLanded() || len(outcome.Unknown) != 1 ||
+		!strings.Contains(outcome.Unknown[0], "the tracker would not say whether the write reached yoyodyne-ifd.142") ||
+		!strings.Contains(outcome.Unknown[0], "the turn was stopped while waiting") {
+		t.Fatalf("outcome = %#v, want the spend standing and the unsettled write saying the turn was stopped", outcome)
 	}
 }
 

@@ -155,6 +155,15 @@ func (s *Session) recoveringTrackerCall(ctx context.Context, attempt func(contex
 // log and on the operator's screen, rather than only once something has come of
 // it.
 func (s *Session) recoverTrackerFrom(ctx context.Context, cause error) (bool, error) {
+	// A wait the turn's ending cut short closes the window for the rest of the
+	// message. The check is here rather than on the context alone because the
+	// call that follows a failed write — the settling read — runs under a context
+	// nothing can cancel, exactly so it reaches the tracker after the turn's own
+	// deadline; a wait taken there would be one the operator had already stopped
+	// and could not stop again.
+	if s.trackerWaitStopped {
+		return false, nil
+	}
 	attempt := s.trackerRetryAttempts() + 1
 	delay := recovery.Interval(attempt)
 	if s.trackerRetryWaited()+delay > recovery.Window {
@@ -185,14 +194,18 @@ func (s *Session) recoverTrackerFrom(ctx context.Context, cause error) (bool, er
 	// then being made again rather than waited on.
 	phase := s.activity.current()
 	s.activity.doing(describeTrackerWait(attempt, delay, now.Add(delay)))
-	if err := s.options.sleep(ctx, delay); err != nil {
-		// The turn is over — the operator stopped it, or it ran out of time — so the
-		// call is left as it failed rather than asked again under a context that has
-		// already ended.
-		return false, nil
-	}
+	err := s.options.sleep(ctx, delay)
+	// The phase is put back either way: the wait is over, and what the turn does
+	// next — the call again, or the recording of how it ended — is not waiting.
 	if phase != "" {
 		s.activity.doing(phase)
+	}
+	if err != nil {
+		// The turn is over — the operator stopped it, or it ran out of time — so the
+		// call is left as it failed rather than asked again under a context that has
+		// already ended, and so is every call after it in this message.
+		s.trackerWaitStopped = true
+		return false, nil
 	}
 	return true, nil
 }
@@ -201,16 +214,24 @@ func (s *Session) recoverTrackerFrom(ctx context.Context, cause error) (bool, er
 // produces. It wraps the failure rather than replacing it, so everything
 // downstream — the outcome's failure line, the settling of what a timed-out
 // write left behind, the results the role is handed — reads as what it always
-// read, with the attempts and the time in front of it.
+// read, with the attempts and the time in front of it. A window the turn's
+// ending closed is said as that rather than as one that ran out, because the
+// two ask different things of whoever reads it: one says the store was down for
+// two hours, the other that somebody stopped waiting.
 func (s *Session) trackerRetriesExhausted(cause error) error {
 	attempts := s.trackerRetryAttempts()
+	waited := s.trackerRetryWaited().Round(time.Second)
+	if s.trackerWaitStopped {
+		return fmt.Errorf("%s failed on something a later attempt could have survived, and the turn was stopped while waiting to ask again, after %d retr(ies) over %s, so it is reported rather than retried further: %w",
+			runstate.RetryTracker, attempts, waited, cause)
+	}
 	if attempts == 0 {
 		// Nothing was waited at all, which is a turn that ended under the call
 		// rather than a window that ran out. Saying it was retried would be untrue.
 		return cause
 	}
 	return fmt.Errorf("%s kept failing on something a later attempt could have survived, and %d retr(ies) over %s did not outlast it, so it is reported rather than retried further: %w",
-		runstate.RetryTracker, attempts, s.trackerRetryWaited().Round(time.Second), cause)
+		runstate.RetryTracker, attempts, waited, cause)
 }
 
 // trackerRetryAttempts is how many times this message has already asked the

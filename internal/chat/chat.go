@@ -575,6 +575,13 @@ type Session struct {
 	// run for the next, and forty calls each waiting a whole window is a message
 	// nobody gets an answer from. See trackerrecovery.go.
 	trackerRetries []runstate.Retry
+	// trackerWaitStopped says a wait in this message was cut short by the turn
+	// ending — the operator stopped it, or it ran out of time — which closes the
+	// window for every later call the message makes. It is kept beside the record
+	// above rather than read off the context, because the settling read a failed
+	// write is followed by runs under a context nothing can cancel, and a wait
+	// there would be one the operator already stopped and could not stop again.
+	trackerWaitStopped bool
 	// notedRefusal is the provider refusal this message has already written down,
 	// as the limit, the model, and the reset time together. It is kept for the
 	// same span as the budget above and for a related reason: the probes a wait
@@ -1033,8 +1040,10 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	s.usageLimitWaited = 0
 	s.notedRefusal = ""
 	// And what it may spend waiting out a tracker that would not answer, over the
-	// same span: every tracker call the message makes shares one window.
+	// same span: every tracker call the message makes shares one window, and a
+	// wait the last message's ending cut short does not close this one's.
 	s.trackerRetries = nil
+	s.trackerWaitStopped = false
 	// How old the picture this answer will rest on is, measured before the prompt
 	// is built because the answer to it changes what the prompt carries: a
 	// picture past the threshold is re-read here and delivered below, and one
@@ -1890,6 +1899,7 @@ func (s *Session) Approve(ctx context.Context, proposalID string) (CreatedItem, 
 	// An approval is the operator's own ask, made between messages, so it is given
 	// a recovery window of its own rather than whatever the last message left.
 	s.trackerRetries = nil
+	s.trackerWaitStopped = false
 	// The goal is checked again where the item is actually created. It was
 	// checked before the operator was asked, and the goals are read from the
 	// repository rather than from the conversation, so between the two the goal

@@ -810,7 +810,11 @@ message nobody gets an answer from. Each wait is recorded on the conversation
 before it is taken, as a `tracker.retried` event, and an interactive turn shows
 it on screen — `waiting out a tracker failure a later attempt may survive; asking
 again at 3:04PM (attempt 3, after 2s)` — so a turn waiting out a contended store
-is distinguishable from one that has hung; stopping the turn ends the wait. An
+is distinguishable from one that has hung. Stopping the turn ends the waiting,
+all of it: the call is left as it failed, the window is closed for every later
+call in the message — including the read that settles what a timed-out write
+left behind, which runs under a context nothing can cancel — and what is
+reported says the turn was stopped rather than that the window ran out. An
 action that landed after waiting says so on its own line. One guard changed
 with it: the duplicate check an admission makes used to let the admission
 through when its listing failed, on the argument that the tracker was briefly
