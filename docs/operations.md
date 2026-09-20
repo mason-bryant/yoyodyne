@@ -2315,7 +2315,17 @@ kept in the checkout it would be a second copy of every sentence the verb says,
 drifting from it — its banner had already drifted from the harness's own wording
 once. Nothing it did is missing from the verb, and two things it could not do are
 here: it needs no `jq`, and it prices a failed invocation, which cost money like
-any other.
+any other. There is nothing at the old path either, on purpose: the script's
+flags were its own — `-L` for following the newest, `-l` to list, `-c` for
+spend, `-n` for the replay — and a one-line `exec yoyo status "$@"` under the
+old name would have turned every one of them into an unknown-flag refusal and a
+bare `bin/yoyo-status` into the recorded report instead of the follow it always
+was, which is the old name answering a different question rather than muscle
+memory kept. So `bin/yoyo-status -L` is `yoyo status --follow --latest` now,
+`-l` is `--list`, `-c` is `--spend`, `-n` is `--lines`, and `--runs`, `--chats`,
+and `--reviews` are `--kind runs`, `--kind chats`, and `--kind reviews`.
+[The retirement's own record](diagnoses/yoyodyne-ifd-239-yoyo-status-already-retired.md)
+says where each of those is pinned in the binary.
 
 ```sh
 yoyo status --follow             # follow the newest of any kind
