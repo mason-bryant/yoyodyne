@@ -421,7 +421,16 @@ func TestASecondSupervisorIsRefusedWhileOneRuns(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- first.Run(ctx) }()
-	waitFor(t, func() bool { running, _ := store.Running(); return running })
+	// The first supervisor is waited for by the record it writes once it holds
+	// the lease, never by store.Running(): that probe answers by taking the lease
+	// and letting it go, so a probe landing before Run reaches Lease() takes the
+	// lease from the supervisor under test, which then returns ErrAlreadyRunning
+	// itself and the wait runs out. The window is one scheduling gap, which a
+	// loaded race run is wide enough to hit.
+	waitFor(t, func() bool { _, found, err := store.Load(); return err == nil && found })
+	if running, err := store.Running(); err != nil || !running {
+		t.Fatalf("Running() = %t, %v; want the first supervisor holding the lease", running, err)
+	}
 
 	second := newSupervisor(t, store, clock, &fakeChild{name: config.ServiceSlack})
 	if err := second.Run(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
