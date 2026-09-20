@@ -1557,6 +1557,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	if s.carried != nil {
 		s.state.ContextGatheredAt = s.carried.GatheredAt
 		s.state.ContextCommit = s.carried.Commit
+		s.state.ContextShippedDocumentationBytes = s.carried.ShippedDocumentationBytes
 		s.carried = nil
 		s.refresh = nil
 	}

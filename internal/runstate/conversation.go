@@ -154,6 +154,13 @@ type Conversation struct {
 	// delivered, never when it is merely taken.
 	ContextGatheredAt time.Time `json:"context_gathered_at,omitempty"`
 	ContextCommit     string    `json:"context_commit,omitempty"`
+	// ContextShippedDocumentationBytes is what the shipped documentation in that
+	// picture added up to on disk. It is recorded with the picture, on every
+	// pass, because the set has a ceiling at which carrying it whole is a
+	// product decision again, and a size nobody wrote down is a growth nobody
+	// sees until the gate on it fails. It is zero on a conversation recorded
+	// before it was written down and on a project naming no documentation.
+	ContextShippedDocumentationBytes int `json:"context_shipped_documentation_bytes,omitempty"`
 	// LastRunWorkItemID is the work item of the run this conversation started
 	// most recently. It is durable for the same reason the rest of this is: the
 	// process that started the run is often not the one the operator comes back

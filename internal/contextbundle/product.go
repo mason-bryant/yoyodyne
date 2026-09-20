@@ -18,43 +18,63 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
+// ShippedDocumentationCeiling is the most the shipped documentation may add up
+// to, on disk, before the gate fails. It is the point at which the briefing's
+// token cost is a product question again: at 2 MiB the set alone is roughly
+// 520,000 tokens at the four bytes a token that English Markdown runs to, sent
+// whole on every first turn and every refresh of every conversation that reads
+// it — the product manager's, and each of the roles briefed the same way. That
+// is a cost to decide about rather than one to absorb by moving a number, which
+// is what the ceiling exists to mark.
+//
+// Its history is why it is a ceiling with a margin below it rather than a
+// budget the set is held to. defaultMaxProductBytes was raised four times in
+// three weeks — 512 to 640 to 768 to 896 KiB — and each time the eight shipped
+// documents stood within bytes of it, so documenting any new behaviour at all
+// failed make test on a sentence unrelated to the change that added it, and
+// seven reports in two days asked the product manager the same question. The
+// product manager answered it on 2026-09-19 (yoyodyne-ifd.403): the decision on
+// yoyodyne-ifd.240 stands, the product manager is given all eight documents in
+// full, and the set is neither trimmed nor narrowed. What changed is the
+// check's shape — a distant ceiling, a declared margin under it that warns, and
+// the set's size recorded on every pass — and what brings the set down is
+// yoyodyne-ifd.117.4, which removes the text README.md and docs/configuration.md
+// carry that the split guides also carry.
+const ShippedDocumentationCeiling = 2 << 20
+
+// ShippedDocumentationMargin is how far under the ceiling the warning starts.
+// Within it, the test that measures the set says so in its output and the
+// product manager's briefing says so to the operator and to the role, and
+// nothing fails; the set has to reach the ceiling itself for the gate to go
+// red. Half a megabyte is several weeks of the growth that took the set from
+// 512 to 877 KiB, which is the lead time a product question is worth.
+const ShippedDocumentationMargin = 512 << 10
+
+// productContextReserve is what the product context keeps for everything that
+// shares it with the shipped documentation: the specifications, the tracker
+// state, the docket, the command help, and the recorded-intent section. The
+// documentation is read last and takes what is left, so a bound sized to the
+// set alone was a bound the set could pass the test against and still not fit
+// under at run time — which is what happened at 896 KiB, where the set was 19
+// KiB under the budget and docs/configuration.md was being dropped from the
+// briefing because the specifications and the help had already taken more than
+// that. The tracker section, the docket, the help, and the intent section are
+// each bounded by construction to some tens of kilobytes, and
+// TestShippedDocumentationFitsTheBriefingBesideEverythingElse assembles this
+// repository with the tracker and the help at their bounds and refuses any
+// omission;
+// the specifications are the directory nobody counts, and what is left over
+// leaves them room to be several times what this repository holds today.
+const productContextReserve = 512 << 10
+
 // defaultMaxProductBytes bounds the product context. It is larger than a work
 // item's bundle because it carries whole documents rather than one item, and
 // bounded for the same reason: a directory of specifications grows without
-// limit.
-//
-// It was 512 KiB, and the eight shipped documents had grown to within 32 bytes
-// of it — so documenting any new behaviour at all pushed the set past the whole
-// budget, with nothing left for the specifications, the tracker state, or the
-// docket that share it. The bound that this figure exists for is the one on a
-// directory nobody counts; a fixed list of eight documents that grows with the
-// product is not it, and squeezing them was costing the product manager the
-// specifications rather than saving anything. So the figure moved once, far
-// enough that the shipped set has room to grow and the rest of the context is
-// not competing with it for the last few kilobytes.
-//
-// It was not far enough, and this is the second move. At 640 KiB the shipped set
-// had grown to within 11 bytes, which is the same wall in the same place: the
-// work item that documented model failover found it by adding a section to
-// docs/configuration.md and failing the gate on the sentence that described the
-// key it had just added. Two moves for one reason is the reason itself becoming
-// worth naming — the set grows with every behaviour the product acquires, and a
-// constant chased upward by that growth is not bounding anything it was meant
-// to bound.
-//
-// It is still a bound and still deliberately finite. What it does not answer,
-// and what the recurrence now argues somebody should, is whether eight whole
-// documents is the right thing to carry in full at all — a product question
-// rather than a constant, and the one this figure keeps being raised instead of
-// answering.
-//
-// This is the third move, and it was the same wall for the third time: at
-// 768 KiB the shipped set stood 96 bytes under the budget on the day the work
-// item documenting the dashboard added its section to docs/operations.md, so
-// the gate failed on the one section the item required and would have failed
-// on a sentence. The step is the same 128 KiB as before, and the question above
-// is still open — it is worth answering before the fourth move.
-const defaultMaxProductBytes = 896 << 10
+// limit. It is the ceiling on the shipped documentation plus the reserve for
+// everything else, so a set that passes the gate is a set the briefing carries
+// whole, and it is not raised to make room for the documentation — the ceiling
+// is where that decision is made, and it is a product decision.
+const defaultMaxProductBytes = ShippedDocumentationCeiling + productContextReserve
 
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
@@ -472,11 +492,12 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// The shipped surface is read after the specifications have taken what they
 	// need, so intent wins the budget over description by construction rather
 	// than by the order somebody happened to write the sections in.
-	documentation, documentationOmitted, err := readShippedDocumentation(root, shipped, maxBytes-bundle.Bytes)
+	documentation, err := readShippedDocumentation(root, shipped, maxBytes-bundle.Bytes)
 	if err != nil {
 		return Bundle{}, err
 	}
-	bundle.Bytes += len(documentation)
+	bundle.Bytes += len(documentation.rendered)
+	bundle.ShippedDocumentationBytes = documentation.bytes
 
 	var output strings.Builder
 	output.WriteString(header)
@@ -488,8 +509,8 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	output.WriteString(specifications.String())
 	output.WriteString(roleSections)
 	output.WriteString(shippedSurface)
-	output.WriteString(documentation)
-	output.WriteString(renderShippedDocumentationNote(shipped, documentation, documentationOmitted))
+	output.WriteString(documentation.rendered)
+	output.WriteString(renderShippedDocumentationNote(shipped, documentation))
 	output.WriteString(trackerState)
 	output.WriteString(triageDocket)
 	if len(bundle.SpecificationProblems) > 0 {
@@ -1097,37 +1118,90 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 	return rendered.String(), found, nil
 }
 
+// shippedDocumentation is what reading the shipped set produced: the rendered
+// sections, the documents that did not fit, and what the set adds up to on disk
+// whether or not it fit.
+type shippedDocumentation struct {
+	rendered string
+	omitted  []string
+	// bytes is the size of every named document the repository has, read off
+	// the filesystem before the budget decides anything. It is the same figure
+	// whether the documents were carried or dropped, and the same figure the
+	// test that gates the set measures, so what the briefing records and what
+	// the gate judges are one number.
+	bytes int
+	// found counts the named documents the repository has.
+	found int
+}
+
 // readShippedDocumentation reads the operator-facing documentation into one
 // rendered block, and names what did not fit. A document the repository does not
 // have is not a failure: a project ships whatever documentation it wrote, and
 // the section says which of these it found.
-func readShippedDocumentation(root string, shipped []string, remainingBytes int) (string, []string, error) {
+func readShippedDocumentation(root string, shipped []string, remainingBytes int) (shippedDocumentation, error) {
 	var rendered strings.Builder
-	var omitted []string
+	var read shippedDocumentation
 	for _, documentPath := range shipped {
-		reference, err := readReference(root, documentPath, remainingBytes-rendered.Len())
+		// Resolved before it is read so the set is sized whether or not it fits:
+		// a document dropped for room still counts toward what the set is.
+		resolved, err := resolveReference(root, documentPath)
 		if err != nil {
-			var tooLarge tooLargeError
-			if errors.As(err, &tooLarge) {
-				omitted = append(omitted, documentPath)
-				continue
-			}
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return "", nil, err
+			return shippedDocumentation{}, err
 		}
-		section := fmt.Sprintf("\n### Shipped documentation: %s\n\n%s", reference.Path, reference.Content)
+		read.found++
+		read.bytes += int(resolved.size)
+		remaining := remainingBytes - rendered.Len()
+		if resolved.size > int64(remaining) {
+			read.omitted = append(read.omitted, documentPath)
+			continue
+		}
+		data, err := readBounded(resolved, documentPath, remaining)
+		if err != nil {
+			return shippedDocumentation{}, err
+		}
+		if len(data) > remaining {
+			read.omitted = append(read.omitted, documentPath)
+			continue
+		}
+		section := fmt.Sprintf("\n### Shipped documentation: %s\n\n%s", resolved.path, data)
 		if !strings.HasSuffix(section, "\n") {
 			section += "\n"
 		}
 		if rendered.Len()+len(section) > remainingBytes {
-			omitted = append(omitted, documentPath)
+			read.omitted = append(read.omitted, documentPath)
 			continue
 		}
 		rendered.WriteString(section)
 	}
-	return rendered.String(), omitted, nil
+	read.rendered = rendered.String()
+	return read, nil
+}
+
+// ShippedDocumentationStanding says where a shipped set of the given size stands
+// against the ceiling: nothing while it has more than the margin to spare, a
+// warning once it is inside the margin, and a statement that it has reached the
+// ceiling once it has. It is the one derivation of that standing, so the test
+// that gates the set, the briefing the product manager reads, and the warning
+// the operator is shown all say the same thing about the same number.
+//
+// The figure is the set's size on disk rather than what the briefing carried:
+// what is being asked about is how much documentation the product ships, which
+// is a question about the repository, and the answer must not change with how
+// much of the context the specifications happened to take that day.
+func ShippedDocumentationStanding(bytes int) string {
+	switch {
+	case bytes >= ShippedDocumentationCeiling:
+		return fmt.Sprintf("the shipped documentation is %d bytes, at or past the %d-byte ceiling: carrying it whole is a product decision again, and until it is made make test fails on the set (yoyodyne-ifd.403; yoyodyne-ifd.117.4 is the reduction)",
+			bytes, ShippedDocumentationCeiling)
+	case bytes > ShippedDocumentationCeiling-ShippedDocumentationMargin:
+		return fmt.Sprintf("the shipped documentation is %d bytes, within %d bytes of the %d-byte ceiling at which carrying it whole is a product decision again: %d bytes of room remain before make test fails on the set (yoyodyne-ifd.403; yoyodyne-ifd.117.4 is the reduction)",
+			bytes, ShippedDocumentationMargin, ShippedDocumentationCeiling, ShippedDocumentationCeiling-bytes)
+	default:
+		return ""
+	}
 }
 
 // renderShippedSurface opens the section that describes what the product ships,
@@ -1181,24 +1255,31 @@ func boundedCommandHelp(help string) string {
 
 // renderShippedDocumentationNote says what became of the documentation: which
 // files did not fit, or that none was found. Absence is stated rather than left
-// as a section that quietly carries less than it says it does.
-func renderShippedDocumentationNote(shipped []string, documentation string, omitted []string) string {
+// as a section that quietly carries less than it says it does. A set that was
+// found is also measured here, with its standing against the ceiling where it
+// has one — the size is recorded on every briefing so the growth is visible
+// before the gate is, and the standing is put to the role that answers the
+// product question it raises rather than only to the test that fails on it.
+func renderShippedDocumentationNote(shipped []string, read shippedDocumentation) string {
 	if len(shipped) == 0 {
 		return noShippedDocumentationNamed
 	}
-	if len(omitted) > 0 {
-		var rendered strings.Builder
+	if read.found == 0 {
+		return noShippedDocumentation
+	}
+	var rendered strings.Builder
+	if len(read.omitted) > 0 {
 		rendered.WriteString("\nThis documentation did not fit and is not included above:\n\n")
-		for _, documentPath := range omitted {
+		for _, documentPath := range read.omitted {
 			rendered.WriteString("- " + documentPath + "\n")
 		}
 		rendered.WriteString("\nTreat anything you cannot see as unread rather than as absent.\n")
-		return rendered.String()
 	}
-	if documentation == "" {
-		return noShippedDocumentation
+	fmt.Fprintf(&rendered, "\nThe shipped documentation is %d bytes across %d document(s) on disk.\n", read.bytes, read.found)
+	if standing := ShippedDocumentationStanding(read.bytes); standing != "" {
+		rendered.WriteString("Note: " + standing + ".\n")
 	}
-	return ""
+	return rendered.String()
 }
 
 const noShippedDocumentation = `
@@ -1230,8 +1311,16 @@ func longestShippedDocumentationNote(shipped []string) int {
 	if named := len(noShippedDocumentationNamed); named > longest {
 		longest = named
 	}
-	if everything := len(renderShippedDocumentationNote(shipped, "", shipped)); everything > longest {
-		longest = everything
+	// Every document omitted, at each standing that renders a sentence: a set
+	// just inside the margin, where the room the warning names has its most
+	// digits, one just under the ceiling, where the size has its most, and one
+	// far past it, which is the ceiling's sentence with more digits than any
+	// repository reaches.
+	for _, bytes := range []int{ShippedDocumentationCeiling - ShippedDocumentationMargin + 1, ShippedDocumentationCeiling - 1, 1 << 40} {
+		worst := shippedDocumentation{omitted: shipped, bytes: bytes, found: len(shipped)}
+		if everything := len(renderShippedDocumentationNote(shipped, worst)); everything > longest {
+			longest = everything
+		}
 	}
 	return longest
 }

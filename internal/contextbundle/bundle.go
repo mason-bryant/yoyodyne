@@ -101,6 +101,13 @@ type Bundle struct {
 	// would be filed in a directory rather than stating any intent, and `yoyo
 	// init` writes one into a specifications directory that is otherwise empty.
 	SpecificationsIncluded int
+	// ShippedDocumentationBytes is set by AssembleProduct alone: what the shipped
+	// documentation the repository actually has adds up to on disk, carried or
+	// not. It is reported so every briefing records the set's size where the
+	// conversation's own record is kept, and so a caller can warn where the set
+	// stands against its ceiling — see ShippedDocumentationStanding — rather
+	// than leaving that to the test that fails once the ceiling is reached.
+	ShippedDocumentationBytes int
 }
 
 var markdownReferencePattern = regexp.MustCompile(`[A-Za-z0-9._/-]+\.md`)

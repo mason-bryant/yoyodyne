@@ -462,6 +462,15 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 		briefing.Problems = append(briefing.Problems,
 			fmt.Sprintf("no specification was found under %s; this conversation has no recorded product intent to reason over", g.specifications))
 	}
+	// The set's size is recorded on every picture, and where it stands inside
+	// the margin under its ceiling is said here as well as in the picture: the
+	// operator opening the conversation is who edits the documentation, and the
+	// warning is what they get for the length of the margin before the gate on
+	// the set fails.
+	briefing.ShippedDocumentationBytes = bundle.ShippedDocumentationBytes
+	if standing := contextbundle.ShippedDocumentationStanding(bundle.ShippedDocumentationBytes); standing != "" {
+		briefing.Problems = append(briefing.Problems, standing)
+	}
 	briefing.Text = bundle.Text
 	// The commit is evidence rather than a requirement: a repository that will
 	// not say what it is on still yields a usable picture, and the comparison

@@ -55,6 +55,13 @@ type Briefing struct {
 	// where the repository would not say, and a comparison that needs it then
 	// reports itself as unknown rather than guessing.
 	Commit string
+	// ShippedDocumentationBytes is what the shipped documentation the picture
+	// was assembled from adds up to on disk. It is recorded with the picture
+	// because the set grows with every behaviour the product acquires and has a
+	// ceiling at which carrying it whole is a product decision again; a size
+	// written down on every pass is what makes that growth visible before the
+	// gate on it fails. It is zero where the project names no documentation.
+	ShippedDocumentationBytes int
 	// Problems are what the gathering could not read or found malformed. They
 	// are reported to the operator rather than failing the picture: intent
 	// somebody wrote down badly is still intent.
@@ -429,11 +436,12 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 		Problems:   briefing.Problems,
 	}
 	if err := s.emit(execution.EventContextRefreshed, map[string]any{
-		"gathered_at": briefing.GatheredAt,
-		"replaces":    previous.GatheredAt,
-		"commit":      briefing.Commit,
-		"since":       movement,
-		"trigger":     trigger,
+		"gathered_at":                 briefing.GatheredAt,
+		"replaces":                    previous.GatheredAt,
+		"commit":                      briefing.Commit,
+		"shipped_documentation_bytes": briefing.ShippedDocumentationBytes,
+		"since":                       movement,
+		"trigger":                     trigger,
 	}); err != nil {
 		return refreshed, fmt.Errorf("record the refresh: %w", err)
 	}
@@ -451,7 +459,7 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 func (s *Session) picture() Briefing {
 	switch {
 	case !s.state.ContextGatheredAt.IsZero():
-		return Briefing{GatheredAt: s.state.ContextGatheredAt, Commit: s.state.ContextCommit}
+		return Briefing{GatheredAt: s.state.ContextGatheredAt, Commit: s.state.ContextCommit, ShippedDocumentationBytes: s.state.ContextShippedDocumentationBytes}
 	case s.state.Turns == 0 && s.refresh != nil:
 		// Nothing has been delivered, so what the conversation holds is what its
 		// first turn will carry, which a refresh has already replaced.

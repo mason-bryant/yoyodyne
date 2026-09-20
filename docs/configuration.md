@@ -612,6 +612,25 @@ manager — the set has to name it, and a test holds the set to documents this
 repository actually has, because a path that stops resolving is a surface the
 product manager silently stops being given.
 
+**The set has a ceiling, and a margin under it that warns.** The eight
+documents are carried in full — that is the product manager's decision, taken
+on yoyodyne-ifd.240 and kept on yoyodyne-ifd.403 — and what they add up to is
+measured against `ShippedDocumentationCeiling` in the same file, which is set
+well above what they are today and marks the point at which the briefing's
+token cost is a product question again; the constant's comment says what that
+cost is. Inside `ShippedDocumentationMargin` of it, `make test` says so in its
+output, every conversation that opens says so on stderr, and the briefing
+itself says so to the role, naming the room left and the reduction
+(yoyodyne-ifd.117.4) that buys more — and nothing fails. Only reaching the
+ceiling fails the test. The set's size is written down on every pass, whatever
+its standing: the briefing states it, the conversation's record keeps it with
+the picture it was taken for (`yoyo agent list` prints it beside the picture's
+commit), and a refresh records it on the event. Over the three weeks to
+2026-09-19 the ceiling was a budget the set was always within bytes of, raised
+four times, and every documentation edit failed the gate on a sentence
+unrelated to it; a reported margin under a distant ceiling is what replaced
+that.
+
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
 shipped-surface section revises that, however emphatically it is written. Where
