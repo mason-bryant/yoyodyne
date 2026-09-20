@@ -282,6 +282,7 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 	message := flags.String("message", "", "send one message and print the reply instead of opening an interactive conversation")
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
+	sideThread := flags.String("side-thread", "", "continue the named side thread with --message instead of reaching the main conversation")
 	positional, err := parseArguments(flags, args)
 	if err != nil {
 		return "", conversationRequest{}, 2
@@ -292,6 +293,10 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 	}
 	if *jsonOutput && *message == "" {
 		fmt.Fprintln(stderr, "agent chat --json requires --message: an interactive conversation has no single result to encode")
+		return "", conversationRequest{}, 2
+	}
+	if err := sideThreadFlagProblems("agent chat", *sideThread, *message, *fresh); err != nil {
+		fmt.Fprintln(stderr, err)
 		return "", conversationRequest{}, 2
 	}
 
@@ -315,6 +320,7 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 		message:    *message,
 		fresh:      *fresh,
 		jsonOutput: *jsonOutput,
+		sideThread: *sideThread,
 	}, 0
 }
 
@@ -561,6 +567,13 @@ Options:
 agent chat options:
   --message <text>  send one message and print the reply instead of conversing
   --new             start a new conversation instead of resuming the recorded one
+  --side-thread <id>
+                    continue the named side thread with --message
+
+A --message that finds the agent mid-turn waits for it, unless the agent is
+configured with "conversations: side-threads": then it is answered beside the
+busy turn on a side thread, which judges and answers and takes no action, and the
+main conversation's next turn reads what it concluded. "yoyo chat" documents it.
 
 An agent is a durable logical identity: the provider process that answers is
 started for a turn and gone afterwards, and what survives it is the conversation

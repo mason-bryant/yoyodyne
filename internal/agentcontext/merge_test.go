@@ -352,6 +352,98 @@ func TestConcludingASideStreamIsWhatWritesTheMerge(t *testing.T) {
 	}
 }
 
+// The runner's merge is Conclude and nothing beside it: what the runner hands over
+// — the open stream, the thread's own account, its drafts, and the outcome and
+// moment the runner decided — is what the memory records, and the stream comes
+// back ended. A merger that composed anything of its own would be a second
+// account of the thread beside the one Conclude writes.
+func TestTheRunnersMergeIsConclude(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t)
+	streams := &recordingStreams{}
+	open := openTestConclusion().Stream
+	at := time.Date(2026, 9, 7, 12, 20, 0, 0, time.UTC)
+
+	var merge sidestream.Merge = Merger{Streams: streams, Memory: store}
+	ended, err := merge.Conclude(context.Background(), open,
+		"The hold names work the harness chooses for itself.",
+		[]string{"say so in the next brief"}, sidestream.OutcomeSpent, at)
+	if err != nil {
+		t.Fatalf("Conclude() error = %v", err)
+	}
+	if ended.Outcome != sidestream.OutcomeSpent || ended.ClosedAt == nil || !ended.ClosedAt.Equal(at) {
+		t.Errorf("the concluded stream is %q closed at %v, want the runner's outcome at the runner's moment", ended.Outcome, ended.ClosedAt)
+	}
+	if len(streams.saved) != 1 || streams.saved[0].Open() {
+		t.Fatalf("Conclude() saved %+v, want the one ended record", streams.saved)
+	}
+	memories, _, err := store.Live(open.Agent)
+	if err != nil {
+		t.Fatalf("Live() error = %v", err)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("Live() returned %d memories, want the one merge", len(memories))
+	}
+	written := memories[0].Current()
+	if written.Memory != open.ID || written.Invocation.Kind != runstate.MemoryInvocationSideStream {
+		t.Errorf("the memory is %q from %s, want the stream's own, written by its side turns", written.Memory, written.Invocation.Kind)
+	}
+	for _, required := range []string{
+		"The hold names work the harness chooses for itself.",
+		"- say so in the next brief",
+		"stopped when it reached its budget",
+	} {
+		if !strings.Contains(written.Text, required) {
+			t.Errorf("the merge does not carry %q:\n%s", required, written.Text)
+		}
+	}
+
+	// An answer longer than a merge may carry is cut to fit and says so, naming
+	// the log that holds the rest, rather than failing the merge and leaving the
+	// thread open over the length of its own prose. The answer bound is four
+	// times the merge bound, so this is the ordinary long answer and not an edge.
+	long := strings.Repeat("The intake hold is read before the item is chosen. ", sidestream.MaxAnswerBytes/60)
+	if len(long) <= MaxSubstanceBytes || len(long) > sidestream.MaxAnswerBytes {
+		t.Fatalf("the test's answer is %d bytes, want one a thread may say and a merge may not carry whole", len(long))
+	}
+	second := open
+	second.ID = "side-ffffffffffffffffffffffffffffffff"
+	if _, err := merge.Conclude(context.Background(), second, long, nil, sidestream.OutcomeConcluded, at); err != nil {
+		t.Fatalf("Conclude() with a long answer error = %v, want it cut to fit", err)
+	}
+	memories, _, err = store.Live(open.Agent)
+	if err != nil {
+		t.Fatalf("Live() error = %v", err)
+	}
+	var cut runstate.MemoryRevision
+	for _, memory := range memories {
+		if memory.Current().Memory == second.ID {
+			cut = memory.Current()
+		}
+	}
+	if cut.Memory == "" {
+		t.Fatal("the long answer's merge was not written")
+	}
+	if !strings.Contains(cut.Text, "is cut here; the whole of it is in side stream "+second.ID+"'s own log") {
+		t.Errorf("a cut merge does not say it was cut or where the rest is:\n%s", cut.Text)
+	}
+	if !strings.HasPrefix(strings.SplitN(cut.Text, "\n\n", 3)[2], "The intake hold is read before the item is chosen.") {
+		t.Errorf("a cut merge does not begin with the thread's own words:\n%s", cut.Text)
+	}
+
+	// A merger with no memory to write into refuses before the record is touched,
+	// which is Conclude's own ordering: nothing is recorded as ended whose
+	// substance reached nowhere.
+	unwired := Merger{Streams: &recordingStreams{}}
+	if _, err := unwired.Conclude(context.Background(), open, "anything", nil, sidestream.OutcomeConcluded, at); err == nil {
+		t.Fatal("Conclude() with no memory store error = nil, want the write refused")
+	}
+	if len(unwired.Streams.(*recordingStreams).saved) != 0 {
+		t.Error("a refused merge still recorded the stream as ended")
+	}
+}
+
 // The merge is written before the record is saved, so a save that fails leaves a
 // stream still recorded open — which whoever holds the lease concludes again —
 // rather than one recorded as ended whose substance nothing will ever write.

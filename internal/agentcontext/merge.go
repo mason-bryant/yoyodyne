@@ -170,6 +170,67 @@ func (c Conclusion) Conclude(ctx context.Context, streams Streams, store *runsta
 	return concluded.Stream, recorded, nil
 }
 
+// Merger is the merge-back write as the side-thread runner holds it: the
+// `sidestream.Merge` a production `sidestream.Runner` is wired with, over the
+// stream store and the agent's memory. It is the one thing that satisfies that
+// interface outside a test, and it exists because the runner cannot hold this
+// package directly — `internal/sidestream` is imported by `internal/runstate`,
+// which this package writes through — so what the runner is handed is the
+// narrowed statement of what concluding does, and this is that statement made
+// good.
+//
+// It adds one thing to Conclude, and it is a bound rather than composition. A
+// side thread may answer in up to `sidestream.MaxAnswerBytes`, and a merge
+// carries at most MaxSubstanceBytes of it, which is a quarter as much: the answer
+// is for whoever asked, and the merge is the account the main thread reads. An
+// answer longer than the merge may carry is cut to fit and the cut is named, with
+// the stream whose own log holds the whole of it — because the alternative is a
+// thread that answered at length and then could not conclude, left open with its
+// turns spent and its substance reaching nobody, over the length of its own
+// prose. Everything else — every refusal, the ordering, the framing — is
+// Conclusion's, and the outcome and the moment are the runner's own rather than
+// anything the thread claimed.
+type Merger struct {
+	Streams Streams
+	Memory  *runstate.MemoryStore
+}
+
+var _ sidestream.Merge = Merger{}
+
+// Conclude satisfies sidestream.Merge.
+func (m Merger) Conclude(ctx context.Context, stream sidestream.Stream, substance string, commitments []string, outcome sidestream.Outcome, at time.Time) (sidestream.Stream, error) {
+	concluded, _, err := Conclusion{
+		Stream:      stream,
+		Substance:   boundedSubstance(substance, stream.ID),
+		Commitments: commitments,
+	}.Conclude(ctx, m.Streams, m.Memory, outcome, at)
+	return concluded, err
+}
+
+// boundedSubstance holds a side thread's answer to what one merge may carry,
+// naming the cut and where the rest is. The whole answer is in the side stream's
+// own log, which the merge already cites, so what the main thread loses is
+// length and never the trail to it.
+func boundedSubstance(substance, streamID string) string {
+	trimmed := strings.TrimSpace(substance)
+	if len(trimmed) <= MaxSubstanceBytes {
+		return trimmed
+	}
+	note := fmt.Sprintf("\n\n[The thread's answer was longer than a merge carries and is cut here; the whole of it is in side stream %s's own log.]", streamID)
+	room := MaxSubstanceBytes - len(note)
+	// Cut on a rune boundary rather than a byte one, as the subject is: a merge a
+	// person reads with half a character before the note is not a shorter account
+	// but a broken one.
+	kept := 0
+	for index := range trimmed {
+		if index > room {
+			break
+		}
+		kept = index
+	}
+	return strings.TrimSpace(trimmed[:kept]) + note
+}
+
 // Merge writes the conclusion into the agent's memory and returns the revision as
 // it was stored.
 //

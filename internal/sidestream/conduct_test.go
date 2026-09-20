@@ -218,6 +218,88 @@ func TestAReplyAskingForAnActionIsRefusedWhole(t *testing.T) {
 	}
 }
 
+// A refused reply on the thread's last turn still ends the thread, with the
+// prose alone: the cap is reached whichever way the reply was read, and a stream
+// left open with nothing remaining over a block nobody would carry out is a
+// thread whose substance reaches nobody. The block drafted nothing, so nothing is
+// handed over to ratify. A refused reply with no prose around its block leaves
+// the thread open, because there is nothing to conclude it with.
+func TestARefusedReplyOnTheLastTurnStillMergesItsProse(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	voice := &fakeVoice{answers: []string{"As far as I got: the hold is read first.\n\n```yoyodyne-tracker\n{}\n```\n"}}
+	merge := &fakeMerge{}
+	runner := testRunner(store, voice, merge)
+	runner.MaxTurns = 1
+
+	answer, err := runner.Put(context.Background(), testAsk())
+	if err == nil || !strings.Contains(err.Error(), "takes no action") {
+		t.Fatalf("Put() error = %v, want the block refused", err)
+	}
+	if merge.calls != 1 || merge.outcome != OutcomeSpent || merge.substance != "As far as I got: the hold is read first." {
+		t.Fatalf("the merge was reached %d time(s) with %q as %q, want once with the prose alone, spent", merge.calls, merge.substance, merge.outcome)
+	}
+	if len(merge.commitments) != 0 {
+		t.Fatalf("a refused block handed over commitments %v to ratify", merge.commitments)
+	}
+	if answer.Stream.Open() || store.streams[answer.Stream.ID].Open() {
+		t.Fatal("a thread with no turns left and prose to conclude with is still open")
+	}
+
+	// No prose at all, and the thread stays open: there is nothing to merge, and
+	// the record says it was never concluded rather than that it concluded nothing.
+	store = newFakeStore()
+	voice = &fakeVoice{answers: []string{"```yoyodyne-tracker\n{}\n```\n"}}
+	merge = &fakeMerge{}
+	runner = testRunner(store, voice, merge)
+	runner.MaxTurns = 1
+	answer, err = runner.Put(context.Background(), testAsk())
+	if err == nil {
+		t.Fatal("Put() error = nil, want the block refused")
+	}
+	if merge.calls != 0 || !store.streams[answer.Stream.ID].Open() {
+		t.Fatal("a refused reply with no prose concluded the thread; there was nothing to conclude it with")
+	}
+}
+
+// A continuation that says who it is asking is held to the stream's own record
+// of who holds it, before anything is written: a stream opened for one agent is
+// served on that agent's account and merges into that agent's memory, so a caller
+// naming another agent would have all three land on the wrong one.
+func TestAContinuationNamingAnotherAgentIsRefusedBeforeATurnIsSpent(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	voice := &fakeVoice{answers: []string{"I need another turn.", "Still thinking."}}
+	runner := testRunner(store, voice, &fakeMerge{})
+	opened, err := runner.Put(context.Background(), testAsk())
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	for name, ask := range map[string]Ask{
+		"another agent": {Stream: opened.Stream.ID, Agent: "architect", Role: domain.RoleArchitect, Question: "and?"},
+		"another role":  {Stream: opened.Stream.ID, Role: domain.RoleArchitect, Question: "and?"},
+	} {
+		answer, err := runner.Put(context.Background(), ask)
+		if !errors.Is(err, ErrNotThisAgents) {
+			t.Fatalf("%s: Put() error = %v, want ErrNotThisAgents", name, err)
+		}
+		if answer.Stream.ID != opened.Stream.ID || store.streams[opened.Stream.ID].Turns != 1 || len(voice.asked) != 1 {
+			t.Fatalf("%s: a refused continuation spent a turn or reached the voice", name)
+		}
+	}
+
+	// The same agent continuing its own thread, by name, is the ordinary case.
+	if _, err := runner.Put(context.Background(), Ask{Stream: opened.Stream.ID, Agent: "product-manager", Role: domain.RoleProductManager, Question: "and?"}); err != nil {
+		t.Fatalf("Put() by the thread's own agent error = %v", err)
+	}
+	if store.streams[opened.Stream.ID].Turns != 2 {
+		t.Fatal("the thread's own agent could not continue it")
+	}
+}
+
 // The turn is taken under the side stream's own lease, named for its own
 // identifier. That is the whole of the concurrency answer: the main thread's
 // lease is not asked for here, so holding it stops nothing and this stops
@@ -367,7 +449,8 @@ func TestAskValidateRejectsIncoherentQuestions(t *testing.T) {
 		{"a stream is not a main thread", Ask{Agent: "product-manager", Role: domain.RoleProductManager, Conversation: "side-0123456789abcdef0123456789abcdef", Topic: "a topic", Question: "why?"}, "does not name a main thread"},
 		{"no topic", Ask{Agent: "product-manager", Role: domain.RoleProductManager, Conversation: testConversation, Question: "why?"}, "topic is required"},
 		{"a stream that is not one", Ask{Stream: "chat-0123456789abcdef0123456789abcdef", Question: "why?"}, "is invalid"},
-		{"continuing and redirecting", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Role: domain.RoleArchitect, Question: "why?"}, "names the stream alone"},
+		{"continuing and redirecting", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Conversation: testConversation, Question: "why?"}, "settled when it opened"},
+		{"continuing as nobody the harness has", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Role: "auditor", Question: "why?"}, "is not one of the harness's roles"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
