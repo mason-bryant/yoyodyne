@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.141.3",
+  "title": "Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states",
+  "status": "in_progress",
+  "priority": 1,
+  "labels": [
+    "dashboard"
+  ],
+  "parent": "yoyodyne-ifd.141",
+  "description": "The page: five sections drawn from the read model and from nothing else, each with an empty, a loading, and an error state beside its ready one.\n\nEvery value reaches the page as JSON and is written as text; nothing loads from anywhere but this origin.",
+  "design": "The page's own script draws the sections from /api/standing and /api/throughput. The words are the terminal's wherever the terminal has them.",
+  "acceptance_criteria": "Every section renders in every state from fixtures under the render test; every value is escaped under the content security policy; the renders are golden files.",
+  "notes": "Goal served: the harness's surfaces read clearly.\n\nClaimed by run run-c07d6849 at 2026-09-19T13:53:00Z.",
+  "run": {
+    "run_id": "run-c07d6849e1f55fd7b982600b8f97a303",
+    "outcome": "running",
+    "phase": "developing",
+    "in_flight": true,
+    "preserved": false,
+    "branch": "yoyodyne/yoyodyne-ifd-141-3/c07d6849",
+    "worktree_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-141-3-c07d6849",
+    "provider_session_id": "0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71",
+    "started_at": "2026-09-19T13:53:00Z",
+    "elapsed": 729000000000,
+    "cost_usd": 3.41
+  }
+}

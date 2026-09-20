@@ -107,6 +107,22 @@ func TestThroughputCountsEachEndingIntoTheWindowItEndedIn(t *testing.T) {
 	if week.Started != 10 || week.Landed != 3 || week.Succeeded != 1 || week.Stopped != 1 || week.Cancelled != 1 || week.TimedOut != 1 || week.Failed != 2 {
 		t.Fatalf("the week counted %+v", week)
 	}
+	// The landed runs are named as well as counted, newest first, and the list
+	// is the count: the surface that opens the landed grouping lists what the
+	// figure counted.
+	names := func(landed []LandedRun) []string {
+		ids := make([]string, 0, len(landed))
+		for _, run := range landed {
+			ids = append(ids, run.RunID)
+		}
+		return ids
+	}
+	if got := names(today.LandedItems); len(got) != today.Landed || got[0] != "j" || got[1] != "a" {
+		t.Fatalf("today's landed items = %v, want j then a", got)
+	}
+	if got := names(week.LandedItems); len(got) != week.Landed || got[2] != "e" || week.LandedItems[2].WorkItemID != "yoyodyne-ifd.e" || !week.LandedItems[2].LandedAt.Equal(noon.Add(-30*time.Hour)) {
+		t.Fatalf("the week's landed items = %+v, want j, a, e with e's item and ending", week.LandedItems)
+	}
 }
 
 // The spend is the spend report's own rows, read once over the widest window
@@ -188,6 +204,11 @@ func TestThroughputSaysWhichSourceCouldNotBeRead(t *testing.T) {
 	})
 	if uncounted.RunsProblem == "" || !strings.Contains(uncounted.RunsProblem, "no such directory") || uncounted.SpendProblem != "" {
 		t.Fatalf("unreadable runs read as %+v", uncounted)
+	}
+	// With the runs unreadable the landed list is absent, never an empty list a
+	// page would show as nothing having landed.
+	if window(t, uncounted, "today").LandedItems != nil || window(t, unpriced, "today").LandedItems == nil {
+		t.Fatalf("the landed list does not follow the runs: unreadable %+v, readable %+v", window(t, uncounted, "today").LandedItems, window(t, unpriced, "today").LandedItems)
 	}
 	if window(t, uncounted, "today").CostUSD != 2 {
 		t.Fatalf("the spend was lost with the runs: %+v", uncounted.Windows)

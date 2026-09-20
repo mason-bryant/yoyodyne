@@ -111,6 +111,40 @@
         <ul id="capacity-conversations" class="held-list"></ul>
       </div>
     </section>
+
+    <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="loading" hidden>
+      <div id="grouping-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="grouping-heading" class="popup-title"></h2>
+            <p id="grouping-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="grouping-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Pricing the week…</p></div>
+        <div class="section-error" role="alert"><p id="grouping-problem" class="problem"></p><p id="grouping-remedy" class="remedy"></p></div>
+        <div class="section-empty"><p id="grouping-empty" class="empty"></p></div>
+        <div class="section-ready"><ol id="grouping-items" class="grouping-items"></ol></div>
+      </div>
+    </div>
+
+    <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="loading" hidden>
+      <div id="card-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="card-heading" class="popup-title"></h2>
+            <p id="card-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="card-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Reading the work item…</p></div>
+        <div class="section-error" role="alert"><p id="card-problem" class="problem"></p><p id="card-remedy" class="remedy"></p></div>
+        <div class="section-empty"><p id="card-empty" class="empty"></p></div>
+        <div class="section-ready"><dl id="card-fields" class="card-fields"></dl></div>
+      </div>
+    </div>
   </div>
 </main>
 <script src="/assets/dashboard.js"></script>

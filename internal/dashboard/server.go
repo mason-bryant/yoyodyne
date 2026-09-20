@@ -33,7 +33,10 @@
 // What is served without a token is the page shell and its own script and
 // style: static text compiled into the binary, with nothing of the read model
 // in it, which is what a browser needs before it can present a token at all.
-// Everything that reads state is behind the token.
+// Everything that reads state is behind the token: the standing, the
+// throughput, and one work item at a time at /api/items/<id>, which is what
+// the page opens a card from. The page never reads the tracker; the card is
+// the read model's projection of the item, served here like the rest.
 //
 // It is a projection, never an engine: it owns no workflow, conversation,
 // provider, or configuration state, and offers no write of any kind. The one
@@ -100,6 +103,13 @@ type Reader interface {
 	// once a minute rather than once every ten seconds. The same rule holds: an
 	// error refuses the whole answer, and a source missing is said inside it.
 	Throughput(ctx context.Context) (readmodel.Throughput, error)
+	// WorkItem reads one work item whole — the tracker's fields and the run the
+	// harness last made for it — for the card the page opens on an item. It is
+	// asked for one item at a time, when a card is opened, because it costs a
+	// tracker command. An error refuses the whole answer: one that is
+	// readmodel.ErrNoSuchWorkItem is the tracker holding nothing under the id,
+	// and any other is the item not being readable.
+	WorkItem(ctx context.Context, id string) (readmodel.WorkItem, error)
 }
 
 // Server is one dashboard process: the token it generated, the address it bound,
@@ -250,17 +260,20 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		s.servePage(writer)
 	case strings.HasPrefix(request.URL.Path, "/assets/"):
 		s.serveAsset(writer, request)
-	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput":
-		// The two routes that read state, and so the two the token guards.
+	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput", strings.HasPrefix(request.URL.Path, "/api/items/"):
+		// The routes that read state, and so the ones the token guards.
 		if !s.presented(request) {
 			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
 			return
 		}
-		if request.URL.Path == "/api/throughput" {
+		switch {
+		case request.URL.Path == "/api/throughput":
 			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Throughput(ctx) })
-			return
+		case request.URL.Path == "/api/standing":
+			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Standing(ctx) })
+		default:
+			s.serveWorkItem(writer, request)
 		}
-		s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Standing(ctx) })
 	default:
 		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
 	}
@@ -297,6 +310,14 @@ func (s *Server) servePage(writer http.ResponseWriter) {
 func (s *Server) serveReading(writer http.ResponseWriter, request *http.Request, read func(context.Context) (any, error)) {
 	reading, err := read(request.Context())
 	if err != nil {
+		if errors.Is(err, readmodel.ErrNoSuchWorkItem) {
+			// A thing that is not recorded is a different answer from state that
+			// could not be read: a page told the first shows it, and a page told
+			// the second keeps asking. The reason is fixed words rather than the
+			// tracker's, which would name the id back.
+			refuse(writer, request, http.StatusNotFound, "no work item is recorded under that id")
+			return
+		}
 		refuse(writer, request, http.StatusServiceUnavailable, err.Error())
 		return
 	}
@@ -311,6 +332,22 @@ func (s *Server) serveReading(writer http.ResponseWriter, request *http.Request,
 	// later reader does.
 	encoder.SetEscapeHTML(true)
 	_ = encoder.Encode(reading)
+}
+
+// serveWorkItem is one work item as JSON, whole or refused, for the card the
+// page opens on it. The id is the rest of the path, and it is checked against
+// the tracker's own shape before anything is asked: an id that is not one is
+// refused as a path nothing is served at, reflecting nothing, rather than being
+// put on a command line. An id the tracker holds nothing under is refused as
+// not found, and an item that could not be read at all as unavailable, each
+// with its reason and nothing of the read model beside it.
+func (s *Server) serveWorkItem(writer http.ResponseWriter, request *http.Request) {
+	id := strings.TrimPrefix(request.URL.Path, "/api/items/")
+	if !readmodel.ValidWorkItemID(id) {
+		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
+		return
+	}
+	s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.WorkItem(ctx, id) })
 }
 
 // serveAsset is the page's own script and style, from the binary. They are the

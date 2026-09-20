@@ -95,9 +95,11 @@
                   <span class="card-kind">developer run</span>
                   <span class="phase">approved, resuming integration</span>
                 </div>
-                <h3 class="card-title">Recurring tasks say when a firing was skipped</h3>
+                <h3 class="card-title">
+                  <button class="item-open" type="button" data-item="yoyodyne-ifd.212">Recurring tasks say when a firing was skipped</button>
+                </h3>
                 <p class="card-meta">
-                  <span class="item-id">yoyodyne-ifd.212</span>
+                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.212">yoyodyne-ifd.212</button>
                   <span class="sep"> · </span>
                   <span class="elapsed">2h45m elapsed</span>
                   <span class="sep"> · </span>
@@ -111,9 +113,11 @@
                   <span class="card-kind">developer run</span>
                   <span class="phase">developing</span>
                 </div>
-                <h3 class="card-title">The sweep names the ref it preserved work on</h3>
+                <h3 class="card-title">
+                  <button class="item-open" type="button" data-item="yoyodyne-ifd.230">The sweep names the ref it preserved work on</button>
+                </h3>
                 <p class="card-meta">
-                  <span class="item-id">yoyodyne-ifd.230</span>
+                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.230">yoyodyne-ifd.230</button>
                   <span class="sep"> · </span>
                   <span class="elapsed">55m elapsed</span>
                   <span class="sep"> · </span>
@@ -134,47 +138,65 @@
           <div class="section-ready">
             <ol id="stages" class="stages">
               <li class="stage stage-admitted">
-                <span class="stage-label">Admitted</span>
-                <span class="stage-figure">4</span>
+                <button class="grouping-open stage-open" type="button" data-grouping="admitted">
+                  <span class="stage-label">Admitted</span>
+                  <span class="stage-figure">4</span>
+                </button>
                 <span class="stage-unit">items</span>
               </li>
               <li class="stage stage-held">
-                <span class="stage-label">Held back</span>
-                <span class="stage-figure">2</span>
+                <button class="grouping-open stage-open" type="button" data-grouping="held">
+                  <span class="stage-label">Held back</span>
+                  <span class="stage-figure">2</span>
+                </button>
                 <span class="stage-unit">items nothing will pull</span>
                 <ul class="piles">
                   <li class="pile pile-largest">
                     <span class="pile-figure">2</span>
-                    <span class="pile-label">pullable, and nothing is choosing (most)</span>
+                    <button class="grouping-open pile-open" type="button" data-grouping="pile:stalled">
+                      <span class="pile-label">pullable, and nothing is choosing (most)</span>
+                    </button>
                     <span class="pile-whose">whose move: whoever the refusal names</span>
                   </li>
                 </ul>
               </li>
               <li class="stage stage-held">
-                <span class="stage-label">Startable</span>
-                <span class="stage-figure">none</span>
+                <button class="grouping-open stage-open" type="button" data-grouping="startable">
+                  <span class="stage-label">Startable</span>
+                  <span class="stage-figure">none</span>
+                </button>
                 <span class="stage-unit">the harness is choosing nothing: Paused on the provider's usage window until 18:50Z</span>
               </li>
               <li class="stage stage-flowing">
-                <span class="stage-label">Running</span>
-                <span class="stage-figure">2</span>
+                <button class="grouping-open stage-open" type="button" data-grouping="running">
+                  <span class="stage-label">Running</span>
+                  <span class="stage-figure">2</span>
+                </button>
                 <span class="stage-unit">developer runs</span>
                 <ul class="piles">
                   <li class="pile">
                     <span class="pile-figure">1</span>
-                    <span class="pile-label">developing</span>
+                    <button class="grouping-open pile-open" type="button" data-grouping="stage:developing">
+                      <span class="pile-label">developing</span>
+                    </button>
                   </li>
                   <li class="pile">
                     <span class="pile-figure">1</span>
-                    <span class="pile-label">integrating</span>
+                    <button class="grouping-open pile-open" type="button" data-grouping="stage:integrating">
+                      <span class="pile-label">integrating</span>
+                    </button>
                   </li>
                 </ul>
               </li>
               <li class="stage stage-landed">
-                <span class="stage-label">Landed</span>
-                <span class="stage-figure">3</span>
+                <button class="grouping-open stage-open" type="button" data-grouping="landed:today">
+                  <span class="stage-label">Landed</span>
+                  <span class="stage-figure">3</span>
+                </button>
                 <span class="stage-unit">today</span>
-                <span class="stage-detail">22 runs in the last 7 days</span>
+                <button class="grouping-open stage-detail-open" type="button" data-grouping="landed:week">
+                  <span class="stage-detail">22 runs in the last 7 days</span>
+                </button>
               </li>
             </ol>
             <ul id="pipeline-problems" class="degraded" hidden></ul>

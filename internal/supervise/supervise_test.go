@@ -418,9 +418,16 @@ func TestASecondSupervisorIsRefusedWhileOneRuns(t *testing.T) {
 	first := newSupervisor(t, store, clock, &fakeChild{name: config.ServiceSlack})
 	first.Poll = time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- first.Run(ctx) }()
+	// The supervisor is joined before the test's directory is removed, on a
+	// failure as on a pass: a supervisor still writing its record while TempDir
+	// is being removed leaves the directory not empty and a second failure over
+	// the first.
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	// The first supervisor is waited for by the record it writes once it holds
 	// the lease, never by store.Running(): that probe answers by taking the lease
 	// and letting it go, so a probe landing before Run reaches Lease() takes the
@@ -436,8 +443,6 @@ func TestASecondSupervisorIsRefusedWhileOneRuns(t *testing.T) {
 	if err := second.Run(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("second Run() error = %v, want %v", err, ErrAlreadyRunning)
 	}
-	cancel()
-	<-done
 }
 
 // A degraded child somebody started by hand is running again, and the
@@ -579,9 +584,14 @@ func TestASupervisorRefusesWithoutWhatItNeeds(t *testing.T) {
 	}
 }
 
+// waitFor polls a condition until it holds. The bound is generous because what
+// is usually waited for is the supervisor's record, and writing it syncs the
+// file and its directory: under the whole suite running in parallel, with the
+// tracker and worktree packages syncing beside it, that has taken longer than
+// five seconds on macOS, and a passing test never waits past the condition.
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return

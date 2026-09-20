@@ -385,12 +385,32 @@ var (
 // holds a developer slot's preferred labels to as well.
 const MaxLabelBytes = domain.MaxLabelBytes
 
+// ErrNoSuchWorkItem reports an id the tracker holds no item under. It is told
+// apart from every other way Show fails because the two are opposite things to
+// do about: a surface answers "there is no such item" for one and "the tracker
+// could not be read" for the rest, and reading the second as the first would
+// report a tracker that is down as a backlog with a hole in it.
+var ErrNoSuchWorkItem = errors.New("no work item is recorded under that id")
+
+// ValidIssueID reports whether an id has the shape the tracker accepts, which is
+// what a surface checks before it puts an id it was handed on a command line.
+func ValidIssueID(id string) bool {
+	return issueIDPattern.MatchString(id)
+}
+
 func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
 		return WorkItem{}, err
 	}
 	data, err := c.run(ctx, "show", id, "--json")
 	if err != nil {
+		// bd refuses an id it holds nothing under in its own words, on the
+		// process's standard error; a runner that could not start bd at all is
+		// not that, so only a refusal bd itself wrote is read for them.
+		var refused processFailure
+		if errors.As(err, &refused) && strings.Contains(strings.ToLower(refused.message), "not found") {
+			return WorkItem{}, fmt.Errorf("%w: %v", ErrNoSuchWorkItem, err)
+		}
 		return WorkItem{}, err
 	}
 	return decodeSingleWorkItem(data)
@@ -1207,9 +1227,24 @@ func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 		if message == "" {
 			message = strings.TrimSpace(result.Stdout)
 		}
-		return nil, fmt.Errorf("bd %s failed with status %s and exit code %d: %s", args[0], result.Status, result.ExitCode, message)
+		return nil, processFailure{verb: args[0], status: result.Status, exitCode: result.ExitCode, message: message}
 	}
 	return []byte(result.Stdout), nil
+}
+
+// processFailure is bd having run and refused: the verb, how the process ended,
+// and what it wrote. It is a type rather than a formatted string so a caller can
+// tell a refusal bd wrote from a bd that could not be started, which the
+// formatted message alone does not say.
+type processFailure struct {
+	verb     string
+	status   execution.ProcessStatus
+	exitCode int
+	message  string
+}
+
+func (f processFailure) Error() string {
+	return fmt.Sprintf("bd %s failed with status %s and exit code %d: %s", f.verb, f.status, f.exitCode, f.message)
 }
 
 type rawWorkItem struct {

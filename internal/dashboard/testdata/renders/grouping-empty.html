@@ -21,7 +21,7 @@
     <main id="page" data-state="ready">
       <div class="state state-ready">
         <p id="stale" class="stale" role="status" hidden></p>
-        <p id="banner" class="banner" role="status" hidden></p>
+        <p id="banner" class="banner" role="status">Every role is paused on the provider's usage window until 2026-09-19T18:50:00Z: all 5 agents run on opus and none names an alternate, so nothing fails over; 7 turns refused since 2026-09-19T12:02:00Z</p>
         <section id="band" class="panel band" data-state="ready" aria-labelledby="band-heading">
           <div class="panel-head">
             <h2 id="band-heading">Where the harness stands</h2>
@@ -36,44 +36,46 @@
               <div class="tile">
                 <dt>Running</dt>
                 <dd>
-                  <span class="figure">4</span>
+                  <span class="figure">2</span>
                   <span class="unit">developer runs</span>
                 </dd>
               </div>
               <div class="tile">
                 <dt>Working</dt>
                 <dd>
-                  <span class="figure">1</span>
-                  <span class="unit">conversation with a turn in flight</span>
+                  <span class="figure">0</span>
+                  <span class="unit">conversations with a turn in flight</span>
                 </dd>
               </div>
               <div class="tile">
                 <dt>Not startable</dt>
                 <dd>
-                  <span class="figure">6</span>
+                  <span class="figure">2</span>
                   <span class="unit">admitted items nothing will pull</span>
-                  <span class="detail">of 9 admitted items; awaiting a decision: 1, awaiting carry-out: 1</span>
+                  <span class="detail">of 4 admitted items</span>
                 </dd>
               </div>
               <div class="tile tile-attention">
                 <dt>Needs a human</dt>
                 <dd>
-                  <span class="figure">3</span>
-                  <span class="unit">things waiting on a person</span>
+                  <span class="figure">1</span>
+                  <span class="unit">thing waiting on a person</span>
                 </dd>
               </div>
-              <div class="tile tile-unreadable">
+              <div class="tile">
                 <dt>Landed</dt>
                 <dd>
-                  <span class="figure">—</span>
-                  <span class="unit">could not be read</span>
+                  <span class="figure">3</span>
+                  <span class="unit">today</span>
+                  <span class="detail">22 runs in the last 7 days</span>
                 </dd>
               </div>
-              <div class="tile tile-unreadable">
+              <div class="tile">
                 <dt>Cost</dt>
                 <dd>
-                  <span class="figure">—</span>
-                  <span class="unit">could not be read</span>
+                  <span class="figure">$92.00</span>
+                  <span class="unit">today</span>
+                  <span class="detail">at least $1,232.58 in the last 7 days</span>
                 </dd>
               </div>
             </dl>
@@ -88,42 +90,6 @@
           <div class="section-ready">
             <ul id="live-problems" class="degraded" hidden></ul>
             <ul id="cards" class="cards">
-              <li class="card card-run">
-                <div class="card-head">
-                  <span class="card-kind">developer run</span>
-                  <span class="phase">developing</span>
-                </div>
-                <h3 class="card-title">
-                  <button class="item-open" type="button" data-item="yoyodyne-ifd.141.3">Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states</button>
-                </h3>
-                <p class="card-meta">
-                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.141.3">yoyodyne-ifd.141.3</button>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">12m elapsed</span>
-                  <span class="sep"> · </span>
-                  <span class="spend">$3.41 so far</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                <p class="card-id">started 2026-09-19 13:53:00 · run-c07d6849e1f55fd7b982600b8f97a303</p>
-              </li>
-              <li class="card card-run">
-                <div class="card-head">
-                  <span class="card-kind">developer run</span>
-                  <span class="phase">reviewing</span>
-                </div>
-                <h3 class="card-title">
-                  <button class="item-open" type="button" data-item="yoyodyne-ifd.201">The heartbeat names the forge when a merge is queued</button>
-                </h3>
-                <p class="card-meta">
-                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.201">yoyodyne-ifd.201</button>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">3m elapsed</span>
-                  <span class="sep"> · </span>
-                  <span class="spend spend-unknown">cost unknown (its event log is gone)</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                <p class="card-id">started 2026-09-19 14:02:00 · run-49839de311bd6b4d06fbfb41f22abdf1</p>
-              </li>
               <li class="card card-run">
                 <div class="card-head">
                   <span class="card-kind">developer run</span>
@@ -160,21 +126,8 @@
                 <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
                 <p class="card-id">started 2026-09-19 13:10:00 · run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</p>
               </li>
-              <li class="card card-turn">
-                <div class="card-head">
-                  <span class="card-kind">conversation</span>
-                  <span class="phase">a turn in flight</span>
-                </div>
-                <h3 class="card-title">product-manager</h3>
-                <p class="card-meta">
-                  <span class="item-id">product-manager</span>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">for 40s after 270 recorded turns</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-fable-5-1</p>
-              </li>
             </ul>
-            <p id="live-note" class="footnote" hidden></p>
+            <p id="live-note" class="footnote">no conversation has a turn in flight.</p>
           </div>
         </section>
         <section id="pipeline" class="panel pipeline" data-state="ready" aria-labelledby="pipeline-heading">
@@ -187,78 +140,44 @@
               <li class="stage stage-admitted">
                 <button class="grouping-open stage-open" type="button" data-grouping="admitted">
                   <span class="stage-label">Admitted</span>
-                  <span class="stage-figure">9</span>
+                  <span class="stage-figure">4</span>
                 </button>
                 <span class="stage-unit">items</span>
               </li>
               <li class="stage stage-held">
                 <button class="grouping-open stage-open" type="button" data-grouping="held">
                   <span class="stage-label">Held back</span>
-                  <span class="stage-figure">6</span>
+                  <span class="stage-figure">2</span>
                 </button>
                 <span class="stage-unit">items nothing will pull</span>
                 <ul class="piles">
                   <li class="pile pile-largest">
                     <span class="pile-figure">2</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:held">
-                      <span class="pile-label">held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)</span>
+                    <button class="grouping-open pile-open" type="button" data-grouping="pile:stalled">
+                      <span class="pile-label">pullable, and nothing is choosing (most)</span>
                     </button>
-                    <span class="pile-whose">whose move: the development manager's, or the harness carrying her decision out</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:directive">
-                      <span class="pile-label">paused by a directive</span>
-                    </button>
-                    <span class="pile-whose">whose move: the operator's, through yoyo directive resolve</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:parked">
-                      <span class="pile-label">parked</span>
-                    </button>
-                    <span class="pile-whose">whose move: whoever parked it</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:waiting">
-                      <span class="pile-label">waiting on other work</span>
-                    </button>
-                    <span class="pile-whose">whose move: nobody's; it clears as that work lands</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:conversation">
-                      <span class="pile-label">carried by a conversation, not a run</span>
-                    </button>
-                    <span class="pile-whose">whose move: the role the item names</span>
+                    <span class="pile-whose">whose move: whoever the refusal names</span>
                   </li>
                 </ul>
               </li>
-              <li class="stage stage-flowing">
+              <li class="stage stage-held">
                 <button class="grouping-open stage-open" type="button" data-grouping="startable">
                   <span class="stage-label">Startable</span>
-                  <span class="stage-figure">3</span>
+                  <span class="stage-figure">none</span>
                 </button>
-                <span class="stage-unit">items the harness pulls next</span>
+                <span class="stage-unit">the harness is choosing nothing: Paused on the provider's usage window until 18:50Z</span>
               </li>
               <li class="stage stage-flowing">
                 <button class="grouping-open stage-open" type="button" data-grouping="running">
                   <span class="stage-label">Running</span>
-                  <span class="stage-figure">4</span>
+                  <span class="stage-figure">2</span>
                 </button>
                 <span class="stage-unit">developer runs</span>
                 <ul class="piles">
                   <li class="pile">
-                    <span class="pile-figure">2</span>
+                    <span class="pile-figure">1</span>
                     <button class="grouping-open pile-open" type="button" data-grouping="stage:developing">
                       <span class="pile-label">developing</span>
-                    </button>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="stage:reviewing">
-                      <span class="pile-label">reviewing</span>
                     </button>
                   </li>
                   <li class="pile">
@@ -269,19 +188,22 @@
                   </li>
                 </ul>
               </li>
-              <li class="stage stage-unreadable">
+              <li class="stage stage-landed">
                 <button class="grouping-open stage-open" type="button" data-grouping="landed:today">
                   <span class="stage-label">Landed</span>
-                  <span class="stage-figure">—</span>
+                  <span class="stage-figure">3</span>
                 </button>
-                <span class="stage-unit">could not be read</span>
+                <span class="stage-unit">today</span>
+                <button class="grouping-open stage-detail-open" type="button" data-grouping="landed:week">
+                  <span class="stage-detail">22 runs in the last 7 days</span>
+                </button>
               </li>
             </ol>
             <ul id="pipeline-problems" class="degraded" hidden></ul>
-            <p id="pipeline-note" class="footnote">Needs a human: 3 things waiting on a person.</p>
+            <p id="pipeline-note" class="footnote">Needs a human: 1 thing waiting on a person.</p>
           </div>
         </section>
-        <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
+        <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
           <div class="panel-head">
             <h2 id="throughput-heading">Throughput and cost</h2>
             <p class="panel-note">
@@ -290,9 +212,67 @@
               prints
             </p>
           </div>
-          <div class="section-error" role="alert">
-            <p id="throughput-problem" class="problem">Could not be read: the state root could not be resolved</p>
-            <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
+          <div class="section-ready">
+            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <ul id="throughput-problems" class="degraded" hidden></ul>
+            <div id="windows" class="windows">
+              <div class="window">
+                <h3 class="window-label">today</h3>
+                <p class="window-span">since midnight, local time</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>3 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>1 stopped for a person</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>6 runs</dd>
+                  </div>
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>$92.00 from 31 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$61.20 on 12 runs, $29.55 on 17 conversations, $1.25 on 2 exchanges</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="window">
+                <h3 class="window-label">last 7 days</h3>
+                <p class="window-span">from 2026-09-13, local days</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>22 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>2 succeeded without promoting, 9 stopped for a person, 3 cancelled, 1 timed out, 2 failed</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>41 runs</dd>
+                  </div>
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>at least $1,232.58 from 452 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$894.63 on 184 runs, $337.95 on 268 conversations</dd>
+                  </div>
+                  <div class="figure-row figure-unreadable">
+                    <dt>Not priced</dt>
+                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">
@@ -301,7 +281,7 @@
             <p class="panel-note">what is parked or held on the provider's usage windows, and what to do about it</p>
           </div>
           <div class="section-ready">
-            <p id="capacity-hold" class="hold" hidden></p>
+            <p id="capacity-hold" class="hold">Every role is held: 5 agents on opus, and none names an alternate; 7 turns refused since 2026-09-19 12:02:00, until 2026-09-19 18:50:00.</p>
             <ul id="capacity-problems" class="degraded" hidden></ul>
             <ul id="capacity-runs" class="held-list">
               <li class="held held-waiting">
@@ -419,6 +399,21 @@
             </ul>
           </div>
         </section>
+        <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="empty">
+          <div id="grouping-backdrop" class="popup-backdrop"></div>
+          <div class="popup-card">
+            <div class="popup-head">
+              <div>
+                <h2 id="grouping-heading" class="popup-title">Startable</h2>
+                <p id="grouping-note" class="popup-note">the harness is choosing nothing: Paused on the provider's usage window until 18:50Z</p>
+              </div>
+              <button type="button" id="grouping-close" class="popup-close">Close</button>
+            </div>
+            <div class="section-empty">
+              <p id="grouping-empty" class="empty">No admitted item is startable.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
     <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>

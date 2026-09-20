@@ -36,30 +36,29 @@
               <div class="tile">
                 <dt>Running</dt>
                 <dd>
-                  <span class="figure">4</span>
+                  <span class="figure">2</span>
                   <span class="unit">developer runs</span>
                 </dd>
               </div>
-              <div class="tile">
+              <div class="tile tile-unreadable">
                 <dt>Working</dt>
                 <dd>
-                  <span class="figure">1</span>
-                  <span class="unit">conversation with a turn in flight</span>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
                 </dd>
               </div>
-              <div class="tile">
+              <div class="tile tile-unreadable">
                 <dt>Not startable</dt>
                 <dd>
-                  <span class="figure">6</span>
-                  <span class="unit">admitted items nothing will pull</span>
-                  <span class="detail">of 9 admitted items; awaiting a decision: 1, awaiting carry-out: 1</span>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
                 </dd>
               </div>
-              <div class="tile tile-attention">
+              <div class="tile tile-unreadable">
                 <dt>Needs a human</dt>
                 <dd>
-                  <span class="figure">3</span>
-                  <span class="unit">things waiting on a person</span>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
                 </dd>
               </div>
               <div class="tile">
@@ -70,16 +69,19 @@
                   <span class="detail">22 runs in the last 7 days</span>
                 </dd>
               </div>
-              <div class="tile">
+              <div class="tile tile-unreadable">
                 <dt>Cost</dt>
                 <dd>
-                  <span class="figure">$92.00</span>
-                  <span class="unit">today</span>
-                  <span class="detail">at least $1,232.58 in the last 7 days</span>
+                  <span class="figure">—</span>
+                  <span class="unit">could not be read</span>
                 </dd>
               </div>
             </dl>
-            <ul id="band-problems" class="degraded" hidden></ul>
+            <ul id="band-problems" class="degraded">
+              <li>Could not be read: whether a turn is in flight could not be asked of product-manager (open conversations/product-manager.lock: permission denied)</li>
+              <li>Could not be read: the admitted work could not be read: bd list: failed to open database: embeddeddolt: openat LOCK: operation not permitted</li>
+              <li>Could not be read: the recorded directives could not be read: open directives: permission denied</li>
+            </ul>
           </div>
         </section>
         <section id="live" class="panel live" data-state="ready" aria-labelledby="live-heading">
@@ -88,7 +90,9 @@
             <p class="panel-note">each developer run and each conversation with a turn in flight</p>
           </div>
           <div class="section-ready">
-            <ul id="live-problems" class="degraded" hidden></ul>
+            <ul id="live-problems" class="degraded">
+              <li>Could not be read: whether a turn is in flight could not be asked of product-manager (open conversations/product-manager.lock: permission denied)</li>
+            </ul>
             <ul id="cards" class="cards">
               <li class="card card-run">
                 <div class="card-head">
@@ -126,55 +130,6 @@
                 <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
                 <p class="card-id">started 2026-09-19 14:02:00 · run-49839de311bd6b4d06fbfb41f22abdf1</p>
               </li>
-              <li class="card card-run">
-                <div class="card-head">
-                  <span class="card-kind">developer run</span>
-                  <span class="phase">approved, resuming integration</span>
-                </div>
-                <h3 class="card-title">
-                  <button class="item-open" type="button" data-item="yoyodyne-ifd.212">Recurring tasks say when a firing was skipped</button>
-                </h3>
-                <p class="card-meta">
-                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.212">yoyodyne-ifd.212</button>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">2h45m elapsed</span>
-                  <span class="sep"> · </span>
-                  <span class="spend">$12.80 so far</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-opus-5 · account pool-b</p>
-                <p class="card-id">started 2026-09-19 11:20:00 · run-5035c832b1e04d7fa9c3e2b8d1f06a11</p>
-              </li>
-              <li class="card card-run">
-                <div class="card-head">
-                  <span class="card-kind">developer run</span>
-                  <span class="phase">developing</span>
-                </div>
-                <h3 class="card-title">
-                  <button class="item-open" type="button" data-item="yoyodyne-ifd.230">The sweep names the ref it preserved work on</button>
-                </h3>
-                <p class="card-meta">
-                  <button class="item-open item-id" type="button" data-item="yoyodyne-ifd.230">yoyodyne-ifd.230</button>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">55m elapsed</span>
-                  <span class="sep"> · </span>
-                  <span class="spend">$5.10 so far</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-opus-5 · account default</p>
-                <p class="card-id">started 2026-09-19 13:10:00 · run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</p>
-              </li>
-              <li class="card card-turn">
-                <div class="card-head">
-                  <span class="card-kind">conversation</span>
-                  <span class="phase">a turn in flight</span>
-                </div>
-                <h3 class="card-title">product-manager</h3>
-                <p class="card-meta">
-                  <span class="item-id">product-manager</span>
-                  <span class="sep"> · </span>
-                  <span class="elapsed">for 40s after 270 recorded turns</span>
-                </p>
-                <p class="card-provenance">claude-code · claude-fable-5-1</p>
-              </li>
             </ul>
             <p id="live-note" class="footnote" hidden></p>
           </div>
@@ -186,73 +141,36 @@
           </div>
           <div class="section-ready">
             <ol id="stages" class="stages">
-              <li class="stage stage-admitted">
+              <li class="stage stage-unreadable">
                 <button class="grouping-open stage-open" type="button" data-grouping="admitted">
                   <span class="stage-label">Admitted</span>
-                  <span class="stage-figure">9</span>
+                  <span class="stage-figure">—</span>
                 </button>
-                <span class="stage-unit">items</span>
+                <span class="stage-unit">could not be read</span>
               </li>
-              <li class="stage stage-held">
+              <li class="stage stage-unreadable">
                 <button class="grouping-open stage-open" type="button" data-grouping="held">
                   <span class="stage-label">Held back</span>
-                  <span class="stage-figure">6</span>
+                  <span class="stage-figure">—</span>
                 </button>
-                <span class="stage-unit">items nothing will pull</span>
-                <ul class="piles">
-                  <li class="pile pile-largest">
-                    <span class="pile-figure">2</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:held">
-                      <span class="pile-label">held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)</span>
-                    </button>
-                    <span class="pile-whose">whose move: the development manager's, or the harness carrying her decision out</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:directive">
-                      <span class="pile-label">paused by a directive</span>
-                    </button>
-                    <span class="pile-whose">whose move: the operator's, through yoyo directive resolve</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:parked">
-                      <span class="pile-label">parked</span>
-                    </button>
-                    <span class="pile-whose">whose move: whoever parked it</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:waiting">
-                      <span class="pile-label">waiting on other work</span>
-                    </button>
-                    <span class="pile-whose">whose move: nobody's; it clears as that work lands</span>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="pile:conversation">
-                      <span class="pile-label">carried by a conversation, not a run</span>
-                    </button>
-                    <span class="pile-whose">whose move: the role the item names</span>
-                  </li>
-                </ul>
+                <span class="stage-unit">could not be read</span>
               </li>
-              <li class="stage stage-flowing">
+              <li class="stage stage-unreadable">
                 <button class="grouping-open stage-open" type="button" data-grouping="startable">
                   <span class="stage-label">Startable</span>
-                  <span class="stage-figure">3</span>
+                  <span class="stage-figure">—</span>
                 </button>
-                <span class="stage-unit">items the harness pulls next</span>
+                <span class="stage-unit">could not be read</span>
               </li>
               <li class="stage stage-flowing">
                 <button class="grouping-open stage-open" type="button" data-grouping="running">
                   <span class="stage-label">Running</span>
-                  <span class="stage-figure">4</span>
+                  <span class="stage-figure">2</span>
                 </button>
                 <span class="stage-unit">developer runs</span>
                 <ul class="piles">
                   <li class="pile">
-                    <span class="pile-figure">2</span>
+                    <span class="pile-figure">1</span>
                     <button class="grouping-open pile-open" type="button" data-grouping="stage:developing">
                       <span class="pile-label">developing</span>
                     </button>
@@ -261,12 +179,6 @@
                     <span class="pile-figure">1</span>
                     <button class="grouping-open pile-open" type="button" data-grouping="stage:reviewing">
                       <span class="pile-label">reviewing</span>
-                    </button>
-                  </li>
-                  <li class="pile">
-                    <span class="pile-figure">1</span>
-                    <button class="grouping-open pile-open" type="button" data-grouping="stage:integrating">
-                      <span class="pile-label">integrating</span>
                     </button>
                   </li>
                 </ul>
@@ -282,8 +194,10 @@
                 </button>
               </li>
             </ol>
-            <ul id="pipeline-problems" class="degraded" hidden></ul>
-            <p id="pipeline-note" class="footnote">Needs a human: 3 things waiting on a person.</p>
+            <ul id="pipeline-problems" class="degraded">
+              <li>Could not be read: the admitted work could not be read: bd list: failed to open database: embeddeddolt: openat LOCK: operation not permitted</li>
+            </ul>
+            <p id="pipeline-note" class="footnote">Needs a human: what waits on a person could not be read: the recorded directives could not be read: open directives: permission denied.</p>
           </div>
         </section>
         <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
@@ -297,7 +211,9 @@
           </div>
           <div class="section-ready">
             <p id="throughput-stale" class="stale" role="status" hidden></p>
-            <ul id="throughput-problems" class="degraded" hidden></ul>
+            <ul id="throughput-problems" class="degraded">
+              <li>Could not be read: the spend could not be read: open streams: permission denied</li>
+            </ul>
             <div id="windows" class="windows">
               <div class="window">
                 <h3 class="window-label">today</h3>
@@ -315,13 +231,9 @@
                     <dt>Started</dt>
                     <dd>6 runs</dd>
                   </div>
-                  <div class="figure-row figure-cost">
+                  <div class="figure-row figure-unreadable">
                     <dt>Cost</dt>
-                    <dd>$92.00 from 31 invocations</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Of which</dt>
-                    <dd>$61.20 on 12 runs, $29.55 on 17 conversations, $1.25 on 2 exchanges</dd>
+                    <dd>could not be read</dd>
                   </div>
                 </dl>
               </div>
@@ -341,17 +253,9 @@
                     <dt>Started</dt>
                     <dd>41 runs</dd>
                   </div>
-                  <div class="figure-row figure-cost">
-                    <dt>Cost</dt>
-                    <dd>at least $1,232.58 from 452 invocations</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Of which</dt>
-                    <dd>$894.63 on 184 runs, $337.95 on 268 conversations</dd>
-                  </div>
                   <div class="figure-row figure-unreadable">
-                    <dt>Not priced</dt>
-                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
+                    <dt>Cost</dt>
+                    <dd>could not be read</dd>
                   </div>
                 </dl>
               </div>
@@ -365,85 +269,10 @@
           </div>
           <div class="section-ready">
             <p id="capacity-hold" class="hold" hidden></p>
-            <ul id="capacity-problems" class="degraded" hidden></ul>
-            <ul id="capacity-runs" class="held-list">
-              <li class="held held-waiting">
-                <div class="held-head">
-                  <span class="held-kind">run</span>
-                  <span class="held-state">waiting</span>
-                </div>
-                <h3 class="held-title">yoyodyne-ifd.230</h3>
-                <dl class="held-facts">
-                  <div class="figure-row">
-                    <dt>Refused by</dt>
-                    <dd>an exhausted usage limit (seven_day)</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Phase</dt>
-                    <dd>developing</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Since</dt>
-                    <dd>2026-09-19 13:40:00</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Resets</dt>
-                    <dd>2026-09-19 18:50:00</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Waited</dt>
-                    <dd>25m of the pause budget</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Change</dt>
-                    <dd>preserved</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Run</dt>
-                    <dd>run-7e2c19d4a0b34f6e9c1d5a8b2f7e3c90</dd>
-                  </div>
-                </dl>
-                <p class="held-remedy">What to do: nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; `yoyo resume` with the work item named asks now instead of at the probe</p>
-              </li>
-              <li class="held held-capacity-blocked">
-                <div class="held-head">
-                  <span class="held-kind">run</span>
-                  <span class="held-state">capacity-blocked</span>
-                </div>
-                <h3 class="held-title">yoyodyne-ifd.150</h3>
-                <dl class="held-facts">
-                  <div class="figure-row">
-                    <dt>Refused by</dt>
-                    <dd>an exhausted usage limit (five_hour)</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Phase</dt>
-                    <dd>reviewing</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Since</dt>
-                    <dd>2026-09-18 22:12:00</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Resets</dt>
-                    <dd>no reset named, and nothing probes: the run stopped</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Waited</dt>
-                    <dd>4h00m of the pause budget</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Change</dt>
-                    <dd>preserved</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Run</dt>
-                    <dd>run-a17c9b40e6f24c1d8b3a5f0e9d2c7b44</dd>
-                  </div>
-                </dl>
-                <p class="held-remedy">What to do: the run stopped and its item is back with the development manager; what lets it run again is more provider capacity, a longer execution.usage_limit_max_pause, or a replan</p>
-              </li>
+            <ul id="capacity-problems" class="degraded">
+              <li>Could not be read: the run records could not be read: open runs: permission denied</li>
             </ul>
+            <ul id="capacity-runs" class="held-list"></ul>
             <ul id="capacity-conversations" class="held-list">
               <li class="held held-capacity-blocked">
                 <div class="held-head">
@@ -482,6 +311,22 @@
             </ul>
           </div>
         </section>
+        <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="error">
+          <div id="grouping-backdrop" class="popup-backdrop"></div>
+          <div class="popup-card">
+            <div class="popup-head">
+              <div>
+                <h2 id="grouping-heading" class="popup-title">Admitted</h2>
+                <p id="grouping-note" class="popup-note">every admitted item, in the product manager's order</p>
+              </div>
+              <button type="button" id="grouping-close" class="popup-close">Close</button>
+            </div>
+            <div class="section-error" role="alert">
+              <p id="grouping-problem" class="problem">Could not be read: the admitted work could not be read: bd list: failed to open database: embeddeddolt: openat LOCK: operation not permitted</p>
+              <p id="grouping-remedy" class="remedy">The admitted work is read from the tracker and the runs from the state root; yoyo doctor says whether bd answers in this checkout and what cannot be read, and yoyo status prints the same refusals.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
     <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>

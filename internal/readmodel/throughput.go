@@ -30,6 +30,7 @@ package readmodel
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -113,6 +114,12 @@ type Window struct {
 	Cancelled int `json:"cancelled"`
 	TimedOut  int `json:"timed_out"`
 	Failed    int `json:"failed"`
+	// LandedItems names each run Landed counts — the work item it landed, and
+	// when — newest first, so a surface that opens the landed grouping lists the
+	// runs the count was taken over rather than a second reading of the records.
+	// It is nil where the runs could not be read, as the endings are nothing
+	// then, and empty rather than absent otherwise.
+	LandedItems []LandedRun `json:"landed_items"`
 
 	// CostUSD is what every priced invocation in the window cost, across runs,
 	// conversations, branch reviews, and exchanges alike, and Invocations how
@@ -127,6 +134,16 @@ type Window struct {
 	// does not have to know why.
 	Unpriced int  `json:"unpriced"`
 	Floor    bool `json:"floor"`
+}
+
+// LandedRun is one run whose work reached the target branch inside a window:
+// the item it landed, by id and by the title the run recorded at its claim, and
+// when it ended.
+type LandedRun struct {
+	RunID      string    `json:"run_id"`
+	WorkItemID string    `json:"work_item_id"`
+	Title      string    `json:"title,omitempty"`
+	LandedAt   time.Time `json:"landed_at"`
 }
 
 // KindSpend is one kind's share of a window's cost.
@@ -229,6 +246,7 @@ func absent(what, problem string) string {
 // the standing status is what counts it.
 func countEndings(window *Window, recorded []runstate.State, now time.Time) {
 	since := startOfLocalDay(now, window.Days)
+	window.LandedItems = []LandedRun{}
 	for _, state := range recorded {
 		if !state.StartedAt.Before(since) && !state.StartedAt.After(now) {
 			window.Started++
@@ -244,6 +262,7 @@ func countEndings(window *Window, recorded []runstate.State, now time.Time) {
 		case runstate.OutcomeSucceeded:
 			if state.Integration != nil {
 				window.Landed++
+				window.LandedItems = append(window.LandedItems, LandedRun{RunID: state.RunID, WorkItemID: state.WorkItemID, Title: state.WorkItemTitle, LandedAt: ended})
 			} else {
 				window.Succeeded++
 			}
@@ -257,6 +276,14 @@ func countEndings(window *Window, recorded []runstate.State, now time.Time) {
 			window.Failed++
 		}
 	}
+	// Newest first, by identifier where two landed at one instant, so two
+	// readings of one directory list the landed work in one order.
+	sort.SliceStable(window.LandedItems, func(first, second int) bool {
+		if !window.LandedItems[first].LandedAt.Equal(window.LandedItems[second].LandedAt) {
+			return window.LandedItems[first].LandedAt.After(window.LandedItems[second].LandedAt)
+		}
+		return window.LandedItems[first].RunID < window.LandedItems[second].RunID
+	})
 }
 
 // endedAt is when a terminal run ended: its completion where the record has
