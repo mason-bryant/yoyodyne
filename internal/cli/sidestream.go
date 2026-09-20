@@ -397,10 +397,13 @@ func askAside(ctx context.Context, p preparedChat, request conversationRequest, 
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
-	ask := sidestream.Ask{Stream: request.sideThread, Question: request.message}
+	// Who is asked travels on every question, a continuation included: the agent
+	// this command addressed, under whose account and provider the turn is served.
+	// A stream another agent holds is refused by the runner on that, before a turn
+	// is spent, rather than continued on the wrong account and merged into the
+	// wrong memory.
+	ask := sidestream.Ask{Stream: request.sideThread, Agent: p.name, Role: role, Question: request.message}
 	if request.sideThread == "" {
-		ask.Agent = p.name
-		ask.Role = role
 		ask.Conversation = conversation
 		ask.Topic = sideTopic(request.message)
 		fmt.Fprintf(stderr, "the %s is mid-turn, so this is answered beside that turn on a side thread\n", chat.RoleTitle(role))
@@ -409,17 +412,40 @@ func askAside(ctx context.Context, p preparedChat, request conversationRequest, 
 	if err != nil {
 		// The prose travels with the failure where there was any: a reply whose
 		// block the harness refused is still an answer somebody paid for, and the
-		// turn is spent either way.
-		if answer.Prose != "" && !request.jsonOutput {
-			fmt.Fprintln(stdout, answer.Prose)
-		}
+		// turn is spent either way. So does the thread's state, where the failure
+		// left one — a thread the refusal concluded, or one still open to continue.
 		if answer.Stream.ID != "" {
 			err = fmt.Errorf("side thread %s: %w", answer.Stream.ID, err)
 		}
-		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
+		if request.jsonOutput {
+			output := chatOutput{Reply: answer.Prose, Error: err.Error()}
+			if answer.Stream.ID != "" {
+				aside := sideThreadOf(answer)
+				output.SideThread = &aside
+			}
+			if code := writeJSON(stdout, stderr, output); code != 0 {
+				return code
+			}
+			return 1
+		}
+		if answer.Prose != "" {
+			fmt.Fprintln(stdout, answer.Prose)
+		}
+		return reportChatFailure(stdout, stderr, false, role, nil, err)
 	}
+	aside := sideThreadOf(answer)
+	if request.jsonOutput {
+		return writeJSON(stdout, stderr, chatOutput{Reply: answer.Prose, SideThread: &aside})
+	}
+	fmt.Fprintln(stdout, answer.Prose)
+	printSideThread(stdout, role, p.name, aside)
+	return 0
+}
+
+// sideThreadOf is what one side turn's answer reports about its thread.
+func sideThreadOf(answer sidestream.Answer) sideThreadOutput {
 	stream := answer.Stream
-	aside := sideThreadOutput{
+	return sideThreadOutput{
 		Stream:       stream.ID,
 		Conversation: stream.Conversation,
 		Turn:         stream.Turns,
@@ -429,12 +455,6 @@ func askAside(ctx context.Context, p preparedChat, request conversationRequest, 
 		Commitments:  answer.Commitments,
 		CostUSD:      stream.CostUSD,
 	}
-	if request.jsonOutput {
-		return writeJSON(stdout, stderr, chatOutput{Reply: answer.Prose, SideThread: &aside})
-	}
-	fmt.Fprintln(stdout, answer.Prose)
-	printSideThread(stdout, role, p.name, aside)
-	return 0
 }
 
 // printSideThread says where an answer came from and what it is worth, which the

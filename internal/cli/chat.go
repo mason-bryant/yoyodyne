@@ -200,12 +200,22 @@ func converse(ctx context.Context, role domain.AgentRole, request conversationRe
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
+	return converseWith(ctx, prepared, request, stdin, stdout, stderr)
+}
+
+// converseWith is the conversation from the point the role is resolved: which
+// thread the message reaches, and then the conversation itself. It is separate
+// from converse so the routing can be driven over real stores without a
+// provider to resolve.
+func converseWith(ctx context.Context, prepared preparedChat, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
+	role := prepared.identity.Role
 	// A message continuing a side thread is that thread's next turn and never
 	// touches the main conversation, held or not.
 	if request.sideThread != "" {
 		return askAside(ctx, prepared, request, "", stdout, stderr)
 	}
 	var hold *runstate.ConversationHold
+	var err error
 	switch {
 	case request.mayGoAside(prepared):
 		// The claim that refuses rather than waits is what decides: a main thread
@@ -507,7 +517,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 // the role start from — the main thread, claimed and opened below, and a side
 // thread held beside it while the main thread is busy — so the agent a side
 // question reaches is the agent the main conversation would have been with,
-// under the same account and the same provider.
+// under the same account and the same provider. A side thread continued by its
+// identifier is held to the same agent: the runner refuses a stream another
+// agent opened, so the account and the memory a continuation lands on are
+// always this agent's own.
 type preparedChat struct {
 	parts    components
 	name     string
@@ -1477,8 +1490,8 @@ turn on a side thread of its own, and the answer says so. A side thread judges a
 answers and takes no action, so anything it promises is tentative until the main
 conversation's next turn — which reads what the side thread concluded — ratifies
 it. A side thread the agent left open for a further turn is continued with
---side-thread <id> and --message; commands and decisions always reach the main
-conversation.
+--side-thread <id> and --message, by the agent that holds it; commands and
+decisions always reach the main conversation.
 
 This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same

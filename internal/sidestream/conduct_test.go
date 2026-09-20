@@ -263,6 +263,43 @@ func TestARefusedReplyOnTheLastTurnStillMergesItsProse(t *testing.T) {
 	}
 }
 
+// A continuation that says who it is asking is held to the stream's own record
+// of who holds it, before anything is written: a stream opened for one agent is
+// served on that agent's account and merges into that agent's memory, so a caller
+// naming another agent would have all three land on the wrong one.
+func TestAContinuationNamingAnotherAgentIsRefusedBeforeATurnIsSpent(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	voice := &fakeVoice{answers: []string{"I need another turn.", "Still thinking."}}
+	runner := testRunner(store, voice, &fakeMerge{})
+	opened, err := runner.Put(context.Background(), testAsk())
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	for name, ask := range map[string]Ask{
+		"another agent": {Stream: opened.Stream.ID, Agent: "architect", Role: domain.RoleArchitect, Question: "and?"},
+		"another role":  {Stream: opened.Stream.ID, Role: domain.RoleArchitect, Question: "and?"},
+	} {
+		answer, err := runner.Put(context.Background(), ask)
+		if !errors.Is(err, ErrNotThisAgents) {
+			t.Fatalf("%s: Put() error = %v, want ErrNotThisAgents", name, err)
+		}
+		if answer.Stream.ID != opened.Stream.ID || store.streams[opened.Stream.ID].Turns != 1 || len(voice.asked) != 1 {
+			t.Fatalf("%s: a refused continuation spent a turn or reached the voice", name)
+		}
+	}
+
+	// The same agent continuing its own thread, by name, is the ordinary case.
+	if _, err := runner.Put(context.Background(), Ask{Stream: opened.Stream.ID, Agent: "product-manager", Role: domain.RoleProductManager, Question: "and?"}); err != nil {
+		t.Fatalf("Put() by the thread's own agent error = %v", err)
+	}
+	if store.streams[opened.Stream.ID].Turns != 2 {
+		t.Fatal("the thread's own agent could not continue it")
+	}
+}
+
 // The turn is taken under the side stream's own lease, named for its own
 // identifier. That is the whole of the concurrency answer: the main thread's
 // lease is not asked for here, so holding it stops nothing and this stops
@@ -412,7 +449,8 @@ func TestAskValidateRejectsIncoherentQuestions(t *testing.T) {
 		{"a stream is not a main thread", Ask{Agent: "product-manager", Role: domain.RoleProductManager, Conversation: "side-0123456789abcdef0123456789abcdef", Topic: "a topic", Question: "why?"}, "does not name a main thread"},
 		{"no topic", Ask{Agent: "product-manager", Role: domain.RoleProductManager, Conversation: testConversation, Question: "why?"}, "topic is required"},
 		{"a stream that is not one", Ask{Stream: "chat-0123456789abcdef0123456789abcdef", Question: "why?"}, "is invalid"},
-		{"continuing and redirecting", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Role: domain.RoleArchitect, Question: "why?"}, "names the stream alone"},
+		{"continuing and redirecting", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Conversation: testConversation, Question: "why?"}, "settled when it opened"},
+		{"continuing as nobody the harness has", Ask{Stream: "side-0123456789abcdef0123456789abcdef", Role: "auditor", Question: "why?"}, "is not one of the harness's roles"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

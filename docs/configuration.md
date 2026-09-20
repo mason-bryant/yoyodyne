@@ -3501,8 +3501,11 @@ settles something the main conversation is waiting on; and a message with
 interactive `yoyo chat` and a message from Slack queue as they always have — a
 side thread is a bounded number of turns, not a prompt to sit at. A side thread
 the agent left open for a further turn is continued with
-`--side-thread <id> --message`, and it takes its turns on its own record and
-its own lease, so it neither waits for the main conversation nor holds it.
+`--side-thread <id> --message`, addressed to the agent that holds it — another
+agent's command naming the stream is refused before a turn is spent, so a thread
+is never served on one agent's account and merged into another's memory. It takes
+its turns on its own record and its own lease, so it neither waits for the main
+conversation nor holds it.
 
 **The knob selects behaviour and never authority.** A side thread judges,
 answers, and tentatively plans: it reads the tracker and the evidence its role

@@ -175,12 +175,20 @@ type Spoken struct {
 // Ask is one question put to a side thread.
 type Ask struct {
 	// Stream names a side thread already open, and is empty for a question that
-	// opens one. The four fields below describe the thread being opened and are
-	// refused on a question continuing one: who is in a side thread, and what it
-	// is beside, are settled when it opens.
-	Stream       string
-	Agent        string
-	Role         domain.AgentRole
+	// opens one.
+	Stream string
+	// Agent and Role are who is being asked. On a question opening a thread they
+	// are who the thread is with, and required. On a question continuing one they
+	// are who the asker believes it is with, and optional: a stream is held by the
+	// agent that opened it, so a continuation naming another agent is refused
+	// rather than carried to the wrong one's provider and merged into the wrong
+	// one's memory. A surface that addresses one agent by name says so here, and
+	// the runner holds the stream to it.
+	Agent string
+	Role  domain.AgentRole
+	// Conversation and Topic describe the thread being opened and are refused on
+	// a question continuing one: what a side thread is beside was settled when
+	// it opened.
 	Conversation string
 	Topic        string
 	Question     string
@@ -190,13 +198,18 @@ type Ask struct {
 func (a Ask) Validate() error {
 	var problems []error
 	problems = append(problems, boundedText("question", a.Question, MaxQuestionBytes, true))
-	if strings.TrimSpace(a.Stream) == "" {
+	continuing := strings.TrimSpace(a.Stream) != ""
+	if !continuing || strings.TrimSpace(a.Agent) != "" {
 		if err := domain.ValidateIdentifier("agent", strings.TrimSpace(a.Agent)); err != nil {
 			problems = append(problems, err)
 		}
+	}
+	if !continuing || a.Role != "" {
 		if !a.Role.Valid() {
 			problems = append(problems, fmt.Errorf("side thread role %q is not one of the harness's roles", a.Role))
 		}
+	}
+	if !continuing {
 		if !conversationPattern.MatchString(strings.TrimSpace(a.Conversation)) {
 			problems = append(problems, fmt.Errorf("side thread conversation %q does not name a main thread", a.Conversation))
 		}
@@ -205,9 +218,8 @@ func (a Ask) Validate() error {
 		if !ValidID(strings.TrimSpace(a.Stream)) {
 			problems = append(problems, fmt.Errorf("side stream id %q is invalid", a.Stream))
 		}
-		if strings.TrimSpace(a.Agent) != "" || a.Role != "" ||
-			strings.TrimSpace(a.Conversation) != "" || strings.TrimSpace(a.Topic) != "" {
-			problems = append(problems, errors.New("a question continuing a side thread names the stream alone; who is in it and what it is beside were settled when it opened"))
+		if strings.TrimSpace(a.Conversation) != "" || strings.TrimSpace(a.Topic) != "" {
+			problems = append(problems, errors.New("a question continuing a side thread names the stream and who is asked, and nothing of what it is beside; that was settled when it opened"))
 		}
 	}
 	if err := errors.Join(problems...); err != nil {
@@ -355,6 +367,14 @@ func (r Runner) Put(ctx context.Context, ask Ask) (Answer, error) {
 			return Answer{}, err
 		}
 		defer release()
+	}
+	// A continuation that says who it is asking is held to the stream's own record
+	// of who holds it. The stream is the authority: it was opened for one agent,
+	// its turns are served on that agent's account and its merge is written into
+	// that agent's memory, and a caller that named another agent would have all
+	// three land on the wrong one. Nothing is written before this is decided.
+	if err := stream.heldBy(ask); err != nil {
+		return Answer{Stream: stream}, err
 	}
 	if !stream.Open() {
 		return Answer{}, fmt.Errorf("%s ended as %q and cannot be continued; open another side thread if there is more to ask",
@@ -506,6 +526,26 @@ func (r Runner) mergeBack(ctx context.Context, stream Stream, substance string, 
 		return stream, fmt.Errorf("merge %s back into the %s agent's context: %w", stream.ID, stream.Agent, err)
 	}
 	return concluded, nil
+}
+
+// ErrNotThisAgents is what a continuation naming an agent the stream is not held
+// by unwraps to, so a surface can tell "this is somebody else's thread" from a
+// stream that does not exist without matching on the words.
+var ErrNotThisAgents = errors.New("the side stream is held by another agent")
+
+// heldBy refuses a question that names an agent or a role the stream is not held
+// by. A question naming neither is held to nothing here: it is a continuation by
+// a caller that trusts the identifier, which is what the runner's own tests do.
+func (s Stream) heldBy(ask Ask) error {
+	asker := strings.TrimSpace(ask.Agent)
+	switch {
+	case asker != "" && asker != s.Agent:
+		return fmt.Errorf("%w: %s is the %s agent %s's thread and not %s's", ErrNotThisAgents, s.ID, s.Role, s.Agent, asker)
+	case ask.Role != "" && ask.Role != s.Role:
+		return fmt.Errorf("%w: %s is the %s's thread and not the %s's", ErrNotThisAgents, s.ID, s.Role, ask.Role)
+	default:
+		return nil
+	}
 }
 
 // begin loads the side stream a question continues, or opens the one it starts.
