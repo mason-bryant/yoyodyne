@@ -598,3 +598,48 @@ func testMemoryRevision() MemoryRevision {
 		RecordedAt: time.Date(2026, 9, 6, 9, 0, 0, 0, time.UTC),
 	}
 }
+
+// A side conversation is a record this harness keeps, so a memory may cite one
+// and may say one wrote it — and both are held to a side stream's own identifier
+// shape. A citation that named a conversation while claiming to be a side stream
+// would be provenance pointing at the wrong thread, which is the failure the
+// merge back into an agent's context is most able to hide.
+func TestAMemoryCitesASideStreamByItsOwnIdentifier(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	revision := testMemoryRevision()
+	revision.Memory = "side-0123456789abcdef0123456789abcdef"
+	revision.Sources = []MemorySource{{Kind: MemorySourceSideStream, ID: "side-0123456789abcdef0123456789abcdef"}}
+	revision.Invocation = MemoryInvocation{
+		Kind:    MemoryInvocationSideStream,
+		ID:      "side-0123456789abcdef0123456789abcdef",
+		Turn:    3,
+		Backend: "claude-code",
+		Model:   "opus",
+	}
+	if _, err := store.Remember(context.Background(), revision); err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+
+	// A conversation identifier is not a side stream identifier, at either end.
+	wrong := revision
+	wrong.Sequence = 0
+	wrong.Sources = []MemorySource{{Kind: MemorySourceSideStream, ID: "chat-0123456789abcdef0123456789abcdef"}}
+	if _, err := store.Remember(context.Background(), wrong); err == nil {
+		t.Error("Remember() recorded a side-stream source naming a conversation")
+	}
+	wrong = revision
+	wrong.Sequence = 0
+	wrong.Invocation.ID = "chat-0123456789abcdef0123456789abcdef"
+	if _, err := store.Remember(context.Background(), wrong); err == nil {
+		t.Error("Remember() recorded a side-stream invocation naming a conversation")
+	}
+	// A side thread takes turns, so a merge that claims none is a merge of nothing.
+	wrong = revision
+	wrong.Sequence = 0
+	wrong.Invocation.Turn = 0
+	if _, err := store.Remember(context.Background(), wrong); err == nil {
+		t.Error("Remember() recorded a side-stream invocation that took no turn")
+	}
+}
