@@ -934,6 +934,21 @@ can open keeps its turn spent, because what that waits on is somebody changing
 something rather than a window ending. Nothing about it is configured, and a pass
 with no refusal to wake for asks no provider anything.
 
+**A pass also audits the claims the tracker holds against the runs the harness
+actually has**, and gives back the ones with nothing alive behind them. A run
+that is killed leaves its item claimed and its record saying it is in flight, and
+nothing else ever undoes either: the item has left the ready queue, so no pull
+chooses it, and the record goes on filling a developer slot, so a machine stuck
+behind two of them reads as a drained queue rather than as a stall. A claim with
+no run alive behind it for half an hour is given back with the reason on its
+notes, the run's record is ended as cancelled under its own lease — which a live
+process holds and the operating system drops when it dies, so a lease the audit
+can take is a process that is gone — and the item is pulled again on the same
+pass. It runs before the intake hold and the capacity check, because a held or
+full session is exactly where a dead claim hides, and it asks no provider
+anything. Each release is on the pass and
+[reaches the operators once](operations.md#claims-with-nothing-working-on-them).
+
 A stoppage the harness tried to deliver and gave up on is not restated by every
 pass after that. It is not lost either: the item stays held for a person, with
 the reason on it, wherever `yoyo status` reports what the harness is holding. The
@@ -957,6 +972,10 @@ wakes a role to put its own refused block right, so
 the fourth: carrying out a decision is the harness choosing work, so a held intake
 leaves the decision standing and the docket entry says the hold is what it is
 waiting on, and the first pull after you release it carries the decision out.
+Nor does it stop the claim audit, which is read before it for the same reason
+the first three are: the brake that holds intake is placed exactly when runs are
+failing one after another, which is when a claim is most likely to have just
+died.
 
 **Only one session watches a product at a time.** A second `yoyo work --watch`
 is refused as it starts, in a sentence naming the session holding the watch and
