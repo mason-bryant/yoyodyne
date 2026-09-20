@@ -149,9 +149,10 @@ func (h IntakeHold) Probing(workItemID string) bool {
 }
 
 // WaitsOnAPerson reports a hold nothing but a person lifts: the operator's own,
-// a brake hold from before the brake worked its own holds, and a brake hold the
-// development manager has escalated. Every other brake hold is the harness's
-// to lift.
+// a brake hold from before the brake worked its own holds, and a brake hold
+// escalated to the operator — by the development manager, or by the harness
+// once its summons-and-probe loop has gone round the configured number of
+// times. Every other brake hold is the harness's to lift.
 func (h IntakeHold) WaitsOnAPerson() bool {
 	return !h.Braked() || h.Brake.Escalated()
 }

@@ -2106,6 +2106,7 @@ execution:
   work_poll: 60s                       # the default
   blocked_runs_before_intake_hold: 3   # the default
   brake_cooldown: 30m                  # the default
+  brake_escalation_cycles: 4           # the default: two hours at that cooldown
 ```
 
 Nothing else about the pass changes, and nothing needed to. Every pull re-reads
@@ -2196,13 +2197,33 @@ the hold, and the probe landing reopens intake while the probe blocking keeps it
 held, restarts the cooldown, and summons her again with the probe's own
 stoppage beside the three. So a broken machine is probed once per cooldown and
 put to her each time, and a machine that was fine is choosing again within a
-cooldown of the trip whether or not anybody answered. The one brake hold that
-waits on a person is one she escalated. `yoyo release` and the conversation's
-`/release` still lift any of them sooner. Thirty minutes is the default: a
-summoned turn is minutes, so that is several answers' worth of slack, and a
-summons the provider refused costs the line half an hour rather than the two
-hours the 2026-09-19 trip cost it. Zero waits for her summoned turn and no
-longer.
+cooldown of the trip whether or not anybody answered. Thirty minutes is the
+default: a summoned turn is minutes, so that is several answers' worth of
+slack, and a summons the provider refused costs the line half an hour rather
+than the two hours the 2026-09-19 trip cost it. Zero waits for her summoned
+turn and no longer.
+
+**And the loop that makes has a bound.** On a machine that stays broken, each
+blocked probe summons her again and restarts the cooldown, so the brake goes
+round — one of her turns and one probe run per cooldown — and before the bound
+nothing about it got louder unless she escalated it. `brake_escalation_cycles`
+is how many of those summons-and-probe cycles the harness goes round before it
+escalates the hold to you itself: the cycle that reaches it is not put to her
+again, no further probe starts, and you are sent
+[one direct message](reporting.md#a-brake-hold-the-harness-escalates), tagged
+by member id, naming the cycles spent and what stopped the last probe. It is a
+count of cycles rather than a length of time because the loop is what it
+bounds; what it comes to in hours is the cooldown times it, and the default of
+four is two hours at the default cooldown — the same bar the heartbeat raises a
+stopped line to critical at. Every summons names which cycle it is and at what
+cycle the harness stops asking, so she can escalate sooner herself. A hold the
+harness escalated is still hers to release if the line turns out to be fine; a
+probe decision on it is refused, because the bound ended the loop. Zero never
+escalates on its own, which is the loop as it stood before the bound existed.
+
+So a brake hold waits on a person only once it is escalated, by her or by the
+harness at that bound. `yoyo release` and the conversation's `/release` still
+lift any of them sooner.
 
 The hold records which of you placed it, and everything that reports one says
 so: "the harness's own brake placed it after 3 run(s) blocked in a row with
@@ -2289,9 +2310,11 @@ changing them under a running developer would mean a run judged by rules it was
 never started under.
 
 A watching session is the same answer said again: `work_poll`,
-`blocked_runs_before_intake_hold`, and `brake_cooldown` are re-read at every
-pull too, so an interval you shorten or a brake you loosen takes effect at the
-next wait rather than at the next restart.
+`blocked_runs_before_intake_hold`, `brake_cooldown`, and
+`brake_escalation_cycles` are re-read at every pull too, so an interval you
+shorten or a brake you loosen takes effect at the next wait rather than at the
+next restart, and a bound you tighten under a standing loop is heard at the
+next probe.
 
 ### Why each run says why it was there
 

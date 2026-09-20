@@ -126,12 +126,15 @@ it is first seen and again with each heartbeat once it has stood past six hours,
 because it is the one state a person ends early; and the stall is sent again
 with every heartbeat it stands, tagged to those members by id in the channel as
 well, because a line that has stopped for reasons nobody can name is the one
-state that gets louder rather than quieter. A brake hold the development manager
-has handed to you is tagged the same way each hour, and sent directly once it
-has stood two hours. Removing the scope costs those direct messages and nothing
-else: the stale-build message, the hold, and the improvement are in the channel
-either way, the stall and the brake hold are still tagged there, and the stall
-is in the durable record `yoyo status` reads back.
+state that gets louder rather than quieter. A brake hold handed to you — by the
+development manager, or by the harness once its summons-and-probe loop has gone
+round its configured number of times — is tagged the same way each hour, and
+sent directly once it has stood two hours; the harness's own escalation is
+also sent directly the once, the moment it is recorded. Removing the scope
+costs those direct messages and nothing else: the stale-build message, the
+hold, and the improvement are in the channel either way, the stall and the
+brake hold are still tagged there, and the stall is in the durable record
+`yoyo status` reads back.
 
 ## 2. Install it and take the two tokens
 
@@ -587,13 +590,14 @@ Four states count: the operator holding all harness activity, a held intake
 watch session running at all. Each closes on whose move it is, in the words
 `yoyo status` puts on its attention line — for a held intake, the hold's own:
 yours for one you placed, the development manager's or the harness's for one
-the brake is working, and yours once she has escalated it. That last one is the
-one state here that gets louder as it stands: a brake hold that waits on you is
-tagged to you by member id every hour, a `warning` while it is young and
-`critical` and sent to you directly once it has stood two hours, until intake is
-released. It stops the moment the state clears, and says nothing about the
-clearing — the release, the session opening, or the run it starts says that
-itself.
+the brake is working — naming which summons-and-probe cycle it is on and at
+what cycle the harness stops asking — and yours once it is escalated, by her or
+by the harness at that bound. That last one is the one state here that gets
+louder as it stands: a brake hold that waits on you is tagged to you by member
+id every hour, a `warning` while it is young and `critical` and sent to you
+directly once it has stood two hours, until intake is released. It stops the
+moment the state clears, and says nothing about the clearing — the release, the
+session opening, or the run it starts says that itself.
 
 The count of promotions is the second thing that makes it speak, and it is there
 because a **dropped merge** is said once, as it happens. A reader who was away

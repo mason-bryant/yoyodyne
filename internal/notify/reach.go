@@ -172,6 +172,10 @@ var reaches = map[Kind]Reach{
 	KindIntakeReleased: ReachChannel,
 	KindHoldPlaced:     ReachChannel,
 	KindHoldLifted:     ReachChannel,
+	// The brake's hold handed to him by the harness at its bound. It is the one
+	// message about a brake hold that asks a person for something, and the sink
+	// sends it to the operators directly as well as posting it here.
+	KindIntakeEscalated: ReachChannel,
 	// What a watch session is doing. These are the poll-by-poll narration of a
 	// process that spends most of its life saying nothing, and they were 473 of the
 	// measured posts on their own. The watch log holds every one of them and

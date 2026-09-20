@@ -321,22 +321,30 @@ acts on her decision at its next poll. Where she records none by
 evidence instead: it starts one probe run under the hold, and the probe landing
 reopens intake while the probe blocking keeps it held, restarts the cooldown,
 and puts the question to her again with the probe's own stoppage. A broken
-machine is therefore probed once per cooldown and put to her each time; a
+machine is therefore probed once per cooldown and put to her each time, and a
 machine that was fine is choosing again within a cooldown of the trip whether or
-not anybody answered; and the one brake hold that waits on you is one she
-escalated, which she does by recording the decision and reporting it at
-`warning` severity so it reaches you. Only verdicts and check failures against
-a change that was present count toward the trip — an environmental stop, a
-dirty checkout or a transport that did not answer, is a verdict on nothing and
-counts toward nothing, and neither does a provider answering nobody.
+not anybody answered. That loop is bounded: after
+`execution.brake_escalation_cycles` of those summons-and-probe cycles — four by
+default, which is two hours at the default cooldown — with her not escalating
+the hold, the harness escalates it to you itself, sends you one direct message
+naming the cycles spent and what stopped the last probe, and starts no further
+probe. So the brake hold that waits on you is one she escalated, which she
+does by recording the decision and reporting it at `warning` severity so it
+reaches you, or one the harness escalated at that bound. Only verdicts and
+check failures against a change that was present count toward the trip — an
+environmental stop, a dirty checkout or a transport that did not answer, is a
+verdict on nothing and counts toward nothing, and neither does a provider
+answering nobody.
 
 The hold's own record says where it stands, and every surface reads it from
 there: `yoyo status` names the hold on its "Needs a human" line with whose move
 it is — the development manager's while she decides, with when the probe
-starts if she has not; the harness's while a probe runs, naming the probe; and
-yours only once she has escalated it — the watch log and the channel say the
-same, `yoyo sweeps` shows the summoned pass as summoned, and the run the probe
-made records the brake as what chose it. `yoyo release` still lifts a brake
+starts if she has not; the harness's while a probe runs, naming the probe;
+either of those with which summons-and-probe cycle it is and at what cycle the
+harness stops asking; and yours only once it is escalated, saying whether she
+did or the harness did — the watch log and the channel say the same,
+`yoyo sweeps` shows the summoned pass as summoned, and the run the probe made
+records the brake as what chose it. `yoyo release` still lifts a brake
 hold sooner, and says what the harness was in the middle of when it did.
 
 ## Waiting out a provider usage limit

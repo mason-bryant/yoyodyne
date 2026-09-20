@@ -991,7 +991,9 @@ whole backlog through a failed run overnight — and the same poll summons the
 development manager to decide what happens to the hold, with the blocked runs
 in front of her, and probes the line by itself with one run if she has not
 decided by `execution.brake_cooldown`, so a hold the brake placed
-[waits on nobody unless she escalates it](operations.md#pausing-everything-and-resuming-it).
+[waits on nobody unless it is escalated](operations.md#pausing-everything-and-resuming-it)
+— by her, or by the harness itself once that summons-and-probe loop has gone
+round `execution.brake_escalation_cycles` times.
 Stops the environment made count toward nothing. What reports that hold
 names the brake rather than you, because the hold records which of the two
 placed it, and says who is deciding it. And it records what it is doing — watching, idle, braked, resumed,

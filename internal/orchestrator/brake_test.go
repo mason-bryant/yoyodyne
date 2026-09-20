@@ -245,6 +245,177 @@ func TestABlockedProbeKeepsTheHoldAndSummonsHerAgain(t *testing.T) {
 	}
 }
 
+// The loop the blocked probe makes has a bound. On a machine that stays broken
+// the brake goes round — summons, cooldown, probe, blocked, summons — spending
+// one of her turns and one run per cooldown, and before this nothing about it
+// got louder unless she escalated it. Driven past execution.brake_escalation_cycles
+// with her deciding nothing, the harness escalates the hold to the operator
+// itself: the summonses stop, no further probe starts, the record names the
+// cycles spent and what stopped the last probe, and every surface names the
+// operator and the harness's escalation rather than hers.
+func TestASummonsAndProbeLoopEscalatesToTheOperatorAtTheBound(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four", "yoyodyne-five", "yoyodyne-six", "yoyodyne-seven")...)
+	harness.blockedRuns = 3
+	harness.cooldown = 5 * time.Minute
+	harness.cycleBound = 2
+	harness.run = blockedStorm
+	var loops []string
+	harness.summon = func(h *scheduleHarness, summons BrakeSummons, _ int) (Fired, error) {
+		// Her summoned turn answers every time and decides nothing about the
+		// hold, which is the shape of a loop nobody is escalating.
+		if summons.Hold.Brake != nil {
+			loops = append(loops, summons.Hold.Brake.Loop())
+		}
+		return Fired{Task: "development-manager-sweep", Turns: 1, Summoned: "the intake brake"}, nil
+	}
+	sessions := &recordedSessions{}
+	// Each poll is a minute and the cooldown five: two cycles are twelve or so
+	// polls, and the rest of the thirty are the hold standing escalated.
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 30 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	// Two probes and no more: the second blocked probe is the second cycle, which
+	// is the bound.
+	probes := 0
+	for _, started := range schedule.Started {
+		if started.Probe {
+			probes++
+		}
+	}
+	if probes != 2 {
+		t.Fatalf("%d probe(s) in thirty polls under a bound of two cycles, want two and then none: %s", probes, schedule.Render())
+	}
+	// Two summonses: the trip and the first blocked probe. The cycle that
+	// reached the bound was not put to her again — it was put to the operator.
+	if len(harness.summonses) != 2 {
+		t.Fatalf("summoned %d time(s), want the trip and the first blocked probe and nothing after the bound", len(harness.summonses))
+	}
+	// Each summons named where the loop stood, so she was told the harness would
+	// stop asking.
+	if len(loops) != 2 || !strings.Contains(loops[0], "cycle 1 of at most 2") || !strings.Contains(loops[1], "cycle 2 of at most 2") {
+		t.Fatalf("summonses named the loop as %q, want each to say which cycle of at most two it was", loops)
+	}
+	if len(harness.releases) != 0 {
+		t.Fatalf("released %d time(s), want an escalated hold left for the operator", len(harness.releases))
+	}
+	// The record: escalated by the harness, after two cycles, naming the last
+	// probe and why it blocked.
+	hold, held, _ := harness.Held()
+	if !held || hold.Brake == nil || !hold.Brake.EscalatedByHarness() {
+		t.Fatalf("hold = %#v, want the harness's escalation on its record", hold.Brake)
+	}
+	escalation := hold.Brake.Escalation
+	if escalation.Cycles != 2 || escalation.Probe != "yoyodyne-five" || !strings.Contains(escalation.Reason, "independent review still required repair") {
+		t.Fatalf("escalation = %#v, want two cycles, the fifth item as the last probe, and its stop reason", escalation)
+	}
+	if !hold.WaitsOnAPerson() {
+		t.Fatal("the escalated hold does not wait on a person, want it the operator's")
+	}
+	if schedule.BrakeEscalated == nil || schedule.BrakeEscalated.Cycles != 2 {
+		t.Fatalf("schedule.BrakeEscalated = %#v, want the escalation on the session's own account", schedule.BrakeEscalated)
+	}
+	if rendered := schedule.Render(); !strings.Contains(rendered, "escalated to the operator") || !strings.Contains(rendered, "2 summons-and-probe cycle(s)") {
+		t.Fatalf("schedule = %s, want the escalation rendered with the cycles spent", rendered)
+	}
+	// Every surface reads the hold's own words: the operator's move, by the
+	// harness's escalation, with the cycles and the last probe's stoppage.
+	mover := sessions.lastMover(runstate.WatchBraked)
+	for _, want := range []string{"the operator's", "the harness escalated it after 2 summons-and-probe cycles", "yoyodyne-five", "independent review still required repair", "yoyo release"} {
+		if !strings.Contains(mover, want) {
+			t.Fatalf("braked mover = %q, want it to carry %q", mover, want)
+		}
+	}
+	if strings.Contains(mover, "the development manager escalated it") {
+		t.Fatalf("braked mover = %q, want the escalation attributed to the harness rather than to her", mover)
+	}
+}
+
+// The bound is a count of blocked probes and not of polls or of summonses. A
+// probe that ended neither landed nor blocked decides nothing about the line
+// and is not a cycle, and a hold configured with no bound goes round as it did
+// before the bound existed.
+func TestOnlyABlockedProbeCountsAsACycleAndNoBoundNeverEscalates(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four", "yoyodyne-five", "yoyodyne-six", "yoyodyne-seven")...)
+	harness.blockedRuns = 3
+	harness.cooldown = 5 * time.Minute
+	harness.run = blockedStorm
+	harness.summon = func(*scheduleHarness, BrakeSummons, int) (Fired, error) {
+		return Fired{Task: "development-manager-sweep", Turns: 1, Summoned: "the intake brake"}, nil
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(_ *scheduleHarness, sleeps int) bool { return sleeps < 30 }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	if _, err := scheduler.Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	hold, held, _ := harness.Held()
+	if !held || hold.Brake == nil || hold.Brake.EscalatedByHarness() {
+		t.Fatalf("hold = %#v, want a loop with no bound never escalated by the harness", hold.Brake)
+	}
+	if hold.Brake.Cycles < 3 {
+		t.Fatalf("cycles = %d, want the unbounded loop to have gone round at least three times in thirty polls", hold.Brake.Cycles)
+	}
+	if len(harness.summonses) != hold.Brake.Cycles+1 {
+		t.Fatalf("summoned %d time(s) over %d cycle(s), want her summoned at the trip and after every blocked probe", len(harness.summonses), hold.Brake.Cycles)
+	}
+	// The loop is still named, so a reader of the hold can see it has no bound.
+	if mover := sessions.lastMover(runstate.WatchBraked); !strings.Contains(mover, "no bound configured") {
+		t.Fatalf("braked mover = %q, want the unbounded loop named", mover)
+	}
+}
+
+// A hold the harness escalated is still hers to release. The bound stops the
+// probing, and it does not stop the one decision that says the line is fine.
+func TestHerReleaseStillLiftsAHoldTheHarnessEscalated(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four", "yoyodyne-five", "yoyodyne-six")...)
+	harness.blockedRuns = 3
+	harness.cooldown = 2 * time.Minute
+	harness.cycleBound = 1
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		if id == "yoyodyne-five" {
+			return h.complete(id), nil
+		}
+		return blockedStorm(h, id)
+	}
+	harness.summon = func(*scheduleHarness, BrakeSummons, int) (Fired, error) {
+		return Fired{Task: "development-manager-sweep", Turns: 1, Summoned: "the intake brake"}, nil
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		// Once the harness has escalated, she reads the line as fine and releases.
+		if hold, held, _ := h.Held(); held && hold.Brake != nil && hold.Brake.EscalatedByHarness() && hold.Brake.Decision == "" {
+			h.decideBrake(runstate.BrakeDecisionRelease, "the machine was fixed by hand")
+		}
+		return sleeps < 12
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.BrakeEscalated == nil {
+		t.Fatalf("schedule = %s, want the harness to have escalated at one cycle", schedule.Render())
+	}
+	if len(harness.releases) != 1 || !strings.Contains(schedule.Released[0].Reason, "the development manager decided to release it") {
+		t.Fatalf("releases = %#v, released = %#v, want her release honoured over the harness's escalation", harness.releases, schedule.Released)
+	}
+	// Four was the probe; five and six were chosen after her release lifted it.
+	if order := harness.pullOrder(); len(order) != 6 || order[4] != "yoyodyne-five" {
+		t.Fatalf("pulled %v, want the line choosing again after her release", order)
+	}
+}
+
 // The one brake hold that waits on a person: she escalated it. No probe starts
 // however long the cooldown has run out, and every surface names the operator.
 func TestAnEscalatedBrakeHoldWaitsOnTheOperator(t *testing.T) {

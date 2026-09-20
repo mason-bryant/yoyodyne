@@ -773,6 +773,15 @@ func summonsMessage(name string, task config.RecurringTask, hold runstate.Intake
 		"Decide what happens to the hold, and record it as a brake decision in your tracker block: \"release\" if the line is fine or what stopped it is dealt with, so the harness chooses work again now; \"probe\" to keep the hold and have one probe run start now, which reopens intake if it lands and keeps it held if it blocks; or \"escalate\" to keep the hold for the operator, which is the only decision under which it waits on a person — say why in the reason and report it at warning severity, so it reaches them.",
 		"Triage the runs themselves as their docket entries warrant — repair, re-run, re-scope, or escalate each — exactly as you would on any pass; a decision about a run does not decide the hold, and a decision about the hold does not decide a run.",
 		fmt.Sprintf("If you record no brake decision, a probe run starts by itself at %s, and the hold is released or kept on what becomes of it.", cooldown),
+	)
+	// Where the loop stands is said to her because she is the one who can end
+	// it early: a summons that named neither the cycle nor the bound would ask
+	// her to decide the same question every cooldown without telling her that
+	// the harness will stop asking.
+	if hold.Brake != nil && hold.Brake.Loop() != "" {
+		lines = append(lines, fmt.Sprintf("This is %s; once it does, no further probe starts and the hold waits on the operator, so escalate it yourself sooner if that is where it belongs.", hold.Brake.Loop()))
+	}
+	lines = append(lines,
 		"",
 		strings.TrimSpace(task.Prompt),
 		"",
