@@ -1317,6 +1317,10 @@ type fakeForge struct {
 	// lagging the merge it just performed.
 	openReplies int
 	stateCalls  int
+	// headCommit is the commit State reports the request carrying, where a test
+	// needs the forge to say. A forge that says nothing leaves the reader to the
+	// commit the harness itself pushed, which is what most tests want.
+	headCommit string
 	// ensureResets and mergeResets are how many times the connection carrying
 	// that call drops before it goes through. They are the failure that killed
 	// four runs on 2026-09-03: nothing about the request reached the forge, so
@@ -1464,9 +1468,9 @@ func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) 
 	f.stateCalls++
 	url := fmt.Sprintf("https://example.invalid/pull/%d", f.number)
 	if !f.merged || f.stateCalls <= f.openReplies {
-		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued}, nil
+		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued, HeadCommit: f.headCommit}, nil
 	}
-	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true}, nil
+	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true, HeadCommit: f.headCommit}, nil
 }
 
 var _ PullRequests = (*fakeForge)(nil)
@@ -2173,6 +2177,9 @@ type queuedFixture struct {
 	worktrees func(ReconcileWorktrees) ReconcileWorktrees
 	// sleep takes the backoff without taking the time.
 	sleep func(context.Context, time.Duration) error
+	// docket is the triage docket the sweep dockets and settles publications on,
+	// where a test reads it; a fixture that sets none sweeps without one.
+	docket *memoryDocket
 }
 
 func newQueuedFixture(t *testing.T) queuedFixture {
@@ -2234,13 +2241,17 @@ func (f queuedFixture) reconciler(t *testing.T) Reconciler {
 	if f.worktrees != nil {
 		worktrees = f.worktrees(worktrees)
 	}
-	return Reconciler{
+	reconciler := Reconciler{
 		Tracker:   f.tracker,
 		Worktrees: worktrees,
 		Store:     f.store,
 		Publisher: f.forge,
 		Sleep:     f.sleep,
 	}
+	if f.docket != nil {
+		reconciler.Docket = docketerOverStore(f.docket, f.store, docketConfig())
+	}
+	return reconciler
 }
 
 // A repository with no remote reports the same thing on every pass. A resumed

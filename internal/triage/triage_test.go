@@ -250,6 +250,34 @@ func TestARenderedEntrySaysWhatTriageHasAlreadyDecided(t *testing.T) {
 	}
 }
 
+// A stopped or escalated run that published names its request beside its
+// branch, and says what the record last knew the forge did with it: nothing,
+// a merge armed and queued, or merged. A publication entry says all of that
+// below in its own section and gets no second line here.
+func TestARenderedEntryNamesTheRequestARunLeftOnTheForge(t *testing.T) {
+	t.Parallel()
+
+	open := stoppedRunEntry()
+	open.Artifacts.PullRequest = 544
+	open.Artifacts.PullRequestURL = "https://forge.invalid/pull/544"
+	if rendered := open.Render(); !strings.Contains(rendered, "Pull request (open on the forge, unmerged, no merge armed): #544 https://forge.invalid/pull/544") {
+		t.Fatalf("rendered entry does not name the open request:\n%s", rendered)
+	}
+	queued := open
+	queued.Artifacts.PullRequestMergeQueued = true
+	if rendered := queued.Render(); !strings.Contains(rendered, "Pull request (open on the forge, merge armed and queued): #544") {
+		t.Fatalf("rendered entry does not say the merge is armed:\n%s", rendered)
+	}
+	merged := queued
+	merged.Artifacts.PullRequestMerged = true
+	if rendered := merged.Render(); !strings.Contains(rendered, "Pull request (merged): #544") {
+		t.Fatalf("rendered entry does not say the request merged:\n%s", rendered)
+	}
+	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "Pull request (") {
+		t.Fatalf("an entry about a run that published nothing names a request:\n%s", rendered)
+	}
+}
+
 // A grant is more than a count of grants, and the rest of it is what the harness
 // already told whoever recorded the decision: how many rounds it came to, and
 // whether the cap cut it. An entry that carried the count alone disagreed with

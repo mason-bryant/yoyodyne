@@ -2298,10 +2298,49 @@ func (s State) Outstanding() bool {
 // separate questions and reading one for the other is what let a settled run's
 // unpublished promotion stop being counted anywhere.
 func (s State) AwaitingForge() bool {
-	if !s.Status.Terminal() || s.Integration == nil || s.PullRequest == nil {
+	if !s.Status.Terminal() || s.Integration == nil {
 		return false
 	}
+	if s.PullRequest == nil {
+		return s.PublicationUnrecorded()
+	}
 	return !s.PullRequest.Merged
+}
+
+// lostPublicationAccount is the clause every account of an unrecorded
+// publication carries, and the one thing that tells such a record from a local
+// promotion: a purely local run promotes and records no request and no failure,
+// so the record itself carries nothing else that says the run was publishing.
+// The account is what the run writes in place of the request it does not hold,
+// and it is written and read through the two functions below so a reader
+// selects on exactly the sentence the writer wrote.
+const lostPublicationAccount = "its record holds no pull request for branch"
+
+// LostPublication is what a publishing run records about a promotion whose
+// pull request it does not hold: the branch, because the branch is the one
+// durable handle the forge can still be asked by, and the sweep, because the
+// sweep is what turns the account into a request on the record.
+func LostPublication(runID, workItemID, targetBranch, branch string) string {
+	return fmt.Sprintf("run %s promoted %s into %s and %s %s, so nothing was asked of the forge; `yoyo reconcile` looks the request up on the forge by that branch, records it, and arms its merge",
+		runID, workItemID, targetBranch, lostPublicationAccount, branch)
+}
+
+// PublicationUnrecorded reports a promotion whose record says it published and
+// holds no request: the run is over, its change is on the target branch, its
+// reviewer approved it, and what stands in place of the request is the account
+// a publishing run writes when it reaches its promotion with none. It is the
+// one reading the docket, the status line, and the recovering sweep all take
+// of that record, so a promotion in this state is named everywhere a
+// publication is before anything has asked the forge about it. The approving
+// verdict is asked for as well as the promotion, because a reader that goes on
+// to publish the change must not infer the approval from the promotion.
+func (s State) PublicationUnrecorded() bool {
+	return s.Status.Terminal() &&
+		s.Integration != nil &&
+		s.PullRequest == nil &&
+		s.ReviewDecision == ReviewApprove &&
+		strings.TrimSpace(s.Branch) != "" &&
+		strings.Contains(s.PublishFailure, lostPublicationAccount)
 }
 
 // Discharges reports whether this run closes its work item. It is the one

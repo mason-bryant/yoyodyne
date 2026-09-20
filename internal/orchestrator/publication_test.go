@@ -302,4 +302,11 @@ func (f *answeringForge) State(_ context.Context, head string) (publish.PullRequ
 	return f.answer, nil
 }
 
+// Merge is never reached from a refresh or a finish: only the recovery of a
+// promotion that recorded no request arms a merge, and none of the records these
+// tests write is one.
+func (f *answeringForge) Merge(context.Context, publish.MergeRequest) (publish.MergeResult, error) {
+	return publish.MergeResult{}, errors.New("answeringForge merges nothing: a refresh only asks")
+}
+
 var _ ReconcilePullRequests = (*answeringForge)(nil)

@@ -1089,6 +1089,65 @@ not take back. A record left alone for a reason, such as a branch the forge
 answers about with some other request, is reported and is not a failure; a forge
 that could not be reached is, and the next sweep asks the same question again.
 
+Before either of those, the sweep looks for the one publication neither can see:
+**a promoted run whose record names no pull request at all.** Everything above
+starts from the request on the record — the docket keys a publication entry to
+it, the heartbeat counts what awaits the forge from it, the re-arm repeats it —
+so a publishing run that promoted a change and recorded no request would be a
+change the forge holds that no surface reports. Three things close that. The run
+itself refuses to be that record: a publishing run that reaches its promotion
+with no request on its record writes a `Publication outstanding` line naming the
+branch and saying nothing was asked of the forge, rather than finishing quietly,
+and a run whose summary names a request its durable record does not hold — or
+holds in a different arming state — is refused completion outright and recorded
+as failed. That line is what the docket and the status line then read, before
+any sweep has asked the forge: the promotion is docketed as a publication keyed
+to the run alone, since there is no number, naming the branch and carrying the
+account, and it is counted as awaiting the forge with the harness named as the
+mover — so a forge that turns out to hold no request for the branch leaves a
+promotion every surface still names, not one only a sweep's stderr does. And the
+sweep asks the forge by the run's branch, which is the one durable handle it has
+left, writes the request the forge holds onto the record — number, state, and
+whether a merge is queued for it — and then makes the merge request the run
+itself never made. That is the run's own merge made late, on the run's own
+evidence and through the run's own gate: the record has to carry the promotion
+and the approving verdict, and the verdict is read off the record by the sweep
+before it asks rather than inferred from the promotion beside it; the request's
+head has to be the promoted commit; the remote target has to pass the same
+pre-merge check the run's merge makes; and the request is pinned to that commit,
+made by the same method, under the target branch's promotion lease.
+The forge's answer is recorded as a queued merge on either answer, exactly as a
+re-arm records one — and the record is written only with that answer, so a
+sweep interrupted between finding the request and arming it leaves the record
+as the run wrote it for the next sweep to ask again, rather than a request
+beside a line saying none is held — and the next sweep settles the run on what
+the forge does with it — confirms the merge, records the merge commit, catches your local
+branch up, deletes the consumed branch, and closes the docket entry the
+promotion had open. A request the forge has already merged, or already holds a
+merge for, needs no arming: something has asked the forge, so the account of
+the loss is replaced in the same write that records the request — with nothing,
+for a merge the forge holds, since settling it writes what became of it; and for
+a merge the forge has performed, with the line every unconfirmed merge carries,
+so the finishing above confirms it on the remote and records the merge commit
+exactly as it finishes a merge the run itself could not confirm; a request
+whose head has moved, a remote target that no longer passes the check, or a
+merge the forge refuses is recorded as the dropped merge it is, which puts it on
+the docket for triage and holds the item exactly as a drop the run itself met.
+The sweep never repeats a merge the forge dropped: that is still `yoyo triage
+rearm`, a decision, once. A forge that holds no request for the branch leaves the
+record as the run wrote it, and the sweep says so on every pass it stands. What
+the sweep, the docket, and the status line select on is that account and only
+that account — a promoted run that recorded it, with the approving verdict
+beside it — and not the bare shape of a promotion with no request on its
+record: the record carries nothing else that tells a local promotion from a
+publishing one, and every promotion of that bare shape the store held when this
+was built was a local one from before publishing existed. A record that lost its
+request by some path that wrote neither the account nor went through the run's
+own completion is therefore not recovered by this, and is not claimed to be.
+docs/diagnoses/yoyodyne-ifd-402-publication-record-not-lost.md is the account
+of the two runs this was built on, neither of which turned out to have lost
+anything.
+
 The same sweep recovers the [exchanges the roles have put to each
 other](conversation.md#roles-asking-each-other-things), for the reason it settles
 the runs: a process died holding something, and this is what finds out. Each
@@ -1519,10 +1578,12 @@ Needs a human (3):
   listed is one that is not. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
   derivation, and each says whose move it is: the forge's while it holds the
-  merge queued, the development manager's once it has dropped one, and the
-  operator's for a request nothing ever asked it to merge. All three leave the
-  line the moment the forge records the merge and
-  [`yoyo reconcile`](#recovering-interrupted-runs) settles it.
+  merge queued, the development manager's once it has dropped one, the
+  operator's for a request nothing ever asked it to merge, and the harness's for
+  a promotion whose record holds no request at all — the next
+  [`yoyo reconcile`](#recovering-interrupted-runs) looks the request up by the
+  run's branch and arms its merge. All four leave the line the moment the forge
+  records the merge and `yoyo reconcile` settles it.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident

@@ -44,15 +44,29 @@ type ReconcileWorktrees interface {
 	// only unregisters checkouts that are no longer on disk.
 	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree, uncommitted gitworktree.UncommittedWork) (gitworktree.WorktreeRemoval, error)
 	PruneRegistrations(ctx context.Context) (gitworktree.Prune, error)
+	// PushRemote names the remote run branches are published to, which is the
+	// one fact a recovered publication record needs that the forge cannot
+	// answer: the forge knows the request and the branch, and the record says
+	// which remote carries that branch.
+	PushRemote() string
+	// VerifyRemoteTarget is the pre-merge check on the remote target that the
+	// run's own merge made, made again by the sweep that arms the merge a run
+	// recorded no request for. It reads and moves nothing.
+	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
-// forge now says about a pull request whose merge it queued. It can only ask,
-// never merge, and that is the point — a queued merge the forge dropped means a
-// requirement went unmet, and satisfying it is a person's work rather than
-// something a sweep should force.
+// forge now says about a pull request whose merge it queued, and the one merge
+// request a sweep may make. It never repeats a merge the forge dropped — a drop
+// means a requirement went unmet, and satisfying it is a person's work rather
+// than something a sweep should force, which is why the re-arm is a triage
+// decision and not a sweep. What it may ask for is the merge a promoted run's
+// approving verdict authorized and the run never asked for, because its record
+// held no request to ask with: that is the run's own merge made late, on the
+// run's own evidence, and not a decision about a refusal.
 type ReconcilePullRequests interface {
 	State(ctx context.Context, head string) (publish.PullRequest, error)
+	Merge(ctx context.Context, request publish.MergeRequest) (publish.MergeResult, error)
 }
 
 // ReconcileStore is the durable run state reconciliation reads and settles.
@@ -551,6 +565,18 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
 	result.Catchup = catchup
+	// A publication entry this merge had open — a promotion docketed with no
+	// request on its record, whose merge the recovering sweep then armed — is
+	// closed by the settlement that finished it, for the reason the finishing
+	// sweep closes its own: left open it would say a publication needs a person
+	// while the record says nothing about it is outstanding, and a docket rebuilt
+	// from the record would never re-derive it. A leftover the deletion wrote
+	// keeps the entry open, exactly as it does on the finishing sweep.
+	if err == nil && state.PublishFailure == "" && r.Docket != nil {
+		if _, docketErr := r.Docket.SettlePublication(state, settledPublicationReason(state)); docketErr != nil {
+			result.DocketProblem = docketErr.Error()
+		}
+	}
 	return result, err
 }
 
