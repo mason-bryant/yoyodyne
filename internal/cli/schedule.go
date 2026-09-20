@@ -14,7 +14,8 @@ package cli
 // on stopped work having an owner before it becomes what an operator gets
 // without asking for it. One stoppage has one now — a run that failed
 // independent review after every permitted attempt is put in front of the
-// development manager by the pass itself, one per pull — and the rest of them,
+// development manager by the pass itself, one per pull, and the repair or the
+// re-run she decides about it is fired by the pass too — and the rest of them,
 // a failing check and a refused path and a replay conflict among them, still
 // wait on somebody reading the docket. `--until-drained` states today's default
 // out loud so that flipping it is one line here rather than a behaviour change
@@ -666,12 +667,16 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		summons = trigger
 	}
 	return orchestrator.Pull{
-		Tracker:    tracker,
-		Runs:       parts.store,
-		Stoppages:  parts.store,
-		Decisions:  parts.store.Triage(),
-		Remains:    remainsOf(parts),
-		Intake:     parts.intake,
+		Tracker:   tracker,
+		Runs:      parts.store,
+		Stoppages: parts.store,
+		Decisions: parts.store.Triage(),
+		Remains:   remainsOf(parts),
+		Intake:    parts.intake,
+		// The same pause every run and every turn reads. The pass enforces nothing
+		// with it; it is what tells the pass not to attempt, on every poll of a
+		// pause, a decision the pause has already stopped once.
+		Holds:      parts.holds,
 		Directives: parts.directives,
 		Staleness: repositoryStaleness{
 			repository: parts.repository,
@@ -698,6 +703,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// reason escalate.go gives: a delivery is a conversation turn, and a run
 		// waiting out one would hold a developer slot open on its way out.
 		Escalations: escalatorFrom(parts, configPath, stderr),
+		// And where the decision she records about it is fired. It is wired beside
+		// the delivery because the two are the same loop seen at its two ends: the
+		// pull puts a stoppage to her, and the pull carries out what she decided
+		// about it, with nobody typing a verb between them.
+		CarryOut: carryOutFrom(parts),
 		// The tree an item's stated prerequisites are read against, and where an
 		// item that does not meet them is routed. The tree is the primary checkout
 		// rather than a worktree, because what the check is about is what a run cut
@@ -833,9 +843,7 @@ this time; a merge she decided to wait on is back on the docket she reads once
 it has been sitting there for another triage.stuck_merge_age, though the pass
 delivers no publication. She
 decides there and the decision is recorded against the item's triage budget
-exactly as it is when somebody brings her a stoppage by hand; nothing is carried
-out by this, so "yoyo triage repair" and "yoyo triage rerun" still act on what
-she decided. A turn that may have reached her and then failed is made again a
+exactly as it is when somebody brings her a stoppage by hand. A turn that may have reached her and then failed is made again a
 quarter of an hour later, three times in all, and
 then left for a person. One that provably reached her with nothing -- her
 conversation could not be opened, the provider had no capacity -- keeps its
@@ -845,6 +853,23 @@ like any other provider call and --budget counts what it spent; holding intake
 does not stop it, because the judgment a held queue is waiting on is what the
 delivery produces. What it did, and anything still waiting on a person, is on the
 pass.
+
+Every pull also carries out one of the decisions she recorded. A repair or a
+re-run she settled a stoppage with is fired by the pass itself, oldest decision
+first, one per pull, taking a developer slot exactly as a pulled item does -- so
+recording a decision is what causes it and nobody types a verb. "yoyo triage
+repair" and "yoyo triage rerun" still work and are what fires one now rather than
+at the next pass. Every gate those verbs ask refuses this the same way: your pause,
+your intake hold, the item's own triage budgets, developer capacity, and the
+preserved worktree being what a continued developer could be handed back. Nothing
+is spent by a refusal, and every refusal is written onto the item's triage record
+and onto the docket entry she reads, naming the gate and what would clear it -- so
+a decision that cannot be carried out says so where she is looking rather than
+sitting silently. A re-arm is not carried out by the pass: "yoyo triage rearm"
+is still typed. A gate that stops one item is retried at a paced interval
+rather than every poll; one that stops everything at once -- your pause, your
+intake hold, a full harness -- is attempted once while it stands, so the docket
+says so, and again on the first pull after it opens.
 
 Every pull also wakes a role whose block of tracker actions the harness refused.
 A block it cannot read is refused whole, so nothing in it happens and the queue

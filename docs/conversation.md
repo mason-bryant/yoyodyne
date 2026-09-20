@@ -1188,7 +1188,10 @@ re-runs, and merge re-arms recorded beside the caps that refuse the next one,
 what a grant came to and whether the round cap cut it down, what the item now
 stands committed to, and which of those decisions the harness has carried out.
 Where a further decision would be refused, the entry says so and says which
-budget refuses it. That is what stops a decision already recorded from reading
+budget refuses it. Where the harness tried to carry a decision out and a gate
+stopped it, the entry says that too — which gate, what it said, and what would
+clear it — so a decision recorded days ago and still not fired is visible on the
+entry rather than only in the silence. That is what stops a decision already recorded from reading
 as an entry nobody has looked at — the reading that had one authorized recovery
 decided a second time, and then paid for by a round-trip on every docket after
 it.
@@ -1224,7 +1227,17 @@ nothing has happened to since stays settled. **A decision to `wait` is the one t
 settling anything**: it says the forge still has the merge, so the entry comes
 back once the merge has been sitting there for another
 [`triage.stuck_merge_age`](configuration.md#triage-thresholds), carrying what
-was decided last time so whoever gets it knows they have seen it.
+was decided last time so whoever gets it knows they have seen it. **A repair or
+a re-run the harness tried to carry out and could not comes back the same way**:
+the entry is listed again carrying the decision she made and the gate that
+stopped it — which gate, what it said, and what would clear it — so a decision
+she recorded that is not happening is read as exactly that rather than as a
+stoppage nobody has looked at. What it asks of her is the gate; deciding the
+same stoppage again is what the budgets refuse. One waiting on a gate that
+clears by itself — your pause, your intake hold, a full harness — is listed
+worded as waiting, and it leaves the docket again the moment the decision
+fires, whichever hand fires it. [Recording a decision is what causes
+it](#deciding-what-becomes-of-stopped-work) says what fires one.
 
 Finding a publication nobody merged is a scan rather than an event, because
 nothing happening is not something anything can be present for. Two things scan:
@@ -1351,6 +1364,18 @@ about a publication rather than a run: it repeats the merge request the forge
 dropped. A fourth action, `yoyo triage resume`, carries out no decision at all,
 and [the paragraph on it below](#resuming-an-approved-change-the-environment-stopped)
 says why there is none to carry out.
+
+Neither of the first two waits on being typed. A watching `yoyo work` session
+fires a recorded repair or re-run itself, one per pull, oldest first, through
+these same two actions and under every condition each of them asks — so
+recording the decision is what causes it, and the verbs are what fires one *now*
+rather than at the next pull. A re-arm is still typed: it is the one decision the
+pass does not carry out. Every refusal is written onto the item's own triage record and shown on the
+docket entry the development manager reads, naming which gate refused and what
+would clear it, so a decision that cannot be carried out says so where she is
+already looking. Before that existed, thirty-three items stood decided and
+unfired, some for days, because the only executor was somebody typing one of these
+two commands.
 
 `yoyo triage rerun <run-id>` starts a fresh run of the item whose stopped run the
 docket entry names — the case where the ground moved under a change that was

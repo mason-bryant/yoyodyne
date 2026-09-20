@@ -430,6 +430,12 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	result.RepairBudget = continued.RepairBudget(c.ConfiguredAttempts)
 	result.RepairAttempts = continued.RepairAttempts
 	result.Continued = true
+	// The finding a refused carry-out left is taken back here, once the re-entry is
+	// recorded and before the run goes: a finding that stood for the length of the
+	// run would have the docket say the decision is not happening while it runs.
+	if problem := clearCarryOutFinding(ctx, c.Decisions, entry.WorkItemID, prior.RunID, c.now()); problem != "" {
+		result.RecordProblem = problem
+	}
 	// The lease is given up before the run is continued, because continuing it is
 	// the pipeline adopting the same run: holding it here would refuse the very
 	// process this action exists to start.
@@ -592,12 +598,13 @@ func continuableItem(item beads.WorkItem, workItemID string) error {
 	switch item.Status {
 	case "open", "in_progress", "blocked":
 	default:
-		return fmt.Errorf("work item %s status is %q, so it is not one a stopped run may be continued on; nothing was spent, so the same decision is carried out by asking again once it is", item.ID, item.Status)
+		return fmt.Errorf("%w: work item %s status is %q, so it is not one a stopped run may be continued on; nothing was spent, so the same decision is carried out by asking again once it is",
+			ErrItemNotStartable, item.ID, item.Status)
 	}
 	blockers := blockingDependencies(item)
 	if len(blockers) > 0 {
-		return fmt.Errorf("work item %s is blocked by: %s; nothing was spent, so the same decision is carried out by asking again once they are closed",
-			item.ID, strings.Join(blockers, ", "))
+		return fmt.Errorf("%w: work item %s is blocked by: %s; nothing was spent, so the same decision is carried out by asking again once they are closed",
+			ErrItemNotStartable, item.ID, strings.Join(blockers, ", "))
 	}
 	return nil
 }

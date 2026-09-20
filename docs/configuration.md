@@ -4116,10 +4116,11 @@ repair grant cap of 2 and a review round cap of 5
 **It carries nothing out.** Recording an override changes what the guards will
 permit and nothing else. The development manager then records the decision the
 escalation was about, which spends the item's budget exactly as it always did, and
-`yoyo triage rerun` or `yoyo triage repair` carries that decision out under every
-condition either already asks — the intake hold, the stoppage being over, the item
-being one a run may start on, a free developer slot. Crossing a cap and spending
-it are two decisions and stay two.
+the next scheduling pass carries that decision out — or `yoyo triage rerun` or
+`yoyo triage repair` fires it now — under every condition either already asks:
+the intake hold, the stoppage being over, the item being one a run may start on,
+a free developer slot. Crossing a cap and spending it are two decisions and stay
+two.
 
 **These budgets are per machine.** Two collaborators running their own harnesses
 against one repository each hold a full set for the same item, so a cap of one is

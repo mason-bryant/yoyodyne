@@ -161,9 +161,18 @@ type RerunRuns interface {
 // item whose record holds no re-run decision about this stoppage is an item
 // nobody decided this about.
 //
+// It also takes back the finding a refused carry-out left about the stoppage,
+// the moment the decision is carried out. The clearing lives here rather than in
+// the pass that fires decisions because this action is the one thing every
+// carry-out goes through — the pass and the typed verb alike — and a finding
+// cleared only by one of them is a finding the other leaves standing over a run
+// that is happening, which reads exactly like the silence the finding exists to
+// end.
+//
 // It is satisfied by runstate.TriageStore.
 type RerunDecisions interface {
 	Counters(workItemID string) (runstate.TriageCounters, error)
+	ClearCarryOut(ctx context.Context, workItemID, runID string, at time.Time) (runstate.TriageCounters, error)
 }
 
 // RerunRecords is where the one re-run a docketed stoppage gets is claimed and
@@ -387,6 +396,11 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	result.Preserved = claimed.Preserved
 
 	result.Started = true
+	// The finding a refused carry-out left is taken back here, at the claim rather
+	// than after the run: a finding that stood for the length of the run would have
+	// the docket say the decision is not happening while it runs. A refusal past
+	// this point writes a fresh finding of its own.
+	result.note(clearCarryOutFinding(ctx, r.Decisions, entry.WorkItemID, entry.RunID, r.now()))
 	outcome, runErr := r.Start(ctx, entry.WorkItemID, runstate.Selection{
 		By:     runstate.SelectedByDevelopmentManager,
 		Reason: result.Reason,
@@ -565,6 +579,13 @@ func unspentRefusal(err error) error {
 	return fmt.Errorf("%w; nothing was claimed, so the stoppage keeps its re-run — asking again once that is no longer so carries out the same decision", err)
 }
 
+// ErrItemNotStartable is what a triage carry-out refused for the work item's own
+// state unwraps to, so a caller can tell "somebody has to put the item back" from
+// a tracker that would not answer without matching on the words of either. It is
+// shared by both carry-outs because it is one condition: a blocked item is
+// neither one a fresh run may start on nor one a stopped run may be resumed on.
+var ErrItemNotStartable = errors.New("the work item is not in a state a run may start or resume on")
+
 // itemCanBeRun reports the work item being in a state a fresh run may start on,
 // which for a docketed stoppage ordinarily means somebody has put it back: a run
 // that stopped on a durable blocker blocked its item, and a blocked item is not
@@ -581,7 +602,8 @@ func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
 		return fmt.Errorf("read the work item the stoppage is about: %w", err)
 	}
 	if err := validateReadyItem(item, workItemID); err != nil {
-		return fmt.Errorf("%w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision", err)
+		return fmt.Errorf("%w: %w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision",
+			ErrItemNotStartable, err)
 	}
 	return nil
 }
@@ -792,6 +814,24 @@ func (result *RerunResult) note(problem string) {
 	default:
 		result.RecordProblem += "; " + problem
 	}
+}
+
+// clearCarryOutFinding takes back the finding a refused carry-out left about one
+// stoppage, now that its decision is being carried out, and reports what it could
+// not do. A finding standing over a decision that has been acted on is the worst
+// kind: it reads exactly like the condition the finding exists to report. The
+// write is made under a context detached from the action's own, for the reason
+// every record written as a run starts is: a shutdown that lands here cancels the
+// very context the action ran under.
+func clearCarryOutFinding(ctx context.Context, decisions RerunDecisions, workItemID, runID string, at time.Time) string {
+	write, stopWriting := recordContext(ctx)
+	defer stopWriting()
+	if _, err := decisions.ClearCarryOut(write, workItemID, runID, at); err != nil {
+		return fmt.Sprintf(
+			"the decision is being carried out and the finding a previous attempt left on %s's triage record could not be cleared, so the docket still says this decision is not happening: %v",
+			workItemID, err)
+	}
+	return ""
 }
 
 // retire removes what the stopped run preserved, now that the fresh run has
