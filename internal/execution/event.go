@@ -123,6 +123,15 @@ const (
 	// recorded because it changes what the agent is reasoning from, which is
 	// otherwise the one thing about a conversation its log would not say.
 	EventContextRefreshed EventType = "context.refreshed"
+	// How old that picture was, in landings on the target branch, measured
+	// before each reply and recorded with what the harness did about it: nothing,
+	// a refresh, or a reply that states its own age because the refresh could
+	// not be made. It is recorded every reply rather than only when something was
+	// done, because the age of the picture a reply was built from is what a
+	// reader holding the reply against the repository needs, and a log that said
+	// so only when the age was past a threshold would leave every other reply's
+	// unstated.
+	EventContextMeasured EventType = "context.measured"
 	// A directive the operator gave is recorded for the whole product rather than
 	// for this conversation, and enforced from there. These say that it passed
 	// through here: what was directed, and what settled it afterwards. Neither is

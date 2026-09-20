@@ -296,6 +296,19 @@ triage:
 exchange:
   max_rounds: %d
 
+# How far behind the target branch a management conversation's picture of the
+# repository may fall before the harness re-reads it. The product manager, the
+# architect, and the development manager are briefed once, when a conversation
+# opens, and every later turn resumes a session that already holds that
+# briefing; before each reply the harness counts the landings on the target
+# branch since it was taken and, past this many, re-reads the repository and
+# the tracker before answering. Where the re-read cannot be made the reply says
+# in its own text how many landings old its picture is. This times the re-read
+# and does not switch it off: it may not be zero, and it may not be more than
+# %d.
+conversation:
+  refresh_after_landings: %d
+
 # What you approve, and what runs without asking. The brief and the goals are
 # "human" deliberately: they are what you state, and everything else traces back
 # to them. "yoyo artifact approve <id>" records your approval in the document's
@@ -353,6 +366,8 @@ approvals:
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,
 		effective.Exchange.MaxRounds,
+		MaxRefreshAfterLandings,
+		effective.Conversation.RefreshAfterLandings,
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,

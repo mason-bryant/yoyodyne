@@ -3332,6 +3332,43 @@ allowed, however many exchanges it spreads them over. That bounds a reply
 opening thread after thread, which is a different question from how long one
 thread may run.
 
+## How far behind a conversation's picture may fall
+
+The product manager, the architect, and the development manager are briefed
+once, when a conversation opens, and every later turn resumes a session that
+already holds that briefing. Before each reply the harness counts the landings
+on the target branch since the picture was taken and records the count on the
+conversation; past this many it re-reads the repository and the tracker before
+the turn is answered, the way [`/refresh`](conversation.md#how-fresh-the-conversations-picture-is-and-how-to-refresh-it)
+does when you ask:
+
+```yaml
+conversation:
+  refresh_after_landings: 20   # landings on the target branch before a turn re-reads
+```
+
+**It is measured in landings, not hours.** A branch that took fifty commits in a
+morning has moved further under a conversation than one that took none in a
+week, and the number a role would have to state about its picture — what the
+repository holds that the picture does not — is the count, so the count is what
+the threshold is in. The picture records the commit it was taken against, and
+the comparison is `git rev-list --count` from that commit to `HEAD` in the
+primary checkout, whose current branch is the integration target every run is
+promoted into.
+
+**It times the re-read and does not switch it off.** Zero is refused, since a
+picture allowed no landings behind is re-read on every turn, and so is anything
+above 200: the case that admitted this was a picture roughly five hundred
+landings old advising the operator to add a section a file had opened with for
+a month, and a threshold that let one be advised from unrefreshed would be this
+file disabling the statement it is only meant to time. Where the re-read cannot
+be made — the tracker locked, the repository not answering — the reply carries
+its picture's age in its own text, and no value here reaches that either. The
+number is a judgement about your project's pace: how many landings a
+conversation may reason across before what it does not know it does not know
+is worth the cost of re-briefing it, which is the whole briefing carried into
+the turn again.
+
 ## Queueing a question, or holding it on a side thread
 
 A conversation takes its turns one at a time. That is what stops two processes

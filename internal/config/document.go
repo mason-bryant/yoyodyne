@@ -21,16 +21,20 @@ import (
 // silently ignored, so a typo in an override fails closed instead of leaving
 // the inherited value quietly in place.
 type configDocument struct {
-	Version   *int                     `yaml:"version"`
-	Extends   *string                  `yaml:"extends"`
-	Product   *productDocument         `yaml:"product"`
-	Execution *executionDocument       `yaml:"execution"`
-	Triage    *triageDocument          `yaml:"triage"`
-	Exchange  *exchangeDocument        `yaml:"exchange"`
-	Research  *researchDocument        `yaml:"research"`
-	Approvals *approvalsDocument       `yaml:"approvals"`
-	Checks    *[]string                `yaml:"checks"`
-	Agents    map[string]agentDocument `yaml:"agents"`
+	Version   *int               `yaml:"version"`
+	Extends   *string            `yaml:"extends"`
+	Product   *productDocument   `yaml:"product"`
+	Execution *executionDocument `yaml:"execution"`
+	Triage    *triageDocument    `yaml:"triage"`
+	Exchange  *exchangeDocument  `yaml:"exchange"`
+	// Conversation is absent from every file written before the picture's age
+	// was measured, which leaves those projects at the harness default: the
+	// measurement is not something a layer opts into, only something it times.
+	Conversation *conversationDocument    `yaml:"conversation"`
+	Research     *researchDocument        `yaml:"research"`
+	Approvals    *approvalsDocument       `yaml:"approvals"`
+	Checks       *[]string                `yaml:"checks"`
+	Agents       map[string]agentDocument `yaml:"agents"`
 	// Operators replaces an inherited mapping entirely rather than merging into
 	// it, for the reason the check list does and the allow-list it absorbed did:
 	// who may act is a decision, and a mapping silently assembled from two layers
@@ -126,6 +130,10 @@ type triageDocument struct {
 
 type exchangeDocument struct {
 	MaxRounds *int `yaml:"max_rounds"`
+}
+
+type conversationDocument struct {
+	RefreshAfterLandings *int `yaml:"refresh_after_landings"`
 }
 
 // researchDocument is absent from every file written before research existed,

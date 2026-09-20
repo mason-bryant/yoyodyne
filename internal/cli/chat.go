@@ -76,6 +76,12 @@ type chatOutput struct {
 	// commit, the path, and the time, and reported here for the reason the
 	// research is: what a reply's advice rests on is the operator's to see.
 	RepositoryReads []chat.RepositoryRound `json:"repository_reads,omitempty"`
+	// Picture is how old the picture of the repository the reply was answered
+	// from was, in landings on the target branch, and what the harness did about
+	// it. It is reported for the reason the reads are: what a reply's advice
+	// rests on is the operator's to see, and a re-read the harness made unasked
+	// is one they have to be told about.
+	Picture *chat.PictureAge `json:"picture,omitempty"`
 	// ResultsCarriedOver reports that the reply stopped where it did because the
 	// product manager ran out of rounds of tracker actions, with results it has
 	// not seen. They are recorded with the conversation and reach it when the
@@ -240,6 +246,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Exchanges:          reply.Exchanges,
 			Research:           reply.Research,
 			RepositoryReads:    reply.RepositoryReads,
+			Picture:            reply.Picture,
 			Evaluation:         reply.Evaluation,
 			EvaluationProblem:  reply.EvaluationProblem,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
@@ -255,6 +262,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
 	printChatResearch(stdout, reply.Research)
 	printChatRepositoryReads(stdout, reply.RepositoryReads)
+	printChatPicture(stdout, reply.Picture)
 	printChatEvaluation(stdout, reply.Evaluation, reply.EvaluationProblem)
 	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
@@ -707,9 +715,13 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,
 		// like the work it steers.
-		Ground:       ground,
-		RedactValues: parts.redactValues,
-		Fresh:        fresh,
+		Ground: ground,
+		// And how far behind the target branch that picture may fall before a
+		// turn re-reads it unasked. It is the project's number for when, read from
+		// the configuration that refused any value that would mean never.
+		RefreshAfterLandings: cfg.Conversation.RefreshAfterLandings,
+		RedactValues:         parts.redactValues,
+		Fresh:                fresh,
 	})
 	if err != nil {
 		return nil, nil, errors.Join(err, hold.Release())
@@ -911,6 +923,9 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		// travel with the failure for the same reason the actions do.
 		output.Research = reply.Research
 		output.RepositoryReads = reply.RepositoryReads
+		// The picture's age was measured and recorded before the turn was taken,
+		// so it travels with the failure for the same reason.
+		output.Picture = reply.Picture
 		output.Evaluation = reply.Evaluation
 		output.EvaluationProblem = reply.EvaluationProblem
 		output.ResultsCarriedOver = reply.ResultsCarriedOver
@@ -930,6 +945,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
 	printChatResearch(stdout, output.Research)
 	printChatRepositoryReads(stdout, output.RepositoryReads)
+	printChatPicture(stdout, output.Picture)
 	printChatEvaluation(stdout, output.Evaluation, output.EvaluationProblem)
 	printChatExchanges(stdout, role, output.Exchanges)
 	printChatAdmitted(stdout, output.Admitted)
@@ -1093,6 +1109,21 @@ func printChatRepositoryReads(writer io.Writer, rounds []chat.RepositoryRound) {
 	for _, round := range rounds {
 		fmt.Fprint(writer, round.Render())
 	}
+}
+
+// printChatPicture says what the harness did about the age of the picture the
+// reply was answered from, where it did anything: a current picture prints
+// nothing, for the reason the render prints nothing.
+func printChatPicture(writer io.Writer, picture *chat.PictureAge) {
+	if picture == nil {
+		return
+	}
+	rendered := picture.Render()
+	if rendered == "" {
+		return
+	}
+	fmt.Fprintln(writer)
+	fmt.Fprint(writer, rendered)
 }
 
 // printChatEvaluation names the recommendation that went into the record, and

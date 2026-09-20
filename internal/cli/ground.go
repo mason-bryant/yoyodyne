@@ -523,6 +523,14 @@ func (g conversationGround) Movement(ctx context.Context, since chat.Briefing) c
 // was taken. It counts against the recorded commit rather than against a time,
 // because that is the exact question — what does HEAD hold that the picture did
 // not — and a commit's own date answers a different one.
+//
+// HEAD here is the target branch. The repository is the primary checkout, whose
+// current branch is what every automatic run is written against and promoted
+// into, so what this counts is landings on the integration target — which is
+// the unit the conversation's refresh threshold is measured in. A checkout
+// somebody has left on another branch counts what that branch holds past the
+// picture's commit instead, which is the same answer a run started from it
+// would be given for its target.
 func (g conversationGround) commitsSince(ctx context.Context, commit string) (int, error) {
 	if strings.TrimSpace(commit) == "" {
 		return 0, errors.New("the commit it was gathered at was not recorded")

@@ -391,7 +391,7 @@ const maxDescribeBytes = 160
 // turn, because unlike research there is nothing here a project configures.
 const Contract = `# Reading the repository
 
-You have no filesystem and never will, and one thing stands in for it: you may name a repository path and the harness reads it for you. It resolves the path against the tree of one recorded commit — HEAD as it stands at that moment, never the working tree — and hands you what is there as evidence, recording on this conversation which commit, which path, and when. The picture you were briefed with was taken once and does not move; a read is how you look at the repository as it is now before you advise about it, and advice about a file you have not read this way is advice about a picture whose age you should state.
+You have no filesystem and never will, and one thing stands in for it: you may name a repository path and the harness reads it for you. It resolves the path against the tree of one recorded commit — HEAD as it stands at that moment, never the working tree — and hands you what is there as evidence, recording on this conversation which commit, which path, and when. The picture you were briefed with was taken once and moves only when the harness re-briefs you — which it does before a turn once the target branch has landed more than the project's threshold since it was taken, telling you so and how far it had fallen behind — so between re-briefings a read is how you look at the repository as it is now before you advise about it, and advice about a file you have not read this way is advice about a picture whose age you should state.
 
 To read, end your reply with exactly one block, after the prose:
 
