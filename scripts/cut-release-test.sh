@@ -96,13 +96,14 @@ fabricate() {
   chmod +x "$project/bin/yoyo"
 
   # A stub notes writer, so the notes gate is exercised without a tracker. The
-  # real scripts/release-notes.sh reads bd and renders with python3; what
-  # cut-release.sh needs from it is that it writes docs/releases/<tag>.md under
-  # its own repository and says whether it could, and that is what this does.
+  # real scripts/release-notes.sh reads the tracker's export and renders with
+  # python3; what cut-release.sh needs from it is that it writes
+  # docs/releases/<tag>.md under its own repository and says whether it could,
+  # and that is what this does.
   if [ "$notes" = "draft-red" ]; then
     cat > "$project/scripts/release-notes.sh" <<'SH'
 #!/usr/bin/env bash
-echo "release-notes: bd is not installed" >&2
+echo "release-notes: .beads/issues.jsonl is not here" >&2
 exit 1
 SH
   else
@@ -494,7 +495,7 @@ step "a cut whose notes cannot be drafted refuses rather than cutting without th
 project="$(fabricate undraftable-notes green green draft-red)"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "notes could not be drafted" "refuses the cut"
-contains "$output" "bd is not installed" "the drafting failure is shown rather than swallowed"
+contains "$output" ".beads/issues.jsonl is not here" "the drafting failure is shown rather than swallowed"
 missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
 if [ -z "$(tags "$project")" ]; then
   pass "no tag was written"

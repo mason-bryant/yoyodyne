@@ -31,8 +31,8 @@ import (
 const cutReleaseTestPath = "../../scripts/cut-release-test.sh"
 
 // releaseNotesTestPath is the notes writer's own suite, and the release page
-// body composer's with it. It fabricates a scratch repository and a stub
-// tracker, so this repository's real history and real tracker are never read —
+// body composer's with it. It fabricates a scratch repository and a tracker
+// export, so this repository's real history and real export are never read —
 // which is what makes its assertions about a range stable enough to run here.
 const releaseNotesTestPath = "../../scripts/release-notes-test.sh"
 

@@ -42,8 +42,10 @@ var namesTheOtherOwnerOnPurpose = map[string]string{
 }
 
 // Directories whose files are records of something rather than the install
-// path: what the tracker itself writes, and diagnoses of what was.
-var recordsRatherThanInstallPath = []string{".beads/", "docs/diagnoses/"}
+// path: what the tracker itself writes, diagnoses of what was, and a release's
+// notes, which carry each closed work item's description verbatim -- the item
+// that asked for the home to be settled names both homes in its own.
+var recordsRatherThanInstallPath = []string{".beads/", "docs/diagnoses/", "docs/releases/"}
 
 // TestEveryBeadsHomeThisRepositoryNamesIsTheCanonicalOne is the gate on the
 // install path naming one Beads home. It sweeps every file this repository
