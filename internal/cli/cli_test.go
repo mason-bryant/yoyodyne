@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -438,6 +439,62 @@ func TestReconcileSaysWhatBecameOfEachRunAndWhatRemainsOfIt(t *testing.T) {
 	}
 	if strings.Contains(printed, "running,") {
 		t.Errorf("stdout = %q, want no ending claimed for a run that has not reached one", printed)
+	}
+}
+
+// One check failing on every queued merge is the forge refusing the whole
+// queue, and for six days in September 2026 the sweep said "queued" once per
+// run and nothing about the check. The forge-wide line says it once per check,
+// naming every merge it holds, and --json carries the same grouping so a script
+// reads it rather than re-deriving it from the runs.
+func TestReconcileSaysWhichCheckIsHoldingTheQueuedMerges(t *testing.T) {
+	t.Parallel()
+
+	results := []orchestrator.Reconciliation{
+		{RunID: "run-first", WorkItemID: "yoyodyne-first", Action: orchestrator.ActionQueued, PullRequest: 487, FailingChecks: []string{"build"}},
+		{RunID: "run-second", WorkItemID: "yoyodyne-second", Action: orchestrator.ActionQueued, PullRequest: 489, FailingChecks: []string{"build"}},
+		// A merge the forge is about to perform is queued and nothing more.
+		{RunID: "run-clean", WorkItemID: "yoyodyne-clean", Action: orchestrator.ActionQueued, PullRequest: 490},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Runs: results}, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if want := `the forge is holding 2 queued merge(s) on the failing check "build": #487, #489`; !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want the forge-wide line %q", stderr.String(), want)
+	}
+	if strings.Count(stderr.String(), "the forge is holding") != 1 {
+		t.Errorf("stderr = %q, want the check said once rather than once per merge", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportReconcileResult(&stdout, &stderr, true, reconcileSweep{Runs: results}, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() --json code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	var output reconcileOutput
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("--json output %q is not JSON: %v", stdout.String(), err)
+	}
+	if len(output.HeldMerges) != 1 || output.HeldMerges[0].Check != "build" ||
+		!slices.Equal(output.HeldMerges[0].PullRequests, []int{487, 489}) ||
+		!slices.Equal(output.HeldMerges[0].WorkItems, []string{"yoyodyne-first", "yoyodyne-second"}) {
+		t.Fatalf("held_merges = %#v, want the one check with the two merges it holds", output.HeldMerges)
+	}
+
+	// A sweep with nothing held says nothing about checks, and carries an empty
+	// list rather than a null.
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportReconcileResult(&stdout, &stderr, true, reconcileSweep{Runs: results[2:]}, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() --json code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"held_merges":[]`) {
+		t.Errorf("--json output = %q, want an empty held_merges list", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "the forge is holding") {
+		t.Errorf("stderr = %q, want nothing said about checks when none holds a merge", stderr.String())
 	}
 }
 

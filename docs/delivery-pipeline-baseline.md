@@ -182,9 +182,9 @@ harness.
 | Phase | What it does | What it writes |
 | --- | --- | --- |
 | `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first | `provider_session_id`, `provider_model`, `provider_resolved_model`, `changes`, `last_sequence` |
-| `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes |
+| `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes; `checks_passed` when every check passes, bound to the attempt and the harness commit it passed over |
 | `reviewing` | One independent review invocation, its own session, no tools, shown the branch's whole diff against the run's recorded base | `review_session_id`, `review_model`, `review_resolved_model`, `review_base_commit`, `review_head_commit`, `review_decision`, `review_approves`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
-| `integrating` | Under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
+| `integrating` | Reads the gate off the record first — `checks_passed` for exactly this attempt and commit, no `check_failure` or `path_refusal` standing, an approving verdict — and refuses without it, before the lease is taken; then, under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
 | `completing` | Record the outcome on the item, settle it — closed when the change discharges the item, back in the backlog parked or waiting on a named impediment when it does not — price it | the tracker's record and settlement |
 | `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
 | `complete` | Nothing outstanding | `completed_at` |

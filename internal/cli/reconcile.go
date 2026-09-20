@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ type reconcileOutput struct {
 	// what the forge says, the other finishes what the record says is unfinished.
 	Settlements []orchestrator.PublicationSettlement `json:"settlements"`
 	Convergence orchestrator.Convergence             `json:"convergence"`
+	// HeldMerges is every check the forge reports failing on a queued merge this
+	// sweep found, with the merges it holds. It is derived from the runs above
+	// rather than asked again, and it is reported as one thing because it is one
+	// thing: a check failing on every queued merge is the forge refusing the
+	// whole queue, which no run's own line says.
+	HeldMerges []orchestrator.CheckHold `json:"held_merges"`
 	// Docketed is how many entries this sweep is what put on the triage docket.
 	// It is a count rather than the entries because the docket is read where it
 	// is acted on, which is the development manager's conversation; what this
@@ -262,6 +269,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			Publications: publications,
 			Settlements:  sweep.Settlements,
 			Convergence:  convergence,
+			HeldMerges:   orchestrator.HeldMerges(results),
 			Docketed:     docketed,
 			Supervision:  sweep.Supervision,
 			Stall:        sweep.Stall,
@@ -278,6 +286,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		}
 		if output.Settlements == nil {
 			output.Settlements = []orchestrator.PublicationSettlement{}
+		}
+		if output.HeldMerges == nil {
+			output.HeldMerges = []orchestrator.CheckHold{}
 		}
 		if output.Convergence.Targets == nil {
 			output.Convergence.Targets = []gitworktree.Catchup{}
@@ -344,6 +355,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 				fmt.Fprintf(stderr, "  not docketed: %s\n", result.DocketProblem)
 			}
 		}
+		printHeldMerges(stderr, orchestrator.HeldMerges(results))
 		printPublications(stdout, stderr, publications)
 		printSettlements(stdout, stderr, sweep.Settlements)
 		printConvergence(stdout, stderr, convergence)
@@ -431,6 +443,24 @@ func supervisionActed(outcome orchestrator.SupervisionOutcome) bool {
 		// An outcome nothing classifies is printed rather than swallowed: a sweep
 		// that acted and said nothing is the worse of the two failures.
 		return true
+	}
+}
+
+// printHeldMerges says which checks the forge is refusing queued merges on, and
+// which merges each is holding. It is said once per check rather than once per
+// run, because the fact worth reading is the check: one failing on every queued
+// merge is the forge refusing the whole queue, and ten lines each saying
+// "queued" is how that went unread for six days. A sweep with nothing held says
+// nothing here, for the reason every other sweep line is silent on the status
+// quo.
+func printHeldMerges(stderr io.Writer, holds []orchestrator.CheckHold) {
+	for _, hold := range holds {
+		numbers := make([]string, 0, len(hold.PullRequests))
+		for _, number := range hold.PullRequests {
+			numbers = append(numbers, "#"+strconv.Itoa(number))
+		}
+		fmt.Fprintf(stderr, "the forge is holding %d queued merge(s) on the failing check %q: %s; nothing merges until it passes on the base branch\n",
+			len(hold.PullRequests), hold.Check, strings.Join(numbers, ", "))
 	}
 }
 
@@ -593,6 +623,12 @@ confirms it: the merge commit is recorded, the local target caught up, the item
 settled by its own landing, and the hold, the heartbeat's count, and the docket
 entry it carried all clear together. One the remote still refuses stays
 outstanding and says so.
+
+A merge the forge still has queued is asked about with its checks: one the forge
+is holding on a failing required check is reported by name rather than as
+"queued", the failing checks are recorded on the run so the channel is told once,
+and where one check is holding several queued merges that is said as one line
+naming the check and every request it holds — the forge refusing the whole queue.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

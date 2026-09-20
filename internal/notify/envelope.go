@@ -102,6 +102,13 @@ const (
 	// person with nothing saying so. It said nothing at all until the moment it
 	// happens became part of the record.
 	KindMergeDropped Kind = "merge.dropped"
+	// A queued merge the forge is holding on a failing check. It is the fifth
+	// fact about getting a change out and looks exactly like the third from
+	// outside: the merge is queued, and it stays queued, and for six days in
+	// September 2026 eight of them did while a required check failed on every one.
+	// It is said when the sweep that asks the forge writes the failing checks
+	// onto the record, and said again only if they change.
+	KindMergeHeld Kind = "merge.held"
 	// A run that stopped and one that carried on. Both are said because a queue
 	// that goes quiet at night is indistinguishable from a broken one until
 	// something says which it is.
@@ -356,6 +363,7 @@ func Kinds() []Kind {
 		KindMergeQueued,
 		KindMergeCompleted,
 		KindMergeDropped,
+		KindMergeHeld,
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
@@ -405,7 +413,7 @@ func (k Kind) Valid() bool {
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut, KindCapCrossed,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
-		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
+		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped, KindMergeHeld,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,

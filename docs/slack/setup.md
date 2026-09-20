@@ -617,6 +617,15 @@ it stops counting a publication the moment the forge records the merge, which
 [`yoyo reconcile`](../operations.md#recovering-interrupted-runs) writes onto the
 record whether the harness made the merge or somebody made it by hand.
 
+A **held merge** is said the same way, once: a queued merge the forge is holding
+on a failing required check, named with the check. It is a `warning` in the
+channel because the count alone did not tell anybody — the count climbed from
+one to eight over six days in September 2026 while the same check failed on every
+queued request, and a merge the forge is holding looks exactly like one it is
+about to perform until the check is read. It is said when the
+[reconcile sweep](../operations.md#recovering-interrupted-runs) writes the
+failing checks onto the run's record, and again only if they change.
+
 It is otherwise deliberately narrow about when it speaks. A run in flight is not
 a stalled line, so nothing is said while work is visibly moving. A product nobody
 has ever watched is not one either: running items by name is a queue you are
