@@ -14,7 +14,7 @@
 // The document model is deliberately small. The script uses getElementById,
 // createElement, textContent, appendChild, removeChild, firstChild, className,
 // setAttribute, removeAttribute, addEventListener (on an element and on the
-// document), focus, and value, and this implements those and no more, so a
+// document), focus, isConnected, and value, and this implements those and no more, so a
 // new DOM call in the script fails here loudly rather than passing on a shim
 // that quietly did nothing. It is not a browser: layout, style, and the policy
 // are checked elsewhere, and what this checks is that the right words land in
@@ -65,6 +65,13 @@ class Node {
   }
   get firstChild() {
     return this.childNodes.length ? this.childNodes[0] : null;
+  }
+  get isConnected() {
+    let node = this;
+    while (node.parentNode) {
+      node = node.parentNode;
+    }
+    return node === this.ownerDocument.root;
   }
   appendChild(child) {
     if (child.parentNode) {
@@ -288,8 +295,9 @@ function items(...ids) {
 }
 
 // A scenario's `open` is what a reader clicks once the page is drawn, in
-// order: a grouping by its key, or an item by its id; `escape` presses Escape
-// afterwards. The pop-ups answer from the standing and the throughput already
+// order: a grouping by its key, or an item by its id — or `poll`, which is
+// the page asking again in between, redrawing every section under the
+// pop-up; `escape` presses Escape afterwards. The pop-ups answer from the standing and the throughput already
 // in hand, and the card from the item answers. `beneath` names the scenario
 // whose render is the page under the pop-ups, which is what the render of one
 // of these leaves out; over() is such a scenario, made from the one beneath.
@@ -338,7 +346,11 @@ const scenarios = pages.concat([
   over("grouping-error", "degraded", { open: [{ grouping: "admitted" }] }),
   over("grouping-loading", "throughput-pending", { open: [{ grouping: "landed:today" }] }),
   over("grouping-card", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }] }),
-  over("closed", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }], escape: 2 })
+  over("closed", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }], escape: 2 }),
+  // A poll redraws the page under an open grouping, so the button that opened
+  // it is gone by the time Escape closes it, and focus goes to the button now
+  // carrying its key.
+  over("closed-after-poll", "busy", { open: [{ grouping: "held" }, { poll: true }], escape: 1 })
 ]);
 
 function settle() {
@@ -408,18 +420,32 @@ async function run(scenario) {
     return found[0];
   };
   const opened = [];
+  const clicked = [];
   for (const step of scenario.open || []) {
-    const opener = step.item ? openerFor("data-item", step.item) : openerFor("data-grouping", step.grouping);
+    if (step.poll) {
+      intervals.filter(Boolean).forEach((callback) => callback());
+      await settle();
+      // The poll redraws the sections, so what was clicked is off the page:
+      // that is the premise a scenario polling under a pop-up exists to test.
+      if (clicked.some((element) => element.isConnected)) {
+        throw new Error(`${scenario.name}: a poll left the clicked opener on the page`);
+      }
+      continue;
+    }
+    const opener = step.item ? ["data-item", step.item] : ["data-grouping", step.grouping];
     opened.push(opener);
-    opener.dispatch("click", {});
+    clicked.push(openerFor(...opener));
+    clicked[clicked.length - 1].dispatch("click", {});
     await settle();
   }
   for (let presses = scenario.escape || 0; presses > 0; presses -= 1) {
     document.dispatch("keydown", { key: "Escape" });
     await settle();
   }
-  // A pop-up closed with Escape gives focus back to what opened it.
-  if (scenario.escape && opened.length > 0 && !opened[0].focused) {
+  // A pop-up closed with Escape gives focus back to what opened it: the
+  // button carrying the first key clicked, which after a poll is a button
+  // drawn since rather than the one that was clicked.
+  if (scenario.escape && opened.length > 0 && !openerFor(...opened[0]).focused) {
     throw new Error(`${scenario.name}: focus did not return to the opener after Escape`);
   }
 
@@ -499,8 +525,8 @@ async function run(scenario) {
     const note = document.createElement("p");
     note.className = "render-note";
     note.textContent = kept.length > 0
-      ? `What the ${scenario.name} scenario opened over the page: the page beneath it is the ${scenario.beneath} render, and is not repeated here.`
-      : `The ${scenario.name} scenario closed everything it opened: what is left is the ${scenario.beneath} render, and it is not repeated here.`;
+      ? `Opened over the ${scenario.beneath} render, which is not repeated here.`
+      : `Everything opened was closed again; what is left is the ${scenario.beneath} render, which is not repeated here.`;
     body.appendChild(note);
     kept.forEach((popup) => body.appendChild(popup));
   }

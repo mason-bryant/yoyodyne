@@ -793,25 +793,37 @@
   var groupingPopup = document.getElementById("grouping");
   var cardPopup = document.getElementById("card");
   // openGrouping is the key of the grouping that is open, or null; openCard is
-  // the id of the item whose card is open, or null. Each pop-up remembers the
-  // element that opened it, to give focus back to.
+  // the id of the item whose card is open, or null. Each pop-up remembers what
+  // opened it, to give focus back to: the element, and the key it carries,
+  // because every poll clears and redraws the sections, so by the time a
+  // pop-up closes the element that opened it may be gone from the page and
+  // what stands in its place is the element now carrying the same key.
   var openGrouping = null;
   var openCard = null;
   var openers = { grouping: null, card: null };
+  // openersByKey is every opener on the page by the key it opens, newest last,
+  // kept only while it is on the page: what close() gives focus back to when
+  // the opener it remembered has been redrawn.
+  var openersByKey = {};
+
+  function opener(kind, key, button) {
+    var name = kind + "=" + key;
+    openersByKey[name] = (openersByKey[name] || []).filter(function (each) { return each.isConnected; });
+    openersByKey[name].push(button);
+    button.setAttribute("type", "button");
+    button.setAttribute(kind, key);
+    return button;
+  }
 
   function itemOpener(id, text, className) {
-    var button = el("button", "item-open" + (className ? " " + className : ""), text);
-    button.setAttribute("type", "button");
-    button.setAttribute("data-item", id);
-    button.addEventListener("click", function () { showCard(id, button); });
+    var button = opener("data-item", id, el("button", "item-open" + (className ? " " + className : ""), text));
+    button.addEventListener("click", function () { showCard(id, { element: button, kind: "data-item", key: id }); });
     return button;
   }
 
   function groupingOpener(key, className, text) {
-    var button = el("button", "grouping-open" + (className ? " " + className : ""), text);
-    button.setAttribute("type", "button");
-    button.setAttribute("data-grouping", key);
-    button.addEventListener("click", function () { showGrouping(key, button); });
+    var button = opener("data-grouping", key, el("button", "grouping-open" + (className ? " " + className : ""), text));
+    button.addEventListener("click", function () { showGrouping(key, { element: button, kind: "data-grouping", key: key }); });
     return button;
   }
 
@@ -819,12 +831,23 @@
     setHidden(popup, false);
   }
 
+  // close hides a pop-up and gives focus back to what opened it — the very
+  // element where it is still on the page, and otherwise the element now
+  // carrying the key it carried, drawn by a poll since.
   function close(popup, which) {
     setHidden(popup, true);
     var back = openers[which];
     openers[which] = null;
-    if (back && back.focus) {
-      back.focus();
+    if (!back) {
+      return;
+    }
+    var target = back.element.isConnected ? back.element : null;
+    if (!target) {
+      var current = (openersByKey[back.kind + "=" + back.key] || []).filter(function (each) { return each.isConnected; });
+      target = current.length > 0 ? current[0] : null;
+    }
+    if (target) {
+      target.focus();
     }
   }
 
@@ -927,9 +950,9 @@
     });
   }
 
-  function showGrouping(key, opener) {
+  function showGrouping(key, from) {
     openGrouping = key;
-    openers.grouping = opener || null;
+    openers.grouping = from || null;
     renderGrouping();
     open(groupingPopup);
     document.getElementById("grouping-close").focus();
@@ -1024,9 +1047,9 @@
   // last read the standing — which is the card's empty state rather than a
   // failure; a 401 sends the page back to asking for the token, as every
   // reading does; anything else is the card's error state, with the reason.
-  function showCard(id, opener) {
+  function showCard(id, from) {
     openCard = id;
-    openers.card = opener || null;
+    openers.card = from || null;
     document.getElementById("card-heading").textContent = id;
     document.getElementById("card-note").textContent = "";
     clear(document.getElementById("card-fields"));
@@ -1222,6 +1245,7 @@
     openGrouping = null;
     openCard = null;
     openers = { grouping: null, card: null };
+    openersByKey = {};
     setHidden(groupingPopup, true);
     setHidden(cardPopup, true);
     render();

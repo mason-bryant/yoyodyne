@@ -2058,25 +2058,26 @@ between them should not have to translate.
 
 The sections show counts and names; the items behind them open in two pop-ups,
 each a dialog over the page that closes on its **Close** button, on a click
-outside it, or on Escape, and puts focus back where it was.
+outside it, or on Escape, and puts focus back on what opened it — on the
+button now carrying that item or grouping where a poll has redrawn the page
+in between.
 
 **A grouping's items.** In *Where the work stands*, the label of each stage —
 Admitted, Held back, Startable, Running, Landed — and of each pile under one
-(`held for a person`, `pullable, and nothing is choosing`, `developing`, and
-the rest; the week's landed line is a grouping of its own beside today's) ends
-in a chevron and opens a list of the work items in it, by title, with the id
-under each and, where the pipeline
-has a word for the item, that word beside it: the refusal for a held-back item,
-the phase and elapsed time for a running one, when it landed for a landed one.
-The list is read from the readings the page already holds — the standing names
-the admitted, startable, and refused items and the throughput names the landed
-runs, so the list is what the figure counted rather than a list assembled on the
-page — and it is drawn again on every poll while it is open. It has the four
-states a section has: **loading** while the landed figure is still being priced,
-**empty** saying in a sentence that no item is in the grouping, **error** with
-the reason the grouping's source could not be read — a stage showing a dash
-still opens, so the reason is readable in full — and **ready**. Each title in it
-opens the item's card, over the list.
+(`held for a person`, `developing`, and the rest; the week's landed line is a
+grouping of its own beside today's) ends in a chevron and opens a list of the
+work items in it, by title, with the id under each and the pipeline's own word
+for it beside: the refusal for a held-back item, the phase and elapsed time for
+a running one, when it landed for a landed one. The list is read from the
+readings the page already holds — the standing names the admitted, startable,
+and refused items and the throughput names the landed runs, so it is what the
+figure counted rather than a list assembled on the page — and is drawn again
+on every poll while it is open. It has the four states a section has:
+**loading** while the landed figure is still being priced, **empty** saying in
+a sentence that no item is in the grouping, **error** with the reason the
+grouping's source could not be read — a stage showing a dash still opens, so
+the reason is readable in full — and **ready**. Each title in it opens the
+item's card, over the list.
 
 **One item's card.** Opened from a running item's title or id, or from any
 entry of a grouping, the card shows the item whole under plain labels: **Id**,
@@ -2092,14 +2093,14 @@ otherwise that nothing is in flight or preserved and what the latest run came
 to, `work removed` or `no artifacts recorded`. Under the line are the run's id
 and when it started and ended, its cost or `cost unknown` and why, the reason it
 gave for ending, and the branch, worktree, and developer session it preserved.
-An item never run says `none is recorded`; run records that could not be read
-say so in the run's place rather than the card showing an item nothing ever
-touched. The card is read once, when it is opened, from `/api/items/<id>`; it
-has the same four states, and its **empty** state is the tracker holding nothing
-under the id — an item closed or removed since the page last read the standing
-— which is a different answer from the item not being readable, and is said as
-one. Every value on it reaches the page as JSON and is written as text, under
-the same policy as the rest of the page.
+An item never run says `none is recorded`; run records that could not be
+opened say why in the run's place rather than the card showing an item nothing
+ever touched. The card is read once, when it is opened, from
+`/api/items/<id>`; it has the same four states, and its **empty** state is the
+tracker holding nothing under the id — an item closed or removed since the
+page last read the standing — which is a different answer from the item not
+being readable, and is said as one. Every value on it reaches the page as JSON
+and is written as text, under the same policy as the rest of the page.
 
 **Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
 holds the page as its own script renders it from the fixtures under
@@ -2110,8 +2111,8 @@ and dropping the hidden ones — one file per scenario — `quiet`, `busy`,
 `throughput-refused`, `throughput-stale`, `refused`, `unreachable`,
 `wrong-token`, `stale`, and `signin` for the page, and `card`, `card-loading`,
 `card-missing`, `card-refused`, `grouping`, `grouping-landed`,
-`grouping-empty`, `grouping-error`, `grouping-loading`, `grouping-card`, and
-`closed` for the pop-ups, each opened by clicking what a reader would click on
+`grouping-empty`, `grouping-error`, `grouping-loading`, `grouping-card`,
+`closed`, and `closed-after-poll` for the pop-ups, each opened by clicking what a reader would click on
 one of the pages and holding the pop-ups alone, over the page render it names
 — which together show every section and each pop-up in each of its four
 states. They are golden files:

@@ -105,6 +105,16 @@ func TestTheShellCarriesFiveSectionsEachWithItsStates(t *testing.T) {
 	if strings.Count(body, `class="popup"`) != len(popups) {
 		t.Fatalf("the shell carries %d pop-ups, not %d:\n%s", strings.Count(body, `class="popup"`), len(popups), body)
 	}
+	// Closed means not shown: the stylesheet gives a pop-up a display of its
+	// own, which on its own would beat the user agent's `[hidden]` rule and
+	// show both dialogs over the page on load, so it holds the attribute off
+	// itself — the render driver prunes by attribute and cannot see this.
+	_, stylesheet := w.get("/assets/dashboard.css", nil)
+	for _, rule := range []string{"[hidden] {\n  display: none !important;\n}", ".popup[hidden] {\n  display: none;\n}"} {
+		if !strings.Contains(stylesheet, rule) {
+			t.Fatalf("the stylesheet lacks %q, so a closed pop-up would be shown:\n%s", rule, stylesheet)
+		}
+	}
 }
 
 // Every fixture the page is rendered from is the read model's own shape: a

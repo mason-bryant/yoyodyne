@@ -348,5 +348,19 @@
       "grouping": "closed",
       "card": "closed"
     }
+  },
+  "closed-after-poll": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
+    }
   }
 }

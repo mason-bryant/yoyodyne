@@ -157,8 +157,9 @@ func (r dashboardReader) WorkItem(ctx context.Context, id string) (readmodel.Wor
 
 // workItemSources opens the tracker and the run store one work item is read
 // from. The tracker not resolving refuses the reading, because the item is the
-// tracker's; the run store not opening costs the run beside it, and the reading
-// says so.
+// tracker's; the state root not resolving or the run store not opening costs
+// the run beside it, and the reading says which under run_problem, as the
+// throughput's runs_problem does.
 func workItemSources(configPath string) (readmodel.WorkItemSources, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
@@ -174,9 +175,12 @@ func workItemSources(configPath string) (readmodel.WorkItemSources, error) {
 	}
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
+		sources.RunsProblem = fmt.Sprintf("the state root could not be resolved: %v", err)
 		return sources, nil
 	}
-	if store, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID); err == nil {
+	if store, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID); err != nil {
+		sources.RunsProblem = err.Error()
+	} else {
 		sources.Runs = store
 	}
 	return sources, nil

@@ -58,8 +58,12 @@ type WorkItemSources struct {
 	Tracker ItemTracker
 	// Runs is the run records, read for the item's latest run. It is optional,
 	// and a reading without one says so in the answer rather than reporting that
-	// nothing ever ran.
-	Runs Histories
+	// nothing ever ran: RunsProblem is why there is none — a state root that
+	// could not be resolved, a store that would not open — and is the answer's
+	// RunProblem where it is set, so the card names what failed rather than a
+	// wiring gap that is not there.
+	Runs        Histories
+	RunsProblem string
 	// TrackerTimeout bounds the tracker command, so an unresponsive tracker
 	// costs this answer rather than hanging the surface that asked.
 	TrackerTimeout time.Duration
@@ -175,6 +179,9 @@ func ReadWorkItem(ctx context.Context, sources WorkItemSources, id string) (Work
 // card's outcome, phase, remains, and cost are the terminal's words.
 func readLatestRun(sources WorkItemSources, id string, now time.Time) (*ItemRun, string) {
 	if sources.Runs == nil {
+		if sources.RunsProblem != "" {
+			return nil, "the runs could not be opened: " + sources.RunsProblem
+		}
 		return nil, "nothing was wired to read the runs"
 	}
 	history, err := sources.Runs.History(runstate.RunQuery{WorkItemID: id, Limit: 1})

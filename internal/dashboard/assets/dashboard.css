@@ -894,7 +894,11 @@ input:focus-visible {
 /* ---- the pop-ups --------------------------------------------------------------------- */
 
 /* A pop-up is a dialog over the page: a backdrop that closes it, and a card
-   with the four states a panel has. */
+   with the four states a panel has. The shell ships both closed, with the
+   `hidden` attribute, and an author `display` would beat the user agent's
+   `[hidden]` rule and show them on load over everything — the `[hidden]`
+   rule above already holds every author rule off, and this one says so
+   beside the rule it holds off. */
 .popup {
   position: fixed;
   inset: 0;
@@ -902,6 +906,10 @@ input:focus-visible {
   display: grid;
   place-items: center;
   padding: 1rem;
+}
+
+.popup[hidden] {
+  display: none;
 }
 
 .popup-backdrop {

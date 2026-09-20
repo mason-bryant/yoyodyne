@@ -173,6 +173,12 @@ func TestReadWorkItemRefusesWhatItCannotReadAndSaysWhatItCould(t *testing.T) {
 	if err != nil || item.Run != nil || !strings.Contains(item.RunProblem, "nothing was wired") {
 		t.Fatalf("no runs wired = %+v / %q / %v", item.Run, item.RunProblem, err)
 	}
+	// A run store that could not be opened is said as that, with the reason,
+	// rather than as a wiring gap.
+	item, err = ReadWorkItem(context.Background(), WorkItemSources{Tracker: tracker, RunsProblem: "the state root could not be resolved: $HOME is not set"}, "yoyodyne-ifd.1")
+	if err != nil || item.Run != nil || item.RunProblem != "the runs could not be opened: the state root could not be resolved: $HOME is not set" || strings.Contains(item.RunProblem, "wired") {
+		t.Fatalf("an unopened run store = %+v / %q / %v", item.Run, item.RunProblem, err)
+	}
 	// An item carrying no labels still answers with a list, so a card shows a
 	// plain "none" rather than wondering whether the field was read.
 	if item.Labels == nil {
