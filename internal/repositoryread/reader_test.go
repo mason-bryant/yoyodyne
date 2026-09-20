@@ -55,6 +55,27 @@ func TestReaderReadsTheRecordedCommitAndNeverTheWorkingTree(t *testing.T) {
 	if len(results) != 6 {
 		t.Fatalf("Read() returned %d result(s) for 6 requests", len(results))
 	}
+	// A path that climbs out, an absolute one, and the root on a read are each
+	// refused as a result of their own, against the commit, beside the paths that
+	// were read — never by losing the block. They are a block of their own here
+	// only so the six above keep their positions.
+	refused, err := reader.Read(context.Background(), []Request{
+		{Action: ActionRead, Path: "../secret"},
+		{Action: ActionRead, Path: "/etc/passwd"},
+		{Action: ActionRead, Path: "."},
+		{Action: ActionRead, Path: "docs/work.md"},
+	})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	for i, want := range map[int]string{0: "climbs out of the repository", 1: "path is absolute", 2: "path is required on a read"} {
+		if !strings.Contains(refused[i].Problem, want) || refused[i].Commit != head || refused[i].Content != "" {
+			t.Errorf("refused[%d] = %#v, want a refusal saying %q at HEAD", i, refused[i], want)
+		}
+	}
+	if refused[3].Problem != "" || !strings.Contains(refused[3].Content, "how work flows") {
+		t.Fatalf("a good path beside refused ones = %#v", refused[3])
+	}
 	for i, result := range results {
 		if result.Commit != head {
 			t.Errorf("results[%d].Commit = %q, want HEAD %q", i, result.Commit, head)

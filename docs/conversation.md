@@ -1008,7 +1008,10 @@ designs, the invariants, and the decision records alongside the specifications;
 the development manager, developer, and reviewer get the designs and the
 invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
-not be able to argue about what the product is for.
+not be able to argue about what the product is for. A management role can also
+read one named path on request, the designs included, and what keeps that
+boundary is the label every such read arrives under rather than the set of
+documents it is given: description of the implementation, never intent.
 
 ### Reading the repository at a recorded commit
 
@@ -1027,8 +1030,9 @@ shown, and the same commit is what the record names. A committed tree holds no
 traversable link and no path that leaves it, so confinement holds by
 construction rather than by a check: a path that names nothing at that commit is
 refused with the commit named, a symbolic link is refused rather than followed,
-and a path that reads as absolute or as climbing out is refused before Git is
-asked anything.
+and a path that reads as absolute or as climbing out is refused with the reason
+before that path reaches Git — as one refused result beside the others in the
+block, never by losing the block.
 
 Two things can be asked for, and nothing further. `read` returns one file's
 content; `list` returns the names one directory holds, one level deep, with a

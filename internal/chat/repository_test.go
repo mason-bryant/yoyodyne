@@ -349,33 +349,95 @@ func TestOneMessageReadsTheRepositoryABoundedNumberOfTimes(t *testing.T) {
 	}
 }
 
-// A repository block the harness cannot read is a typed failure rather than a
-// reply that asked for nothing: nothing is read, and the prose is still the
-// operator's to read.
+// A repository block the harness cannot read — an action it does not perform —
+// is a typed failure rather than a reply that asked for nothing: nothing is
+// read, the operator is told, and the prose is still theirs to read.
 func TestAnUnreadableRepositoryBlockIsReported(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeRepositoryReader{}
 	provider := &fakeBackend{results: []backendapi.RunResult{
-		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Let me read.\n\n" + repositoryread.Fence + "\n" + `{"requests":[{"action":"read","path":"../secret"}]}` + "\n```"},
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Let me edit it.\n\n" + repositoryread.Fence + "\n" + `{"requests":[{"action":"write","path":"CLAUDE.md"}]}` + "\n```"},
 	}}
 	options := testOptions(t, provider)
 	options.RepositoryReader = reader
 	session := openTestSession(t, options)
 
-	reply, err := session.Send(context.Background(), "What is above the repository?")
+	reply, err := session.Send(context.Background(), "Change CLAUDE.md.")
 	var unreadable *RepositoryError
 	if !errors.As(err, &unreadable) {
 		t.Fatalf("Send() error = %v, want a RepositoryError", err)
 	}
-	if !strings.Contains(unreadable.Error(), "climbs out of the repository") {
+	if !strings.Contains(unreadable.Error(), `action "write" is not one the harness performs`) {
 		t.Fatalf("error = %q", unreadable)
 	}
 	if len(reader.asked) != 0 {
 		t.Fatalf("a refused block still read %d path(s)", len(reader.asked))
 	}
-	if !strings.Contains(reply.Text, "Let me read") {
+	if !strings.Contains(reply.Text, "Let me edit it") {
 		t.Fatalf("the refusal swallowed the reply: %q", reply.Text)
+	}
+}
+
+// A path that climbs out of the repository is not an unreadable block: the
+// block decodes, the reader refuses that one path with the reason, the reason
+// reaches the role beside the paths that were read, and the refusal is on the
+// record exactly as a read is — which is what the contract promises.
+func TestAClimbingPathIsRefusedToTheRoleAndRecorded(t *testing.T) {
+	t.Parallel()
+
+	asked := "Let me look above and inside.\n\n" +
+		repositoryread.Fence + "\n" +
+		`{"requests":[{"action":"read","path":"../secret"},{"action":"read","path":"CLAUDE.md"}]}` +
+		"\n```"
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: asked},
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Nothing above the repository is readable; CLAUDE.md is."},
+	}}
+	readAt := time.Date(2026, 9, 19, 10, 30, 0, 0, time.UTC)
+	reader := &fakeRepositoryReader{results: []repositoryread.Result{
+		{Action: repositoryread.ActionRead, Path: "../secret", Commit: "0123456789abcdef0123456789abcdef01234567", ReadAt: readAt, Problem: `path "../secret" climbs out of the repository`},
+		{Action: repositoryread.ActionRead, Path: "CLAUDE.md", Commit: "0123456789abcdef0123456789abcdef01234567", ReadAt: readAt, Content: "# Project Instructions\n", Size: 23},
+	}}
+	root := t.TempDir()
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.RepositoryReader = reader
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "What is above the repository?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reader.asked) != 2 || reader.asked[0].Path != "../secret" {
+		t.Fatalf("the harness was handed %#v", reader.asked)
+	}
+	continuation := provider.requests[1].Prompt
+	for _, required := range []string{"nothing was returned: path \"../secret\" climbs out of the repository", "# Project Instructions"} {
+		if !strings.Contains(continuation, required) {
+			t.Fatalf("the continuation = %q, want it to contain %q", continuation, required)
+		}
+	}
+	if len(reply.RepositoryReads) != 1 || len(reply.RepositoryReads[0].Results) != 2 {
+		t.Fatalf("reply repository reads = %#v", reply.RepositoryReads)
+	}
+	events, err := newTestStore(t, root).LoadEvents(session.Evidence().ConversationID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	var refusals, reads int
+	for _, event := range events {
+		if event.Type != execution.EventRepositoryRead {
+			continue
+		}
+		if strings.Contains(string(event.Payload), "climbs out of the repository") {
+			refusals++
+		} else {
+			reads++
+		}
+	}
+	if refusals != 1 || reads != 1 {
+		t.Fatalf("the record holds %d refusal(s) and %d read(s), want one of each", refusals, reads)
 	}
 }
 

@@ -557,7 +557,11 @@ any other part of the persona.
 product ships today.** That last part is the documentation your project names,
 and the help every command prints. It is carried in a section of its own,
 labeled as description of the implementation as built and never as authority
-about intent. No source, no design document, and no way to run a command.
+about intent. That is the whole of what is delivered in its context: no source
+and no design document arrives there, and nothing runs a command. What it may
+additionally do is [read one named path at a recorded commit](#reading-the-repository-from-a-conversation)
+— a source file or a design among them — which arrives under the same
+description-not-intent label, one path at a time, and only when it asks.
 
 **Which documents those are is `product.shipped_documentation`**, a list of
 Markdown files relative to the repository:

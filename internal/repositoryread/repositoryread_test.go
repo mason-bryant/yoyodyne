@@ -25,11 +25,7 @@ func TestDecodeAcceptsTheContractAndRefusesTheRest(t *testing.T) {
 		"no requests":         `{"requests":[]}`,
 		"unknown field":       `{"requests":[{"action":"read","path":"a","extra":1}]}`,
 		"unknown action":      `{"requests":[{"action":"write","path":"a"}]}`,
-		"read with no path":   `{"requests":[{"action":"read"}]}`,
-		"absolute path":       `{"requests":[{"action":"read","path":"/etc/passwd"}]}`,
-		"climbing path":       `{"requests":[{"action":"read","path":"../secret"}]}`,
-		"climbing after dots": `{"requests":[{"action":"read","path":"docs/../../secret"}]}`,
-		"backslash":           `{"requests":[{"action":"read","path":"docs\\x.md"}]}`,
+		"path over the bound": fmt.Sprintf(`{"requests":[{"action":"read","path":%q}]}`, strings.Repeat("a", MaxPathBytes+1)),
 		"trailing content":    `{"requests":[{"action":"read","path":"a"}]} trailing`,
 		"too many": fmt.Sprintf(`{"requests":[%s]}`, strings.TrimSuffix(
 			strings.Repeat(`{"action":"read","path":"a"},`, MaxRequestsPerReply+1), ",")),
@@ -38,6 +34,30 @@ func TestDecodeAcceptsTheContractAndRefusesTheRest(t *testing.T) {
 			t.Parallel()
 			if _, err := Decode(payload); err == nil {
 				t.Fatalf("Decode(%q) accepted a block the contract refuses", payload)
+			}
+		})
+	}
+
+	// Where a path leads is not the block's shape. A path that is absolute,
+	// climbs out, or names the root on a read decodes, and is refused where the
+	// request is performed, as a result the role is handed and the record keeps —
+	// refusing the whole block here would lose every good path beside it and
+	// tell the role nothing.
+	for name, payload := range map[string]string{
+		"read with no path":   `{"requests":[{"action":"read"}]}`,
+		"absolute path":       `{"requests":[{"action":"read","path":"/etc/passwd"}]}`,
+		"climbing path":       `{"requests":[{"action":"read","path":"../secret"}]}`,
+		"climbing after dots": `{"requests":[{"action":"read","path":"docs/../../secret"}]}`,
+		"backslash":           `{"requests":[{"action":"read","path":"docs\\x.md"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			requests, err := Decode(payload)
+			if err != nil || len(requests) != 1 {
+				t.Fatalf("Decode(%q) = %#v, %v; want the request handed to the reader to refuse", payload, requests, err)
+			}
+			if _, err := CleanPath(requests[0].Path, false); err == nil {
+				t.Fatalf("CleanPath(%q) accepted a path the reader has to refuse", requests[0].Path)
 			}
 		})
 	}
