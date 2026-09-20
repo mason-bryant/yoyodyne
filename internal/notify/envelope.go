@@ -172,6 +172,13 @@ const (
 	KindDirectiveCarriedOut Kind = "directive.carried-out"
 	KindDirectiveRefused    Kind = "directive.refused"
 	KindDirectiveWithdrawn  Kind = "directive.withdrawn"
+	// A reply that was a question rather than an instruction. Nothing is
+	// recorded from it — a question in the directive record is a directive
+	// nobody gave — and what the person is owed is an answer, which the product
+	// manager gives in the same thread. This is the receipt that says so in the
+	// meantime, and it is its own kind rather than a refusal because nothing was
+	// refused: the question was heard, and the answer is on its way.
+	KindQuestionHeard Kind = "question.heard"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -371,6 +378,7 @@ func Kinds() []Kind {
 		KindDirectiveCarriedOut,
 		KindDirectiveRefused,
 		KindDirectiveWithdrawn,
+		KindQuestionHeard,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -410,7 +418,7 @@ func (k Kind) Valid() bool {
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
-		KindDirectiveWithdrawn,
+		KindDirectiveWithdrawn, KindQuestionHeard,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,

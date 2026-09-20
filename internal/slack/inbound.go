@@ -13,13 +13,24 @@ package slack
 // received it" costs and all it costs. Nothing here can weaken directive
 // governance, because nothing here has governance of its own to weaken.
 //
-// Three rules hold the channel to that:
+// Four rules hold the channel to that:
+//
+// Only an instruction reaches the record. A reply is read for what it is for
+// before anything is written down — the directive package's own stated rule,
+// not a classifier — and a question is carried to the product manager's
+// conversation instead, with her answer returned to the thread; a reply the
+// rule will not decide is asked back in one line. The record used to take
+// everything, and on 2026-08-30 it took the operator's question about a phrase
+// in a receipt as a standing instruction and acknowledged it with the same
+// phrase. A question in the directive record is a directive nobody gave, and
+// enforceability presumes there are none.
 //
 // The pausing kinds are stated, never inferred. A reply opening `ambiguous:` or
 // `artifact:` records that kind and must say what is unresolved; everything else
 // is operational. A classifier deciding which sentences stop work is exactly
 // what the command line already refused, and it would be worse here, where the
-// input is chat.
+// input is chat. The intent reading above cannot stop work either: at most it
+// answers, or asks.
 //
 // Authority defaults closed. A reply acts only when its Slack member id belongs
 // to a human the project granted direct-work, and the derivation of that list is
@@ -271,8 +282,16 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	// as not-listening — and it is never a gate, so a workspace that will not take
 	// a mark costs the reply its mark and nothing else.
 	s.mark(ctx, message.ts, notify.ReceiptUnderConsideration)
-	answered := s.act(ctx, topic, message, time.Now())
+	answered, question := s.act(ctx, topic, message, time.Now())
 	s.answer(ctx, threads, message.user, answered)
+	// A question goes to the product manager only once its receipt is in the
+	// thread, so the answer follows the line that promised it rather than racing
+	// it. The turn marks the reply settled when the answer lands, or refused when
+	// nothing could be said, which is conversation.go's.
+	if question != "" {
+		s.carry(ctx, message, question)
+		return
+	}
 	// Only a disposition that has already landed is marked here. Recording a
 	// directive is not disposing of it: what settles one is somebody carrying it
 	// out or deciding what it asked, which the delivery pass reads out of the
@@ -321,14 +340,36 @@ func disposition(answer notify.Notification) (notify.Receipt, bool) {
 // branch produces one: the acknowledgment is the whole of what an operator has
 // to go on, and a path that produced nothing would be the channel quietly
 // ignoring somebody.
-func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundMessage, at time.Time) notify.Notification {
+//
+// The second value is the one thing a reply can ask for beyond its
+// acknowledgment: a question to carry to the product manager, framed for her,
+// once the receipt is posted. It is empty for everything else, and it is only
+// ever returned with the turn already taken, so whoever posts the receipt owes
+// the conversation exactly one carry.
+func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundMessage, at time.Time) (notify.Notification, string) {
 	// Authority first, and before the reply is even read: what an unlisted person
-	// typed is not something the harness should be parsing, let alone recording.
-	// Whoever reaches here is somebody the project recognizes, so the refusal
-	// names the grant they are missing rather than telling a colleague this app
-	// has never heard of them.
+	// typed is not something the harness should be parsing, let alone recording —
+	// or carrying to the product manager, which admits work and spends money and
+	// is held to the same grant. Whoever reaches here is somebody the project
+	// recognizes, so the refusal names the grant they are missing rather than
+	// telling a colleague this app has never heard of them.
 	if !s.operators[message.user] {
-		return refused(topic, at, "the reply is from somebody this project has not granted direct-work with a bound Slack member id, so nothing was recorded; `operators` in .yoyodyne/config.yaml is where that grant lives")
+		return refused(topic, at, "the reply is from somebody this project has not granted direct-work with a bound Slack member id, so nothing was recorded; `operators` in .yoyodyne/config.yaml is where that grant lives"), ""
+	}
+	parsed, err := parseSteer(message.text)
+	if err != nil {
+		return refused(topic, at, err.Error()), ""
+	}
+	// What the reply is for is decided before anything about recording it is,
+	// because a question never reaches the record and an uncertain reply is asked
+	// about rather than written down. The fixture this exists for is a question
+	// recorded as a standing instruction and acknowledged with the phrase it was
+	// asking about; neither of these branches can produce that.
+	switch {
+	case parsed.asks():
+		return s.ask(topic, message, parsed.text, at)
+	case parsed.uncertain():
+		return refused(topic, at, askedBack), ""
 	}
 	// A sink assembled to carry the conversation and nothing else reads replies —
 	// it has to, or a message addressed to this app inside a thread would reach
@@ -336,18 +377,14 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 	// left as a reply that vanished, which is the failure the whole inbound half
 	// is built not to have.
 	if s.directives == nil {
-		return refused(topic, at, "this sink was assembled without the directive record, so a reply in a thread steers nothing; `yoyo directive record` is how one is recorded")
+		return refused(topic, at, "this sink was assembled without the directive record, so a reply in a thread steers nothing; `yoyo directive record` is how one is recorded"), ""
 	}
 	// A directive from a thread is scoped to the thread's work item, so a thread
 	// that is not about a work item has nothing to scope one to. Recording it
 	// unscoped would reach every item in the product, which is a far larger thing
 	// than anybody replying to an exchange meant.
 	if topic.Kind != notify.TopicWorkItem {
-		return refused(topic, at, "this thread is not a work item's, and a directive from a thread is scoped to the item the thread is about; `yoyo directive record` is how one is recorded against something else")
-	}
-	parsed, err := parseSteer(message.text)
-	if err != nil {
-		return refused(topic, at, err.Error())
+		return refused(topic, at, "this thread is not a work item's, and a directive from a thread is scoped to the item the thread is about; `yoyo directive record` is how one is recorded against something else"), ""
 	}
 	if parsed.settles() {
 		// A reply that named no directive is settling what this thread's own item is
@@ -359,26 +396,90 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 		if reference == "" {
 			held, err := s.holding(topic)
 			if err != nil {
-				return refused(topic, at, err.Error())
+				return refused(topic, at, err.Error()), ""
 			}
 			reference = held
 		}
 		resolved, err := s.directives.Resolve(reference, parsed.resolution, at)
 		if err != nil {
-			return refused(topic, at, err.Error())
+			return refused(topic, at, err.Error()), ""
 		}
 		// What became of it is said here, by this reply, so the delivery pass must
 		// not say it again when it reads the same settlement out of the record —
 		// unless this is not the thread that asked for it, in which case the thread
 		// that did has still heard nothing and is still owed the outcome.
 		s.said(ctx, resolved.ID, topic)
-		return acknowledged(topic, settledKind(resolved), resolved, at)
+		return acknowledged(topic, settledKind(resolved), resolved, at), ""
 	}
 	recorded, err := s.record(topic, message, parsed, at)
 	if err != nil {
-		return refused(topic, at, err.Error())
+		return refused(topic, at, err.Error()), ""
 	}
-	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at)
+	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at), ""
+}
+
+// askedBack is the one line a reply gets when the reading would not say whether
+// it was a question or an instruction. It asks rather than guesses, because
+// either guess is a real cost: a question recorded is a directive nobody gave,
+// and an instruction answered is direction that never reached the work. Nothing
+// is recorded, and the reply is marked refused, which is what a reply that
+// recorded nothing wears.
+const askedBack = "that reads as either a question or an instruction, so nothing was done with it — end it with a question mark to ask the product manager, or say it as an instruction to record it"
+
+// ask is a question in a thread: the receipt that says it was heard as one, and
+// the question itself framed for the product manager, whose answer follows the
+// receipt into the same thread.
+//
+// The receipt is a kind of its own rather than a refusal, because nothing was
+// refused. It names the item's thread rather than the question — the question is
+// the message directly above it, typed by the person being answered, and reading
+// it back would restate the very phrase they may be asking about, which is the
+// second defect in the screenshot this exists for.
+//
+// The turn is taken here and not in the carry, so a question that cannot be
+// answered gets its refusal as its whole answer rather than a receipt promising
+// an answer followed by a line taking the promise back. Every refusal says where
+// the question can be asked instead: a sink with no conversation behind it, and
+// a product manager already mid-turn, both point at `yoyo chat`.
+func (s *steering) ask(topic notify.Topic, message inboundMessage, question string, at time.Time) (notify.Notification, string) {
+	if s.conversation == nil {
+		return refused(topic, at, "that reads as a question, and this sink was started without the product manager's conversation to carry it to; nothing was recorded, and `yoyo chat` is where to ask it"), ""
+	}
+	if !s.begin() {
+		return refused(topic, at, "that reads as a question, and the product manager is already answering something else; nothing was recorded — say it again once that lands, or ask at `yoyo chat`"), ""
+	}
+	s.sink.log("a question arrived in the thread of %s from %s, saying %q, and is being taken to the product manager rather than recorded",
+		topic.Key(), message.user, singleLine(message.text, maxAskedBytes))
+	return heard(topic, question, at), framed(topic, question)
+}
+
+// framed is the question as the product manager hears it: the operator's own
+// words, with where they were asked in front of them. A question in a work
+// item's thread is about that item more often than not — "did you restart?",
+// "what does this receipt mean?" — and the conversation has no other way to
+// know which item a thread is about.
+func framed(topic notify.Topic, question string) string {
+	if topic.Kind == notify.TopicWorkItem {
+		return fmt.Sprintf("Asked in the Slack thread for work item %s: %s", topic.ID, question)
+	}
+	return fmt.Sprintf("Asked in the Slack thread for %s: %s", topic.Key(), question)
+}
+
+// heard is the receipt for a question: heard, not recorded, and answered next.
+// The question rides on the event's text for the record, and the voice line
+// deliberately does not read it back.
+func heard(topic notify.Topic, question string, at time.Time) notify.Notification {
+	return notify.Notification{
+		Topic:   topic,
+		Speaker: notify.Harness(),
+		Event: notify.Event{
+			Kind:     notify.KindQuestionHeard,
+			At:       at.UTC(),
+			Severity: report.SeverityNote,
+			Refs:     notify.Refs{WorkItemID: workItemOf(topic)},
+			Text:     question,
+		},
+	}
 }
 
 // holding is the directive this thread's item is waiting on, for a reply that
@@ -690,6 +791,13 @@ type steer struct {
 	artifact   string
 	unresolved string
 	text       string
+	// intent is what a reply that stated nothing is for, read by the directive
+	// package's own rule: an instruction to record, a question to answer, or
+	// something to ask back about. A reply that stated a kind or settled a
+	// directive said what it was for, so it is an instruction here whatever shape
+	// its words take — `ambiguous: which did you mean?` is the operator's own
+	// question, recorded as one on purpose.
+	intent directive.Intent
 }
 
 // settles reports a reply that settles a directive rather than recording one. How
@@ -698,9 +806,17 @@ type steer struct {
 // reply named none.
 func (parsed steer) settles() bool { return parsed.resolution != "" }
 
+// asks reports a reply that is a question, which is answered rather than
+// recorded. uncertain reports one the reading would not decide, which is asked
+// back rather than guessed at.
+func (parsed steer) asks() bool      { return parsed.intent == directive.IntentQuestion }
+func (parsed steer) uncertain() bool { return parsed.intent == directive.IntentUncertain }
+
 // parseSteer reads a reply. The grammar is small on purpose: everything it does
-// not recognize is an operational directive said in the operator's own words,
-// which is the reading that cannot silently stop work.
+// not recognize is read for what it is for — a question to answer, or an
+// instruction recorded as an operational directive in the operator's own words —
+// and only the second is the reading that can reach the record. Neither can
+// silently stop work: the pausing kinds are stated by the person or not at all.
 //
 // A refusal names what to type instead, because the person reading it is in a
 // chat client rather than at a terminal with the usage text in front of them.
@@ -709,7 +825,7 @@ func parseSteer(raw string) (steer, error) {
 	if said == "" {
 		return steer{}, errors.New("the reply said nothing that could be recorded")
 	}
-	parsed := steer{kind: directive.KindOperational, receivedBy: receivedBy, text: said}
+	parsed := steer{kind: directive.KindOperational, receivedBy: receivedBy, text: said, intent: directive.IntentInstruction}
 	lowered := strings.ToLower(said)
 	switch {
 	case lowered == resolveVerb || strings.HasPrefix(lowered, resolveVerb+" "):
@@ -747,6 +863,12 @@ func parseSteer(raw string) (steer, error) {
 		if parsed.unresolved == "" {
 			return steer{}, errors.New("`artifact: <name> <what has to be decided about it>` — say what has to be decided; work derived from that document waits until somebody does")
 		}
+	default:
+		// A reply that stated nothing is the one whose words have to say what it
+		// is for. The screenshot this exists for was a question recorded as a
+		// standing instruction and acknowledged with the phrase it asked about;
+		// reading the intent here is what keeps a question out of the record.
+		parsed.intent = directive.ReadIntent(said)
 	}
 	return parsed, nil
 }

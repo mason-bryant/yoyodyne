@@ -4815,9 +4815,10 @@ grants is a list that disagrees with them — silently, and about authority. A
 human granted `direct-work` who has bound no member id simply is not on it: they
 hold the authority, and Slack is not a boundary they can reach it through.
 
-A reply from somebody on that list is recorded as a directive against the item
-whose thread it was said in, and reaches the work exactly as one typed at a
-terminal does. A reply from a human this mapping names who is not on it is
+An instruction from somebody on that list is recorded as a directive against the
+item whose thread it was said in, and reaches the work exactly as one typed at a
+terminal does; a question from them is answered by the product manager in the
+same thread and recorded as nothing. A reply from a human this mapping names who is not on it is
 answered in the thread saying it was not acted on, naming the grant they are
 missing — visibly, because a channel that silently ignores some people looks
 broken rather than closed. What a reply may say is in

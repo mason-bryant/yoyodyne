@@ -166,6 +166,9 @@ var reaches = map[Kind]Reach{
 	KindDirectiveCarriedOut: ReachThread,
 	KindDirectiveRefused:    ReachThread,
 	KindDirectiveWithdrawn:  ReachThread,
+	// A question's receipt is the same shape: addressed by name to whoever asked,
+	// in the thread they asked in, with the answer following it there.
+	KindQuestionHeard: ReachThread,
 	// The operator's two switches, which are about the whole line and are his own
 	// to lift.
 	KindIntakeHeld:     ReachChannel,
