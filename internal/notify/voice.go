@@ -178,6 +178,7 @@ var harnessVoice = voice{
 		KindMergeQueued:              "The merge of {pr} is queued on the forge.",
 		KindMergeCompleted:           "{pr} merged.",
 		KindMergeDropped:             "The merge of {pr} is not going to happen: {cause}. The change is promoted; the publication is not.",
+		KindMergeHeld:                "The forge is holding the queued merge of {pr}: {cause}. The change is promoted; nothing merges until the check passes on the target branch.",
 		KindRunParked:                "{run} stopped part-way through {item}, waiting on {cause}.",
 		KindRunContinued:             "{run} continued on {item}.",
 		KindBlockerRecorded:          "{item} is blocked, and {remains}: {text}",
@@ -247,6 +248,7 @@ var developerVoice = voice{
 		KindMergeQueued:              "{pr} is queued to merge; there is nothing more from me on {item}.",
 		KindMergeCompleted:           "{pr} is merged, so {item} is out of my hands.",
 		KindMergeDropped:             "{pr} was never merged and will not be by itself: {cause}. My change is on the target branch; what is on the forge is not.",
+		KindMergeHeld:                "{pr} is queued and the forge is holding it: {cause}. My change is on the target branch; the forge will not take it until that check passes there.",
 		KindRunParked:                "I've stopped mid-change on {item}, waiting on {cause}. The worktree keeps everything.",
 		KindRunContinued:             "Back on {item}, picking the change up where I left it.",
 		KindBlockerRecorded:          "I could not finish {item}, and {remains}: {text}",
@@ -316,6 +318,7 @@ var reviewerVoice = voice{
 		KindMergeQueued:              "{pr} is queued to merge with my approval behind it.",
 		KindMergeCompleted:           "{pr} is merged, so what I approved is what landed.",
 		KindMergeDropped:             "{pr} did not merge: {cause}. What I approved is on the target branch, and the request carrying it is still open.",
+		KindMergeHeld:                "{pr} is held on the forge: {cause}. What I approved is on the target branch, and the request carrying it waits on a check no verdict of mine moves.",
 		KindRunParked:                "{item} stopped before there was a verdict, waiting on {cause}.",
 		KindRunContinued:             "{item} is moving again; I'll see the change when it is ready.",
 		KindBlockerRecorded:          "{item} is blocked and there is no change to judge, though {remains}: {text}",
@@ -384,6 +387,7 @@ var developmentManagerVoice = voice{
 		KindMergeQueued:              "{pr} is queued to merge, so {item} stays in flight until the forge says otherwise.",
 		KindMergeCompleted:           "{pr} merged; {item} is done.",
 		KindMergeDropped:             "{pr} will not merge on its own: {cause}. {item} is promoted, and its publication is now somebody's to settle by hand.",
+		KindMergeHeld:                "{pr} is queued and going nowhere: {cause}. {item} is promoted, and its publication waits on the check passing on the target branch.",
 		KindRunParked:                "{item} is stopped part-way, waiting on {cause}. It keeps its claim.",
 		KindRunContinued:             "{item} is moving again, from where it stopped.",
 		KindBlockerRecorded:          "{item} is blocked, and recorded as blocked rather than left implicit, with {remains}: {text}",
@@ -453,6 +457,7 @@ var productManagerVoice = voice{
 		KindMergeQueued:              "{pr} is queued to merge; {item} is not delivered until it lands.",
 		KindMergeCompleted:           "{pr} merged, so {item} is delivered.",
 		KindMergeDropped:             "{pr} is not merging: {cause}. {item} is built and promoted, and it is not delivered until somebody publishes it.",
+		KindMergeHeld:                "{pr} is queued and held: {cause}. {item} is built and promoted, and it is not delivered until that check passes on the target branch.",
 		KindRunParked:                "{item} is waiting on {cause}. Nothing about its priority changed while it waits.",
 		KindRunContinued:             "{item} is moving again.",
 		KindBlockerRecorded:          "{item} is blocked and stays in the backlog until somebody decides otherwise, with {remains}: {text}",
@@ -522,6 +527,7 @@ var architectVoice = voice{
 		KindMergeQueued:              "{pr} is queued to merge; the forge settles it, not this run.",
 		KindMergeCompleted:           "{pr} merged, so the forge's history and the local target agree again.",
 		KindMergeDropped:             "{pr} was dropped rather than merged: {cause}. The local target carries the promotion and the forge does not, which is the divergence somebody has to close.",
+		KindMergeHeld:                "{pr} is queued and the forge is holding it: {cause}. The local target carries the promotion and the forge does not, and the divergence grows by one landing until the check passes there.",
 		KindRunParked:                "{item} is stopped part-way, waiting on {cause}. A design that cannot survive an interruption is the wrong design.",
 		KindRunContinued:             "{item} resumed from exactly where it stopped.",
 		KindBlockerRecorded:          "{item} is blocked, which is a fact about the system rather than about the attempt, and {remains}: {text}",
@@ -654,6 +660,10 @@ var nextMoves = map[Kind]string{
 	// one it had queued, and asking again earns the same answer — so nothing
 	// happens to the publication until somebody makes it happen.
 	KindMergeDropped: "the operator's — the forge will not merge this by itself, and the publication stands until somebody settles it.",
+	// A held merge is the same person's, for a different reason: the forge will
+	// perform it by itself the moment the check passes, and the check is on the
+	// base branch, where no run's repair reaches.
+	KindMergeHeld:    "the operator's — the check that failed is on the target branch, and the forge performs the merge by itself once it passes there.",
 	KindRunParked:    "whatever it is waiting on; the run resumes from its own record once that clears.",
 	KindRunContinued: "the developer's, from where the change stopped.",
 	// Work that stopped and stayed stopped, and capacity that ran out. Neither

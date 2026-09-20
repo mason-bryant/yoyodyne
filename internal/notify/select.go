@@ -156,6 +156,19 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 			Cause:       after.MergeDrop.Reason,
 		})
 	}
+	// A queued merge the forge is holding on a failing check, said when the
+	// sweep writes the checks onto the record and again only if they change: a
+	// hold that stands for a week is one fact, not one message a sweep. It is a
+	// warning for the reason a drop is — nobody chose it, the change is promoted,
+	// and the merge stays armed and reads as about to happen for as long as
+	// nobody looks. It is not said for a merge the forge is simply about to
+	// perform, which is what the flag alone says.
+	if heldOn := heldChecks(after); heldOn != "" && heldOn != heldChecks(before) {
+		say(KindMergeHeld, report.SeverityWarning, Harness(), Detail{
+			PullRequest: describePullRequest(after.PullRequest),
+			Cause:       heldOn,
+		})
+	}
 	if !parked(before) && parked(after) {
 		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
@@ -1162,6 +1175,24 @@ func mergeQueued(state runstate.State) bool {
 
 func merged(state runstate.State) bool {
 	return state.PullRequest != nil && state.PullRequest.Merged
+}
+
+// heldChecks is the sentence a held merge is said with, and empty where the
+// record names no failing check on a queued merge. It is derived from the
+// record's own predicate so the crossing and the reason are one reading.
+func heldChecks(state runstate.State) string {
+	if state.PullRequest == nil || !state.PullRequest.HeldByChecks() {
+		return ""
+	}
+	checks := state.PullRequest.FailingChecks
+	if len(checks) == 1 {
+		return fmt.Sprintf("the check %q is failing on it", checks[0])
+	}
+	quoted := make([]string, 0, len(checks))
+	for _, check := range checks {
+		quoted = append(quoted, fmt.Sprintf("%q", check))
+	}
+	return fmt.Sprintf("the checks %s are failing on it", strings.Join(quoted, ", "))
 }
 
 // describePullRequest names a published request the way somebody would quote
