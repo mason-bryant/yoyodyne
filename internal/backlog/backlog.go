@@ -498,11 +498,12 @@ func (e Entry) Hold() string {
 // the same reading the refusals are worded from rather than from a second
 // parse of the sentences.
 //
-// It is owned here, by the queue, so that no surface redeclares it. Two of its
-// values are refusals the queue itself never makes — a directive pausing the
-// item, and the harness choosing nothing at all — and they are here all the
+// It is owned here, by the queue, so that no surface redeclares it. Three of
+// its values are refusals an entry's own hold never makes — the item's children
+// covering it, which Coverage reads over the whole queue; a directive pausing
+// the item; and the harness choosing nothing at all — and they are here all the
 // same, because a vocabulary for why an admitted item is not pulled that left
-// two of the reasons to another package would be two vocabularies.
+// three of the reasons to another package would be two vocabularies.
 type HoldKind string
 
 const (
@@ -520,6 +521,12 @@ const (
 	// say why: blocked work whose holds could not be read, or a dependency the
 	// listing did not carry.
 	HeldUnread HoldKind = "unread"
+	// HeldCovered is an item whose unfinished children already carry its
+	// execution, so the scheduling pass never pulls it: the children are the
+	// work. An entry's own hold does not make this refusal, because it is read
+	// over the whole queue and one status wider — Cover and CoveredReason do —
+	// and the standing status names it in those words.
+	HeldCovered HoldKind = "covered"
 	// HeldByDirective is an item an unresolved directive pauses. The queue does
 	// not make this refusal; the pipeline does, and the standing status names it.
 	HeldByDirective HoldKind = "directive"

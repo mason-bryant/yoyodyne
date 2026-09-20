@@ -112,9 +112,10 @@ func (s Scheduler) eligibility(entry backlog.Entry, reading eligibilityReading) 
 	// work that has not been done yet. This is re-read at every pull like
 	// everything else, so an item stops being covered when its last child
 	// closes, and one that is decomposed while the session watches stops being
-	// pullable at the next selection.
-	if covering := read.children[entry.ID]; len(covering) > 0 {
-		reading.passOver(entry.ID, coveredReason(covering))
+	// pullable at the next selection. The derivation and the words are the
+	// backlog's, which is what the standing status refuses the same item with.
+	if covering := read.coverage.Covering(entry.ID); len(covering) > 0 {
+		reading.passOver(entry.ID, backlog.CoveredReason(covering))
 		poll.pass(entry.ID, runstate.PassedOverCoveredByChildren, "")
 		return passedOver, nil
 	}
