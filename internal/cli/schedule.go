@@ -855,7 +855,7 @@ delivery produces. What it did, and anything still waiting on a person, is on th
 pass.
 
 Every pull also carries out one of the decisions she recorded. A repair or a
-re-run she settled a stoppage with is fired by the pass itself, oldest decision
+re-run she settled a stoppage with is fired by the pass itself, oldest stoppage
 first, one per pull, taking a developer slot exactly as a pulled item does -- so
 recording a decision is what causes it and nobody types a verb. "yoyo triage
 repair" and "yoyo triage rerun" still work and are what fires one now rather than

@@ -208,7 +208,9 @@ type CarriedOut struct {
 }
 
 // Outstanding is every decision recorded and not carried out, in the docket's own
-// order, with the ones nothing can act on now left out.
+// order — oldest stoppage first, which is the order the entries were recorded in
+// rather than the order the decisions were made — with the ones nothing can act
+// on now left out.
 //
 // Three things take an entry out. An item with a run in flight is not stopped
 // work whatever the docket said when the entry was written, and the actions would

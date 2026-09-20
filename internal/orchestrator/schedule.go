@@ -2768,9 +2768,11 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 // harness on stopped work and leave the queue untouched. The next pass takes the
 // next, and on a poll loop that is an interval later.
 //
-// The oldest goes first, which is the docket's own order: a decision recorded
-// days ago is the one that has been waiting longest, and it is exactly the
-// backlog of those that this exists to clear.
+// The oldest stoppage goes first, which is the docket's own order — the order
+// the stoppages were recorded in, not the order the decisions about them were
+// made, though the two seldom differ. A stoppage docketed days ago is the one
+// whose decision has been waiting longest, and it is exactly the backlog of
+// those that this exists to clear.
 //
 // A reading that failed is reported and starts nothing. That is the same
 // direction every other optional part of a pull fails in: the queue's own work is

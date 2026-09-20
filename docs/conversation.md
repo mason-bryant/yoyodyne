@@ -1366,7 +1366,7 @@ and [the paragraph on it below](#resuming-an-approved-change-the-environment-sto
 says why there is none to carry out.
 
 Neither of the first two waits on being typed. A watching `yoyo work` session
-fires a recorded repair or re-run itself, one per pull, oldest first, through
+fires a recorded repair or re-run itself, one per pull, oldest stoppage first, through
 these same two actions and under every condition each of them asks — so
 recording the decision is what causes it, and the verbs are what fires one *now*
 rather than at the next pull. A re-arm is still typed: it is the one decision the

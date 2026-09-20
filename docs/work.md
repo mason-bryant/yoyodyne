@@ -625,11 +625,14 @@ there, and releasing an outstanding publication would start one over work the
 promotion has already put on the target branch — which is what
 [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
 cost, three developer runs and three reviews each re-deriving that the change
-was already on `main`. So a hold is lifted only by triage picking the change up,
-by the escalation being answered, or by the publication being settled
-— at which point the records stop saying the item is
-held, and it becomes pullable without anybody having edited its status. The
-first two are a person's. The third is
+was already on `main`. So a hold is lifted only by the development manager
+deciding the stoppage, by her decision being carried out, by the escalation
+being answered, or by the publication being settled — at which point the records
+stop saying the item is held, and it becomes pullable without anybody having
+edited its status. The first and the third are a person's. The second is the
+pass's own: a repair or a re-run she recorded is fired at the next pull, under
+the gates the carry-out paragraph further down names, and the hold goes with it
+— so an item awaiting carry-out waits on an interval rather than on anybody. The fourth is
 [`yoyo reconcile`](operations.md#recovering-interrupted-runs)'s: every sweep
 asks the remote again whether it carries a publication the record says is
 unfinished, and where it does — a merge that landed among others, a dropped merge
@@ -673,8 +676,11 @@ over with the parking reason named, which the paragraph after that is about. And
 a **held** item — a stoppage whose change is still on a branch, one nobody has
 decided about, or a publication that did not finish over work already integrated,
 in the sense the hold paragraph above gives it — is
-passed over with the hold named. A stoppage is, like the parking, not a wait for
-anything and will not clear on its own. An unfinished publication is the one
+passed over with the hold named. A stoppage nobody has decided about is, like
+the parking, not a wait for anything and will not clear on its own; one she has
+decided is a wait on the pass carrying the decision out, which the next pull
+does unless a gate stops it — and a gate that stops it is written onto the item
+and her docket rather than left silent. An unfinished publication is the other
 hold that is a wait: the next `yoyo reconcile` re-asks the remote, and a merge
 the forge has since made — queued and then landed, landed among others, or made
 by hand after a drop — settles on that sweep with nobody acting, while a merge
@@ -884,7 +890,7 @@ development manager. Only the courier changes, and `yoyo work --help` has what
 bounds it.
 
 **A pass also carries out what she decided about it.** A repair or a re-run she
-recorded is fired by the pass itself, oldest decision first, one per pull,
+recorded is fired by the pass itself, oldest stoppage first, one per pull,
 against a developer slot exactly as a pulled item is — so recording the decision
 is what causes it, and `yoyo triage repair` and `yoyo triage rerun` are what
 fires one now rather than at the next pull. It runs under every gate those verbs
