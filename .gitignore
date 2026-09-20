@@ -15,7 +15,6 @@
 # is what a new one silently falls into: the file is on disk, the documentation
 # tells an operator to run it, and nothing ever committed it.
 /bin/*
-!/bin/yoyo-status
 !/bin/yoyo-account
 
 # bd's atomic-write temp files: an export mid-write must never read as a dirty
