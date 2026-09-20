@@ -237,16 +237,20 @@ type Artifacts struct {
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	// PullRequest and PullRequestURL name the request the run published its
-	// branch through, where the project publishes, and PullRequestMerged what
-	// the run's record last said the forge did with it. They are on every entry
-	// about a run that published rather than only on a publication entry, because
-	// a stopped or escalated run leaves its request open on the forge exactly as
-	// it leaves its branch, and an entry that named the branch and not the
-	// request sent the development manager after the one and left the other for a
-	// person to find: yoyodyne-ifd.402 is what that cost.
-	PullRequest       int    `json:"pull_request,omitempty"`
-	PullRequestURL    string `json:"pull_request_url,omitempty"`
-	PullRequestMerged bool   `json:"pull_request_merged,omitempty"`
+	// branch through, where the project publishes, and PullRequestMerged and
+	// PullRequestMergeQueued what the run's record last said the forge did with
+	// it: merged, or holding a merge for it. They are on every entry about a run
+	// that published rather than only on a publication entry, because a stopped
+	// or escalated run leaves its request open on the forge exactly as it leaves
+	// its branch, and an entry that named the branch and not the request sent the
+	// development manager after the one and left the other for a person to find:
+	// yoyodyne-ifd.402 is what that cost. Whether the request is mergeable and
+	// what its checks say are not here, because the docket asks the forge nothing
+	// when it builds; the record is what it carries.
+	PullRequest            int    `json:"pull_request,omitempty"`
+	PullRequestURL         string `json:"pull_request_url,omitempty"`
+	PullRequestMerged      bool   `json:"pull_request_merged,omitempty"`
+	PullRequestMergeQueued bool   `json:"pull_request_merge_queued,omitempty"`
 }
 
 // Publication is an unfinished publication as the harness recorded it. There
@@ -1766,9 +1770,12 @@ func (e Entry) renderArtifacts() string {
 	// here is for the other classes: the request a stopped or escalated run left
 	// open on the forge, which a decision about the run has to account for.
 	if e.Artifacts.PullRequest > 0 && e.Class != ClassPublication {
-		state := "open on the forge, unmerged"
-		if e.Artifacts.PullRequestMerged {
+		state := "open on the forge, unmerged, no merge armed"
+		switch {
+		case e.Artifacts.PullRequestMerged:
 			state = "merged"
+		case e.Artifacts.PullRequestMergeQueued:
+			state = "open on the forge, merge armed and queued"
 		}
 		fmt.Fprintf(&rendered, "      Pull request (%s): #%d %s\n", state, e.Artifacts.PullRequest, e.Artifacts.PullRequestURL)
 	}

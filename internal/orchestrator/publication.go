@@ -187,18 +187,23 @@ func lostPublicationRecord(state runstate.State) bool {
 	return state.PublicationUnrecorded()
 }
 
-// recoverPublication asks about one run's branch, records the answer under that
-// run's own lease so the record that is rewritten is the record that was read,
-// and arms the merge where the forge holds the request open with nothing done
-// about it.
+// recoverPublication asks about one run's branch, and under that run's own
+// lease — so the record that is rewritten is the record that was read — records
+// what became of the request: merged or queued as the forge reports it, armed
+// where the forge held it open with nothing done about it, or dropped where the
+// arming refused.
 //
-// The request is written onto the record before anything is asked of the forge
-// about merging it, so a process that dies between the two leaves a record every
-// surface can read rather than one still saying nothing — the arming itself is
-// then made by the next sweep, which finds the same record with the same account
-// on it. What is written is what the forge reported: the request's head as the
-// forge holds it rather than as the promotion would have it, because a request
-// that moved is exactly what the arming below has to be able to refuse.
+// The record is written once, when that outcome is decided, and not before. The
+// selection reads the lost account with no request beside it, so a request
+// written ahead of the arming would be a record nothing selects again: a lease
+// that timed out, a process that died, or a check that refused between the two
+// would leave a request on the record beside a sentence saying none is held,
+// which is a hand merge by another route. Written only with its outcome, an
+// interruption leaves the record exactly as the run wrote it, and the next sweep
+// asks the forge again and arms. What is written is what the forge reported:
+// the request's head as the forge holds it rather than as the promotion would
+// have it, because a request that moved is exactly what the arming has to be
+// able to refuse.
 func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.State) PublicationRecovery {
 	recovery := PublicationRecovery{
 		RunID:      recorded.RunID,
@@ -258,7 +263,6 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 		// forge's answer.
 		MergeQueued: observed.AutoMerge && !observed.Merged,
 	}
-	state.PullRequest = &published
 	// The account of the loss said nothing was asked of the forge. Where the
 	// forge reports the request merged or holds a merge for it, somebody has
 	// asked — by hand, since the run did not — and the account is replaced in the
@@ -270,27 +274,36 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 	// finishes those.
 	switch {
 	case published.Merged:
-		state.PublishFailure = unconfirmedRecoveredMerge(published, state.Integration.TargetBranch)
-	case published.MergeQueued:
-		state.PublishFailure = ""
-	}
-	state.UpdatedAt = r.clock().Now()
-	if err := r.Store.Save(state); err != nil {
-		recovery.Failure = fmt.Errorf("record pull request %d for branch %s on run %s: %w",
-			observed.Number, state.Branch, state.RunID, err).Error()
-		return recovery
-	}
-	recovery.Recovered = true
-
-	switch {
-	case published.Merged:
-		recovery.Kept = fmt.Sprintf("the forge reports pull request %d merged, so there is nothing to arm; the next sweep confirms the merge on the remote and finishes the publication", published.Number)
+		recovery = r.recordRecoveredRequest(state, published, unconfirmedRecoveredMerge(published, state.Integration.TargetBranch), recovery)
+		if recovery.Failure == "" {
+			recovery.Kept = fmt.Sprintf("the forge reports pull request %d merged, so there is nothing to arm; the next sweep confirms the merge on the remote and finishes the publication", published.Number)
+		}
 		return recovery
 	case published.MergeQueued:
-		recovery.Kept = fmt.Sprintf("the forge already holds a merge for pull request %d, so there is nothing to arm; the next sweep settles the run on what the forge does with it", published.Number)
+		recovery = r.recordRecoveredRequest(state, published, "", recovery)
+		if recovery.Failure == "" {
+			recovery.Kept = fmt.Sprintf("the forge already holds a merge for pull request %d, so there is nothing to arm; the next sweep settles the run on what the forge does with it", published.Number)
+		}
 		return recovery
 	}
 	return r.armRecoveredMerge(ctx, state, published, recovery)
+}
+
+// recordRecoveredRequest is the one write a recovery makes: the request the
+// forge reported and the account that goes with what became of it, in place of
+// the account of the loss. A write that fails leaves the record as the run
+// wrote it, which is what the next sweep selects and asks about again.
+func (r Reconciler) recordRecoveredRequest(state runstate.State, published runstate.PullRequest, account string, recovery PublicationRecovery) PublicationRecovery {
+	state.PullRequest = &published
+	state.PublishFailure = account
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		recovery.Failure = fmt.Errorf("record pull request %d for branch %s on run %s: %w; the record is left as the run wrote it, and the next sweep asks the forge again",
+			published.Number, state.Branch, state.RunID, err).Error()
+		return recovery
+	}
+	recovery.Recovered = true
+	return recovery
 }
 
 // unconfirmedRecoveredMerge is what the record says about a recovered request
@@ -316,12 +329,15 @@ func unconfirmedRecoveredMerge(published runstate.PullRequest, targetBranch stri
 // and the merge would have the forge merging into a branch nobody here saw.
 //
 // A refusal at either check, or from the forge, is recorded as the dropped
-// merge it is — the account on the record, the moment beside it — which is what
-// puts the publication on the docket for triage and keeps the item held. The
-// request the forge takes is recorded queued on either answer, exactly as the
-// re-arm records one: a merge performed on the spot still owes the confirmation,
-// the merge commit, the consumed branch and the catch-up, and the run settlement
-// on the next sweep does all four for a merge it finds landed.
+// merge it is — the request, the account on the record, the moment beside it —
+// which is what puts the publication on the docket for triage and keeps the
+// item held. The request the forge takes is recorded queued on either answer,
+// exactly as the re-arm records one: a merge performed on the spot still owes
+// the confirmation, the merge commit, the consumed branch and the catch-up, and
+// the run settlement on the next sweep does all four for a merge it finds
+// landed. Nothing is written on the paths that decide nothing — a verdict the
+// record no longer carries, a promotion lease that could not be taken — so the
+// next sweep finds the record as the run wrote it and asks again.
 func (r Reconciler) armRecoveredMerge(ctx context.Context, state runstate.State, published runstate.PullRequest, recovery PublicationRecovery) PublicationRecovery {
 	// The verdict is read off the record here, at the action, and not inferred
 	// from the promotion beside it: what this asks the forge for is a publication
@@ -336,7 +352,7 @@ func (r Reconciler) armRecoveredMerge(ctx context.Context, state runstate.State,
 	}
 	integration := integrationOf(state)
 	if published.HeadCommit != integration.SourceCommit {
-		return r.recordRecoveredDrop(state, recovery, fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
+		return r.recordRecoveredDrop(state, published, recovery, fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
 			published.Number, published.HeadCommit, integration.SourceCommit))
 	}
 	promotion, err := r.Store.LeasePromotion(ctx, integration.TargetBranch)
@@ -348,7 +364,7 @@ func (r Reconciler) armRecoveredMerge(ctx context.Context, state runstate.State,
 	defer func() { _ = promotion.Release() }()
 
 	if err := r.Worktrees.VerifyRemoteTarget(ctx, integration); err != nil {
-		return r.recordRecoveredDrop(state, recovery, fmt.Errorf("check the remote target branch before merging: %w", err))
+		return r.recordRecoveredDrop(state, published, recovery, fmt.Errorf("check the remote target branch before merging: %w", err))
 	}
 	result, err := r.Publisher.Merge(ctx, publish.MergeRequest{
 		Number:     published.Number,
@@ -356,35 +372,33 @@ func (r Reconciler) armRecoveredMerge(ctx context.Context, state runstate.State,
 		Method:     mergeMethod,
 	})
 	if err != nil {
-		return r.recordRecoveredDrop(state, recovery, err)
+		return r.recordRecoveredDrop(state, published, recovery, err)
 	}
 	recovery.Armed = true
 	recovery.Queued = result.Queued
 	published.MergeMethod = string(mergeMethod)
 	published.MergeQueued = true
-	state.PullRequest = &published
 	// The account of the loss is settled by the request having been made: what
-	// it said was that nothing was asked of the forge, and something now has.
-	state.PublishFailure = ""
-	state.UpdatedAt = r.clock().Now()
-	if err := r.Store.Save(state); err != nil {
-		recovery.Failure = fmt.Errorf("the merge of pull request %d was armed and the run's record still says nothing was asked of the forge, so the next sweep will not settle what the forge does with it: %w",
-			published.Number, err).Error()
+	// it said was that nothing was asked of the forge, and something now has. A
+	// write that fails here leaves the record as the run wrote it, and the next
+	// sweep finds the forge holding the merge and records it as queued.
+	recovery = r.recordRecoveredRequest(state, published, "", recovery)
+	if recovery.Failure != "" {
+		recovery.Failure = fmt.Sprintf("the merge of pull request %d was armed and the run's record still says nothing was asked of the forge: %s", published.Number, recovery.Failure)
 	}
 	return recovery
 }
 
 // recordRecoveredDrop writes a merge this sweep would not or could not arm onto
-// the record as the dropped merge it is, in the words the run's own merge would
-// have recorded it in, so the docket entry and the item's line read the same
-// whichever of the two found it.
-func (r Reconciler) recordRecoveredDrop(state runstate.State, recovery PublicationRecovery, cause error) PublicationRecovery {
+// the record — the request beside the dropped merge it is, in the words the
+// run's own merge would have recorded it in — so the docket entry and the item's
+// line read the same whichever of the two found it.
+func (r Reconciler) recordRecoveredDrop(state runstate.State, published runstate.PullRequest, recovery PublicationRecovery, cause error) PublicationRecovery {
 	recovery.Refused = cause.Error()
-	state.PublishFailure = cause.Error()
 	state.MergeDrop = &runstate.MergeDrop{At: r.clock().Now(), Reason: cause.Error()}
-	state.UpdatedAt = r.clock().Now()
-	if err := r.Store.Save(state); err != nil {
-		recovery.Failure = fmt.Errorf("record why the merge of pull request %d was not armed: %w", state.PullRequest.Number, err).Error()
+	recovery = r.recordRecoveredRequest(state, published, cause.Error(), recovery)
+	if recovery.Failure != "" {
+		recovery.Failure = fmt.Sprintf("the merge of pull request %d was not armed and the record could not say why: %s", published.Number, recovery.Failure)
 	}
 	return recovery
 }

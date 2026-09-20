@@ -1117,8 +1117,11 @@ head has to be the promoted commit; the remote target has to pass the same
 pre-merge check the run's merge makes; and the request is pinned to that commit,
 made by the same method, under the target branch's promotion lease.
 The forge's answer is recorded as a queued merge on either answer, exactly as a
-re-arm records one, and the next sweep settles the run on what the forge does
-with it — confirms the merge, records the merge commit, catches your local
+re-arm records one — and the record is written only with that answer, so a
+sweep interrupted between finding the request and arming it leaves the record
+as the run wrote it for the next sweep to ask again, rather than a request
+beside a line saying none is held — and the next sweep settles the run on what
+the forge does with it — confirms the merge, records the merge commit, catches your local
 branch up, deletes the consumed branch, and closes the docket entry the
 promotion had open. A request the forge has already merged, or already holds a
 merge for, needs no arming: something has asked the forge, so the account of
@@ -1575,10 +1578,12 @@ Needs a human (3):
   listed is one that is not. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
   derivation, and each says whose move it is: the forge's while it holds the
-  merge queued, the development manager's once it has dropped one, and the
-  operator's for a request nothing ever asked it to merge. All three leave the
-  line the moment the forge records the merge and
-  [`yoyo reconcile`](#recovering-interrupted-runs) settles it.
+  merge queued, the development manager's once it has dropped one, the
+  operator's for a request nothing ever asked it to merge, and the harness's for
+  a promotion whose record holds no request at all — the next
+  [`yoyo reconcile`](#recovering-interrupted-runs) looks the request up by the
+  run's branch and arms its merge. All four leave the line the moment the forge
+  records the merge and `yoyo reconcile` settles it.
 
 A line with nothing in it says `nothing` in words, and a line whose records could
 not be read says that instead — never `nothing`, which would be a confident

@@ -135,7 +135,12 @@ four places rather than trusting the argument above:
   commit, by the same method, under the target branch's promotion lease. The
   forge's answer is recorded queued on either answer, as a re-arm records one,
   and the next sweep's run settlement finishes the publication and closes the
-  docket entry. A request already merged or already holding a merge is recorded
+  docket entry. The record is written once, with that outcome, and not before:
+  a lease that times out, a process that dies, or a check that refuses between
+  finding the request and arming it leaves the record exactly as the run wrote
+  it, and the next sweep asks the forge again — a request written ahead of the
+  arming would be a record nothing selects again, shown everywhere as a merge
+  nobody asked for. A request already merged or already holding a merge is recorded
   as that in the same write, with the account of the loss replaced — by nothing
   for a queued merge, and by the unconfirmed-merge line for a performed one, so
   the finishing sweep selects and finishes it as it finishes any merge the run
@@ -144,8 +149,11 @@ four places rather than trusting the argument above:
   refusal is recorded as the dropped merge it is, on the same docket entry. The
   sweep never repeats a dropped merge — that stays `yoyo triage rearm`.
 - Every docket entry about a run that published — stopped, escalated, or a
-  death — names the pull request beside the branch, so the development manager
-  reads the open request where the run's other artifacts are.
+  death — names the pull request beside the branch and what the record last
+  knew the forge did with it (nothing armed, a merge armed and queued, or
+  merged), so the development manager reads the open request where the run's
+  other artifacts are. Mergeability and checks are not carried: the docket asks
+  the forge nothing when it builds.
 
 The recovery, the docket, and the status line all select on the run's own
 account of the loss — the sentence `publishIntegration` now writes — and not on
@@ -173,5 +181,6 @@ holding the status line's words), and the reconcile recovery — the merge armed
 and then settled by the next sweep with the docket entry closed, a forge refusal
 docketed for triage, a request whose head moved left unarmed, a request already
 merged finished by the next sweep, a request somebody queued by hand settled by
-the next sweep, nothing armed without the recorded approval, and a forge that
-holds no request for the branch.
+the next sweep, nothing armed without the recorded approval, a recovery
+interrupted at the promotion lease leaving the record for the next sweep to arm,
+and a forge that holds no request for the branch.

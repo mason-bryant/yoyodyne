@@ -1515,6 +1515,7 @@ func docketArtifacts(state runstate.State) triage.Artifacts {
 		artifacts.PullRequest = state.PullRequest.Number
 		artifacts.PullRequestURL = state.PullRequest.URL
 		artifacts.PullRequestMerged = state.PullRequest.Merged
+		artifacts.PullRequestMergeQueued = state.PullRequest.MergeQueued
 	}
 	return artifacts
 }

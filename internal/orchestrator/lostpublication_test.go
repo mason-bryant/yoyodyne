@@ -13,6 +13,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -122,10 +123,10 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	if entry.Artifacts.PullRequest != outcome.PullRequest.Number || entry.Artifacts.PullRequestURL != outcome.PullRequest.URL {
 		t.Fatalf("entry artifacts = %#v, want pull request #%d %s named", entry.Artifacts, outcome.PullRequest.Number, outcome.PullRequest.URL)
 	}
-	if entry.Artifacts.PullRequestMerged {
-		t.Error("the entry reports the request merged, and nothing merged it")
+	if entry.Artifacts.PullRequestMerged || entry.Artifacts.PullRequestMergeQueued {
+		t.Errorf("the entry artifacts = %#v report a merge, and nothing merged or armed one", entry.Artifacts)
 	}
-	if rendered := entry.Render(); !strings.Contains(rendered, "Pull request (open on the forge, unmerged): #1") {
+	if rendered := entry.Render(); !strings.Contains(rendered, "Pull request (open on the forge, unmerged, no merge armed): #1") {
 		t.Errorf("the rendered entry does not name the open request:\n%s", rendered)
 	}
 }
@@ -534,6 +535,69 @@ func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
 	if !strings.Contains(recovery.Failure, `review decision "repair"`) || !strings.Contains(recovery.Failure, "nothing authorizes the merge") {
 		t.Errorf("failure = %q, want the missing approval named", recovery.Failure)
 	}
+}
+
+// A recovery interrupted between finding the request and arming it — the
+// target's promotion queue timing out, here — writes nothing: the record stays
+// exactly as the run wrote it, with no request beside the lost account, and the
+// next sweep asks the forge again and arms. A request written ahead of the
+// arming would be a record nothing selects again, presented everywhere as a
+// merge nobody asked for — the hand merge by another route.
+func TestAnInterruptedRecoveryLeavesTheRecordForTheNextSweep(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	lost := loseThePublication(t, fixture)
+	fixture.forge.queued = false
+	fixture.forge.merges = nil
+
+	interrupted := fixture.reconciler(t)
+	interrupted.Store = &refusingPromotionLease{ReconcileStore: fixture.store}
+	recoveries, err := interrupted.RecoverPublications(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverPublications() error = %v", err)
+	}
+	if len(recoveries) != 1 || recoveries[0].Recovered || recoveries[0].Armed || !strings.Contains(recoveries[0].Failure, "held the lease") {
+		t.Fatalf("recoveries = %#v, want nothing recovered or armed, and the lease named", recoveries)
+	}
+	if len(fixture.forge.merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked while the promotion lease was held", fixture.forge.merges)
+	}
+	untouched, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if untouched.PullRequest != nil {
+		t.Fatalf("record = pull request %#v beside the account %q; want no request written ahead of the arming", untouched.PullRequest, untouched.PublishFailure)
+	}
+	if untouched.PublishFailure != lost.PublishFailure || !untouched.PublicationUnrecorded() {
+		t.Fatalf("publish failure = %q, want the run's own account left for the next sweep", untouched.PublishFailure)
+	}
+
+	// The next sweep, with the lease free, arms it.
+	recoveries = fixture.recover(t)
+	if len(recoveries) != 1 || !recoveries[0].Recovered || !recoveries[0].Armed {
+		t.Fatalf("recoveries = %#v, want the next sweep to arm the merge", recoveries)
+	}
+	armed, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if armed.PullRequest == nil || !armed.PullRequest.MergeQueued || armed.PullRequest.Number != outcome.PullRequest.Number || armed.PublishFailure != "" {
+		t.Fatalf("armed record = pull request %#v, publish failure %q; want the merge queued and the loss settled", armed.PullRequest, armed.PublishFailure)
+	}
+}
+
+// refusingPromotionLease is the run store with the target branch's promotion
+// queue never draining: the lease is refused the way LeasePromotion refuses one
+// after the whole wait, without spending the wait.
+type refusingPromotionLease struct {
+	ReconcileStore
+}
+
+func (r *refusingPromotionLease) LeasePromotion(_ context.Context, targetBranch string) (*runstate.Lease, error) {
+	return nil, fmt.Errorf("wait to promote into %s: another promotion held the lease for the whole 15m0s wait", targetBranch)
 }
 
 // A merge the forge refuses is not forced: the recovered request is recorded
