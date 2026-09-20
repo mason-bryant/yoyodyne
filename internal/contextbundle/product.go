@@ -1194,10 +1194,10 @@ func readShippedDocumentation(root string, shipped []string, remainingBytes int)
 func ShippedDocumentationStanding(bytes int) string {
 	switch {
 	case bytes >= ShippedDocumentationCeiling:
-		return fmt.Sprintf("the shipped documentation is %d bytes, at or past the %d-byte ceiling: carrying it whole is a product decision again, and until it is made make test fails on the set (yoyodyne-ifd.403; yoyodyne-ifd.117.4 is the reduction)",
+		return fmt.Sprintf("the shipped documentation is %d bytes, at or past the %d-byte ceiling: carrying it whole is a product decision again, and until it is made make test fails on the set (yoyodyne-ifd.240 is the precedent for raising it rather than trimming or narrowing the set; yoyodyne-ifd.403 set the ceiling; yoyodyne-ifd.117.4 is the reduction)",
 			bytes, ShippedDocumentationCeiling)
 	case bytes > ShippedDocumentationCeiling-ShippedDocumentationMargin:
-		return fmt.Sprintf("the shipped documentation is %d bytes, within %d bytes of the %d-byte ceiling at which carrying it whole is a product decision again: %d bytes of room remain before make test fails on the set (yoyodyne-ifd.403; yoyodyne-ifd.117.4 is the reduction)",
+		return fmt.Sprintf("the shipped documentation is %d bytes, within %d bytes of the %d-byte ceiling at which carrying it whole is a product decision again: %d bytes of room remain before make test fails on the set (yoyodyne-ifd.240 is the precedent for raising it rather than trimming or narrowing the set; yoyodyne-ifd.403 set the ceiling; yoyodyne-ifd.117.4 is the reduction)",
 			bytes, ShippedDocumentationMargin, ShippedDocumentationCeiling, ShippedDocumentationCeiling-bytes)
 	default:
 		return ""
