@@ -164,8 +164,12 @@ further attempts, and [`yoyo triage
 repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
 run's repair loop on the change it already has rather than starting the item
 over. Its opposite is `yoyo triage rerun`, which starts the item over for a
-change whose ground moved. **The two are different acts with different
-accounting** — one spends the item's repair grant and the review rounds that
+change whose ground moved. **A watching `yoyo work` session fires whichever of
+the two she recorded, one per pull, without anybody typing either command**, so
+the verbs are what fires a decision now rather than at the next pull; every gate
+they ask refuses the pass in the same way, and every refusal is written onto the
+item and shown on her docket entry naming the gate and what would clear it.
+**The two are different acts with different accounting** — one spends the item's repair grant and the review rounds that
 grant buys, the other spends its re-run budget — and neither of them is `yoyo
 run <beads-id>`, which is you naming an item rather than carrying out a decision
 somebody recorded about a run that stopped. `yoyo run` enforces that difference
@@ -621,11 +625,14 @@ there, and releasing an outstanding publication would start one over work the
 promotion has already put on the target branch — which is what
 [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
 cost, three developer runs and three reviews each re-deriving that the change
-was already on `main`. So a hold is lifted only by triage picking the change up,
-by the escalation being answered, or by the publication being settled
-— at which point the records stop saying the item is
-held, and it becomes pullable without anybody having edited its status. The
-first two are a person's. The third is
+was already on `main`. So a hold is lifted only by the development manager
+deciding the stoppage, by her decision being carried out, by the escalation
+being answered, or by the publication being settled — at which point the records
+stop saying the item is held, and it becomes pullable without anybody having
+edited its status. The first and the third are a person's. The second is the
+pass's own: a repair or a re-run she recorded is fired at the next pull, under
+the gates the carry-out paragraph further down names, and the hold goes with it
+— so an item awaiting carry-out waits on an interval rather than on anybody. The fourth is
 [`yoyo reconcile`](operations.md#recovering-interrupted-runs)'s: every sweep
 asks the remote again whether it carries a publication the record says is
 unfinished, and where it does — a merge that landed among others, a dropped merge
@@ -669,8 +676,11 @@ over with the parking reason named, which the paragraph after that is about. And
 a **held** item — a stoppage whose change is still on a branch, one nobody has
 decided about, or a publication that did not finish over work already integrated,
 in the sense the hold paragraph above gives it — is
-passed over with the hold named. A stoppage is, like the parking, not a wait for
-anything and will not clear on its own. An unfinished publication is the one
+passed over with the hold named. A stoppage nobody has decided about is, like
+the parking, not a wait for anything and will not clear on its own; one she has
+decided is a wait on the pass carrying the decision out, which the next pull
+does unless a gate stops it — and a gate that stops it is written onto the item
+and her docket rather than left silent. An unfinished publication is the other
 hold that is a wait: the next `yoyo reconcile` re-asks the remote, and a merge
 the forge has since made — queued and then landed, landed among others, or made
 by hand after a drop — settles on that sweep with nobody acting, while a merge
@@ -879,6 +889,26 @@ attempt, rather than that run waiting on the docket for somebody to tell the
 development manager. Only the courier changes, and `yoyo work --help` has what
 bounds it.
 
+**A pass also carries out what she decided about it.** A repair or a re-run she
+recorded is fired by the pass itself, oldest stoppage first, one per pull,
+against a developer slot exactly as a pulled item is — so recording the decision
+is what causes it, and `yoyo triage repair` and `yoyo triage rerun` are what
+fires one now rather than at the next pull. It runs under every gate those verbs
+already ask: your pause, your intake hold, the item's own triage budgets,
+developer capacity, and the preserved worktree being what a continued developer
+could be handed back. A refusal spends nothing and is never silent: it is
+written onto the item's triage record and the docket entry she reads comes back
+carrying the decision and the gate, naming what would clear it. A gate shut for
+one item — a directive, work it waits on, a worktree somebody has been in — is
+retried at a paced interval rather than every poll, so one decision that cannot
+fire does not starve the ones behind it; a gate shut for everything at once —
+your pause, your intake hold, a full harness — is attempted once while it
+stands and again on the first pull after it opens. Before this, thirty-three
+decided items stood unfired for days because the only executor was a person
+typing one of the two verbs. [Deciding what becomes of stopped
+work](conversation.md#deciding-what-becomes-of-stopped-work) is the decision
+side of it.
+
 **A pass also fires whichever [recurring task](configuration.md#recurring-tasks)
 is due**, where a project has configured any — a role woken on a cadence to look
 at its own domain, rather than because something happened. At most one per pass,
@@ -917,13 +947,16 @@ until you stop it. Nothing else about the pass changes, and nothing needed to:
 the re-reading above is per pull. An idle session costs one local tracker read
 per interval and asks no provider anything, unless it has a stopped run to put to
 the development manager, a recurring task that has come due, or a refused tracker
-block to wake a role for. Holding intake
+block to wake a role for, or a triage decision of hers to carry out. Holding intake
 brakes a watching session in place rather
 than stopping it — it keeps polling, chooses nothing, and resumes when you
-release it. It does not stop those three, which are read before it and choose no
+release it. It does not stop the first three, which are read before it and choose no
 work: a held intake still delivers a stoppage, still fires a due task, and still
 wakes a role to put its own refused block right, so
-`yoyo pause` is the switch for stopping what a quiet session spends.
+`yoyo pause` is the switch for stopping what a quiet session spends. It does stop
+the fourth: carrying out a decision is the harness choosing work, so a held intake
+leaves the decision standing and the docket entry says the hold is what it is
+waiting on, and the first pull after you release it carries the decision out.
 
 **Only one session watches a product at a time.** A second `yoyo work --watch`
 is refused as it starts, in a sentence naming the session holding the watch and

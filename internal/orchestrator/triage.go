@@ -186,7 +186,10 @@ type Docketer struct {
 // standing fact to whoever reads the docket.
 type DocketBuild struct {
 	// Entries are the stoppages nobody has decided about, which is what a docket
-	// is for. An entry a triage decision closed is not among them.
+	// is for. An entry a triage decision closed is not among them — unless the
+	// harness has since tried to carry that decision out and a gate stopped it,
+	// which puts the entry back carrying both the decision and the gate; see
+	// openDocket.
 	Entries []triage.Entry `json:"entries"`
 	Added   int            `json:"added"`
 	// Closed is how many of the docket's entries have been decided and are
@@ -260,9 +263,49 @@ func (d Docketer) Build() (DocketBuild, error) {
 	// again from the same durable records the next time anything scans; what a
 	// decision ends is its being a question, and this is where the questions are
 	// handed over.
-	open, closed := openDocket(entries, now)
-	problems = append(problems, d.joinDecisions(open, publicationsOf(recorded))...)
-	return DocketBuild{Entries: open, Added: added, Closed: closed}, errors.Join(problems...)
+	//
+	// The record is joined before the questions are separated, because one kind
+	// of settled entry is a question again: a decision the harness carries out
+	// itself, tried, and stopped by a gate. Which entries those are is on the
+	// item's record rather than on the entry, so the join has to be read to find
+	// them. It is read for the settled entries whose decision the harness carries
+	// out and for no other settled entry, since a re-scope, a wait, and an
+	// escalation are never attempted and have nothing to be stopped by.
+	listable, unlisted := listableDocket(entries, now)
+	problems = append(problems, d.joinDecisions(listable, publicationsOf(recorded))...)
+	open, closed := openDocket(listable, now)
+	return DocketBuild{Entries: open, Added: added, Closed: closed + unlisted}, errors.Join(problems...)
+}
+
+// listableDocket is every entry the docket might list, and how many it will
+// not whatever the record says: the entries nobody has decided about, and the
+// settled ones whose decision is one the harness carries out — which are listed
+// again only where the harness has tried and a gate stopped it, and that is
+// read off the item's record by the join. The rest were settled by a decision
+// nothing attempts, so nothing about them changes after the closure.
+func listableDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
+	listable := make([]triage.Entry, 0, len(entries))
+	unlisted := 0
+	for _, entry := range entries {
+		if entry.Closed != nil && entry.Closed.Holds(now) && !harnessCarriesOut(entry.Closed.Decision) {
+			unlisted++
+			continue
+		}
+		listable = append(listable, entry)
+	}
+	return listable, unlisted
+}
+
+// harnessCarriesOut reports a decision the scheduling pass fires itself, which
+// is the two that ask for a run. A re-arm is a merge request the operator still
+// repeats by hand, and the other three ask for nothing.
+func harnessCarriesOut(decision string) bool {
+	switch strings.TrimSpace(decision) {
+	case runstate.TriageDecisionRepair, runstate.TriageDecisionRerun:
+		return true
+	default:
+		return false
+	}
 }
 
 // openDocket separates the stoppages nobody has decided about from the ones a
@@ -273,11 +316,22 @@ func (d Docketer) Build() (DocketBuild, error) {
 // question again once it has been sitting there as long as it took to become one
 // in the first place. The entry still carries what was decided, so the reader
 // who gets it back is told they have seen it before.
+//
+// So does a decision the harness tried to carry out and a gate stopped, for the
+// reason the whole carry-out exists: a decision recorded and never fired, with
+// nothing anywhere saying why, is the thirty-three-item silence of 2026-09-07.
+// The entry comes back carrying the decision and the gate, so the development
+// manager reads it as a decision she made that is not happening — and what it
+// asks of her is the gate, since deciding the same stoppage again is what the
+// budgets refuse. A gate that clears on its own is listed too, worded as
+// waiting: a decision waiting on the operator's hold is still a decision that is
+// not happening, and the docket saying so is what the operator's own reading of
+// it is built on.
 func openDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
 	open := make([]triage.Entry, 0, len(entries))
 	closed := 0
 	for _, entry := range entries {
-		if entry.Closed != nil && entry.Closed.Holds(now) {
+		if entry.Closed != nil && entry.Closed.Holds(now) && !carryOutStopped(entry) {
 			closed++
 			continue
 		}
@@ -289,6 +343,14 @@ func openDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
 		return nil, closed
 	}
 	return open, closed
+}
+
+// carryOutStopped reports a settled entry whose decision the harness has tried to
+// carry out since it was decided, and been stopped. The finding has to be about
+// this decision — made after it — because a finding about an earlier decision on
+// the same stoppage is one this decision has since superseded.
+func carryOutStopped(entry triage.Entry) bool {
+	return entry.Closed != nil && entry.CarryOut != nil && entry.CarryOut.RefusedAt.After(entry.Closed.ClosedAt)
 }
 
 // standingDocket is what the docket already holds for each key: an entry nobody
@@ -381,8 +443,42 @@ func (d Docketer) joinDecisions(entries []triage.Entry, published map[string]pub
 		// answers the escalation this entry produced, so it is always made after the
 		// entry exists.
 		entry.Overrides = docketedOverrides(decisions.counters.Overrides)
+		// And what became of the harness's own attempt to carry this entry's
+		// decision out, where a gate stopped it. Joined here for the sharpest
+		// version of the reason the two above are: the attempt is made after the
+		// decision, which is made after the entry, so one frozen into the entry
+		// could only ever be absent — and an absent one reads as a decision the
+		// harness is about to act on, which is precisely what a refused carry-out
+		// is not.
+		entry.CarryOut = docketedCarryOut(*entry, decisions.counters)
 	}
 	return problems
+}
+
+// docketedCarryOut is the carry-out finding standing about one entry's own
+// stoppage, in the shape the entry carries it. It is matched on the run rather
+// than on the item, because an item with several stoppages has a decision and an
+// attempt for each of them and a finding shown against the wrong one is a finding
+// about a change the reader cannot see.
+//
+// A finding older than the entry is about a stoppage this one replaced: a
+// repaired run that died again is docketed afresh under the same run, and what
+// the harness was stopped doing about the last stoppage says nothing about this
+// one.
+func docketedCarryOut(entry triage.Entry, counters runstate.TriageCounters) *triage.CarryOut {
+	recorded, found := counters.CarryOutOf(entry.RunID)
+	if !found || recorded.RefusedAt.Before(entry.RecordedAt) {
+		return nil
+	}
+	return &triage.CarryOut{
+		Decision:  recorded.Decision,
+		Gate:      recorded.Gate,
+		Refusal:   recorded.Refusal,
+		Clears:    recorded.Clears,
+		Waiting:   recorded.Waiting,
+		Attempts:  recorded.Attempts,
+		RefusedAt: recorded.RefusedAt,
+	}
 }
 
 // itemDecisions is one work item's triage record as the guards read it: what has
