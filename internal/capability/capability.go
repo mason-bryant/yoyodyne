@@ -45,6 +45,16 @@ const (
 	// no write of any kind, which is what makes it the capability a step that only
 	// looks at a change can be held to.
 	RepositoryRead Capability = "repository.read"
+	// RepositoryList is being told the names one directory of the repository
+	// holds, at a recorded commit. It is apart from RepositoryRead because the two
+	// answer different questions and are held by different roles: every role has
+	// repository content read on its behalf — the diff, the context bundle — and
+	// only the roles that hold both may name a path of their own to be read, which
+	// is the management conversations' repository block. A role that may be told
+	// what the tree holds is the role that may ask for one thing in it, and the
+	// reviewer, whose evidence is the change, holds neither in that sense. It is
+	// granted by the configurable-workflows design's authority-model section.
+	RepositoryList Capability = "repository.list"
 	// WorktreeMutate is writing inside the run's own isolated worktree and on its
 	// own branch: creating it, committing what a developer left, removing it once
 	// its work is somewhere else. It never reaches the branch a run promotes into,
@@ -199,6 +209,7 @@ var declared = []Capability{
 	WorkItemRead,
 	WorkItemMutate,
 	RepositoryRead,
+	RepositoryList,
 	WorktreeMutate,
 	TargetBranchMutate,
 	PromotionLease,

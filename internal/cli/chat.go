@@ -20,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/evaluation"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/repositoryread"
 	"github.com/mason-bryant/yoyodyne/internal/research"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -70,6 +71,11 @@ type chatOutput struct {
 	Research          []chat.ResearchRound   `json:"research,omitempty"`
 	Evaluation        *evaluation.Evaluation `json:"evaluation,omitempty"`
 	EvaluationProblem string                 `json:"evaluation_problem,omitempty"`
+	// RepositoryReads are the rounds of reading the repository at a recorded
+	// commit the reply set off. Each is recorded on the conversation as the
+	// commit, the path, and the time, and reported here for the reason the
+	// research is: what a reply's advice rests on is the operator's to see.
+	RepositoryReads []chat.RepositoryRound `json:"repository_reads,omitempty"`
 	// ResultsCarriedOver reports that the reply stopped where it did because the
 	// product manager ran out of rounds of tracker actions, with results it has
 	// not seen. They are recorded with the conversation and reach it when the
@@ -233,6 +239,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Actions:            reply.Actions,
 			Exchanges:          reply.Exchanges,
 			Research:           reply.Research,
+			RepositoryReads:    reply.RepositoryReads,
 			Evaluation:         reply.Evaluation,
 			EvaluationProblem:  reply.EvaluationProblem,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
@@ -247,6 +254,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
 	printChatResearch(stdout, reply.Research)
+	printChatRepositoryReads(stdout, reply.RepositoryReads)
 	printChatEvaluation(stdout, reply.Evaluation, reply.EvaluationProblem)
 	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
@@ -589,6 +597,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// hand like the tracker is: the role names a question and a permitted
 		// source, and nothing about what runs or where it reaches is the role's.
 		Research: conversationResearch(parts),
+		// How a management role reads the repository: a named path resolved by the
+		// harness's own Git against the tree of the commit HEAD names at that
+		// moment, never the working tree. It is wired for every role because the
+		// authority to ask is decided in the chat package's table rather than
+		// here, and a reader nobody may ask is never asked.
+		RepositoryReader: conversationRepositoryReader(parts),
 		// Where a recorded recommendation about an operator's idea is kept. It is
 		// wired for every role because the authority to record one is decided in
 		// the chat package's table rather than here, and a store nobody may write
@@ -807,6 +821,19 @@ func conversationResearch(parts components) research.Runner {
 	}
 }
 
+// conversationRepositoryReader is the repository-read capability a conversation
+// performs on a management role's behalf. Every path it resolves is read out of
+// the tree of one recorded commit in the primary checkout, so the working tree —
+// which may hold an operator's uncommitted edit — is never what a role is shown,
+// and the redact values are the same ones every other provider-facing path uses.
+func conversationRepositoryReader(parts components) repositoryread.Reader {
+	return repositoryread.Reader{
+		Process:      parts.runner,
+		Directory:    parts.repository,
+		RedactValues: parts.redactValues,
+	}
+}
+
 // chatTracker is the work-item client a conversation acts through: it reads the
 // tracker state the product context is built from, and it is what an approved
 // proposal is created with. Both are bounded the same way, so no tracker call a
@@ -840,6 +867,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		// Research already happened and an evaluation was already recorded, so both
 		// travel with the failure for the same reason the actions do.
 		output.Research = reply.Research
+		output.RepositoryReads = reply.RepositoryReads
 		output.Evaluation = reply.Evaluation
 		output.EvaluationProblem = reply.EvaluationProblem
 		output.ResultsCarriedOver = reply.ResultsCarriedOver
@@ -858,6 +886,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
 	printChatResearch(stdout, output.Research)
+	printChatRepositoryReads(stdout, output.RepositoryReads)
 	printChatEvaluation(stdout, output.Evaluation, output.EvaluationProblem)
 	printChatExchanges(stdout, role, output.Exchanges)
 	printChatAdmitted(stdout, output.Admitted)
@@ -1002,6 +1031,18 @@ func printChatExchanges(writer io.Writer, role domain.AgentRole, exchanges []cha
 // above, and a page of retrieved text under it would bury the answer in its own
 // sources.
 func printChatResearch(writer io.Writer, rounds []chat.ResearchRound) {
+	if len(rounds) == 0 {
+		return
+	}
+	fmt.Fprintln(writer)
+	for _, round := range rounds {
+		fmt.Fprint(writer, round.Render())
+	}
+}
+
+// printChatRepositoryReads names what the harness read from the repository and
+// at which commit, one line per path. The content is in the reply above it.
+func printChatRepositoryReads(writer io.Writer, rounds []chat.RepositoryRound) {
 	if len(rounds) == 0 {
 		return
 	}

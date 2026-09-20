@@ -143,6 +143,13 @@ const (
 	// answer still happened and still spent the exchange's budget.
 	EventExchangeRound  EventType = "exchange.round"
 	EventExchangeClosed EventType = "exchange.closed"
+	// A repository path the harness read or listed for a management conversation,
+	// recorded as the commit it was read at, the path, and the time. It is in the
+	// conversation's own log because it is what the role's advice was built from:
+	// a reply that rests on a file is a reply somebody may later need to hold
+	// against the commit the file was read at. One event per path, and a path
+	// that was refused is recorded with the refusal rather than left out.
+	EventRepositoryRead EventType = "repository.read"
 )
 
 type Event struct {

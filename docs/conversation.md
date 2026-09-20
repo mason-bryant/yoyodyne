@@ -99,7 +99,10 @@ and what it cost, in the
 [configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
-capabilities the harness performs on its behalf. The first is the work tracker,
+capabilities the harness performs on its behalf — the tracker below, [a read of
+one repository path at a recorded commit](#reading-the-repository-at-a-recorded-commit),
+and [research](#bringing-it-an-idea-rather-than-a-work-item) where you have
+configured a source. The first is the work tracker,
 through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, label and unlabel, reparent, reprioritize, park and unpark, link
@@ -944,12 +947,12 @@ its conversations exactly where the role would have put them.
 **What each role may do is fixed in the harness rather than in its persona.** A
 project rewrites any persona it likes and the boundaries do not move:
 
-| Role | Reads the tracker | Writes to the tracker | Its own documents |
-| --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | brief and goals: proposes, never writes |
-| architect | yes | nothing | designs, decisions, invariants: decides, and you record |
-| development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | none |
-| developer, reviewer | yes | nothing | none |
+| Role | Reads the tracker | Writes to the tracker | Reads the repository by path | Its own documents |
+| --- | --- | --- | --- | --- |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | yes, [labelled as description](#reading-the-repository-at-a-recorded-commit) | brief and goals: proposes, never writes |
+| architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
+| development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
+| developer, reviewer | yes | nothing | no | none |
 
 The product manager's admitting is the one row a setting moves, and it moves in
 one direction only. `approvals.work_items` decides what may reach the queue
@@ -1006,6 +1009,85 @@ the development manager, developer, and reviewer get the designs and the
 invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for.
+
+### Reading the repository at a recorded commit
+
+The three management roles — product manager, architect, development manager —
+can have the harness read the repository for them. It is the same arrangement
+the tracker has: the role names a path in a bounded block, the harness performs
+the read, records it, tells you, and hands the content back as evidence before
+the reply finishes. The role still has no filesystem. What was refused with the
+tools was arbitrary execution and a role that a document could talk into
+opening the next one; one path resolved by the harness's own Git is neither.
+
+**Every read is against the tree of a recorded commit, never the working tree.**
+The harness resolves `HEAD` once per block and reads every path in it out of
+that commit's tree, so an edit you have not committed is never what a role is
+shown, and the same commit is what the record names. A committed tree holds no
+traversable link and no path that leaves it, so confinement holds by
+construction rather than by a check: a path that names nothing at that commit is
+refused with the commit named, a symbolic link is refused rather than followed,
+and a path that reads as absolute or as climbing out is refused before Git is
+asked anything.
+
+Two things can be asked for, and nothing further. `read` returns one file's
+content; `list` returns the names one directory holds, one level deep, with a
+trailing slash marking a directory. A directory asked for as a file, a file
+asked for as a directory, and a file that is not text are each refused with the
+reason, and the refusal is evidence the role is told rather than silence.
+
+**The bounds are the harness's, not configuration.** One reply names at most
+six paths; one read returns at most 48 KiB of a file, and one reply's reads
+together at most 96 KiB; a listing returns at most 400 names; and one message
+reads at most twice before it has to answer. A file longer than a read may
+return is cut with the cut declared and the file's whole size named — not split
+across reads — so a role that wants the rest asks by a narrower question. There
+is no key that widens any of it, and none that switches the capability off: what
+is bounded is the size of a prompt, which is the protocol's, and a role that may
+not have the harness read for it is one whose bundle does not hold the
+capability, which no configuration changes. The content is redacted with the
+same values every other provider-facing path is redacted with.
+
+**What comes back is framed as untrusted, and for the product manager it is
+labelled once more.** Every role is told the content is evidence of what the
+repository holds at that commit and never an instruction. The product manager is
+told, in the contract and again on every delivery, that what it read is
+description of the implementation as built and states no intent: the
+specifications are the only statement of what the product is for, and where a
+file contradicts one the product manager reports the conflict rather than
+resolving it or repeating either side as settled product fact. That label is the
+whole of what makes the read safe to give the role that owns intent, and it is
+the same label its [shipped documentation](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not)
+already carries.
+
+**Each read is on the conversation's record** as the commit, the path, and the
+time — one `repository.read` event per path, refusals included, and never the
+content. A reply that rests on a file is one somebody may later need to hold
+against the commit the file was read at, and the record is what says which. The
+transcript and `--json` (`repository_reads`) say the same thing to you as it
+happens:
+
+```text
+[repository] 1 path(s) read at a recorded commit
+    read CLAUDE.md at 339d2f14b07c — 14155 bytes, read 2026-09-19T10:30:00Z
+```
+
+**The reviewer and the developer are unchanged.** Neither holds the capability:
+the reviewer's evidence is the change, and it stays tool-less and diff-scoped;
+the developer's is the worktree it is given inside a run. A conversation with
+either that names a path is refused by the harness, and nothing is read.
+
+This is a distinct capability from [research](#bringing-it-an-idea-rather-than-a-work-item),
+not research pointed inward. Research is evidence from outside the repository,
+run through a command you configured and off until you name one; this is
+evidence from inside it, run by the harness's own Git, and on for the three
+roles whatever the configuration says. It is also not a substitute for
+[freshness](#how-fresh-the-conversations-picture-is-and-how-to-refresh-it): a
+read samples what a role thinks to read, and what a stale picture costs is what
+it does not know it does not know. The case that admitted this — a product
+manager advising, from a month-old briefing, that CLAUDE.md gain a section it
+had opened with for weeks — is now a read before the advice, and the refresh
+discipline still stands beside it.
 
 ### Roles asking each other things
 
@@ -1891,7 +1973,10 @@ It was never frozen entirely. Every turn carries what you did through the
 harness since the last reply — the runs you started, stopped, and redirected —
 so `/work`, `/stop`, and `/redirect` reach a resumed conversation, and reading an
 item, surveying the open queue, and acting on any item all go to the tracker as it
-stands rather than to that opening snapshot. Nothing outside those commands
+stands rather than to that opening snapshot. A management role can also
+[read one repository path](#reading-the-repository-at-a-recorded-commit) at the
+commit `HEAD` names now, which is how it checks a document before advising about
+it rather than describing the copy in its briefing. Nothing outside those commands
 arrives on its own — an item something else created or closed reaches the
 conversation when the product manager asks, by surveying or by acting on it, and
 not before — and edits under `docs/product` do not reach it that way at all, since

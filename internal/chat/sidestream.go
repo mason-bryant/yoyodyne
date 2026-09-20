@@ -48,6 +48,11 @@ func (a Authority) OnSideStream() Authority {
 	narrowed.Concerns = a.Concerns && sidestream.Permits(capability.ConcernRaise)
 	narrowed.Research = a.Research && sidestream.Permits(capability.ResearchCommission)
 	narrowed.Evaluations = a.Evaluations && sidestream.Permits(capability.EvaluationRecord)
+	// A side thread reads the evidence it was given and names no path of its
+	// own: the named read is the pair of capabilities, and the list is not one a
+	// side thread holds.
+	narrowed.RepositoryReads = a.RepositoryReads && sidestream.Permits(capability.RepositoryRead) &&
+		sidestream.Permits(capability.RepositoryList)
 	narrowed.Asks = a.Asks && sidestream.Permits(capability.ExchangeAsk)
 	return narrowed
 }
