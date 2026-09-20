@@ -521,18 +521,61 @@ func TestScaffoldedSlackExampleLoadsWhenUncommented(t *testing.T) {
 	}
 }
 
+// The developer slots example is the guide's own block -- the first slot
+// preferring the reliability label -- shown commented under the capacity it is
+// one unit of. Uncommented and loaded, it has to be that slot and nothing else,
+// for the reason the Slack example is loaded: an example that does not load is
+// worse than none.
+func TestScaffoldedDeveloperSlotsExampleLoadsWhenUncommented(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."})
+	rendered, err := os.ReadFile(resolved.Path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		"  # developer_slots:\n",
+		"  #   - prefer: [reliability]",
+		"reliability label, which\n  # means bugs, anything that keeps the system from stalling, and anything that\n  # keeps the system from making mistakes",
+	} {
+		if !strings.Contains(string(rendered), want) {
+			t.Errorf("generated configuration does not show %q:\n%s", want, rendered)
+		}
+	}
+	// Shown is not switched on: a generated project's every slot prefers nothing.
+	if slots := resolved.Config.Execution.DeveloperSlots; len(slots) != 0 {
+		t.Errorf("developer_slots = %+v, want none until the example is uncommented", slots)
+	}
+
+	edited := loadScaffoldEdited(t, ScaffoldOptions{ProductID: "example", Repository: "."}, func(content string) string {
+		return uncommentScaffoldNestedBlock(t, content, "  ", "developer_slots:")
+	})
+	want := []domain.DeveloperSlot{{Prefer: []string{"reliability"}}}
+	if got := edited.Config.Execution.DeveloperSlots; !reflect.DeepEqual(got, want) {
+		t.Errorf("developer_slots = %+v, want the example's one slot preferring reliability %+v", got, want)
+	}
+}
+
 // uncommentScaffoldBlock deletes the leading "# " from a commented top-level
 // key and everything under it, which is the whole gesture the generated file
 // asks for -- delete the comment marker and nothing else.
 func uncommentScaffoldBlock(t *testing.T, content, key string) string {
 	t.Helper()
+	return uncommentScaffoldNestedBlock(t, content, "", key)
+}
+
+// uncommentScaffoldNestedBlock is the same gesture for a key commented out
+// inside a live section, where the comment marker follows the indent.
+func uncommentScaffoldNestedBlock(t *testing.T, content, indent, key string) string {
+	t.Helper()
 	lines := strings.Split(content, "\n")
 	for index, line := range lines {
-		if line != "# "+key {
+		if line != indent+"# "+key {
 			continue
 		}
-		for ; index < len(lines) && strings.HasPrefix(lines[index], "# "); index++ {
-			lines[index] = strings.TrimPrefix(lines[index], "# ")
+		for ; index < len(lines) && strings.HasPrefix(lines[index], indent+"# "); index++ {
+			lines[index] = indent + strings.TrimPrefix(lines[index], indent+"# ")
 		}
 		return strings.Join(lines, "\n")
 	}

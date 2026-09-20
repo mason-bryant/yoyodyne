@@ -190,6 +190,18 @@ product:
 
 execution:
   max_concurrent_developers: %d
+  # Each unit of that capacity is a developer slot. A slot may prefer a label --
+  # the tracker's own labels, which the product manager and the development
+  # manager put on work items -- and then pulls that label's ready work first,
+  # wherever it sits in the order, and the rest of the backlog only when none of
+  # it is ready. One entry per slot, in slot order; the list may be shorter than
+  # the capacity, and the slots it does not name prefer nothing. The example is
+  # Yoyodyne's own: its first slot is dedicated to the reliability label, which
+  # means bugs, anything that keeps the system from stalling, and anything that
+  # keeps the system from making mistakes. Delete the leading "# " to give slot
+  # 1 the same preference.
+  # developer_slots:
+  #   - prefer: [reliability]   # developer slot 1 pulls reliability-labelled work first
   repair_attempts_before_replan: %d
   # A promotion that loses a race -- to another run, or to whoever moved the
   # target branch while this one was working -- is replayed onto where the
