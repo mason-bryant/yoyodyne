@@ -39,6 +39,12 @@ const replyOpening = "\nproduct-manager> "
 // do is read as a finished answer.
 const replyCutOff = "…the reply above stops there: the turn did not finish, so it is not the whole answer."
 
+// replyInterrupted is what is said when the turn being shown was refused for
+// want of provider capacity and is about to be asked again. The prose above it
+// is real and is left where it is; what it must not do is read as the start of
+// the answer the reissued turn will write underneath it.
+const replyInterrupted = "…the reply above stops there: the provider had no capacity for the rest of it, so the turn is being asked again."
+
 // harnessFences open the blocks a reply carries for the harness rather than for
 // the operator. Each is reported in its own way once the turn is over — as
 // actions taken, proposals to decide, questions to answer, reports collected —
@@ -178,6 +184,38 @@ func (r *replyStream) cutOff() {
 	}
 	fmt.Fprintln(r.out, replyCutOff)
 	fmt.Fprintln(r.out)
+}
+
+// interrupted closes off the half answer a refused invocation left on screen and
+// opens the stream for the one that replaces it. It is deliberately not cutOff:
+// the answer is not over, it is being asked again, and the reissued reply is a
+// fresh answer rather than a continuation of a sentence nobody finished.
+func (r *replyStream) interrupted() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ended {
+		return
+	}
+	r.flush()
+	// A block the provider was part way through writing belongs to the attempt
+	// that was refused, so nothing about it carries into the next one.
+	r.fenced = false
+	r.quoted = false
+	r.held = 0
+	if !r.shown {
+		// Nothing reached the screen, so there is no half answer to close off and
+		// the reissued attempt simply writes the first one there is.
+		return
+	}
+	fmt.Fprintln(r.out, replyInterrupted)
+	fmt.Fprintln(r.out)
+	// The next attempt opens its answer as the first one did. What the operator
+	// reads is one whole reply under its own heading, above it the fragment that
+	// was interrupted and the line saying so.
+	r.shown = false
 }
 
 // flush writes whatever is held without its newline. What the provider sent is

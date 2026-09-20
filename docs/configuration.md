@@ -2820,6 +2820,26 @@ refused it. A reset that is not in the future is refused deliberately: a limit
 still declining work while claiming it has already reset is not describing a
 wait, and honoring it would mean reissuing straight back into the same refusal.
 
+These three settings are not only a run's. A conversation turn you typed —
+`yoyo chat`, interactive or `--message` — waits out a refusing provider under
+exactly the same bounds and the same polling discipline, because an operator who
+has said how long the harness may wait out a limit has said it about every
+invocation they pay for. Two things differ. The budget covers the message you
+are waiting for rather than one run, across however many rounds that message
+takes. And a wait this configuration will not take fails the turn instead of
+parking it: a run leaves its deadline in durable state for a later invocation to
+continue, and a turn has no such record, so it says what refused it and when the
+provider claimed it lifts, and saying the same thing again takes the turn. What
+the turn had already done is unaffected either way — tracker actions applied by
+a round that finished stay applied, and only the invocation the provider declined
+is reissued. The turns the harness takes for itself — a stopped run delivered to
+the development manager, a recurring firing, a correction, the Slack sink's —
+read none of this and fail on the refusal as they always did, because each of
+them already paces itself on it and a `yoyo work` session that slept through a
+window inside one turn would be a session choosing nothing for hours.
+[A provider refusal outside a run](operations.md#a-provider-refusal-outside-a-run)
+covers what an operator sees while it happens.
+
 `server_overload_pause` is the same discipline on a different clock, for the
 other way a provider refuses without judging the work: its own servers are
 transiently unable to serve the attempt. That names no reset time at all and
@@ -3014,12 +3034,14 @@ What happens on a refused turn:
   dated is said around twelve times at the `30m` default, not once per turn.
 
 An agent that has not enabled failover behaves exactly as it did before: one
-invocation, under the model it named, and a refused turn that fails and is
-recorded as the stoppage it is. So does an agent whose alternate is refused too.
-A run's developer and reviewer invocations are not covered by this and still wait
-their window out on the settings above; what this covers is the turns an agent
-takes — the conversations, where a decision nobody can make stops everything
-downstream of it.
+invocation, under the model it named, and a refused turn recorded as the stoppage
+it is — which a turn you typed at `yoyo chat` then
+[waits out on that model](#waiting-out-a-provider-that-refuses) under the
+settings above, and a turn the harness took for itself fails on. So does an
+agent whose alternate is refused too. A run's developer and reviewer invocations
+are not covered by this and still wait their window out on the settings above;
+what this covers is the turns an agent takes — the conversations, where a
+decision nobody can make stops everything downstream of it.
 
 ### Pinning an agent to a model version
 
