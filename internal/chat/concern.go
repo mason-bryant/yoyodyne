@@ -19,6 +19,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // concernFence opens the one block a reply may raise concerns in. It is a
@@ -164,6 +165,42 @@ type PendingConcern struct {
 	ConversationID string  `json:"conversation_id"`
 	Turn           int     `json:"turn"`
 	Concern        Concern `json:"concern"`
+}
+
+// recorded is the concern as the conversation's durable record keeps it: what
+// a later process needs to put the same question to the operator, or to match
+// an answer sent from the command line to it.
+func (c PendingConcern) recorded() runstate.PendingConcern {
+	return runstate.PendingConcern{
+		ID:       c.ID,
+		Turn:     c.Turn,
+		Kind:     string(c.Concern.Kind),
+		Subject:  c.Concern.Subject,
+		Goal:     c.Concern.Goal,
+		Detail:   c.Concern.Detail,
+		Question: c.Concern.Question,
+		Options:  c.Concern.Options,
+	}
+}
+
+// restoredConcern is one recorded concern put back on the table, in the
+// conversation it was raised in. It is the exact inverse of recorded: a
+// question an operator answers in a later process has to be the one they were
+// asked in an earlier one, down to the answers that were on offer.
+func restoredConcern(conversationID string, recorded runstate.PendingConcern) PendingConcern {
+	return PendingConcern{
+		ID:             recorded.ID,
+		ConversationID: conversationID,
+		Turn:           recorded.Turn,
+		Concern: Concern{
+			Kind:     ConcernKind(recorded.Kind),
+			Subject:  recorded.Subject,
+			Goal:     recorded.Goal,
+			Detail:   recorded.Detail,
+			Question: recorded.Question,
+			Options:  recorded.Options,
+		},
+	}
 }
 
 // concernDocument is the payload shape of the fenced block. The block always

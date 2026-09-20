@@ -49,9 +49,11 @@ type chatOutput struct {
 	// reported here for the same reason the actions are: a one-shot message has
 	// nobody to tell afterwards, and this is the telling.
 	Admitted []chat.AdmittedItem `json:"admitted,omitempty"`
-	// Concerns are what the product manager would not propose until somebody
-	// answers it. A one-shot message has nobody to answer, so they are reported
-	// as the open questions they are rather than as work.
+	// Concerns are what this turn's product manager would not propose until
+	// somebody answers it. A one-shot message has nobody at a prompt to answer,
+	// so they are reported as the open questions they are rather than as work,
+	// and the answer arrives as its own message. What is still waiting once this
+	// one is over is Unanswered, which is the wider list.
 	Concerns []chat.PendingConcern `json:"concerns,omitempty"`
 	// Actions are the tracker changes the product manager made while answering.
 	// Unlike proposals they already happened, so they are reported rather than
@@ -100,16 +102,21 @@ type chatOutput struct {
 	// spent.
 	Harness string `json:"harness,omitempty"`
 	// Decisions are what the message decided about proposals the conversation was
-	// waiting on. Like a command they are the harness's own answer rather than
-	// anything that was said: the decision is carried out here, no turn is spent,
-	// and the agent hears about it when it is next spoken to.
+	// waiting on, and Answers what it answered among the concerns it stopped on.
+	// Like a command they are the harness's own answer rather than anything that
+	// was said: the decision is carried out here, no turn is spent, and the agent
+	// hears about it when it is next spoken to.
 	Decisions []chat.DecisionOutcome `json:"decisions,omitempty"`
+	Answers   []chat.AnswerOutcome   `json:"answers,omitempty"`
 	// Pending are the proposals still awaiting a decision once this message is
 	// over, which is what a script deciding them next has to name. It is not the
 	// same list as Proposals: that one is what this turn proposed, and this one is
 	// everything nobody has decided, including proposals from earlier messages.
-	Pending []chat.PendingProposal `json:"pending,omitempty"`
-	Error   string                 `json:"error,omitempty"`
+	// Unanswered is the same list for concerns: everything still waiting for an
+	// answer, named by the identifier the next message answers it with.
+	Pending    []chat.PendingProposal `json:"pending,omitempty"`
+	Unanswered []chat.PendingConcern  `json:"unanswered,omitempty"`
+	Error      string                 `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -211,11 +218,14 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 		return runChatCommand(ctx, session, message, jsonOutput, stdout, stderr)
 	}
 	// An answer to a proposal this conversation is still waiting on decides it
-	// here rather than being said to the agent. Without this the operator's "y"
-	// arrived as ordinary speech to a role that cannot create the item, so the
-	// approval was spent, nothing reached the queue, and nothing said so.
-	if outcomes, decided, err := session.Decide(ctx, message); decided {
-		return reportChatDecisions(stdout, stderr, jsonOutput, role, session, outcomes, err)
+	// here rather than being said to the agent, and an answer to a concern it
+	// stopped on answers that. Without this the operator's "y" arrived as
+	// ordinary speech to a role that cannot create the item, so the approval was
+	// spent, nothing reached the queue, and nothing said so — and once a message
+	// could decide a proposal, a "yes" meant for a question approved whatever
+	// proposal was undecided instead.
+	if decided, settled, err := session.Decide(ctx, message); settled {
+		return reportChatDecisions(stdout, stderr, jsonOutput, role, session, decided, err)
 	}
 	// A one-shot message resumes the same recorded conversation an interactive
 	// one does, and carries the same risk of answering from a picture taken hours
@@ -240,6 +250,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			// hide the earlier proposals from the reader least able to go
 			// looking for them.
 			Pending:            session.Proposals(),
+			Unanswered:         session.Concerns(),
 			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
@@ -267,25 +278,27 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
 	printChatReports(stdout, theme, role, reply.Reports, reply.ReportProblem)
-	printChatConcerns(stdout, theme, role, reply.Concerns)
-	// Everything undecided is listed rather than only what this turn proposed: a
-	// decision arrives as its own message, so what the operator has to be able to
-	// name is the whole of what is still waiting on them.
+	// Everything unanswered and everything undecided is listed rather than only
+	// what this turn raised or proposed: an answer or a decision arrives as its
+	// own message, so what the operator has to be able to name is the whole of
+	// what is still waiting on them.
+	printChatConcerns(stdout, theme, role, session.Concerns())
 	printChatProposals(stdout, role, session.Proposals())
 	printChatEvidence(stdout, reply.Evidence)
 	return 0
 }
 
 // reportChatDecisions reports what a message decided about the proposals a
-// conversation was waiting on. What was decided is written whether or not the
-// answer went on to fail, for the reason a failed command still writes what it
-// did: a decision that was recorded happened, and the failure is about the rest
-// of the answer.
-func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.AgentRole, session *chat.Session, outcomes []chat.DecisionOutcome, err error) int {
+// conversation was waiting on, or answered among the concerns it stopped on.
+// What was decided is written whether or not the answer went on to fail, for
+// the reason a failed command still writes what it did: a decision that was
+// recorded happened, and the failure is about the rest of the answer.
+func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.AgentRole, session *chat.Session, decided chat.Decided, err error) int {
 	pending := session.Proposals()
+	unanswered := session.Concerns()
 	if jsonOutput {
 		evidence := session.Evidence()
-		output := chatOutput{Evidence: &evidence, Decisions: outcomes, Pending: pending}
+		output := chatOutput{Evidence: &evidence, Decisions: decided.Decisions, Answers: decided.Answers, Pending: pending, Unanswered: unanswered}
 		if err != nil {
 			output.Error = err.Error()
 		}
@@ -297,7 +310,11 @@ func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.
 		}
 		return 0
 	}
-	printChatDecisions(stdout, outcomes)
+	printChatDecisions(stdout, decided)
+	// A one-shot message has no console to ask, so what it may be dressed with is
+	// asked of the stream it is writing to, as the reply path asks.
+	theme := console.ThemeFor(stdout, os.Getenv)
+	printChatConcerns(stdout, theme, role, unanswered)
 	printChatProposals(stdout, role, pending)
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
@@ -306,26 +323,33 @@ func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.
 	return 0
 }
 
-// printChatDecisions says what the operator's message did to each proposal it
-// named. Nothing here was said by the agent, so it is written plainly rather
-// than as part of a reply: an approval that created an item and one the tracker
-// refused are the two things the operator has to be able to tell apart.
-func printChatDecisions(writer io.Writer, decisions []chat.DecisionOutcome) {
-	fmt.Fprint(writer, renderDecisions(decisions))
+// printChatDecisions says what the operator's message did to each proposal or
+// concern it named. Nothing here was said by the agent, so it is written
+// plainly rather than as part of a reply: an approval that created an item and
+// one the tracker refused are the two things the operator has to be able to
+// tell apart.
+func printChatDecisions(writer io.Writer, decided chat.Decided) {
+	fmt.Fprint(writer, renderDecisions(decided))
 }
 
-// renderDecisions is what a message that decided something says back. It is one
-// rendering rather than one per client: a decision made from a channel and the
-// same decision made at a terminal are the same act, and two accounts of it that
-// could drift apart would be the operator reading two answers to one question.
-func renderDecisions(decisions []chat.DecisionOutcome) string {
-	if len(decisions) == 0 {
-		return ""
-	}
+// renderDecisions is what a message that decided or answered something says
+// back. It is one rendering rather than one per client: a decision made from a
+// channel and the same decision made at a terminal are the same act, and two
+// accounts of it that could drift apart would be the operator reading two
+// answers to one question.
+func renderDecisions(decided chat.Decided) string {
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "You decided %d proposal(s):\n\n", len(decisions))
-	for _, made := range decisions {
-		rendered.WriteString(made.Render())
+	if len(decided.Decisions) > 0 {
+		fmt.Fprintf(&rendered, "You decided %d proposal(s):\n\n", len(decided.Decisions))
+		for _, made := range decided.Decisions {
+			rendered.WriteString(made.Render())
+		}
+	}
+	if len(decided.Answers) > 0 {
+		fmt.Fprintf(&rendered, "You answered %d question(s):\n\n", len(decided.Answers))
+		for _, answered := range decided.Answers {
+			rendered.WriteString(answered.Render())
+		}
 	}
 	return rendered.String()
 }
@@ -1195,17 +1219,22 @@ func printChatProposals(writer io.Writer, role domain.AgentRole, proposals []cha
 	fmt.Fprintf(writer, "\nDecide one from here: `yoyo chat --message \"approve %s\"` creates it, and\n`yoyo chat --message \"decline %s <reason>\"` turns it down. `yoyo chat` puts them\nto you as a prompt instead.\n", first, first)
 }
 
-// printChatConcerns reports what a one-shot message would not propose. There is
-// nobody to answer it here, so the questions are printed with what they are:
-// raised, unanswered, and holding work that was never proposed.
+// printChatConcerns reports what the product manager would not propose until it
+// is answered, and says how to answer from here. There is nobody at a prompt in
+// a one-shot message, so the questions are printed with what they are — raised,
+// unanswered, and holding work that was never proposed — and each is named by
+// its own identifier, for the reason a proposal is: an answer sent as its own
+// message has to name something that survives between the two invocations.
 func printChatConcerns(writer io.Writer, theme console.Theme, role domain.AgentRole, concerns []chat.PendingConcern) {
 	if len(concerns) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "\nThe %s will not propose %d thing(s) until it is answered. Nothing was proposed or created: answer it in `yoyodyne chat`.\n\n", chat.RoleTitle(role), len(concerns))
+	fmt.Fprintf(writer, "\nThe %s will not propose %d thing(s) until it is answered. Nothing was proposed or created for them:\n\n", chat.RoleTitle(role), len(concerns))
 	for _, concern := range concerns {
 		fmt.Fprint(writer, concern.Render(theme))
 	}
+	first := concerns[0].ID
+	fmt.Fprintf(writer, "\nAnswer one from here: `yoyo chat --message \"answer %s <what you decide>\"`, with the\nnumber of an answer on offer or your own words. `yoyo chat` puts them to you as a\nprompt instead.\n", first)
 }
 
 // printOpenConcerns names the questions a conversation ended without answering,
@@ -1303,6 +1332,13 @@ decision words, as "y", "no", or "approve 1,3". Everything else is said to the
 product manager as it always was and leaves every proposal where it was —
 including a reply that opens with one of those words, because "no, let us look at
 the resolver instead" is a sentence rather than a decline.
+
+A --message that answers a question the product manager stopped on is carried out
+the same way: "answer c3.1 <what you decide>" answers concern c3.1 with your words
+or the number of an answer it offered, and a bare "yes" or "no" answers it where
+it is the only thing waiting. With a question and a proposal both waiting, a
+message that names neither is refused with the list rather than applied to
+either, so an answer meant for the question never approves the proposal.
 
 This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same

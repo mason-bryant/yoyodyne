@@ -132,6 +132,69 @@ func TestAProposalMadeAtTheTerminalIsApprovedFromSlack(t *testing.T) {
 	}
 }
 
+// A question the product manager stopped on at the terminal is answered from
+// Slack by name, and a bare "yes" with that question and a proposal both waiting
+// approves nothing: the door dispatches exactly as `yoyo chat --message` does,
+// so the same word is refused with the list in both clients rather than
+// approving the proposal in one of them.
+func TestAQuestionAskedAtTheTerminalIsAnsweredFromSlackByName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &recordingChatTracker{}
+
+	asking := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: concernAndProposalReply}}
+	terminal := openTestChatSession(t, root, asking, tracker)
+	if _, err := terminal.Send(context.Background(), "should we let agents merge?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(terminal.Concerns()) != 1 || len(terminal.Proposals()) != 1 {
+		t.Fatalf("concerns = %#v and proposals = %#v, want one of each waiting", terminal.Concerns(), terminal.Proposals())
+	}
+
+	answering := &recordingChatBackend{}
+	fromSlack := openTestChatSession(t, root, answering, tracker)
+	answer, err := sayToConversation(context.Background(), fromSlack, "yes", discardLog)
+	if err == nil || !answer.Harness {
+		t.Fatalf("sayToConversation(\"yes\") = %#v, %v; want it refused as the harness's own answer", answer, err)
+	}
+	if len(tracker.creations) != 0 {
+		t.Fatalf("creations = %#v; a yes meant for the question approved the proposal", tracker.creations)
+	}
+
+	answer, err = sayToConversation(context.Background(), fromSlack, "answer c1.1 no, the goal stands", discardLog)
+	if err != nil {
+		t.Fatalf("sayToConversation() error = %v", err)
+	}
+	if !answer.Harness || !strings.Contains(answer.Text, "You answered 1 question(s)") || !strings.Contains(answer.Text, "no, the goal stands") {
+		t.Fatalf("answer = %#v, want what the answer did, as the harness's own", answer)
+	}
+	if answering.turns != 0 {
+		t.Fatalf("the answer was said to the product manager %d time(s); it is carried out by the harness", answering.turns)
+	}
+	if len(fromSlack.Concerns()) != 0 || len(fromSlack.Proposals()) != 1 || len(tracker.creations) != 0 {
+		t.Fatalf("concerns = %#v, proposals = %#v, creations = %#v; want the question answered and the proposal untouched",
+			fromSlack.Concerns(), fromSlack.Proposals(), tracker.creations)
+	}
+	back := openTestChatSession(t, root, &recordingChatBackend{}, tracker)
+	if open := back.Concerns(); len(open) != 0 {
+		t.Fatalf("concerns = %#v, want the terminal to find the question answered rather than still waiting", open)
+	}
+}
+
+// concernAndProposalReply stops on one question and proposes one item in the
+// same turn, which is the shape a misdirected "yes" needs.
+const concernAndProposalReply = `One of these is yours to decide.
+
+` + "```yoyodyne-concern" + `
+{"concerns":[{"kind":"conflict","subject":"Let an agent merge its own work","goal":"No agent pushes or merges.","detail":"It is the thing that goal exists to prevent.","question":"Do you want that goal changed?"}]}
+` + "```" + `
+
+` + "```yoyodyne-proposal" + `
+{"items":[{"title":"Pause on a usage limit","description":"Wait for the window and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously."}]}
+` + "```" + `
+`
+
 // Everything a turn said travels back even when the turn then failed, because a
 // partial answer is worth reading and the door posts it ahead of the account of
 // the failure.

@@ -62,7 +62,7 @@ func TestAProposalOutlivesTheProcessThatMadeItSoALaterOneCanDecideIt(t *testing.
 		t.Fatalf("proposal came back as %#v, want what the operator was shown", pending[0].Proposal)
 	}
 
-	outcomes, decided, err := resumed.Decide(context.Background(), "y")
+	outcomes, decided, err := decisions(resumed.Decide(context.Background(), "y"))
 	if err != nil || !decided {
 		t.Fatalf("Decide() = %v, %t, %v; want the bare approval to decide the one proposal on the table", outcomes, decided, err)
 	}
@@ -120,7 +120,7 @@ func TestADecidedProposalDoesNotComeBackFromTheRecord(t *testing.T) {
 	}
 	// A bare yes with nothing on the table names no proposal, so it is somebody
 	// talking and is said to the agent exactly as it always was.
-	outcomes, decided, err := third.Decide(context.Background(), "y")
+	outcomes, decided, err := decisions(third.Decide(context.Background(), "y"))
 	if decided || err != nil || len(outcomes) != 0 {
 		t.Fatalf("Decide() = %v, %t, %v; want nothing on the table to decide", outcomes, decided, err)
 	}
@@ -128,7 +128,7 @@ func TestADecidedProposalDoesNotComeBackFromTheRecord(t *testing.T) {
 	// it is the answer that must never go quietly to the agent: this is an
 	// operator approving something whose decision they did not see, and telling
 	// them the approval was said to a product manager as chat is the whole defect.
-	outcomes, decided, err = third.Decide(context.Background(), "approve 1.1")
+	outcomes, decided, err = decisions(third.Decide(context.Background(), "approve 1.1"))
 	if !decided {
 		t.Fatalf("an approval naming a proposal was passed on as speech with nothing on the table")
 	}
@@ -169,7 +169,7 @@ func TestEveryDecisionInABatchIsDurableAsItIsMade(t *testing.T) {
 	}
 
 	deciding := openTestSession(t, perItemApprovalOptions(t, root, tracker, "both are settled"))
-	outcomes, decided, err := deciding.Decide(context.Background(), "approve 1.1 and decline 1.2 not this quarter")
+	outcomes, decided, err := decisions(deciding.Decide(context.Background(), "approve 1.1 and decline 1.2 not this quarter"))
 	if err != nil || !decided {
 		t.Fatalf("Decide() = %v, %t, %v; want the batch carried out", outcomes, decided, err)
 	}
@@ -190,7 +190,7 @@ func TestEveryDecisionInABatchIsDurableAsItIsMade(t *testing.T) {
 	}
 	// And neither can be spent a second time, which is what the record is for.
 	for _, named := range []string{"approve 1.1", "approve 1.2"} {
-		outcomes, decided, err := later.Decide(context.Background(), named)
+		outcomes, decided, err := decisions(later.Decide(context.Background(), named))
 		if !decided || err == nil {
 			t.Fatalf("Decide(%q) = %v, %t, %v; want a decided proposal refused out loud", named, outcomes, decided, err)
 		}
@@ -215,7 +215,7 @@ func TestAnApprovalTheTrackerRefusesLeavesTheProposalWaitingAndSaysSo(t *testing
 
 	unreachable := &fakeTracker{err: errors.New("bd is unreachable")}
 	resumed := openTestSession(t, perItemApprovalOptions(t, root, unreachable, "nothing to say"))
-	outcomes, decided, err := resumed.Decide(context.Background(), "y")
+	outcomes, decided, err := decisions(resumed.Decide(context.Background(), "y"))
 	if !decided || err != nil {
 		t.Fatalf("Decide() = %t, %v; want the approval carried out and its failure reported in the outcome", decided, err)
 	}
@@ -259,7 +259,7 @@ func TestAMessageThatDecidesNothingLeavesEveryProposalWhereItWas(t *testing.T) {
 	}
 
 	resumed := openTestSession(t, perItemApprovalOptions(t, root, tracker, "two of them are about capacity"))
-	outcomes, decided, err := resumed.Decide(context.Background(), "what else is open?")
+	outcomes, decided, err := decisions(resumed.Decide(context.Background(), "what else is open?"))
 	if decided || err != nil || len(outcomes) != 0 {
 		t.Fatalf("Decide() = %v, %t, %v; want a question to be a question", outcomes, decided, err)
 	}
@@ -292,7 +292,7 @@ func TestAConversationalReplyThatOpensWithADecisionWordIsStillSpeech(t *testing.
 		"decline 2 too vague",
 	} {
 		resumed := openTestSession(t, perItemApprovalOptions(t, root, tracker, "understood"))
-		outcomes, decided, err := resumed.Decide(context.Background(), speech)
+		outcomes, decided, err := decisions(resumed.Decide(context.Background(), speech))
 		if decided || err != nil || len(outcomes) != 0 {
 			t.Fatalf("Decide(%q) = %v, %t, %v; want it said to the product manager rather than decided", speech, outcomes, decided, err)
 		}
@@ -344,7 +344,7 @@ func TestADecisionNamingAProposalThatIsNotThereFailsRatherThanDecidingNothing(t 
 	}
 
 	resumed := openTestSession(t, perItemApprovalOptions(t, root, tracker, "nothing to say"))
-	outcomes, decided, err := resumed.Decide(context.Background(), "approve 9.9")
+	outcomes, decided, err := decisions(resumed.Decide(context.Background(), "approve 9.9"))
 	if !decided {
 		t.Fatalf("Decide() reported nothing decided, want an approval that failed rather than speech")
 	}
@@ -414,7 +414,7 @@ func TestAConversationOpensByPuttingWhatIsStillWaitingToTheOperator(t *testing.T
 	if pending := third.Proposals(); len(pending) != 0 {
 		t.Fatalf("pending = %#v, want an approved proposal to stay approved across processes", pending)
 	}
-	outcomes, decided, err := third.Decide(context.Background(), "approve 1.1")
+	outcomes, decided, err := decisions(third.Decide(context.Background(), "approve 1.1"))
 	if !decided || err == nil {
 		t.Fatalf("Decide() = %v, %t, %v; want the decided proposal refused out loud", outcomes, decided, err)
 	}

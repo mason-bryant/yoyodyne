@@ -668,12 +668,13 @@ func refuseCommand(said string) (slack.Answer, bool) {
 func sayToConversation(ctx context.Context, session *chat.Session, said string, log func(format string, args ...any)) (slack.Answer, error) {
 	evidence := session.Evidence()
 	answer := slack.Answer{ConversationID: evidence.ConversationID, Turns: evidence.Turns}
-	if outcomes, decided, err := session.Decide(ctx, said); decided {
-		// A decision is the harness's own answer: no turn was spent, and the product
-		// manager was never asked. What was decided travels back whether or not it
-		// then failed, because a decision that was recorded happened.
+	if decided, settled, err := session.Decide(ctx, said); settled {
+		// A decision is the harness's own answer, and so is an answer to a concern:
+		// no turn was spent, and the product manager was never asked. What was
+		// decided travels back whether or not it then failed, because a decision
+		// that was recorded happened.
 		answer.Harness = true
-		answer.Text = renderDecisions(outcomes)
+		answer.Text = renderDecisions(decided)
 		answer.Turns = session.Evidence().Turns
 		return answer, err
 	}

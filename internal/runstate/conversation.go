@@ -198,6 +198,19 @@ type Conversation struct {
 	// stays there; what is kept here is the set a later process may still act on,
 	// so a proposal leaves this list the moment it is approved or declined.
 	PendingProposals []PendingProposal `json:"pending_proposals,omitempty"`
+	// PendingConcerns are the questions an agent stopped to ask that nobody has
+	// answered yet. They are durable for exactly the reason the proposals are: a
+	// concern raised by one `--message` invocation is answered by another, and a
+	// process that could not read back what was asked had nothing an answer
+	// could name. Before this a concern lived only in the process that raised
+	// it, so the one way to answer it was the interactive prompt — and an
+	// operator answering from the command line with "yes" was deciding whatever
+	// proposal happened to be on the table instead.
+	//
+	// It holds only the unanswered ones, as PendingProposals holds only the
+	// undecided: the answer is an event in the log, and a concern leaves this
+	// list the moment it is answered.
+	PendingConcerns []PendingConcern `json:"pending_concerns,omitempty"`
 	// PendingNotices is the account of harness activity the agent has not been
 	// told about yet, and PendingNoticesDropped says older activity was cut to
 	// keep it bounded. They are durable for the same reason the tracker results
@@ -356,6 +369,34 @@ type PendingProposal struct {
 // decided is already a conversation nobody is reading.
 const MaxPendingProposals = 20
 
+// PendingConcern is one raised concern as the record keeps it: what the agent
+// would not propose, which turn stopped to ask, and the answers it offered.
+// Like PendingProposal it is declared here rather than shared with the
+// conversation code that builds it, because that code depends on this package
+// and the dependency may not run both ways; the field names are the concern
+// contract's, so what is written here reads as what was asked.
+type PendingConcern struct {
+	ID       string `json:"id"`
+	Turn     int    `json:"turn"`
+	Kind     string `json:"kind"`
+	Subject  string `json:"subject"`
+	Goal     string `json:"goal,omitempty"`
+	Detail   string `json:"detail"`
+	Question string `json:"question"`
+	// Options are the answers the question can be answered by, where the agent
+	// enumerated any. They are kept because an answer sent from the command line
+	// may pick one by its number, exactly as the prompt lets it.
+	Options []string `json:"options,omitempty"`
+}
+
+// MaxPendingConcerns bounds the unanswered concerns one conversation carries.
+// A reply raises at most five, so ten is two whole turns' worth of questions
+// nobody has answered — a conversation that far past its own questions has
+// moved on from the earliest of them, which is what is dropped. Each one is
+// small beside a proposal, so the bound is about the record staying a list an
+// operator can be asked to answer from rather than about the state file.
+const MaxPendingConcerns = 10
+
 // MaxPendingNotices bounds the account of harness activity one conversation
 // carries forward. It matches the bound the conversation itself keeps, so what
 // is written is always what was going to be delivered.
@@ -472,6 +513,16 @@ func (c Conversation) Validate() error {
 	for i, proposal := range c.PendingProposals {
 		if strings.TrimSpace(proposal.ID) == "" {
 			problems = append(problems, fmt.Errorf("pending_proposals[%d] has no id", i))
+		}
+	}
+	if len(c.PendingConcerns) > MaxPendingConcerns {
+		problems = append(problems, fmt.Errorf("%d unanswered concerns are recorded, limit is %d",
+			len(c.PendingConcerns), MaxPendingConcerns))
+	}
+	// The same for a question: one nobody can name is one nobody can answer.
+	for i, concern := range c.PendingConcerns {
+		if strings.TrimSpace(concern.ID) == "" {
+			problems = append(problems, fmt.Errorf("pending_concerns[%d] has no id", i))
 		}
 	}
 	if len(c.PendingNotices) > MaxPendingNotices {

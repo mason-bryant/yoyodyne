@@ -432,7 +432,7 @@ func TestAProposalMadeWhileTheConversationWasDownIsStillThereToApprove(t *testin
 
 	// The approval is the operator's, typed at the console that never made the
 	// proposal, and it creates the work.
-	outcomes, decided, err := session.Decide(context.Background(), "y")
+	outcomes, decided, err := decisions(session.Decide(context.Background(), "y"))
 	if err != nil || !decided {
 		t.Fatalf("Decide() = %v, %t, %v; want the approval to decide the proposal that came back", outcomes, decided, err)
 	}
