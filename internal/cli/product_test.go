@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/launchd"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/shutdown"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
@@ -242,6 +244,132 @@ func TestStartSaysWhatTheSupervisorRecordedAboutEachPart(t *testing.T) {
 	}
 }
 
+// Where the launch agent `yoyo setup` installed is loaded and runs this
+// configuration, `yoyo start` asks launchd for the supervisor rather than
+// detaching one: the resident launchd restarts is the one that runs. An agent
+// for another checkout of a product with the same id is not this one's, and
+// the verb detaches as before.
+func TestStartAsksLaunchdForTheSupervisorWhereItsAgentIsLoaded(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	store, err := runstate.NewSupervisionStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.LoadResolved(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	launchctl := &fakeLaunchctl{store: store}
+	agent := launchd.AgentFor("yoyodyne", launchd.Controller{Runner: launchctl, UserHomeDir: func() (string, error) { return home, nil }, Getuid: func() int { return 501 }})
+	if err := agent.Install(launchd.Render(launchd.Spec{Label: agent.Label, Program: "/opt/yoyo/bin/yoyo", Args: []string{"start", "--foreground", "--config", resolved.Path}})); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &recordingLauncher{store: store}
+	p := &product{resolved: resolved, stateRoot: stateRoot, store: store, program: "/opt/yoyo/bin/yoyo", launcher: launcher, agent: agent, now: time.Now}
+
+	var stdout, stderr strings.Builder
+	if code := p.start(context.Background(), &stdout, &stderr, false); code != 0 {
+		t.Fatalf("start code = %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "started the supervisor for yoyodyne through the launch agent com.yoyodyne.yoyodyne, as pid 4343") {
+		t.Errorf("start said:\n%s\nwant the supervisor started through the launch agent", stdout.String())
+	}
+	if len(launcher.launched) != 0 {
+		t.Errorf("start detached %v beside the launch agent's supervisor", launcher.launched)
+	}
+	if !launchctl.kickstarted {
+		t.Error("start did not ask launchd to start the job")
+	}
+
+	// The agent runs another checkout's configuration: not this one's.
+	other, err := config.LoadResolved(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchctl.kickstarted = false
+	p.resolved = other
+	detaching := &recordingLauncher{store: store}
+	p.launcher = detaching
+	stdout.Reset()
+	if code := p.start(context.Background(), &stdout, &stderr, false); code != 0 {
+		t.Fatalf("second start code = %d, stderr %q", code, stderr.String())
+	}
+	if detaching.cancel != nil {
+		defer func() {
+			detaching.cancel()
+			<-detaching.done
+		}()
+	}
+	if launchctl.kickstarted || len(detaching.launched) != 1 {
+		t.Errorf("start with another checkout's agent: kickstarted %t, launched %v; want the supervisor detached from here", launchctl.kickstarted, detaching.launched)
+	}
+}
+
+// fakeLaunchctl is launchd holding the product's job: a kickstart writes the
+// record a launchd-started supervisor would, and is recorded.
+type fakeLaunchctl struct {
+	store       *runstate.SupervisionStore
+	kickstarted bool
+}
+
+func (f *fakeLaunchctl) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	joined := command.Name + " " + strings.Join(command.Args, " ")
+	switch {
+	case strings.HasPrefix(joined, "launchctl print gui/501/com.yoyodyne.yoyodyne"):
+		return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
+	case strings.HasPrefix(joined, "launchctl kickstart gui/501/com.yoyodyne.yoyodyne"):
+		f.kickstarted = true
+		now := time.Now().UTC()
+		if err := f.store.Save(runstate.Supervision{PID: 4343, StartedAt: now, ObservedAt: now, Children: []runstate.SupervisedChild{
+			{Service: config.ServiceMaintenance, State: runstate.ChildScheduled, Reason: "every 10m0s"},
+		}}); err != nil {
+			return execution.ProcessResult{}, err
+		}
+		return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
+	}
+	return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "unexpected: " + joined}, nil
+}
+
+// The foreground form refused because a supervisor already runs exits as the
+// detaching form does, without failure: the launch agent runs this form, and
+// a refusal launchd read as a failure would be started again every few
+// seconds for as long as the other supervisor ran.
+func TestTheForegroundSupervisorRefusedByALeaseExitsCleanly(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	store, err := runstate.NewSupervisionStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, held, err := store.Lease()
+	if err != nil || !held {
+		t.Fatalf("Lease() = %t, %v", held, err)
+	}
+	defer lease.Release()
+	resolved, err := config.LoadResolved(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &product{
+		resolved:  resolved,
+		stateRoot: stateRoot,
+		store:     store,
+		program:   "/opt/yoyo/bin/yoyo",
+		children: func() ([]supervise.Child, []supervise.NotYet, []config.ServiceName, error) {
+			return nil, nil, config.ServiceNames, nil
+		},
+		now: time.Now,
+	}
+	var stdout, stderr strings.Builder
+	if code := p.supervise(context.Background(), &stdout, &stderr); code != 0 || !strings.Contains(stderr.String(), "a second start while one is running does nothing") {
+		t.Fatalf("supervise() = %d, stderr %q; want a clean exit saying a second start does nothing", code, stderr.String())
+	}
+}
+
 // The real parts are assembled from the services section: a part that is off
 // is off, the sink and the scheduler are children, and the two whose adoption
 // has not landed are named as such with the work that adopts them.
@@ -269,8 +397,21 @@ func TestTheRealPartsFollowTheServicesSection(t *testing.T) {
 	if len(children) != 1 || children[0].Name() != config.ServiceScheduler {
 		t.Errorf("children = %v, want the scheduler alone", children)
 	}
-	if len(notYet) != 2 || notYet[0].Name != config.ServiceDashboard || !strings.Contains(notYet[0].Reason, "yoyodyne-ifd.414") || notYet[1].Name != config.ServiceMaintenance || !strings.Contains(notYet[1].Reason, "yoyodyne-ifd.413") {
-		t.Errorf("notYet = %+v, want the dashboard and the maintenance pass with their adopting work named", notYet)
+	if len(notYet) != 1 || notYet[0].Name != config.ServiceDashboard || !strings.Contains(notYet[0].Reason, "yoyodyne-ifd.414") {
+		t.Errorf("notYet = %+v, want the dashboard alone with its adopting work named", notYet)
+	}
+	// The maintenance pass is the supervisor's own rather than a child: it is
+	// assembled from the section as a pass on its cadence, or not at all.
+	pass, err := p.realPass(nil, nil, t.Logf)
+	if err != nil || pass == nil {
+		t.Fatalf("realPass() = %v, %v, want the enabled pass", pass, err)
+	}
+	if got := pass.Describe(); !strings.Contains(got, "every 10m0s") {
+		t.Errorf("pass.Describe() = %q, want the configured cadence", got)
+	}
+	p.resolved.Config.Services.Maintenance.Enabled = false
+	if pass, err := p.realPass(nil, nil, t.Logf); err != nil || pass != nil {
+		t.Errorf("realPass() with the pass off = %v, %v, want none", pass, err)
 	}
 	if len(off) != 1 || off[0] != config.ServiceSlack {
 		t.Errorf("off = %v, want slack", off)
@@ -317,7 +458,7 @@ func TestStartAndStopAreListedAmongTheCommands(t *testing.T) {
 	var start, stop strings.Builder
 	printStartUsage(&start)
 	printStopUsage(&stop)
-	for _, want := range []string{"yoyo slack ensure", "yoyo work --watch", "degraded", "--foreground", "second start"} {
+	for _, want := range []string{"yoyo slack ensure", "yoyo work --watch", "degraded", "--foreground", "second start", "yoyo reconcile", "launch agent", "never stopped for a deploy"} {
 		if !strings.Contains(start.String(), want) {
 			t.Errorf("start usage does not say %q", want)
 		}

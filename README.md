@@ -227,8 +227,10 @@ and personas.
 **Or have step 2 walked for you.** `yoyo setup` is that step and everything
 around it as questions — the tracker, the configuration, the checks read from
 what your repository already declares, the tracker's sync remote, the index at
-the door of each artifact home, and then the
-optional offer of [reporting into Slack](docs/reporting.md#reporting-into-slack) — ending with
+the door of each artifact home, the
+optional offer of [reporting into Slack](docs/reporting.md#reporting-into-slack),
+and on macOS [the launch agent](docs/operations.md#starting-with-the-machine-the-launch-agent)
+that starts the product with the machine — ending with
 `yoyo doctor`, which is what decides whether the installation actually works:
 
 ```sh
@@ -250,8 +252,9 @@ waits for each Slack token to be typed. `--json` on its own asks nothing and
 *changes* nothing: it reports the same steps machine-readably, saying what is
 already true and what would still have to be done, so reading the report is
 never consent to alter the machine. `yoyo setup --yes --json` is what carries a
-walk out with nobody at the terminal — it leaves the keychain step, and only
-that step, to a walk somebody is watching.
+walk out with nobody at the terminal — it leaves the keychain step to a walk
+somebody is watching, and the launch agent to a walk that asked for it with
+`--launch-agent`.
 
 **Or have your own agent walk it.**
 [`skills/yoyo-setup/SKILL.md`](skills/yoyo-setup/SKILL.md) is a prompt rather

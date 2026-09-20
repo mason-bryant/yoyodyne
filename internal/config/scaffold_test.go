@@ -482,7 +482,7 @@ func TestScaffoldWritesEveryServiceAtItsDefault(t *testing.T) {
 		"  slack:\n    enabled: false\n",
 		"  dashboard:\n    enabled: false\n    port: 8765\n    bind: 127.0.0.1\n    allowed_hosts: []\n    token: generated\n",
 		"  scheduler:\n    enabled: true\n",
-		"  maintenance:\n    enabled: true\n",
+		"  maintenance:\n    enabled: true\n    every: 10m\n",
 	} {
 		if !strings.Contains(string(rendered), want) {
 			t.Errorf("generated configuration does not write %q:\n%s", want, rendered)

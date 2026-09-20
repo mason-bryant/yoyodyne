@@ -348,6 +348,13 @@ func renderSweeps(recorded []runstate.Sweep, unreadable []runstate.UnreadableSwe
 // leisure has to be able to see that at a glance.
 func renderSweep(recorded runstate.Sweep) string {
 	var rendered strings.Builder
+	if recorded.HarnessPass() {
+		// The harness's own pass wakes nobody and takes no turns, so its header
+		// says what it is and its body is the steps it took.
+		fmt.Fprintf(&rendered, "%s  %s (the harness's own pass)\n",
+			recorded.StartedAt.UTC().Format(time.RFC3339), recorded.Task)
+		return renderHarnessPass(&rendered, recorded)
+	}
 	fmt.Fprintf(&rendered, "%s  %s (%s), %d turn(s)",
 		recorded.StartedAt.UTC().Format(time.RFC3339), recorded.Task, recorded.Role, recorded.Turns)
 	if recorded.CostUSD > 0 {
@@ -388,6 +395,28 @@ func renderSweep(recorded runstate.Sweep) string {
 	return rendered.String()
 }
 
+// renderHarnessPass writes the steps of the harness's own pass, each with what
+// became of it. A skipped step is shown with its reason on the same footing as
+// one that ran, because the skip is the fact a reader of this log is after.
+func renderHarnessPass(rendered *strings.Builder, recorded runstate.Sweep) string {
+	if recorded.Result != nil {
+		if summary := strings.TrimSpace(recorded.Result.Summary); summary != "" {
+			fmt.Fprintf(rendered, "  %s\n", summary)
+		}
+	}
+	for _, step := range recorded.Steps {
+		fmt.Fprintf(rendered, "  - %s: %s", step.Name, step.Outcome)
+		if detail := strings.TrimSpace(step.Detail); detail != "" {
+			fmt.Fprintf(rendered, ", %s", detail)
+		}
+		rendered.WriteString("\n")
+	}
+	if recorded.Problem != "" {
+		fmt.Fprintf(rendered, "  %s\n", recorded.Problem)
+	}
+	return rendered.String()
+}
+
 func nonEmptySweepProblem(problem string) string {
 	if trimmed := strings.TrimSpace(problem); trimmed != "" {
 		return trimmed
@@ -424,6 +453,11 @@ A pass the intake brake summoned out of its cadence says so under its header,
 naming what tripped the brake. It is the development manager's sweep fired the
 moment the line stopped, with the blocked runs in front of her, and it counts as
 a firing: the cadence runs on from it.
+
+One pass here is the harness's own: the supervisor's maintenance pass, under the
+task name "maintenance", headed as such rather than as a role's, with the steps
+it took in place of findings -- each saying whether it ran, was skipped, or
+failed, and why. "--task maintenance" reads its passes alone.
 
 The twenty most recent passes are shown by default, which for an hourly task is
 under a day. "--limit 200" reads further back and "--limit 0" reads every pass

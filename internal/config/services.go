@@ -24,6 +24,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Services is what a product declares about its parts. Every service is present
@@ -46,14 +47,44 @@ type Services struct {
 	Scheduler Service `yaml:"scheduler" json:"scheduler"`
 	// Maintenance is the periodic pass that keeps the installation converged:
 	// reconciling interrupted runs, catching the checkout up, and the rest of
-	// what the interim maintenance job did by hand.
-	Maintenance Service `yaml:"maintenance" json:"maintenance"`
+	// what the interim maintenance job did by hand. It is the supervisor's own
+	// pass rather than a process of its own, and its one setting is how often.
+	Maintenance MaintenanceService `yaml:"maintenance" json:"maintenance"`
 }
 
 // Service is a part of the product with nothing to say but whether it runs.
 type Service struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 }
+
+// MaintenanceService is the periodic pass's entry: whether it runs, and its
+// cadence. The cadence is measured from the last pass rather than against a
+// wall-clock grid, as a recurring task's is, so a machine that slept through
+// the night owes nobody the passes it missed.
+type MaintenanceService struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Every is how often the pass runs. It has a floor rather than a ceiling:
+	// every pass runs `yoyo reconcile`, which reads the tracker and asks the
+	// forge about every unsettled publication, and a cadence of seconds would be
+	// that load for nothing, since what the pass settles moves on the scale of
+	// runs finishing.
+	Every Duration `yaml:"every" json:"every"`
+}
+
+const (
+	// DefaultMaintenanceInterval is how often the pass runs when a project says
+	// nothing. It is the cadence the interim maintenance job ran on, which was
+	// long enough to settle a finished run promptly without reading the tracker
+	// and the forge more than a few times an hour.
+	DefaultMaintenanceInterval = 10 * time.Minute
+	// MinMaintenanceInterval is the shortest cadence a project may set.
+	MinMaintenanceInterval = time.Minute
+	// MaintenanceTaskName is the name the pass records its firings under in the
+	// sweep log, beside the recurring tasks. It is reserved: a recurring task
+	// written under it would share the pass's cadence claim, so one is refused
+	// when the configuration loads.
+	MaintenanceTaskName = "maintenance"
+)
 
 // DashboardService is the dashboard's entry. The bind address and the allowed
 // hosts are the observability-and-dashboard design's web-security conventions
@@ -171,7 +202,7 @@ func DefaultServices() Services {
 			Token:        DashboardTokenGenerated,
 		},
 		Scheduler:   Service{Enabled: true},
-		Maintenance: Service{Enabled: true},
+		Maintenance: MaintenanceService{Enabled: true, Every: Duration(DefaultMaintenanceInterval)},
 	}
 }
 
@@ -230,7 +261,16 @@ func (s Services) problems(reporting Slack) []string {
 	if s.Slack.Enabled && !reporting.Enabled {
 		problems = append(problems, "services.slack is enabled and slack reporting is off; a sink started for a project that reports nothing has nowhere to post, so set slack.enabled and slack.channel, or set services.slack.enabled to false")
 	}
-	return append(problems, s.Dashboard.problems()...)
+	problems = append(problems, s.Dashboard.problems()...)
+	return append(problems, s.Maintenance.problems()...)
+}
+
+func (m MaintenanceService) problems() []string {
+	if m.Every.Duration() < MinMaintenanceInterval {
+		return []string{fmt.Sprintf("services.maintenance.every is %s, and the shortest cadence is %s: every pass reads the tracker and asks the forge about every unsettled publication, so a cadence below that is load rather than maintenance",
+			m.Every, Duration(MinMaintenanceInterval))}
+	}
+	return nil
 }
 
 func (d DashboardService) problems() []string {

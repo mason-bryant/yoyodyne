@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every part of the product is present whether or not a project mentions it,
@@ -24,7 +25,7 @@ func TestAProjectThatSaysNothingAboutServicesGetsEveryServiceAtItsDefault(t *tes
 			Token:        DashboardTokenGenerated,
 		},
 		Scheduler:   Service{Enabled: true},
-		Maintenance: Service{Enabled: true},
+		Maintenance: MaintenanceService{Enabled: true, Every: Duration(DefaultMaintenanceInterval)},
 	}
 	if !reflect.DeepEqual(resolved.Config.Services, want) {
 		t.Fatalf("services = %+v, want the defaults %+v", resolved.Config.Services, want)
@@ -38,6 +39,7 @@ func TestAProjectThatSaysNothingAboutServicesGetsEveryServiceAtItsDefault(t *tes
 		"services.dashboard.token",
 		"services.scheduler.enabled",
 		"services.maintenance.enabled",
+		"services.maintenance.every",
 	} {
 		if origin := resolved.Origins[key]; origin != OriginDefault {
 			t.Errorf("origin[%q] = %q, want %q", key, origin, OriginDefault)
@@ -66,10 +68,15 @@ services:
     token: keychain
   scheduler:
     enabled: false
+  maintenance:
+    every: 30m
 `, nil)
 	services := resolved.Config.Services
 	if !services.Slack.Enabled || !services.Dashboard.Enabled || services.Scheduler.Enabled || !services.Maintenance.Enabled {
-		t.Fatalf("services = %+v, want slack and the dashboard on, the scheduler off, and the maintenance pass left at its default", services)
+		t.Fatalf("services = %+v, want slack and the dashboard on, the scheduler off, and the maintenance pass left on", services)
+	}
+	if services.Maintenance.Every.Duration() != 30*time.Minute {
+		t.Errorf("maintenance every = %s, want the 30m the file wrote over the default", services.Maintenance.Every)
 	}
 	if services.Dashboard.Bind != "192.168.1.20" || services.Dashboard.Token != DashboardTokenKeychain {
 		t.Errorf("dashboard = %+v, want the bind and token the file wrote", services.Dashboard)
@@ -90,6 +97,7 @@ services:
 		"services.dashboard.allowed_hosts": resolved.Path,
 		"services.dashboard.token":         resolved.Path,
 		"services.scheduler.enabled":       resolved.Path,
+		"services.maintenance.every":       resolved.Path,
 		"services.dashboard.port":          OriginDefault,
 		"services.maintenance.enabled":     OriginDefault,
 	} {
@@ -185,6 +193,14 @@ func TestServicesAreValidatedLikeEveryOtherKey(t *testing.T) {
 		"the slack service over reporting that is off": {
 			section: "services:\n  slack:\n    enabled: true\n",
 			want:    "services.slack is enabled and slack reporting is off",
+		},
+		"a maintenance cadence below the floor": {
+			section: "services:\n  maintenance:\n    every: 30s\n",
+			want:    "services.maintenance.every is 30s, and the shortest cadence is 1m0s",
+		},
+		"a recurring task named for the maintenance pass": {
+			section: "recurring_tasks:\n  maintenance:\n    role: developer\n    every: 1h\n    enabled: true\n    prompt: look\n",
+			want:    `recurring task "maintenance" is named for the product's maintenance pass`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

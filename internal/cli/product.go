@@ -17,11 +17,20 @@ package cli
 //
 // The supervisor is one verb rather than two: `yoyo start` detaches a
 // `yoyo start --foreground` into a session of its own and returns, and the
-// foreground form is the resident — what a launchd job runs, once the
-// resident item lands. What the supervisor holds is exactly what it needs and
+// foreground form is the resident — what the launch agent `yoyo setup`
+// installs runs with the machine, and what a deploy replaces in place. Where
+// that agent is installed and loaded, `yoyo start` asks launchd to start it
+// rather than detaching a supervisor of its own, so the resident is always the
+// one launchd restarts. What the supervisor holds is exactly what it needs and
 // no more: it never has a Slack token, because the sink's launch reads the
 // pair out of the keychain into the sink's own environment and nowhere else,
 // and every other child is started with the Slack variables taken out.
+//
+// The maintenance pass is the supervisor's own rather than a child: every
+// `services.maintenance.every` it runs `yoyo reconcile`, rebuilds and takes up
+// a build that landed, and records each step in the sweep log, holding every
+// restart while the provider is not answering. It is what the interim
+// maintenance job did by hand, and what retires it.
 
 import (
 	"context"
@@ -37,8 +46,12 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/launchd"
+	"github.com/mason-bryant/yoyodyne/internal/maintain"
+	"github.com/mason-bryant/yoyodyne/internal/redeploy"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 	"github.com/mason-bryant/yoyodyne/internal/supervise"
@@ -72,7 +85,24 @@ type product struct {
 	// children assembles the parts to drive, in start order, with the enabled
 	// parts nothing can start yet and the parts that are off.
 	children func() ([]supervise.Child, []supervise.NotYet, []config.ServiceName, error)
-	now      func() time.Time
+	// pass assembles the maintenance pass for a supervisor, or nothing where
+	// the section leaves it off, and deployment resolves the binary the
+	// supervisor runs so the pass can take an installed build up.
+	pass       func(residents maintain.Residents, deployment maintain.Deployment, log func(string, ...any)) (supervise.Pass, error)
+	deployment func() (deploymentBinary, error)
+	// agent is the launch agent as installed on this machine, or nil where the
+	// platform has none, so `yoyo start` can ask launchd for the resident
+	// rather than detaching a second kind of one.
+	agent *launchd.Agent
+	now   func() time.Time
+}
+
+// deploymentBinary is what the supervisor needs of the file it is executing:
+// what the pass reads to tell a deploy, and what the supervisor restarts
+// through. It is satisfied by *redeploy.Binary.
+type deploymentBinary interface {
+	maintain.Deployment
+	supervise.Deployment
 }
 
 func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -153,6 +183,17 @@ func openProduct(configPath string) (*product, error) {
 		now:       time.Now,
 	}
 	p.children = p.realChildren
+	p.pass = p.realPass
+	p.deployment = func() (deploymentBinary, error) {
+		binary, err := redeploy.Running()
+		if err != nil {
+			return nil, err
+		}
+		return binary, nil
+	}
+	if runtime.GOOS == "darwin" {
+		p.agent = launchd.AgentFor(resolved.Config.Product.ID, launchd.Controller{Runner: execution.OSProcessRunner{}, UserHomeDir: os.UserHomeDir, Getuid: os.Getuid})
+	}
 	return p, nil
 }
 
@@ -170,6 +211,9 @@ type startReport struct {
 	// Pending says why it was not.
 	Recorded *runstate.Supervision `json:"recorded,omitempty"`
 	Pending  string                `json:"pending,omitempty"`
+	// LaunchAgent names the launchd job the supervisor was started through,
+	// where it was, so a reader knows launchd is what restarts it.
+	LaunchAgent string `json:"launch_agent,omitempty"`
 }
 
 // start starts the supervisor detached, unless one is running, and reports
@@ -197,6 +241,24 @@ func (p *product) start(ctx context.Context, stdout, stderr io.Writer, jsonOutpu
 		return p.reportStart(stdout, stderr, jsonOutput, report)
 	}
 	logRoot, logPath := p.store.SupervisorLog()
+	// Where the launch agent is installed and loaded, the resident is launchd's
+	// to start: asked for here, it comes up as the job launchd restarts if it
+	// dies and starts again with the machine, which a supervisor detached from
+	// this terminal would not be.
+	if p.agent != nil {
+		// The agent has to be this checkout's: one written for another checkout
+		// of a product with the same id is that checkout's resident.
+		runs, err := p.agent.Runs(p.resolved.Path)
+		if err != nil {
+			fmt.Fprintf(stderr, "the launch agent %s could not be read, so the supervisor is started from here instead: %v\n", p.agent.Label, err)
+		} else if runs {
+			if loaded, err := p.agent.Loaded(ctx); err != nil {
+				fmt.Fprintf(stderr, "whether the launch agent %s is loaded could not be read, so the supervisor is started from here instead: %v\n", p.agent.Label, err)
+			} else if loaded {
+				return p.startThroughLaunchd(ctx, stdout, stderr, jsonOutput, filepath.Join(logRoot, filepath.FromSlash(logPath)))
+			}
+		}
+	}
 	pid, err := p.launcher.Launch(slack.Launch{
 		Program: p.program,
 		Args:    []string{"start", "--foreground", "--config", p.resolved.Path},
@@ -221,7 +283,7 @@ func (p *product) start(ctx context.Context, stdout, stderr io.Writer, jsonOutpu
 	// The supervisor records the parts on its first look. Waiting for that is
 	// what lets this verb say what came up rather than only that something was
 	// started to find out.
-	recorded, found := p.awaitRecord(ctx, pid)
+	recorded, found := p.awaitRecord(ctx, func(recorded runstate.Supervision) bool { return recorded.PID == pid })
 	if found {
 		report.Recorded = &recorded
 	} else {
@@ -230,14 +292,39 @@ func (p *product) start(ctx context.Context, stdout, stderr io.Writer, jsonOutpu
 	return p.reportStart(stdout, stderr, jsonOutput, report)
 }
 
+// startThroughLaunchd asks launchd to start the agent's job, and waits for the
+// supervisor it starts to record the parts. Which process launchd started is
+// read from the record rather than from launchd, so the wait is for a record
+// newer than any an earlier supervisor left.
+func (p *product) startThroughLaunchd(ctx context.Context, stdout, stderr io.Writer, jsonOutput bool, log string) int {
+	productID := p.resolved.Config.Product.ID
+	before := 0
+	if recorded, found, err := p.store.Load(); err == nil && found {
+		before = recorded.PID
+	}
+	if err := p.agent.Kickstart(ctx); err != nil {
+		fmt.Fprintf(stderr, "start failed: ask launchd to start %s: %v\n", p.agent.Label, err)
+		return 1
+	}
+	report := startReport{Product: productID, Started: true, Log: log, LaunchAgent: p.agent.Label}
+	recorded, found := p.awaitRecord(ctx, func(recorded runstate.Supervision) bool { return recorded.PID != before })
+	if found {
+		report.Recorded = &recorded
+		report.PID = recorded.PID
+	} else {
+		report.Pending = "launchd was asked to start the supervisor and it has not recorded the parts yet; `yoyo status` says how they stand, and its log says what it is doing"
+	}
+	return p.reportStart(stdout, stderr, jsonOutput, report)
+}
+
 // awaitRecord waits, bounded, for the supervisor just started to write its
 // record. A record an earlier supervisor left is not the one being waited
-// for, which is why it is matched on the process.
-func (p *product) awaitRecord(ctx context.Context, pid int) (runstate.Supervision, bool) {
+// for, which is why the caller says which record it is waiting for.
+func (p *product) awaitRecord(ctx context.Context, wanted func(runstate.Supervision) bool) (runstate.Supervision, bool) {
 	deadline := p.now().Add(startWait)
 	for {
 		recorded, found, err := p.store.Load()
-		if err == nil && found && recorded.PID == pid {
+		if err == nil && found && wanted(recorded) {
 			return recorded, true
 		}
 		if !p.now().Before(deadline) || ctx.Err() != nil {
@@ -258,6 +345,10 @@ func (p *product) reportStart(stdout, stderr io.Writer, jsonOutput bool, report 
 		return writeJSON(stdout, stderr, report)
 	}
 	switch {
+	case report.Started && report.LaunchAgent != "" && report.PID > 0:
+		fmt.Fprintf(stdout, "started the supervisor for %s through the launch agent %s, as pid %d, logging to %s\n", report.Product, report.LaunchAgent, report.PID, report.Log)
+	case report.Started && report.LaunchAgent != "":
+		fmt.Fprintf(stdout, "asked launchd to start the supervisor for %s through the launch agent %s, logging to %s\n", report.Product, report.LaunchAgent, report.Log)
 	case report.Started:
 		fmt.Fprintf(stdout, "started the supervisor for %s as pid %d, logging to %s\n", report.Product, report.PID, report.Log)
 	case report.PID > 0:
@@ -278,13 +369,16 @@ func (p *product) reportStart(stdout, stderr io.Writer, jsonOutput bool, report 
 }
 
 // supervise is the foreground form: this process is the supervisor, until it
-// is asked to stop. It is what `yoyo start` detaches, and what a launchd job
-// runs once the resident item lands.
+// is asked to stop. It is what `yoyo start` detaches, and what the launch
+// agent runs.
 func (p *product) supervise(ctx context.Context, stdout, stderr io.Writer) int {
 	children, notYet, off, err := p.children()
 	if err != nil {
 		fmt.Fprintf(stderr, "start failed: %v\n", err)
 		return 1
+	}
+	log := func(format string, args ...any) {
+		fmt.Fprintf(stdout, "%s %s\n", p.now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 	}
 	supervisor := &supervise.Supervisor{
 		Records:  p.store,
@@ -293,22 +387,94 @@ func (p *product) supervise(ctx context.Context, stdout, stderr io.Writer) int {
 		NotYet:   notYet,
 		Off:      off,
 		Now:      p.now,
-		Log: func(format string, args ...any) {
-			fmt.Fprintf(stdout, "%s %s\n", p.now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
-		},
-		PID:   os.Getpid(),
-		Build: buildinfo.Commit(),
+		Log:      log,
+		PID:      os.Getpid(),
+		Build:    buildinfo.Commit(),
+	}
+	// Which file this process was started from, read before anything runs, for
+	// the reason the watch session reads it then: this is the only moment the
+	// answer is known to be about the build that is actually running. A platform
+	// that cannot replace a running process supervises without it, and says so.
+	var binary deploymentBinary
+	if p.deployment != nil {
+		resolved, err := p.deployment()
+		switch {
+		case errors.Is(err, redeploy.ErrUnsupported):
+			log("this supervisor will not take up a build deployed over it, and has to be restarted by hand for one: %v", err)
+		case err != nil:
+			fmt.Fprintf(stderr, "start failed: %v\n", err)
+			return 1
+		default:
+			binary = resolved
+			supervisor.Deployment = binary
+		}
+	}
+	if p.pass != nil {
+		// The pass is given the same reading of the binary the supervisor
+		// restarts through, or none where the platform has none: an interface
+		// holding a nil pointer would read as a deployment that is there.
+		var deployment maintain.Deployment
+		if binary != nil {
+			deployment = binary
+		}
+		pass, err := p.pass(supervisor, deployment, log)
+		if err != nil {
+			fmt.Fprintf(stderr, "start failed: %v\n", err)
+			return 1
+		}
+		if pass != nil {
+			supervisor.Pass = pass
+		}
 	}
 	err = supervisor.Run(ctx)
 	switch {
 	case errors.Is(err, supervise.ErrAlreadyRunning):
+		// The same answer the detaching form gives, and the exit status matches
+		// it, because the launch agent runs this form: a job that exited on a
+		// refusal launchd read as a failure would be started again every few
+		// seconds for as long as the other supervisor ran.
 		fmt.Fprintf(stderr, "start refused: %v; a second start while one is running does nothing\n", err)
-		return 1
+		return 0
 	case err != nil:
 		fmt.Fprintf(stderr, "start failed: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// realPass assembles the maintenance pass from the services section, or
+// nothing where the section leaves it off.
+func (p *product) realPass(residents maintain.Residents, deployment maintain.Deployment, log func(string, ...any)) (supervise.Pass, error) {
+	services := p.resolved.Config.Services
+	if !services.Maintenance.Enabled {
+		return nil, nil
+	}
+	productID := p.resolved.Config.Product.ID
+	sweeps, err := runstate.NewSweepStore(p.stateRoot, productID)
+	if err != nil {
+		return nil, err
+	}
+	outages, err := runstate.NewProviderOutageStore(p.stateRoot, productID)
+	if err != nil {
+		return nil, err
+	}
+	pass := &maintain.Pass{
+		Product:    productID,
+		Every:      services.Maintenance.Every.Duration(),
+		Program:    p.program,
+		Config:     p.resolved.Path,
+		Repository: doctor.RepositoryPath(config.ProjectDirectory(p.resolved.Path), p.resolved.Config.Product.Repository),
+		Environ:    slack.WithoutSecrets(p.environ),
+		Commit:     buildinfo.Commit(),
+		Claims:     sweeps,
+		Outages:    outages,
+		Deployment: deployment,
+		Residents:  residents,
+		Runner:     execution.OSProcessRunner{},
+		Now:        p.now,
+		Log:        log,
+	}
+	return pass, nil
 }
 
 // stopReport is what `yoyo stop` did, in order: the supervisor, then each
@@ -456,11 +622,8 @@ func (p *product) realChildren() ([]supervise.Child, []supervise.NotYet, []confi
 				Reason: "its adoption is yoyodyne-ifd.414; until that lands, start it with `yoyo dashboard`",
 			})
 		case config.ServiceMaintenance:
-			// The periodic pass is yoyodyne-ifd.413, the resident item.
-			notYet = append(notYet, supervise.NotYet{
-				Name:   name,
-				Reason: "the periodic pass is yoyodyne-ifd.413; until that lands, `yoyo reconcile` is scheduled by hand",
-			})
+			// The supervisor's own pass rather than a child: assembled by realPass
+			// and recorded as scheduled.
 		}
 	}
 	return children, notYet, off, nil
@@ -612,14 +775,23 @@ with the reason. The supervisor's own death leaves the parts running, and the
 next `+"`yoyo start`"+` finds them by their leases and takes them back rather than
 starting them again.
 
-A second start while the product is running says so and does nothing. A part the
-section enables that is not yet a child of the supervisor -- the dashboard, and
-the maintenance pass -- is reported as such, with the work that adopts it.
+The maintenance pass is the supervisor's own: every services.maintenance.every
+it runs `+"`yoyo reconcile`"+`, rebuilds and takes up a build that landed on the
+checkout, keeps the sink up, and records each step in the sweep log, where
+`+"`yoyo sweeps`"+` reads it. Nothing is restarted while the provider cannot be reached
+or is not logged in, and the scheduler is never stopped for a deploy: it takes a
+build up itself, between the runs it hosts.
+
+A second start while the product is running says so and does nothing. Where the
+launch agent `+"`yoyo setup`"+` installs is loaded, the supervisor is started through
+it, so launchd is what restarts it. A part the section enables that is not yet a
+child of the supervisor -- the dashboard -- is reported as such, with the work
+that adopts it.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --foreground      be the supervisor in this process rather than detaching one;
-                    what a launchd job runs
+                    what the launch agent runs
   --json            emit machine-readable JSON`)
 }
 

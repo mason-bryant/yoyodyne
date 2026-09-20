@@ -533,6 +533,7 @@ func TestDescribeChildSaysEachStateInPlainWords(t *testing.T) {
 		{runstate.SupervisedChild{Service: config.ServiceScheduler, State: runstate.ChildDown, Reason: "died at noon"}, "scheduler: down, died at noon"},
 		{runstate.SupervisedChild{Service: config.ServiceDashboard, State: runstate.ChildNotYet, Reason: "yoyodyne-ifd.414"}, "dashboard: enabled, and not yet a child of the supervisor: yoyodyne-ifd.414"},
 		{runstate.SupervisedChild{Service: config.ServiceMaintenance, State: runstate.ChildOff}, "maintenance: off; set services.maintenance.enabled to start it with the product"},
+		{runstate.SupervisedChild{Service: config.ServiceMaintenance, State: runstate.ChildScheduled, Reason: "every 10m0s; next at noon"}, "maintenance: the supervisor's own periodic pass, every 10m0s; next at noon"},
 	} {
 		if got := DescribeChild(testCase.child); got != testCase.want {
 			t.Errorf("DescribeChild(%+v) = %q, want %q", testCase.child, got, testCase.want)
@@ -580,4 +581,156 @@ func waitFor(t *testing.T, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("the condition was not met in time")
+}
+
+// fakePass is the maintenance pass as a test drives it: due when the test says
+// so, and asking for a restart into a deploy on cue.
+type fakePass struct {
+	mu       sync.Mutex
+	due      bool
+	takeUp   bool
+	runs     int
+	restarts func(ctx context.Context) error
+}
+
+func (p *fakePass) Due(time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.due
+}
+
+func (p *fakePass) Run(ctx context.Context) PassOutcome {
+	p.mu.Lock()
+	p.runs++
+	p.due = false
+	takeUp := p.takeUp
+	restarts := p.restarts
+	p.mu.Unlock()
+	if restarts != nil {
+		_ = restarts(ctx)
+	}
+	return PassOutcome{TakeUpDeploy: takeUp}
+}
+
+func (p *fakePass) Describe() string { return "every 10m0s; a fake" }
+
+func (p *fakePass) runCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.runs
+}
+
+// fakeDeployment records the invocation the supervisor tried to restart into,
+// and cannot actually replace the process, which is the one half of a
+// re-execution a test can observe.
+type fakeDeployment struct {
+	mu    sync.Mutex
+	taken [][]string
+}
+
+func (d *fakeDeployment) Args() []string { return []string{"yoyo", "start", "--foreground"} }
+
+func (d *fakeDeployment) Take(args []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.taken = append(d.taken, args)
+	return errors.New("the test process is not replaced")
+}
+
+func (d *fakeDeployment) takes() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.taken)
+}
+
+// The maintenance pass is the supervisor's own: taken between looks when its
+// cadence says so, recorded as scheduled beside the children, and when it
+// finds a build installed over the running one the supervisor lets its lease
+// go and re-executes itself. Where the re-execution does not happen the
+// supervisor takes its lease back and carries on as the build it is, with
+// every child left running throughout.
+func TestTheSupervisorTakesThePassAndRestartsIntoADeploy(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t)
+	clock := &clock{now: time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)}
+	slack := &fakeChild{name: config.ServiceSlack}
+	scheduler := &fakeChild{name: config.ServiceScheduler}
+	supervisor := newSupervisor(t, store, clock, slack, scheduler)
+	supervisor.Off = nil
+	supervisor.Poll = time.Millisecond
+	pass := &fakePass{due: true, takeUp: true}
+	deployment := &fakeDeployment{}
+	supervisor.Pass = pass
+	supervisor.Deployment = deployment
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	waitFor(t, func() bool { return pass.runCount() == 1 && deployment.takes() == 1 })
+	// The restart did not happen, and the supervisor is still the product's:
+	// its lease is held again and its children were never touched.
+	waitFor(t, func() bool { running, _ := store.Running(); return running })
+	if !slack.isRunning() || !scheduler.isRunning() || slack.stops != 0 || scheduler.stops != 0 {
+		t.Fatal("the takeover touched a child; the children are left running to be reattached")
+	}
+	if got := deployment.taken[0]; strings.Join(got, " ") != "yoyo start --foreground" {
+		t.Errorf("restarted as %v, want the supervisor's own invocation", got)
+	}
+	recorded := loaded(t, store)
+	maintenance := child(t, recorded, config.ServiceMaintenance)
+	if maintenance.State != runstate.ChildScheduled || maintenance.Reason != "every 10m0s; a fake" {
+		t.Errorf("maintenance = %+v, want it recorded as the supervisor's scheduled pass", maintenance)
+	}
+	// A pass that is not due is not taken.
+	clock.advance(time.Minute)
+	time.Sleep(5 * time.Millisecond)
+	if pass.runCount() != 1 {
+		t.Errorf("the pass was taken %d times while not due, want the one", pass.runCount())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+// The pass restarts a child for a deploy through the supervisor, which stops
+// it and starts it again on its next look: a stop on purpose, not a death, so
+// the failure count and the backoff are untouched and the reason is on the
+// record until the child is back.
+func TestARestartStopsAChildForTheNextLookToStartAgain(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(t)
+	clock := &clock{now: time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)}
+	slack := &fakeChild{name: config.ServiceSlack}
+	supervisor := newSupervisor(t, store, clock, slack)
+	supervisor.Tick(context.Background())
+	if slack.startCount() != 1 {
+		t.Fatalf("starts = %d after the first look, want 1", slack.startCount())
+	}
+
+	state, err := supervisor.Restart(context.Background(), config.ServiceSlack, "stopped for the build installed at noon")
+	if err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+	if state.State != runstate.ChildDown || state.Reason != "stopped for the build installed at noon" || state.Failures != 0 || slack.stops != 1 || slack.isRunning() {
+		t.Fatalf("after Restart(): state %+v, stops %d, running %t; want the child stopped and recorded down with the reason and no failure counted", state, slack.stops, slack.isRunning())
+	}
+	if _, err := supervisor.Restart(context.Background(), config.ServiceSlack, "again"); err == nil {
+		t.Error("Restart() of a child that is not running was not refused")
+	}
+	if _, err := supervisor.Restart(context.Background(), config.ServiceDashboard, "again"); err == nil {
+		t.Error("Restart() of a part that is not a child was not refused")
+	}
+
+	clock.advance(time.Second)
+	supervisor.Tick(context.Background())
+	if slack.startCount() != 2 || !slack.isRunning() {
+		t.Fatalf("starts = %d, running %t after the next look, want the child started again at once", slack.startCount(), slack.isRunning())
+	}
+	got := child(t, loaded(t, store), config.ServiceSlack)
+	if got.State != runstate.ChildRunning || got.Failures != 0 || got.Reason != "" || got.Starts != 2 {
+		t.Errorf("slack = %+v, want running again with no failure counted", got)
+	}
 }

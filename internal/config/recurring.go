@@ -108,6 +108,12 @@ func (t RecurringTask) problems(name string, agents map[string]AgentConfig) []st
 	if err := domain.ValidateIdentifier("recurring task name", name); err != nil {
 		problems = append(problems, err.Error())
 	}
+	// The maintenance pass records its firings in the sweep log under its own
+	// name and claims its cadence there, so a task written under that name
+	// would fire on the pass's claim and the pass on the task's.
+	if name == MaintenanceTaskName {
+		problems = append(problems, fmt.Sprintf("recurring task %q is named for the product's maintenance pass, which records its passes under that name; give the task another", name))
+	}
 	if !t.Role.Valid() {
 		problems = append(problems, fmt.Sprintf("recurring task %q role %q must be one of %s", name, t.Role, describeRoles()))
 	} else if !roleIsConfigured(agents, t.Role) {

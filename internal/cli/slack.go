@@ -138,7 +138,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 // started this is here.
 func sayWhereStallsAreNoticed(stdout io.Writer) {
 	fmt.Fprintln(stdout, "this sink reports stalls and no longer notices them: `yoyo work --watch` takes that reading as it polls, and `yoyo reconcile` takes it on every sweep")
-	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; scheduling the sweep is the supervisor's periodic pass, yoyodyne-ifd.413, and until it lands it is yours")
+	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; the supervisor's maintenance pass runs the sweep on its cadence for a product started with `yoyo start`")
 }
 
 // ensureSlackSink is the step a maintenance pass takes about reporting: this

@@ -154,11 +154,20 @@ func (c SweepClaim) Validate() error {
 // correct. What the harness knows — which task, which role, which conversation,
 // how many turns, what it cost — is the harness's and is never the role's to
 // assert.
+//
+// The product's maintenance pass records its firings here too, under
+// config.MaintenanceTaskName, because it is a pass on a cadence that nobody
+// watches and the question asked of it — did it run, and if it skipped a step,
+// why — is the question this log exists to answer. It wakes no role, so it
+// names none, and what it carries instead is each step it took with what became
+// of it.
 type Sweep struct {
 	SchemaVersion int              `json:"schema_version"`
 	ProductID     domain.ProductID `json:"product_id"`
 	Task          string           `json:"task"`
-	Role          domain.AgentRole `json:"role"`
+	// Role is who the pass woke. It is empty on the harness's own maintenance
+	// pass, which wakes nobody and carries Steps instead.
+	Role domain.AgentRole `json:"role,omitempty"`
 	// ConversationID is the role's own durable conversation the pass happened in,
 	// so what was actually said can be read from the conversation record rather
 	// than only from this.
@@ -191,6 +200,70 @@ type Sweep struct {
 	// cadence fired, which is nearly every pass, and it is on the record so a
 	// reader of the log can tell a summoned pass from the hourly one beside it.
 	Summoned string `json:"summoned,omitempty"`
+	// Steps is what the harness's own maintenance pass did, one entry per step in
+	// the order it took them, each saying whether it ran, was skipped, or failed,
+	// and why. A step that was skipped says so rather than being left out,
+	// because a pass that quietly did less than it was meant to is the failure
+	// this record exists to make visible. It is empty on a role's pass.
+	Steps []SweepStep `json:"steps,omitempty"`
+}
+
+// SweepStepOutcome is what became of one step of a harness pass.
+type SweepStepOutcome string
+
+const (
+	// StepRan is a step that was carried out, whatever it found.
+	StepRan SweepStepOutcome = "ran"
+	// StepSkipped is a step the pass deliberately did not take, with the reason
+	// in the detail: the provider is not answering, a build is already waiting,
+	// nothing changed.
+	StepSkipped SweepStepOutcome = "skipped"
+	// StepFailed is a step that was taken and did not succeed.
+	StepFailed SweepStepOutcome = "failed"
+)
+
+func (o SweepStepOutcome) Valid() bool {
+	switch o {
+	case StepRan, StepSkipped, StepFailed:
+		return true
+	}
+	return false
+}
+
+// SweepStep is one step of a harness pass and what became of it.
+type SweepStep struct {
+	Name    string           `json:"name"`
+	Outcome SweepStepOutcome `json:"outcome"`
+	// Detail is what the step did, or why it was skipped, or how it failed.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Validate refuses a step with no name, an outcome this harness does not name,
+// or a skip with no reason.
+func (s SweepStep) Validate() error {
+	var problems []error
+	if strings.TrimSpace(s.Name) == "" {
+		problems = append(problems, errors.New("step name is required"))
+	}
+	if !s.Outcome.Valid() {
+		problems = append(problems, fmt.Errorf("step outcome %q must be %q, %q, or %q", s.Outcome, StepRan, StepSkipped, StepFailed))
+	}
+	if s.Outcome != StepRan && strings.TrimSpace(s.Detail) == "" {
+		problems = append(problems, fmt.Errorf("a step that %s says why", s.Outcome))
+	}
+	if len(s.Detail) > MaxSweepTextBytes {
+		problems = append(problems, fmt.Errorf("step detail is %d bytes, limit is %d", len(s.Detail), MaxSweepTextBytes))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid step: %w", err)
+	}
+	return nil
+}
+
+// HarnessPass reports a record the harness wrote about a pass of its own rather
+// than about a role it woke.
+func (s Sweep) HarnessPass() bool {
+	return s.Role == ""
 }
 
 // ForgeNotice is one open pull request the harness noticed a reason to report:
@@ -287,8 +360,24 @@ func (s Sweep) Validate() error {
 	if err := domain.ValidateIdentifier("recurring task name", s.Task); err != nil {
 		problems = append(problems, err)
 	}
-	if !s.Role.Valid() {
+	// A role's pass names a role this harness has; the harness's own pass names
+	// none and carries its steps instead, and a record that does neither says
+	// nothing about who or what the pass was.
+	switch {
+	case s.Role != "" && !s.Role.Valid():
 		problems = append(problems, fmt.Errorf("role %q is not one this harness has", s.Role))
+	case s.Role == "" && len(s.Steps) == 0:
+		problems = append(problems, errors.New("a sweep names the role it woke, or carries the steps the harness took"))
+	case s.Role != "" && len(s.Steps) > 0:
+		problems = append(problems, errors.New("a sweep of a role's pass carries no harness steps"))
+	}
+	if len(s.Steps) > sweep.MaxPassFindings {
+		problems = append(problems, fmt.Errorf("%d steps in one pass, limit is %d", len(s.Steps), sweep.MaxPassFindings))
+	}
+	for i, step := range s.Steps {
+		if err := step.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("steps[%d]: %w", i, err))
+		}
 	}
 	if s.StartedAt.IsZero() {
 		problems = append(problems, errors.New("started at is required"))

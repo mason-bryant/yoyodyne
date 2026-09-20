@@ -5,7 +5,9 @@ of [yoyo's documentation](../README.md#further-reading).*
 
 ## Starting the product, and stopping it
 
-A person starts the product once, with one verb, and stops it with one:
+A person starts the product once, with one verb, and stops it with one — and on
+macOS, once [the launch agent](#starting-with-the-machine-the-launch-agent) is
+installed, does not type the first at all, because the machine starts it:
 
 ```sh
 yoyo start    # the supervisor, and through it every part the configuration enables
@@ -16,32 +18,33 @@ Slack, the scheduler, the dashboard, and the maintenance pass are parts of one
 product rather than tools each started by hand, and the configuration's
 [`services`](configuration.md#services) section is where a product says which
 of them it runs. `yoyo start` starts the product's supervisor — one process per
-product, detached into a session of its own so it outlives the terminal — and
-the supervisor reads that section and starts every enabled part the way that
-part is started alone: the Slack sink exactly as
+product, detached into a session of its own so it outlives the terminal, or
+started through the launch agent where one is loaded — and the supervisor
+reads that section and starts every enabled part the way that part is started
+alone: the Slack sink exactly as
 [`yoyo slack ensure`](#checking-the-installation) starts it, from this product's
 own stored tokens into that one process and nowhere else; the scheduler as
 [`yoyo work --watch`](work.md#letting-the-harness-choose-the-work) under its own
 watch lease. Each start is lease-checked, so a part that is already running is
 taken as it is rather than started twice, and a part started here holds exactly
-what it holds started by hand. The verb waits for the supervisor to record what
-came up and says so, one line per part:
+what it holds started by hand. The maintenance pass is not a process at all: it
+is [the supervisor's own periodic pass](#the-maintenance-pass), taken on the
+section's cadence between its looks at the children. The verb waits for the
+supervisor to record what came up and says so, one line per part:
 
 ```text
 started the supervisor for yoyodyne as pid 48211, logging to …/products/yoyodyne/supervisor/supervisor.log
   slack: running as pid 48214, logging to …/products/yoyodyne/slack/sink.log
   dashboard: enabled, and not yet a child of the supervisor: its adoption is yoyodyne-ifd.414; until that lands, start it with `yoyo dashboard`
   scheduler: running as pid 48215, logging to …/products/yoyodyne/scheduler.log
-  maintenance: enabled, and not yet a child of the supervisor: the periodic pass is yoyodyne-ifd.413; until that lands, `yoyo reconcile` is scheduled by hand
+  maintenance: the supervisor's own periodic pass, every 10m0s
 stop it with `yoyo stop`; `yoyo status` says how each part stands
 ```
 
-Two of the four parts are declared and not yet started by the supervisor, and
-the line says which work adopts each: the dashboard is `yoyodyne-ifd.414`, and
-the maintenance pass — the resident that replaces the hand-rolled job — is
-`yoyodyne-ifd.413`. Until those land, `yoyo dashboard` and a scheduled
-`yoyo reconcile` are still yours, and the supervisor says so rather than
-starting a part it does not know how to.
+One of the four parts is declared and not yet started by the supervisor, and
+the line says which work adopts it: the dashboard is `yoyodyne-ifd.414`. Until
+that lands, `yoyo dashboard` is still yours, and the supervisor says so rather
+than starting a part it does not know how to.
 
 **A second start while the product is running says so and does nothing.**
 Whether a supervisor is running is its lease's answer, an advisory lock the
@@ -88,10 +91,170 @@ settles what that leaves. When what you want is for the runs to keep what they
 have and carry on later, [`yoyo pause`](#pausing-everything-and-resuming-it) is
 the verb and the product stays up.
 
-Nothing starts the product with the machine yet: `yoyo start` is typed, once,
-and the launchd job that runs it at login is the resident item,
-`yoyodyne-ifd.413`, whose form is `yoyo start --foreground` — the same verb,
-being the supervisor in the calling process rather than detaching one.
+**The supervisor takes up a build installed over it.** It is the resident a
+deploy replaces in place: when [its maintenance pass](#the-maintenance-pass)
+finds the binary it was started from has been written since, it writes what it
+knows, lets its lease go, and re-executes itself from the new file, keeping its
+process id and whatever started it, with every child left running to be
+reattached on its first look. It holds no runs, so it has nothing to drain. The
+scheduler is never stopped for a deploy — a watch session takes up a build
+itself, between the runs it hosts, on [its own drain
+rules](work.md#letting-the-harness-choose-the-work) — and the sink, which has no
+takeover of its own, is stopped by the pass and started again from the new
+build by the supervisor's next look.
+
+## Starting with the machine: the launch agent
+
+On macOS, [`yoyo setup`](#checking-the-installation)'s last step installs a
+per-user launch agent whose program is the supervisor verb, so the product
+comes up with the machine and nothing is typed by hand:
+
+```text
+done        launch-agent   yoyodyne now starts with the machine: the launch agent com.yoyodyne.yoyodyne runs its supervisor
+                           ~/Library/LaunchAgents/com.yoyodyne.yoyodyne.plist runs `yoyo start --foreground` from /Users/you/github/yoyodyne/bin/yoyo, now and at every login; it is removed with: launchctl bootout gui/$(id -u)/com.yoyodyne.yoyodyne; rm ~/Library/LaunchAgents/com.yoyodyne.yoyodyne.plist
+```
+
+The job is `com.yoyodyne.<product>`, one per product, and it runs
+`yoyo start --foreground --config <this configuration>` from the binary that
+installed it, in the project directory, logging to the supervisor log
+`yoyo start` names. Four settings in it are deliberate, and two of them are
+the history of the hand-rolled job this replaces:
+
+- **`RunAtLoad`**, so a machine restart brings the product up — the
+  supervisor, and through it every enabled part — with nothing to do by hand.
+- **`KeepAlive` on an unsuccessful exit only.** A supervisor that crashes is
+  started again by launchd; one `yoyo stop` asked to stop exits cleanly and
+  stays stopped, and so does one refused because another supervisor already
+  holds the product's lease — a refusal launchd read as a failure would be
+  started again every ten seconds for as long as the other ran.
+- **`AbandonProcessGroup`**, so the job's exit does not tear down the
+  processes it started. On 2026-09-03 the operator's maintenance job lacked it,
+  and launchd killed every watch session and Slack service the job had started
+  at the end of each of its passes: 77 kill-restart cycles before anybody read
+  the log. The children are meant to survive the supervisor, and this is the
+  setting that lets them.
+- **The operator's `PATH`**, carried from the shell that ran setup, because
+  launchd's own is a bare one and every part needs `git`, `bd`, `make`, and
+  the provider on it; `YOYODYNE_STATE_HOME` and `XDG_STATE_HOME` are carried
+  where they were set, so the job reads the same state your own commands do.
+
+The plist is compared whole on every walk: one that reads exactly as this binary
+would write it is already installed; one that does not — an older binary path,
+a moved checkout — is replaced with the question asked and reloaded, which
+restarts the supervisor and leaves its children to be reattached. A walk
+answering itself with `--yes` installs the agent only where `--launch-agent`
+asked for it, because a resident that starts with the machine is a change to
+the machine somebody should have asked for by name rather than one a scratch
+walk leaves behind.
+
+**With the agent loaded, `yoyo start` goes through it.** The verb asks launchd
+to start the job rather than detaching a supervisor of its own, so the resident
+is always the one launchd restarts, and the first line says so:
+
+```text
+started the supervisor for yoyodyne through the launch agent com.yoyodyne.yoyodyne, as pid 48211, logging to …
+```
+
+An agent installed for another checkout of a product with the same id is that
+checkout's, and `yoyo start` here detaches as before. `yoyo stop` is unchanged:
+it stops the supervisor and the parts, and launchd leaves the job stopped
+until the next `yoyo start` or the next login. Elsewhere than macOS the step is
+handed off with `yoyo start` as the command, and a systemd user unit is the
+equivalent this harness does not write yet.
+
+**The hand-rolled job is retired.** With the agent installed and the
+[maintenance pass](#the-maintenance-pass) running, what the operator's
+`~/.local/yoyodyne/yoyodyne-maintenance.sh` did is the product's — reconcile,
+convergence, the rebuild, the sink, the provider guard, and the stall reading
+are the pass's, restarts of a part that died are the supervisor's, and the
+watch takes up a deploy itself — and what it did that the product deliberately
+does not is retired with it: the bounce of a live watch session, which has
+cancelled a run before. The one step it ran that nothing yet replaces is
+starting the dashboard, which is `yoyodyne-ifd.414`; until that lands,
+[`yoyo dashboard`](#watching-from-a-browser-the-dashboard) is started by hand.
+`~/.local/yoyodyne/carry-out-queue.sh`, whose bare `bd update --status=open`
+[rewrote four tracker statuses](diagnoses/yoyodyne-ifd-392-status-rewrites-by-the-carry-out-queue.md),
+has no successor: the pass writes no tracker status, and the triage verbs claim
+an item and clear a stale block with a note themselves. Both scripts can be
+deleted, with the launchd job that ran the first:
+
+```sh
+launchctl bootout gui/$(id -u)/com.yoyodyne.maintenance
+rm ~/Library/LaunchAgents/com.yoyodyne.maintenance.plist
+rm ~/.local/yoyodyne/yoyodyne-maintenance.sh ~/.local/yoyodyne/carry-out-queue.sh
+```
+
+## The maintenance pass
+
+The supervisor takes one pass every `services.maintenance.every` — ten minutes
+by default — over what the interim maintenance job did by hand, and records
+each one in the sweep log beside the recurring tasks', where
+[`yoyo sweeps`](#reading-what-the-recurring-tasks-found) reads it:
+
+```text
+2026-09-19T12:00:00Z  maintenance (the harness's own pass)
+  3 step(s) ran, 2 skipped, 0 failed
+  - provider: ran, answering
+  - reconcile: ran, exit 0: main caught up onto origin/main
+  - rebuild: skipped, the running build is the checkout's tip 6a20f00c1d2e
+  - redeploy: skipped, the running build is the one installed; nothing to take up
+  - slack: ran, running as pid 48214; the supervisor's own look keeps it up, which is `yoyo slack ensure` taken every few seconds
+```
+
+The steps, in the order they are taken:
+
+- **`provider`** reads whether the provider is answering, from the same
+  [outage record](#waiting-out-a-provider-nobody-can-reach) every surface names
+  the wait from. It decides the restarts below: while the provider cannot be
+  reached or is not logged in, **nothing is restarted** — a restart cannot renew
+  a login or bring a network back, and it can kill a process that is waiting one
+  of them out. The operator's job force-restarted the watch 158 times on an
+  expired login; this pass records the hold instead, on this step and on each
+  step it holds.
+- **`reconcile`** runs [`yoyo reconcile`](#recovering-interrupted-runs) from the
+  running binary: the settlement of interrupted runs, the publications re-asked
+  about and finished, the convergence of the checkout onto the forge, and the
+  stall reading. It is the one step that writes to the tracker, and every write
+  it makes is a recorded settlement with a note; the pass itself never writes a
+  tracker status. It runs whatever the provider is doing, because it asks the
+  provider nothing.
+- **`rebuild`** builds and installs the binary when the checkout has moved past
+  the build that is running in something that goes into it — `cmd`,
+  `internal`, `go.mod`, `go.sum`, the `Makefile` — with `make build`, so the
+  self-redeploy has a build to take up and the staleness warning is transient
+  with no human step. It applies to one shape of installation: the running
+  binary inside the product's own repository, which is a harness developing
+  itself. An installed release is skipped with that reason, and so is a checkout
+  with uncommitted changes to tracked files, a running binary that carries no
+  revision, and a build already installed and waiting to be taken up.
+- **`redeploy`** takes an installed build up, unless the provider guard holds
+  it: the sink started before the install is stopped so the supervisor's next
+  look starts it from the new build, the scheduler is left to take the build up
+  itself between the runs it hosts — a session is never stopped for a deploy —
+  and the supervisor restarts into the new build once this record is written.
+- **`slack`** is `yoyo slack ensure`, which the supervisor's own look at the
+  sink already takes every few seconds; the step records what that look came to
+  rather than asking the keychain a second time, and a sink the supervisor has
+  left degraded is recorded here as a failed step.
+
+A step that is skipped says why, on the same footing as one that ran, because a
+pass that quietly did less than it was meant to is the failure this record
+exists to make visible; a step that fails is recorded as failed, in the record's
+problem line and on the cadence's claim, and the steps after it are still taken.
+`yoyo start` reports the pass as the supervisor's own, with its cadence and its
+last pass, and `yoyo sweeps --task maintenance` reads its passes alone. The
+cadence is measured from the last pass and kept durably, so a supervisor that
+restarted into a new build does not take a pass it took a minute ago, and a
+machine that slept through the night owes nobody the passes it missed.
+
+Two things the pass does not do, on purpose. It never bounces a watch session:
+the interim job's bounce-when-idle step cancelled a live run, and what replaces
+it is the supervisor's restart of a session that died, within its bounds, and
+the session's own takeover of a deploy. And it never starts a part that is
+down: that is the supervisor's look, every few seconds, which starts a child
+that died whatever the provider is doing, because starting a dead part kills
+nothing and the scheduler it starts is what asks the provider whether it is
+back.
 
 ## Checking the installation
 
@@ -1556,14 +1719,11 @@ harness were the ones with no stall history at all.
 
 How promptly a stall is noticed is `--stall-after` — ten minutes by default, and
 the same flag on both commands — and, for the sweep, the cadence of whatever runs
-it. Nothing `yoyo` installs runs the sweep on a schedule yet: the maintenance
-pass is the supervisor's periodic pass, `yoyodyne-ifd.413` (which absorbed
-`yoyodyne-ifd.207`), and until it lands scheduling it is yours —
-[`yoyo start`](#starting-the-product-and-stopping-it) says so on the
-maintenance line. A machine
-running neither a watch session nor a sweep records no stalls, so this listing is
-empty on one; the sink says so when it starts, because that is the state nobody
-would think to check for.
+it. On a product that has been started, that is [the supervisor's maintenance
+pass](#the-maintenance-pass), which runs `yoyo reconcile` every
+`services.maintenance.every`; a machine running neither a watch session nor a
+sweep records no stalls, so this listing is empty on one, and the sink says so
+when it starts, because that is the state nobody would think to check for.
 
 A product that has never gone quiet says nothing here at all. The five most
 recent stalls are printed, newest first, and `--json` carries every one of them
@@ -2150,6 +2310,14 @@ that finds it, rather than once an hour. The `--json` form carries them a second
 time as `pull_requests` on the record, by number, which is what the next pass
 reads to know what was already said. [Recurring
 tasks](configuration.md#recurring-tasks) says when the reading is taken.
+
+**One pass in the log is the harness's own.** The supervisor's
+[maintenance pass](#the-maintenance-pass) records each of its firings here
+under the task name `maintenance`, headed as the harness's own pass rather than
+a role's: no turns and no cost, and in place of findings the steps it took, each
+saying whether it ran, was skipped, or failed, and why. It is in this log
+because the question asked of it is the one this log answers — did it run, and
+if it skipped a step, why — and `--task maintenance` reads its passes alone.
 
 Three outcomes look similar in a listing and are not the same thing:
 

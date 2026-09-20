@@ -164,14 +164,19 @@ type slackDocument struct {
 }
 
 type servicesDocument struct {
-	Slack       *serviceDocument          `yaml:"slack"`
-	Dashboard   *dashboardServiceDocument `yaml:"dashboard"`
-	Scheduler   *serviceDocument          `yaml:"scheduler"`
-	Maintenance *serviceDocument          `yaml:"maintenance"`
+	Slack       *serviceDocument            `yaml:"slack"`
+	Dashboard   *dashboardServiceDocument   `yaml:"dashboard"`
+	Scheduler   *serviceDocument            `yaml:"scheduler"`
+	Maintenance *maintenanceServiceDocument `yaml:"maintenance"`
 }
 
 type serviceDocument struct {
 	Enabled *bool `yaml:"enabled"`
+}
+
+type maintenanceServiceDocument struct {
+	Enabled *bool     `yaml:"enabled"`
+	Every   *Duration `yaml:"every"`
 }
 
 type dashboardServiceDocument struct {

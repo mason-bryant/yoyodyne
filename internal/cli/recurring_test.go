@@ -169,6 +169,39 @@ func TestSweepListingTellsAFailedPassFromAQuietOne(t *testing.T) {
 	}
 }
 
+// The harness's own maintenance pass is listed beside the roles' passes, named
+// as the harness's rather than as a role's, with each step it took and each
+// step it skipped saying why — the skip is the fact this log is read for.
+func TestSweepListingShowsTheHarnessPassStepByStep(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	rendered := renderSweepsAtDefault([]runstate.Sweep{{
+		Task:      config.MaintenanceTaskName,
+		StartedAt: at,
+		EndedAt:   at.Add(time.Minute),
+		Result:    &sweep.Result{Status: sweep.StatusComplete, Summary: "3 steps ran, 1 skipped"},
+		Steps: []runstate.SweepStep{
+			{Name: "provider", Outcome: runstate.StepRan, Detail: "answering"},
+			{Name: "reconcile", Outcome: runstate.StepRan, Detail: "exit 0"},
+			{Name: "redeploy", Outcome: runstate.StepSkipped, Detail: "the running build is the checkout's tip"},
+		},
+	}})
+	for _, want := range []string{
+		"maintenance (the harness's own pass)",
+		"3 steps ran, 1 skipped",
+		"- provider: ran, answering",
+		"- redeploy: skipped, the running build is the checkout's tip",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered = %q, want %q in it", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, "turn(s)") || strings.Contains(rendered, "no account of this pass") {
+		t.Errorf("rendered = %q, want the harness pass shown without a turn count or a missing account", rendered)
+	}
+}
+
 // The most recent is what a reader wants from a schedule, and the count says how
 // much of the pile they are not looking at.
 func TestSweepListingShowsTheMostRecentFirst(t *testing.T) {

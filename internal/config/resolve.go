@@ -273,6 +273,7 @@ func newResolution() *resolution {
 			"services.dashboard.token":                            OriginDefault,
 			"services.scheduler.enabled":                          OriginDefault,
 			"services.maintenance.enabled":                        OriginDefault,
+			"services.maintenance.every":                          OriginDefault,
 			"product.specifications":                              OriginDefault,
 			"product.invariants":                                  OriginDefault,
 			"product.designs":                                     OriginDefault,
@@ -420,6 +421,7 @@ func (r *resolution) apply(applied layer) error {
 		}
 		if maintenance := services.Maintenance; maintenance != nil {
 			setValue(r.origins, "services.maintenance.enabled", maintenance.Enabled, &r.config.Services.Maintenance.Enabled, applied.origin)
+			setValue(r.origins, "services.maintenance.every", maintenance.Every, &r.config.Services.Maintenance.Every, applied.origin)
 		}
 	}
 	// A supplied operators mapping replaces the inherited one entirely, for the
