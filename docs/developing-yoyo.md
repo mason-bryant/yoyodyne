@@ -388,9 +388,11 @@ over it.
 Two things are written before the tag, in one housekeeping commit placed after
 the last gate is green. The tracker's own exports —
 `.beads/interactions.jsonl` and `.beads/issues.jsonl` — do not count as a dirty
-tree: they are derived from a store that is authoritative elsewhere, nothing a
-release ships is built from them, and the walkthrough this gate runs rewrites
-them itself, so refusing on them would stall most days of a daily cadence. The
+tree: they are derived from a store that is authoritative elsewhere, the
+archives a release ships are not built from them (the notes are drafted from
+one, and are committed before the cut), and the walkthrough this gate runs
+rewrites them itself, so refusing on them would stall most days of a daily
+cadence. The
 readiness result is stamped into `docs/releases/<tag>.md` and goes into the same
 commit, so the notes the tag names carry the conformance result of the tree it
 names rather than one taken on whichever day the notes were drafted; it is
@@ -478,11 +480,38 @@ loop against a scratch repository with a real remote, unpushed notes and all.
 
 The draft comes from the tracker rather than the commit log:
 [`scripts/release-notes.sh`](../scripts/release-notes.sh) reads the work items
-closed between the previous tag and this one and carries their titles, their
-types, and the goals they served. A commit message says what one change did; the
+closed between the previous tag and this one out of the tracker's export,
+`.beads/issues.jsonl`, and carries their titles, their descriptions, their
+types, the goals they served, and — for an item that did not come from a person
+— which persona asked for it. A commit message says what one change did; the
 item behind it says what somebody wanted, which is the difference between notes
-and a changelog. `make release-notes VERSION=<tag>` drafts one on its own, and
+and a changelog. The export rather than `bd` is what it reads, so a draft needs
+no tracker on the machine and can be made from any checkout carrying the
+export. `make release-notes VERSION=<tag>` drafts one on its own, and
 `bash scripts/release-notes.sh <tag> --print` shows one without writing it.
+
+Every entry has one shape, which is the operator's:
+
+```markdown
+- **The title** (`yoyodyne-ifd.404`)
+  Serves: the goal the item names
+  Requested by the reviewer: the reason, in the reviewer's own words
+
+  The item's description, paragraph by paragraph.
+```
+
+The `Requested by` line is there only for an item that did not originate with a
+person, and which those are is read off the admission the item's own notes
+record rather than guessed from its description: an item admitted from a role's
+collected report names that role and carries the report's own words; an item
+the development manager carved out of a parent names him, the parent, and the
+reason he recorded — ``Requested by the development manager, decomposing
+`yoyodyne-ifd.209`: …``. An item the product manager admitted with neither is
+the ordinary case, work the operator asked for through her, and carries no such
+line, because the notes do not say which person asked and guessing would be
+worse than silence.
+[`docs/releases/v0.5.0.md`](releases/v0.5.0.md) is the first release written
+in this shape.
 
 Only what the tracker calls **closed** reaches the notes. An id in a commit
 message says work touched that item, not that the item is done — a parent epic
@@ -498,8 +527,10 @@ is an enhancement, and which fix is critical enough to go up to the top is the
 product manager's judgement until the post-v1 release-manager role exists. The
 three sections and their order are the operator's and are not the draft's to
 change. [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh)
-executes the placement rule, the section order, and the refusals against a
-fabricated repository and a stub tracker, and `make test` runs it.
+executes the placement rule, the section order, the entry shape — three items
+side by side, one the operator asked for, one from a reviewer's report, one the
+development manager decomposed — and the refusals against a fabricated
+repository and a fabricated export, and `make test` runs it.
 
 The release workflow publishes that same file as the release page's body, with
 the install preamble under it, so the release page and the repository tell one

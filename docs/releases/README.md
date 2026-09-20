@@ -31,14 +31,36 @@ should say so at the top, not three headings down.
 
 [`scripts/release-notes.sh`](../../scripts/release-notes.sh) drafts one from
 what actually landed — the work items closed between the previous release tag
-and this one, with their titles, their types, and the goals they served. The
-work item behind a change says what somebody wanted, which is the difference
-between notes and a changelog:
+and this one, read from the tracker's export, `.beads/issues.jsonl`, with their
+titles, their descriptions, their types, and the goals they served. The work
+item behind a change says what somebody wanted, which is the difference between
+notes and a changelog:
 
 ```sh
 make release-notes VERSION=v0.3.1               # draft docs/releases/v0.3.1.md
 bash scripts/release-notes.sh v0.3.1 --print    # see it without writing it
 ```
+
+Every entry has one shape: the title and the id on the first line, the goal
+the item serves under it, then — only for an item that did not originate with
+a person — one line saying which persona asked for it and why, and then the
+item's description as its own paragraphs.
+
+```markdown
+- **The title** (`yoyodyne-ifd.404`)
+  Serves: the goal the item names
+  Requested by the reviewer: the reason, in the reviewer's own words
+
+  The item's description, paragraph by paragraph.
+```
+
+Which items get the `Requested by` line is read off the admission the item's
+notes record: one admitted from a role's collected report names that role, in
+the report's own words, and one the development manager decomposed out of a
+parent names him, the parent, and his reason. An item the operator asked for
+through the product manager carries no such line. [`v0.5.0.md`](v0.5.0.md) is
+the first release written this way; the two before it carry titles and goals
+only.
 
 Only what the tracker calls **closed** reaches the notes. An id in a commit
 message says work touched that item, not that the item is done — a parent epic
