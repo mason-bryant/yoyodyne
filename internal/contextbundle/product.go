@@ -33,13 +33,19 @@ import (
 // documents stood within bytes of it, so documenting any new behaviour at all
 // failed make test on a sentence unrelated to the change that added it, and
 // seven reports in two days asked the product manager the same question. The
-// product manager answered it on 2026-09-19 (yoyodyne-ifd.403): the decision on
-// yoyodyne-ifd.240 stands, the product manager is given all eight documents in
-// full, and the set is neither trimmed nor narrowed. What changed is the
-// check's shape — a distant ceiling, a declared margin under it that warns, and
-// the set's size recorded on every pass — and what brings the set down is
-// yoyodyne-ifd.117.4, which removes the text README.md and docs/configuration.md
-// carry that the split guides also carry.
+// product manager decided it on yoyodyne-ifd.240, the first of those raises:
+// the bound is raised, the guides are not trimmed — they serve operators, and
+// cutting them to fit a constant inverts priorities — the set is not narrowed,
+// because narrowing the product manager's evidence cost real decisions twice
+// (yoyodyne-ifd.20 and yoyodyne-ifd.52), and the headroom check stays, since a
+// test failing near the bound is the early warning working. That decision is
+// the precedent for every raise since, and it was kept on 2026-09-19
+// (yoyodyne-ifd.403): the product manager is given all eight documents in full,
+// and the set is neither trimmed nor narrowed. What changed is the check's shape
+// — a distant ceiling, a declared margin under it that warns, and the set's size
+// recorded on every pass — and what brings the set down is yoyodyne-ifd.117.4,
+// which removes the text README.md and docs/configuration.md carry that the
+// split guides also carry.
 const ShippedDocumentationCeiling = 2 << 20
 
 // ShippedDocumentationMargin is how far under the ceiling the warning starts.
