@@ -505,8 +505,9 @@ the documents the marked role owns, and an item whose identifier opens the
 reason of a revision in one of them — `yoyodyne-ifd.330 - side conversations
 designed` in a design's revision log, made by that role — is closed with the
 document and the revision cited, at the first pull after the revision is in the
-tree. The same clause that is refused on an unmarked item is what a marked one
-says: "Done means the ruling is recorded on the slack-reporting design" is
+tree. Reopen it with a note if the close was wrong: the item carries the
+revision it was closed on and is not closed on that revision again. The same
+clause that is refused on an unmarked item is what a marked one says: "Done means the ruling is recorded on the slack-reporting design" is
 admitted with `executor: conversation:architect`, and refused with none.
 
 An item also says whether it is to be started at all. Work you still want and do

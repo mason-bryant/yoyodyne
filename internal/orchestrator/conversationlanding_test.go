@@ -14,11 +14,30 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
-// landingTracker records the closes a sweep makes, and refuses the ones it is
-// told to.
+// landingTracker records the landings and closes a sweep makes, and refuses
+// the ones it is told to.
 type landingTracker struct {
-	closed  map[string]string
-	refused map[string]error
+	closed   map[string]string
+	landings map[string][]string
+	refused  map[string]error
+	// unrecordable refuses every landing write on an item, and unclearable
+	// refuses only the write that clears one.
+	unrecordable map[string]error
+	unclearable  map[string]error
+}
+
+func (t *landingTracker) RecordLanding(_ context.Context, id, landing string) (beads.WorkItem, error) {
+	if err := t.unrecordable[id]; err != nil {
+		return beads.WorkItem{}, err
+	}
+	if err := t.unclearable[id]; err != nil && landing == "" {
+		return beads.WorkItem{}, err
+	}
+	if t.landings == nil {
+		t.landings = map[string][]string{}
+	}
+	t.landings[id] = append(t.landings[id], landing)
+	return beads.WorkItem{ID: id, Status: "open", Landing: landing}, nil
 }
 
 func (t *landingTracker) Complete(_ context.Context, id, reason string) (beads.WorkItem, error) {
@@ -30,6 +49,16 @@ func (t *landingTracker) Complete(_ context.Context, id, reason string) (beads.W
 	}
 	t.closed[id] = reason
 	return beads.WorkItem{ID: id, Status: "closed"}, nil
+}
+
+// current is what the item carries as its landing after everything the sweep
+// wrote to it, which is what the next pull's queue reads back.
+func (t *landingTracker) current(id string) string {
+	written := t.landings[id]
+	if len(written) == 0 {
+		return ""
+	}
+	return written[len(written)-1]
 }
 
 // landingRepository is a checkout with the recommended artifact layout and one
@@ -113,6 +142,11 @@ func TestAConversationsItemClosesOnTheRevisionThatOpensWithItsIdentifier(t *test
 			t.Fatalf("close reason %q never says %q", reason, want)
 		}
 	}
+	// The revision was written onto the item before the close, so the item
+	// carries what it was closed on.
+	if got := tracker.current("yoyodyne-ifd.330"); got != "docs/designs/management-and-supervision.md@2026-09-07T05:30:00Z" {
+		t.Fatalf("landing recorded on 330 = %q, want the document and the revision's time", got)
+	}
 	// 280 is mentioned and not landed; 330.1 is a developer item however its
 	// revision reads; 250 is the development manager's, who owns no document.
 	for _, id := range []string{"yoyodyne-ifd.280", "yoyodyne-ifd.306", "yoyodyne-ifd.330.1", "yoyodyne-ifd.250"} {
@@ -149,9 +183,79 @@ func TestALandingSweepReadsNothingItHasNoUseForAndClosesNothingItCannotRead(t *t
 	}
 }
 
+// The remedy every document names for a wrong close is reopening the item with
+// a note, and it holds only if the next pull does not close it again. The item
+// the harness closed carries the revision it was closed on; reopened, it comes
+// back into the queue carrying it, and the sweep that reads the same revision
+// again leaves it where the person put it — until a later revision opening
+// with its identifier lands, which is a new landing and closes it again.
+func TestAReopenedItemIsNotClosedAgainOnTheSameRevision(t *testing.T) {
+	t.Parallel()
+
+	tracker := &landingTracker{}
+	lander := ConversationLander{Tracker: tracker, Repository: landingRepository(t), Product: landingProduct()}
+	first, err := lander.Settle(context.Background(), []backlog.Entry{architectEntry("yoyodyne-ifd.330")})
+	if err != nil || len(first.Landed) != 1 {
+		t.Fatalf("Settle() = %#v, %v, want 330 closed on its landing", first, err)
+	}
+
+	// Reopened by hand: the item is back in the queue, open, carrying the
+	// landing the harness wrote on it.
+	reopened := architectEntry("yoyodyne-ifd.330")
+	reopened.Landing = tracker.current("yoyodyne-ifd.330")
+	delete(tracker.closed, "yoyodyne-ifd.330")
+	second, err := lander.Settle(context.Background(), []backlog.Entry{reopened})
+	if err != nil {
+		t.Fatalf("Settle() after the reopen error = %v", err)
+	}
+	if len(second.Landed) != 0 || len(second.Problems) != 0 {
+		t.Fatalf("Settle() after the reopen = %#v, want the item left open", second)
+	}
+	if len(second.Reopened) != 1 || second.Reopened[0] != "yoyodyne-ifd.330" {
+		t.Fatalf("reopened = %v, want the item named as one the harness is leaving alone", second.Reopened)
+	}
+	if _, closed := tracker.closed["yoyodyne-ifd.330"]; closed {
+		t.Fatal("the reopened item was closed again on the revision it was reopened from")
+	}
+	if len(tracker.landings["yoyodyne-ifd.330"]) != 1 {
+		t.Fatalf("landings written = %v, want nothing written to a reopened item", tracker.landings["yoyodyne-ifd.330"])
+	}
+	// A landing the harness cannot read back is still the harness's own mark,
+	// and an item carrying one is left alone rather than closed over it.
+	garbled := architectEntry("yoyodyne-ifd.330")
+	garbled.Landing = "not a landing anybody wrote"
+	if sweep, err := lander.Settle(context.Background(), []backlog.Entry{garbled}); err != nil || len(sweep.Landed) != 0 || len(sweep.Reopened) != 1 {
+		t.Fatalf("Settle() over an unreadable landing = %#v, %v, want the item left alone", sweep, err)
+	}
+
+	// A later revision opening with the identifier is a new landing.
+	root := landingRepository(t)
+	path := filepath.Join(root, "docs", "designs", "management-and-supervision.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amended := strings.Replace(string(content), "---\n# Management\n",
+		"    - action: amended\n      by: architect\n      at: 2026-09-12T09:00:00Z\n      reason: yoyodyne-ifd.330 - the merge-back ratified after the reopen\n---\n# Management\n", 1)
+	if err := os.WriteFile(path, []byte(amended), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later := ConversationLander{Tracker: tracker, Repository: root, Product: landingProduct()}
+	third, err := later.Settle(context.Background(), []backlog.Entry{reopened})
+	if err != nil || len(third.Landed) != 1 || third.Landed[0].RevisedAt.Format("2006-01-02") != "2026-09-12" {
+		t.Fatalf("Settle() on a later revision = %#v, %v, want the item closed on the new landing", third, err)
+	}
+	// The earliest revision that lands the item is the landing where the item
+	// has not been closed on it; here it has, so the one after it is.
+	if got := tracker.current("yoyodyne-ifd.330"); !strings.HasSuffix(got, "@2026-09-12T09:00:00Z") {
+		t.Fatalf("landing recorded = %q, want the later revision", got)
+	}
+}
+
 // A landing the tracker will not close is named rather than lost: the item is
 // done and nothing will close it, which is exactly the state this exists to
-// stop being invisible.
+// stop being invisible. And the revision recorded ahead of the close is taken
+// back off it, so the next pull tries again rather than reading a reopen.
 func TestALandingTheTrackerRefusesToCloseIsReported(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +269,37 @@ func TestALandingTheTrackerRefusesToCloseIsReported(t *testing.T) {
 		t.Fatalf("sweep = %#v, want the refused close named as a problem", sweep)
 	}
 	for _, want := range []string{"yoyodyne-ifd.330", "docs/designs/management-and-supervision.md", "closed by hand", "the store is locked"} {
+		if !strings.Contains(sweep.Problems[0], want) {
+			t.Fatalf("problem %q never says %q", sweep.Problems[0], want)
+		}
+	}
+	if got := tracker.current("yoyodyne-ifd.330"); got != "" {
+		t.Fatalf("landing left on the unclosed item = %q, want it cleared so the next pull retries", got)
+	}
+
+	// A revision that cannot be recorded closes nothing: the close would be one
+	// a reopen could not hold against.
+	unrecordable := &landingTracker{unrecordable: map[string]error{"yoyodyne-ifd.330": errors.New("bd: the store is locked")}}
+	sweep, err = ConversationLander{Tracker: unrecordable, Repository: landingRepository(t), Product: landingProduct()}.Settle(context.Background(), []backlog.Entry{architectEntry("yoyodyne-ifd.330")})
+	if err != nil || len(sweep.Landed) != 0 || len(sweep.Problems) != 1 || len(unrecordable.closed) != 0 {
+		t.Fatalf("Settle() with the record refused = %#v, %v, closed %v; want nothing closed and the refusal named", sweep, err, unrecordable.closed)
+	}
+	if !strings.Contains(sweep.Problems[0], "could not be recorded on it, so it was not closed") {
+		t.Fatalf("problem %q never says the record was refused", sweep.Problems[0])
+	}
+
+	// A record that could be written and not cleared after a refused close is
+	// the one state a later pull reads as a reopen, so it is said with what to
+	// clear.
+	stuck := &landingTracker{
+		refused:     map[string]error{"yoyodyne-ifd.330": errors.New("bd: the store is locked")},
+		unclearable: map[string]error{"yoyodyne-ifd.330": errors.New("bd: still locked")},
+	}
+	sweep, err = ConversationLander{Tracker: stuck, Repository: landingRepository(t), Product: landingProduct()}.Settle(context.Background(), []backlog.Entry{architectEntry("yoyodyne-ifd.330")})
+	if err != nil || len(sweep.Problems) != 1 {
+		t.Fatalf("Settle() with the clear refused = %#v, %v, want one problem", sweep, err)
+	}
+	for _, want := range []string{"could not be cleared", "reads the item as reopened", beads.LandingKey, "still locked"} {
 		if !strings.Contains(sweep.Problems[0], want) {
 			t.Fatalf("problem %q never says %q", sweep.Problems[0], want)
 		}

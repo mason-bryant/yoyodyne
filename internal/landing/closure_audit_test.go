@@ -136,7 +136,7 @@ var auditedClosures = []closureSite{
 	{
 		File: "internal/orchestrator/conversationlanding.go", Declaration: "(ConversationLander) Settle", Calls: 1,
 		ConsultsDischarge: false, Kind: kindRecordedLanding,
-		Why: "the pass closing an item a conversation carries, which no run ever claimed and no reviewer ever judged, so there is no landing claim to read. What it reads instead is the landing the owner recorded: a revision of a document the item's role owns, by that role, whose reason opens with the item's identifier — the architect saying the item's work is in the document. It closes only on that, never on a revision that mentions the item further in, and the close reason cites the revision so a person can reopen it with a note.",
+		Why: "the pass closing an item a conversation carries, which no run ever claimed and no reviewer ever judged, so there is no landing claim to read. What it reads instead is the landing the owner recorded: a revision of a document the item's role owns, by that role, whose reason opens with the item's identifier — the architect saying the item's work is in the document. It closes only on that, never on a revision that mentions the item further in, and the close reason cites the revision so a person can reopen it with a note — which holds, because the revision is recorded on the item ahead of the close and an open item still carrying it is not closed on it again.",
 	},
 }
 

@@ -118,7 +118,14 @@ reads, on every pull, the documents each marked role owns, and closes an entry
 whose identifier opens the reason of a revision in one of them made by that
 role. The close reason names the document, the revision's timestamp, the
 convention, and the revision's own words, so a close the product manager
-disagrees with is one she can read and reopen with a note. The development
+disagrees with is one she can read and reopen with a note. The reopen holds
+because the close is made once per revision rather than once per pull: the
+revision is written onto the item (`yoyodyne_landed`, document and timestamp)
+before the close, and a pull that finds an open item still carrying it leaves
+it alone; only a later revision opening with the identifier closes it again. A
+close the tracker refuses after the record was written has the record taken
+back off, so the next pull retries; if even that fails, the pass names the key
+to clear. The development
 manager owns no document, so its items are never read for one; an unmarked item
 is a developer run, whose landing is its merge. Run against this worktree and
 the export's open items, the first pull closes 209.21, 294, 306, 313, and 348,

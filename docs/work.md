@@ -860,10 +860,15 @@ convention is that the reason *opens* with the identifier: a revision that
 mentions an item further in — "published under yoyodyne-ifd.280 after three
 reviewer reports" — is about something else and closes nothing, so an item with
 two deliverables is not closed on a revision that carries one. A close you
-disagree with is one you can read and reopen with a note. The development
-manager's conversation owns no document, so an item it carries is never read
-for a landing; and an item nobody marked is a developer run, whose landing is
-its merge.
+disagree with is one you can read and reopen with a note, and the reopen
+holds: the revision the item was closed on is written onto the item, as
+`yoyodyne_landed` in its metadata, before the close, and a pull that finds an
+open item still carrying that revision leaves it where you put it rather than
+closing it again a minute later. What closes it again is a later revision
+opening with its identifier, which is a new landing. The development manager's
+conversation owns no document, so an item it carries is never read for a
+landing; and an item nobody marked is a developer run, whose landing is its
+merge.
 
 **Parked work is out of reach until somebody puts it back.** Some admitted work
 is work you still want and do not want started: deferred by a scope decision,

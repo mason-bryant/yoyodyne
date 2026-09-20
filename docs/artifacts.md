@@ -97,7 +97,9 @@ with it is the convention and the whole of the judgement; a reason that mentions
 an item further in is about something else and closes nothing. So when the
 revision is the landing of a tracked item, write the identifier first, and when
 it is not, do not. [How work flows](work.md#letting-the-harness-choose-the-work)
-says what the close records and how it is undone.
+says what the close records and how it is undone: reopening the item with a
+note, which holds because the item carries the revision it was closed on and
+is not closed on it again.
 
 The chain that identity makes expressible is then checked, every time the
 artifacts are loaded: a `supports` entry naming an id no artifact answers to is

@@ -1780,10 +1780,15 @@ yoyodyne-ifd.330 was closed: its architect landed as the 2026-09-07 05:30:00Z re
 
 The close reason on the item names the document, the revision, the convention
 it was read by, and the revision's own words, so a close you disagree with is
-one you can read and reopen with a note. A revision that mentions an item
-further into its reason closes nothing, which is what keeps an item with two
-deliverables open on a revision that carries one; a landing the tracker will
-not close is reported on the pass and left for you. [How work
+one you can read and reopen with a note — and the reopen holds, because the
+revision is recorded on the item ahead of the close and a pull that finds the
+item open and still carrying it leaves it alone until a later revision lands.
+A revision that mentions an item further into its reason closes nothing, which
+is what keeps an item with two deliverables open on a revision that carries
+one; a landing the tracker will not close is reported on the pass and left for
+you, and so is the one case a person has to clear by hand — a close the tracker
+refused after the revision was recorded and the record could not be taken back
+off, which the pass names with the metadata key to clear. [How work
 flows](work.md#letting-the-harness-choose-the-work) says what is read and why,
 and [the artifacts manual](artifacts.md#artifact-identity) says how to write
 the revision so it is read.
