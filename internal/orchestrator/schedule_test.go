@@ -2327,7 +2327,11 @@ type scheduleHarness struct {
 	staleErr error
 	held     *runstate.IntakeHold
 	capacity int
-	openErr  error
+	// slots is execution.developer_slots as each pull reads it: what each slot
+	// prefers. Every other test here leaves it empty, which is every slot pulling
+	// in the product manager's order.
+	slots   []domain.DeveloperSlot
+	openErr error
 	// blockedRuns is the brake bound each pull reports, and prices is what each
 	// run this harness ran cost. Both are per pull for the reason capacity is:
 	// the scheduler re-reads them, and a test changes them under it.
@@ -2502,7 +2506,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		onPull(h, pulls)
 	}
 	h.mu.Lock()
-	openErr, capacity := h.openErr, h.capacity
+	openErr, capacity, slots := h.openErr, h.capacity, append([]domain.DeveloperSlot(nil), h.slots...)
 	h.mu.Unlock()
 	if openErr != nil {
 		return Pull{}, openErr
@@ -2542,7 +2546,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
 		Stoppages: stoppages, Decisions: decisions,
-		Capacity: capacity, Start: h.start, Escalations: escalations,
+		Capacity: capacity, Slots: slots, Start: h.start, Escalations: escalations,
 		Tree: tree, Triage: docket, Recurring: recurring,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated

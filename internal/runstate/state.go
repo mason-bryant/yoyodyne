@@ -1041,6 +1041,16 @@ type State struct {
 	// that run should say however the item is renamed later. Absent means nothing
 	// recorded a title, which is what every run written before this did.
 	WorkItemTitle string `json:"work_item_title,omitempty"`
+	// WorkItemLabels is the tracker's labels on the item, written with the run
+	// for the reason the title is: the claim is where the harness has the
+	// tracker's answer in hand, and what reads the record afterwards reads only
+	// the record. It is what lets the standing status say which developer slot a
+	// run occupies — a slot that prefers a label holds the runs over work carrying
+	// it — without asking the tracker, and it is a copy on purpose: the record says
+	// what the item carried when the run started, which is what it was pulled as.
+	// Absent means nothing recorded labels, which is what every run written before
+	// this did, and such a run reads as one over unlabelled work.
+	WorkItemLabels []string `json:"work_item_labels,omitempty"`
 	// WorkItemClaimedAt is when this run took its work item, and is absent on a
 	// run that never got that far.
 	//

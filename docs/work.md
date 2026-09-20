@@ -649,8 +649,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Ten things keep an item out of a pass, and the pass accounts for them at two
-different grains. Seven are named against the item, because nothing else would
+Eleven things keep an item out of a pass, and the pass accounts for them at two
+different grains. Eight are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -684,7 +684,15 @@ read as a decision backlog for days on 2026-09-07. And an item **the tree is not
 for** — one that pinpoints code the repository no longer has, or that says in its
 own words that something has to land first — is passed over with the unmet
 prerequisite named and routed to the development manager's docket, which the last
-of the paragraphs below is about. The other
+of the paragraphs below is about. And an item every free developer slot
+**walked past for its preferred label** — an unlabelled item ranked above the
+labelled one a preferring slot pulled, with no slot preferring nothing free to
+take it — is passed over as **left for another developer slot** rather than as
+deferred, naming the slot and what it pulled ahead of the item: it waits on
+nothing about itself, and the next slot with no preference to come free takes
+it in the order, or the preferring slot does once its label's work is exhausted.
+[A developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label)
+is how a slot comes to prefer one. The other
 three — nothing reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them

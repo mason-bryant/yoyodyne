@@ -1317,7 +1317,16 @@ Needs a human (3):
 
 - **Running** is the developer runs in flight, each with its item, the phase it
   reached, how long it has been going, and what it has spent so far. A run whose
-  evidence cannot be priced says so; it is never reported as free.
+  evidence cannot be priced says so; it is never reported as free. Where any
+  [developer slot prefers a label](configuration.md#a-developer-slot-that-prefers-a-label),
+  each run also says which slot it is in and what that slot prefers — `, in
+  developer slot 1 (prefers the dashboard label)` — and each free slot is named
+  under the runs with its preference, `developer slot 3 is free and prefers no
+  label`, so the next pull's first choice is readable before it is made. Which
+  slot a run is in is read off the labels the run recorded at its claim, by the
+  same derivation the scheduler fills the free slots from, so the slot this
+  line calls free is the slot the scheduler will fill. Where no slot prefers a
+  label the line reads exactly as above.
 - **Working** is the persona conversations with a turn in flight, which nothing
   counted before this: a conversation is not a run, so a machine spending money
   on six persona turns used to report nothing running at all. The advisory hold

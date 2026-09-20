@@ -517,8 +517,9 @@ parked in fact.
 An item also carries the tracker's own labels, and they are how an admission
 practice is written where it can be checked. The practice that provoked this is
 the reliability directive of 2026-09-19: every item admitted under it, every
-bug, and every stall or mistake fix carries a `reliability` label, and a seat
-that watches for the label has work only where the label is there. `labels` on
+bug, and every stall or mistake fix carries a `reliability` label, and a
+[developer slot that prefers the label](configuration.md#a-developer-slot-that-prefers-a-label)
+pulls that work first and the rest only when none of it is ready. `labels` on
 a creation applies them in the same write as the admission, so the item never
 exists unlabelled — for the reason `parked` and `executor` are set there — and
 `label` puts one on an item already in the queue with `add` or takes one off

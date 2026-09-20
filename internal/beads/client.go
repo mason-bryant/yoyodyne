@@ -377,17 +377,13 @@ var (
 	issueIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	statusPattern    = regexp.MustCompile(`^[a-z][a-z_]*$`)
 	issueTypePattern = regexp.MustCompile(`^[a-z][a-z_]*$`)
-	// labelPattern is what a label the harness writes is held to. bd itself
-	// stores any string, spaces and all, and the narrowing is deliberate: a label
-	// is a word things are filtered on, so it is an identifier — one token, no
-	// whitespace, nothing bd's comma-separated flag spelling would split — and a
-	// label that is a sentence is a note wearing a label's clothes.
-	labelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
-// MaxLabelBytes bounds one label. It is exported beside ValidateLabel so a
-// caller can state the bound it refuses on rather than only that it refused.
-const MaxLabelBytes = 64
+// MaxLabelBytes bounds one label. It is the domain's bound, restated here so a
+// caller of this client can state the bound it refuses on rather than only that
+// it refused; the rule itself is domain.ValidateLabel, which the configuration
+// holds a developer slot's preferred labels to as well.
+const MaxLabelBytes = domain.MaxLabelBytes
 
 func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
@@ -1616,19 +1612,11 @@ func ValidateIssueID(id string) error {
 // ValidateLabel refuses a label the harness will not write: anything that is
 // not one identifier-shaped token within MaxLabelBytes. It is exported for the
 // reason ValidateIssueID is, and for one more — bd would accept what this
-// refuses, so a caller that did not ask would find out from nobody.
+// refuses, so a caller that did not ask would find out from nobody. The rule is
+// the domain's, so a developer slot's preference and the label an action writes
+// are held to one spelling.
 func ValidateLabel(label string) error {
-	trimmed := strings.TrimSpace(label)
-	if trimmed == "" {
-		return errors.New("a label cannot be empty")
-	}
-	if len(trimmed) > MaxLabelBytes {
-		return fmt.Errorf("label %q is %d bytes, limit is %d", trimmed, len(trimmed), MaxLabelBytes)
-	}
-	if !labelPattern.MatchString(trimmed) {
-		return fmt.Errorf("label %q is not an identifier: one word of letters, digits, dots, underscores, and hyphens, starting with a letter or digit", trimmed)
-	}
-	return nil
+	return domain.ValidateLabel(label)
 }
 
 // labelProblems refuses every label in a list that ValidateLabel would, and a

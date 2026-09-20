@@ -410,6 +410,7 @@ var passedOverClauses = map[runstate.PassedOverClass]string{
 	runstate.PassedOverPausedByDirective:     "paused by a directive nobody has resolved",
 	runstate.PassedOverSequencedBehindWork:   "sequenced behind work in flight that they would race",
 	runstate.PassedOverPrerequisiteUnmet:     "asking for something the tree does not have",
+	runstate.PassedOverLeftForAnotherSlot:    "left for a developer slot with no preference, because every free slot pulled its preferred label's work ahead of them",
 }
 
 // Whose is whose move it is, and what settles it. It is the other half of what a
@@ -457,4 +458,5 @@ var passedOverMoves = map[runstate.PassedOverClass]string{
 	runstate.PassedOverPausedByDirective:     "the operator's — the work stays paused until the directive is resolved",
 	runstate.PassedOverSequencedBehindWork:   "nobody's — each is pulled at the first pull where the run it would have raced has ended",
 	runstate.PassedOverPrerequisiteUnmet:     "the development manager's — the item asks for something the tree does not have, and it is docketed rather than dispatched",
+	runstate.PassedOverLeftForAnotherSlot:    "nobody's — a developer slot with no preference takes them in the product manager's order, and a preferring slot falls back to them once its label's work is exhausted",
 }

@@ -416,6 +416,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Agents:            agentEndpoints(resolved.Config),
 		UnknownResetPause: resolved.Config.Execution.UsageLimitUnknownResetPause.Duration(),
 		Capacity:          resolved.Config.Execution.MaxConcurrentDevelopers,
+		Slots:             resolved.Config.Execution.DeveloperSlots,
 		TrackerTimeout:    chatTrackerTimeout,
 	}
 	sink, err := slack.New(slack.Options{

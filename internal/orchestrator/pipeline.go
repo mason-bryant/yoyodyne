@@ -1005,7 +1005,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// reads only the record, so a title not copied here is a title nothing can
 		// say the work by.
 		WorkItemTitle: item.Title,
-		Backend:       domain.BackendClaudeCode,
+		// And what it carries, for the same reason: the developer slot a run
+		// occupies is read off the labels the item was pulled with, by the status
+		// as much as by the scheduler, and neither goes back to the tracker for it.
+		WorkItemLabels: append([]string(nil), item.Labels...),
+		Backend:        domain.BackendClaudeCode,
 		// Which configuration set this run up is written with the run for the reason
 		// the title is: this is where the answer is in hand, everything that reads
 		// the record afterwards reads only the record, and a configuration is

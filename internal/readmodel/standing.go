@@ -53,6 +53,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/developerslot"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -232,6 +233,13 @@ type Sources struct {
 	// what turns "nothing is starting" into "there is no slot", which are opposite
 	// things for an operator to do about.
 	Capacity int
+	// Slots is execution.developer_slots as the caller read it: what each of the
+	// Capacity developer slots prefers. It is what lets the running line say
+	// which slot each run occupies and name the preferred label beside each slot,
+	// read off the same derivation the scheduler fills the free slots from. Empty
+	// is every slot preferring nothing, and the line then reads exactly as it did
+	// before slots could prefer anything.
+	Slots []domain.DeveloperSlot
 	// TrackerTimeout bounds one tracker command, so an unresponsive tracker costs
 	// this answer a line rather than hanging the surface that asked.
 	TrackerTimeout time.Duration
@@ -249,6 +257,10 @@ type RunningRun struct {
 	// surface that shows a run as a card rather than a line: an id alone is a
 	// lookup, and a title beside it is a glance.
 	Title string `json:"title,omitempty"`
+	// Labels is the tracker's labels on the item as the run recorded them at its
+	// claim, and empty on a run recorded before labels were carried. They are
+	// what the slot below is read from.
+	Labels []string `json:"labels,omitempty"`
 	// Backend, Model, and Account are what the run is spending: the provider it
 	// runs on, the model it asked for (the resolved identifier where the provider
 	// reported one), and the account alias it runs under. The alias is exactly
@@ -272,7 +284,23 @@ type RunningRun struct {
 	// UnknownCost says why there is no figure rather than reporting one of zero: a
 	// run whose evidence cannot be read has not cost nothing.
 	UnknownCost string `json:"unknown_cost,omitempty"`
+	// Slot is the developer slot this run occupies, counted from 1 as the
+	// configuration counts them, and SlotPrefers what that slot prefers. Both are
+	// carried only where some configured slot prefers a label — which slot a run
+	// is in is only worth saying where the slots differ — and both are read off
+	// the derivation the scheduler reads, so the slot this says a run holds is
+	// the slot the scheduler will not fill. Zero is a run in flight beyond the
+	// configured capacity, which no slot holds.
+	Slot        int      `json:"developer_slot,omitempty"`
+	SlotPrefers []string `json:"slot_prefers,omitempty"`
 }
+
+// DeveloperSlotStanding is one configured developer slot as the standing status
+// names it: its number, what it prefers, and the run in it where one is. It is
+// carried only where some configured slot prefers a label, for the surfaces
+// that read the model rather than its lines, and the running line renders the
+// free ones under it.
+type DeveloperSlotStanding = developerslot.Slot
 
 // WorkingTurn is one persona conversation with a turn in flight. It is the fact
 // no surface counted before this: a conversation is not a run, so a machine
@@ -361,6 +389,12 @@ type Standing struct {
 
 	Running        []RunningRun `json:"running"`
 	RunningProblem string       `json:"running_problem,omitempty"`
+	// DeveloperSlots is every configured developer slot with the run in it, in
+	// slot order, where some slot prefers a label; nil otherwise. The running
+	// line names the free ones with their preference under itself, and a run's
+	// own entry says which slot it is in, so this is for the surface that wants
+	// the whole set rather than the lines.
+	DeveloperSlots []DeveloperSlotStanding `json:"developer_slots,omitempty"`
 
 	Working        []WorkingTurn `json:"working"`
 	WorkingProblem string        `json:"working_problem,omitempty"`
@@ -445,6 +479,13 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 
 	running, runningProblem := readRunning(sources, now)
 	standing.Running, standing.RunningProblem = running, runningProblem
+	// Which slot each run occupies, and which slots are free, from the reading
+	// the scheduler makes. It is read only where a slot prefers a label, and
+	// only where the runs could be read: a slot said to be free over runs
+	// nobody could list would be the confident emptiness this refuses.
+	if runningProblem == "" {
+		standing.DeveloperSlots = readSlots(sources, standing.Running)
+	}
 
 	standing.Working, standing.WorkingProblem = readWorking(sources, now)
 
@@ -580,6 +621,7 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 			RunID:               state.RunID,
 			WorkItemID:          state.WorkItemID,
 			Title:               state.WorkItemTitle,
+			Labels:              append([]string(nil), state.WorkItemLabels...),
 			Backend:             state.Backend,
 			Model:               modelOf(state.ProviderModel, state.ProviderResolvedModel),
 			Account:             state.AccountAlias,
@@ -613,6 +655,40 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 		return running[first].RunID < running[second].RunID
 	})
 	return running, ""
+}
+
+// readSlots is which developer slot each run in flight occupies and which are
+// free, read from the same derivation the scheduler fills the free slots from,
+// over the labels each run recorded at its claim. It answers nothing where no
+// configured slot prefers a label: which slot a run is in is only worth saying
+// where the slots differ, and a project that configured no preference reads
+// exactly as it did before. The runs are given their slot in place.
+func readSlots(sources Sources, running []RunningRun) []DeveloperSlotStanding {
+	if !developerslot.Preferring(sources.Slots) {
+		return nil
+	}
+	inFlight := make([]developerslot.Run, 0, len(running))
+	for _, run := range running {
+		inFlight = append(inFlight, developerslot.Run{
+			RunID:      run.RunID,
+			WorkItemID: run.WorkItemID,
+			Labels:     run.Labels,
+			StartedAt:  run.StartedAt,
+		})
+	}
+	assignment := developerslot.Assign(sources.Capacity, sources.Slots, inFlight)
+	for _, slot := range assignment.Slots {
+		if slot.Free() {
+			continue
+		}
+		for index := range running {
+			if running[index].RunID == slot.RunID {
+				running[index].Slot = slot.Number
+				running[index].SlotPrefers = slot.Preferred
+			}
+		}
+	}
+	return assignment.Slots
 }
 
 // readWorking is the persona conversations with a turn in flight. A conversation

@@ -331,6 +331,17 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 		setValue(r.origins, "execution.brake_cooldown", execution.BrakeCooldown, &r.config.Execution.BrakeCooldown, applied.origin)
+		// A supplied slot list replaces the inherited one entirely, and is copied
+		// rather than aliased, for the reasons the check list is: which slot
+		// prefers what is one statement, and a layer's own slice must not become
+		// the resolved configuration's.
+		if execution.DeveloperSlots != nil {
+			r.config.Execution.DeveloperSlots = make([]domain.DeveloperSlot, 0, len(*execution.DeveloperSlots))
+			for _, slot := range *execution.DeveloperSlots {
+				r.config.Execution.DeveloperSlots = append(r.config.Execution.DeveloperSlots, domain.DeveloperSlot{Prefer: append([]string(nil), slot.Prefer...)})
+			}
+			r.origins["execution.developer_slots"] = applied.origin
+		}
 		// The declarative path carries a harness default like the values above it,
 		// because it is what a run does rather than something a project opts into.
 		// A layer that writes the key — `false` for the rollback to the legacy
