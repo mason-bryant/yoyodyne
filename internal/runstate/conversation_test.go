@@ -1007,6 +1007,21 @@ func TestAConversationFullOfUndecidedProposalsStillSaves(t *testing.T) {
 			Goal:        strings.Repeat("g", 400),
 		})
 	}
+	// And the questions nobody has answered, at their own bound and each at the
+	// bounds the concern contract allows, beside the proposals rather than
+	// instead of them.
+	for i := 0; i < MaxPendingConcerns; i++ {
+		conversation.PendingConcerns = append(conversation.PendingConcerns, PendingConcern{
+			ID:       fmt.Sprintf("c%d.1", i+1),
+			Turn:     i + 1,
+			Kind:     "conflict",
+			Subject:  strings.Repeat("s", 200),
+			Goal:     strings.Repeat("g", 200),
+			Detail:   strings.Repeat("d", 4<<10),
+			Question: strings.Repeat("q", 4<<10),
+			Options:  []string{strings.Repeat("a", 200), strings.Repeat("b", 200)},
+		})
+	}
 	if err := store.Save(conversation); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -1016,6 +1031,18 @@ func TestAConversationFullOfUndecidedProposalsStillSaves(t *testing.T) {
 	}
 	if len(loaded.PendingProposals) != MaxPendingProposals {
 		t.Fatalf("loaded %d proposal(s), want %d", len(loaded.PendingProposals), MaxPendingProposals)
+	}
+	if len(loaded.PendingConcerns) != MaxPendingConcerns || len(loaded.PendingConcerns[0].Options) != 2 {
+		t.Fatalf("loaded %d concern(s), want %d with their answers", len(loaded.PendingConcerns), MaxPendingConcerns)
+	}
+	// One past either bound, or a question nobody can name, is refused.
+	conversation.PendingConcerns = append(conversation.PendingConcerns, PendingConcern{ID: "c99.1"})
+	if err := store.Save(conversation); err == nil || !strings.Contains(err.Error(), "unanswered concerns") {
+		t.Fatalf("Save() past the concern bound error = %v, want the bound named", err)
+	}
+	conversation.PendingConcerns = []PendingConcern{{Turn: 1}}
+	if err := store.Save(conversation); err == nil || !strings.Contains(err.Error(), "pending_concerns[0] has no id") {
+		t.Fatalf("Save() of a nameless concern error = %v, want it refused", err)
 	}
 }
 

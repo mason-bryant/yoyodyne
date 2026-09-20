@@ -795,9 +795,9 @@ func Open(options Options) (*Session, error) {
 
 // adopt takes one durable record as this session's own. It is everything about
 // a conversation that outlives the process holding it, and nothing else: what
-// only ever lived in this process — the concerns raised here, the run it
-// started, the picture it is carrying, what it has spent — is untouched,
-// because no other process wrote any of it.
+// only ever lived in this process — the run it started, the picture it is
+// carrying, what it has spent — is untouched, because no other process wrote
+// any of it.
 func (s *Session) adopt(existing runstate.Conversation) {
 	s.state = existing
 	// A record written before the agent was part of the identity acquires it
@@ -826,6 +826,17 @@ func (s *Session) adopt(existing runstate.Conversation) {
 	for _, pending := range existing.PendingProposals {
 		s.proposals = append(s.proposals, &proposalRecord{
 			pending: restoredProposal(existing.ConversationID, pending),
+		})
+	}
+	// And what the operator has not answered yet, for the same reason: a
+	// question raised by one process is answered by another, and a process that
+	// could not read the question back had nothing an answer could be matched
+	// to — so an answer sent as a message fell through to whatever proposal was
+	// waiting instead.
+	s.concerns = nil
+	for _, pending := range existing.PendingConcerns {
+		s.concerns = append(s.concerns, &concernRecord{
+			pending: restoredConcern(existing.ConversationID, pending),
 		})
 	}
 	// The same for what the agent has not been told: it acted, the process that
@@ -1778,6 +1789,15 @@ func (s *Session) recordConcerns(concerns []Concern) ([]PendingConcern, error) {
 		s.concerns = append(s.concerns, record)
 		raised = append(raised, record.pending)
 	}
+	// What is now awaiting an answer is written into the record before the
+	// operator is asked, for the reason a proposal is: a question that lived only
+	// in this process was unanswerable the moment the process exited, which for
+	// a single message is immediately.
+	if len(raised) > 0 {
+		if err := s.record(); err != nil {
+			return raised, err
+		}
+	}
 	return raised, nil
 }
 
@@ -2179,10 +2199,17 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 	// thing, because it is something the operator asked for and has to act on
 	// rather than part of the conversation.
 	harness := s.theme.Harness(screen)
-	// A proposal nobody decided outlives the process that made it, so a
+	// A question nobody answered outlives the process that asked it, so a
 	// conversation that opens with one waiting puts it to the operator before
-	// anything else. Without this it would be named as undecided when this
+	// anything else. Without this it would be named as unanswered when this
 	// conversation ended too, having been put to nobody in either of them.
+	if waiting := s.Concerns(); len(waiting) > 0 {
+		fmt.Fprintln(out, "Questions from earlier in this conversation are still waiting on you.")
+		if err := s.raise(ctx, waiting, screen); err != nil {
+			return err
+		}
+	}
+	// A proposal nobody decided outlives the process that made it, the same way.
 	if waiting := s.Proposals(); len(waiting) > 0 {
 		fmt.Fprintf(out, "%s\n", s.theme.Proposal("Proposals from earlier in this conversation are still waiting on you."))
 		if err := s.decide(ctx, waiting, screen); err != nil {
@@ -2663,6 +2690,13 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 		if err := s.Answer(concern.ID, answer); err != nil {
 			return err
 		}
+		// Saved as it is answered, for the reason a decision is: what the record
+		// carries is the questions still awaiting an answer, and an operator who
+		// answers one and leaves without taking a turn would otherwise be asked it
+		// again by the next process.
+		if err := s.record(); err != nil {
+			return err
+		}
 		fmt.Fprintf(out, "answered %s; what you said reaches the product manager when you next say something.\n\n", concern.ID)
 	}
 	return nil
@@ -2863,11 +2897,38 @@ func (s *Session) decideOne(ctx context.Context, made decision) (DecisionOutcome
 	return outcome, nil
 }
 
-// Decide applies one operator answer to the proposals this conversation is
-// still waiting on, and reports whether the answer was a decision at all. It is
-// what makes an approval sent as a single message decide the same proposal the
-// same answer decides at a prompt: the grammar is the one the prompt uses, and
-// every decision goes through the same Approve and Reject.
+// Decided is what one message did to what the conversation was waiting on: the
+// proposals it decided and the concerns it answered. One message does one or
+// the other, never both — an answer names what it answers — so at most one of
+// the two lists is ever filled, and both are reported the way a decision always
+// was: as the harness's own answer, with no turn spent.
+type Decided struct {
+	Decisions []DecisionOutcome `json:"decisions,omitempty"`
+	Answers   []AnswerOutcome   `json:"answers,omitempty"`
+}
+
+// Decide applies one operator message to what this conversation is still
+// waiting on — the proposals nobody has decided and the concerns nobody has
+// answered — and reports whether the message was a decision or an answer at
+// all. It is what makes an approval sent as a single message decide the same
+// proposal the same answer decides at a prompt, and an answer sent as a single
+// message reach the same concern: the grammar is the one the prompt uses, and
+// every decision goes through the same Approve and Reject, every answer
+// through the same Answer.
+//
+// The two kinds of waiting thing are told apart by what the message names, and
+// that is the whole of the rule. A concern named by its identifier is answered,
+// whatever else is waiting; a proposal named by its identifier is decided the
+// same way. A message that names nothing is applied only where there is exactly
+// one thing it could mean — the single proposal, or the single concern, that is
+// all the conversation is waiting on. Where there is more than one and a
+// concern is among them, the message is refused with the list rather than
+// applied to any of them, because the failure this exists to end is precisely
+// that case: an operator answering a question with "yes" while a proposal was
+// undecided approved the proposal, and the approval was real, recorded, and
+// created the item. A batch of proposals with no concern beside it keeps the
+// grammar it always had, since "decline all" and "approve 1,3" are about
+// proposals and nothing else could be meant.
 //
 // What it does not carry over is the prompt's own rule that anything unrecognized
 // declines, and more than that: it does not carry over the prompt's licence to
@@ -2906,18 +2967,49 @@ func (s *Session) decideOne(ctx context.Context, made decision) (DecisionOutcome
 // process reading it would put a created item's proposal back on the table for
 // the operator to approve a second time — which is the failure this whole path
 // exists to end, arrived at from the other side.
-func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome, bool, error) {
+func (s *Session) Decide(ctx context.Context, answer string) (Decided, bool, error) {
 	// Bounded exactly as a message is, and before it is read rather than after: a
 	// decline keeps what the operator said as the reason, so an answer too large
 	// to be said is too large to be recorded as one.
 	trimmed := strings.TrimSpace(answer)
 	if len(trimmed) > MaxOperatorMessageBytes {
-		return nil, false, nil
+		return Decided{}, false, nil
+	}
+	// A concern named by its identifier is answered whatever else is waiting: the
+	// identifier is the one thing that says which question, and it says it
+	// however many proposals are on the table beside it.
+	if id, said, names := namesAConcern(trimmed); names {
+		outcome, err := s.answerFromMessage(id, said)
+		if err != nil {
+			return Decided{}, true, err
+		}
+		return Decided{Answers: []AnswerOutcome{outcome}}, true, nil
 	}
 	if !decidesAsAMessage(trimmed) {
-		return nil, false, nil
+		return Decided{}, false, nil
 	}
 	cards := s.pendingCards()
+	open := s.Concerns()
+	_, namesProposal := namesAProposal(trimmed)
+	switch {
+	case len(open) == 0 || namesProposal:
+		// Nothing but proposals is waiting, or the message says which proposal
+		// it means: the proposal grammar reads it, exactly as it always has.
+	case len(open) == 1 && len(cards) == 0 && answersAlone(trimmed):
+		// The one thing waiting is a question and the message is a bare answer
+		// word, which names it the way a bare yes names the only proposal.
+		outcome, err := s.answerFromMessage(open[0].ID, trimmed)
+		if err != nil {
+			return Decided{}, true, err
+		}
+		return Decided{Answers: []AnswerOutcome{outcome}}, true, nil
+	default:
+		// A concern is waiting and the message names nothing, so there is more
+		// than one thing it could be about — or it is a proposal's grammar with
+		// no proposal to read it against. Nothing is applied: this is the case
+		// where "yes" to a question approved whatever proposal was undecided.
+		return Decided{}, true, s.refuseUnnamed(trimmed, open, cards)
+	}
 	if len(cards) == 0 {
 		// The answer decides something and there is nothing here to decide. Only an
 		// answer naming a proposal can say which, and it is refused out loud rather
@@ -2925,19 +3017,19 @@ func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome,
 		// no longer one this conversation holds, and either answer is the
 		// operator's to hear. A bare yes names nothing, so it is somebody talking.
 		if named, names := namesAProposal(trimmed); names {
-			return nil, true, fmt.Errorf("no proposal %s is awaiting a decision in this conversation; it was decided already, or this conversation no longer holds it. Nothing was decided, and nothing was said to the %s",
+			return Decided{}, true, fmt.Errorf("no proposal %s is awaiting a decision in this conversation; it was decided already, or this conversation no longer holds it. Nothing was decided, and nothing was said to the %s",
 				named, RoleTitle(s.state.Role))
 		}
-		return nil, false, nil
+		return Decided{}, false, nil
 	}
 	decisions, err := readDecisions(trimmed, cards)
 	switch {
 	case errors.Is(err, errNotADecision):
-		return nil, false, nil
+		return Decided{}, false, nil
 	case err != nil:
-		return nil, true, fmt.Errorf("%w; nothing was decided, and all of it is still waiting on you", err)
+		return Decided{}, true, fmt.Errorf("%w; nothing was decided, and all of it is still waiting on you", err)
 	}
-	outcomes := make([]DecisionOutcome, 0, len(decisions))
+	var decided Decided
 	for _, made := range decisions {
 		outcome, err := s.decideOne(ctx, made)
 		// Saved after each decision rather than once at the end, and on the way
@@ -2946,14 +3038,66 @@ func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome,
 		// already decided must never be left listed as awaiting one.
 		saved := s.record()
 		if err != nil {
-			return outcomes, true, errors.Join(err, saved)
+			return decided, true, errors.Join(err, saved)
 		}
-		outcomes = append(outcomes, outcome)
+		decided.Decisions = append(decided.Decisions, outcome)
 		if saved != nil {
-			return outcomes, true, saved
+			return decided, true, saved
 		}
 	}
-	return outcomes, true, nil
+	return decided, true, nil
+}
+
+// answerFromMessage answers one concern with what a message said about it, and
+// reports what was recorded. It goes through the same Answer the prompt goes
+// through, so what the record and the product manager's next turn carry is
+// identical whichever way the answer arrived; what is added here is the
+// resolution of an answer picked by number, which the prompt's own chooser does
+// for it, and the save the prompt's caller makes.
+//
+// A concern the message names that is not awaiting an answer is refused out
+// loud, for the reason a decided proposal is: the operator answered something
+// whose settlement they did not see, and that is theirs to hear rather than a
+// sentence for the agent to interpret.
+func (s *Session) answerFromMessage(concernID, said string) (AnswerOutcome, error) {
+	record, err := s.awaitingAnswer(concernID)
+	if err != nil {
+		return AnswerOutcome{}, fmt.Errorf("%w. Nothing was answered, and nothing was said to the %s", err, RoleTitle(s.state.Role))
+	}
+	if strings.TrimSpace(said) == "" {
+		return AnswerOutcome{}, fmt.Errorf("concern %s needs an answer: say `answer %s <what you decide>`. Nothing was answered, and nothing was said to the %s",
+			record.pending.ID, record.pending.ID, RoleTitle(s.state.Role))
+	}
+	answer := chosenAnswer(record.pending, said)
+	if err := s.Answer(record.pending.ID, answer); err != nil {
+		return AnswerOutcome{}, err
+	}
+	// Saved as it is answered, for the reason a decision is: what the record
+	// carries is the questions still awaiting an answer, and one this process
+	// has answered must never be left listed as awaiting one.
+	if err := s.record(); err != nil {
+		return AnswerOutcome{}, err
+	}
+	return AnswerOutcome{ConcernID: record.pending.ID, Subject: record.pending.Concern.Subject, Answer: answer}, nil
+}
+
+// refuseUnnamed is the refusal a message gets when a concern is waiting and the
+// message names nothing. It lists everything that is waiting and how to name
+// each, because an operator who has just been told no is owed the next thing to
+// type — and because the list is the evidence that there was more than one
+// thing the message could have meant.
+func (s *Session) refuseUnnamed(message string, open []PendingConcern, cards []card) error {
+	var listing strings.Builder
+	for _, concern := range open {
+		fmt.Fprintf(&listing, "\n  concern %s: %s — answer it with `answer %s <what you decide>`",
+			concern.ID, strings.TrimSpace(concern.Concern.Subject), concern.ID)
+	}
+	for _, entry := range cards {
+		fmt.Fprintf(&listing, "\n  proposal %s: %s — decide it with `approve %s` or `decline %s <reason>`",
+			entry.proposal.ID, strings.TrimSpace(entry.proposal.Proposal.Title), entry.proposal.ID, entry.proposal.ID)
+	}
+	return fmt.Errorf("%q names nothing, and %d thing(s) are waiting on you:%s\nNothing was answered or decided, and nothing was said to the %s; name the one you mean",
+		message, len(open)+len(cards), listing.String(), RoleTitle(s.state.Role))
 }
 
 // pendingCards is every proposal this conversation is still waiting on, in the
@@ -3070,6 +3214,7 @@ func (s *Session) notice(format string, args ...any) {
 func (s *Session) record() error {
 	s.state.UpdatedAt = s.options.clock().Now()
 	s.state.PendingProposals = s.undecidedProposals()
+	s.state.PendingConcerns = s.unansweredConcerns()
 	s.state.PendingNotices = s.notices
 	s.state.PendingNoticesDropped = s.noticesDropped
 	if err := s.options.Store.Save(s.state); err != nil {
@@ -3092,6 +3237,24 @@ func (s *Session) undecidedProposals() []runstate.PendingProposal {
 	}
 	if len(pending) > runstate.MaxPendingProposals {
 		pending = pending[len(pending)-runstate.MaxPendingProposals:]
+	}
+	return pending
+}
+
+// unansweredConcerns is what a later process may still be asked to answer,
+// bounded the same way and for the same reason: the oldest questions go first,
+// because a conversation that has left that many unanswered has moved on from
+// the earliest of them.
+func (s *Session) unansweredConcerns() []runstate.PendingConcern {
+	var pending []runstate.PendingConcern
+	for _, record := range s.concerns {
+		if record.answered {
+			continue
+		}
+		pending = append(pending, record.pending.recorded())
+	}
+	if len(pending) > runstate.MaxPendingConcerns {
+		pending = pending[len(pending)-runstate.MaxPendingConcerns:]
 	}
 	return pending
 }

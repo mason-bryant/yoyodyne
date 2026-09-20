@@ -653,10 +653,12 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	}
 }
 
-// A question the product manager stopped to ask has nobody to answer it in a
-// one-shot message, and a conversation can end with one unanswered. Both say so:
-// silence about a concern reads as agreement, which is the thing it exists to
-// prevent.
+// A question the product manager stopped to ask has nobody at a prompt to
+// answer it in a one-shot message, and a conversation can end with one
+// unanswered. Both say so: silence about a concern reads as agreement, which is
+// the thing it exists to prevent. The one-shot report also says how to answer
+// from where the operator is — by the concern's own identifier, in the next
+// message — for the reason a proposal's does.
 func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	t.Parallel()
 
@@ -676,7 +678,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	printChatConcerns(&oneShot, console.Theme{}, domain.RoleProductManager, concerns)
 	for _, required := range []string{
 		"Nothing was proposed or created",
-		"yoyodyne chat",
+		`answer c1.1 <what you decide>`,
 		"[c1.1] " + chat.ConcernConflict.Headline(),
 		"Do you want that goal changed?",
 	} {

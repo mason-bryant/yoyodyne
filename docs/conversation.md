@@ -266,8 +266,11 @@ A proposal the harness cannot read is reported and the conversation carries on.
 prints what is awaiting you, named by its own identifier; the next message
 decides it. `yoyo chat --message "approve 3.1"` creates the item, and
 `yoyo chat --message "decline 3.1 <reason>"` turns it down with your words kept
-as the reason. A bare `y` works where exactly one proposal is waiting, which is
-the same rule a prompt answers by.
+as the reason. A bare `y` works where exactly one proposal is waiting and no
+question is, which is the same rule a prompt answers by; with a question waiting
+beside it the `y` is refused with both named, because
+[a message answers a question by naming it](#answering-a-question-from-a-single-message)
+and must never answer one thing by deciding another.
 
 **Two shapes decide, and everything else is speech.** A message decides when it
 names a proposal by its identifier — `approve 3.1`, `decline 3.1 too vague` —
@@ -558,9 +561,46 @@ marker; typing anything else there is that answer, so a numbered prompt never
 costs you a sentence you had already written. What is recorded either way is the
 answer itself, in the words it was offered in, and that is what reaches the
 product manager. Offering answers never narrows what you may say, which is why
-your own words are on every list there is. `--message` has nobody to answer, so
-it prints the questions with the answers that were on offer, and proposes
-nothing.
+your own words are on every list there is. `--message` has nobody standing at a
+prompt, so it prints the questions with the answers that were on offer, named by
+their own identifiers, and proposes nothing; the answer arrives as its own
+message.
+
+### Answering a question from a single message
+
+A question outlives the process that asked it, exactly as a proposal does, so
+the invocation that
+raised it and the one that answers it are two different commands.
+`yoyo chat --message "answer c3.1 the goal stands"` answers concern `c3.1` with
+your words, and `yoyo chat --message "answer c3.1 2"` answers it with the second
+of the answers it offered, recorded in the words it was offered in; the
+`answer` in front is optional, because the identifier is the thing nobody types
+by accident. A bare `yes` or `no` answers the question where it is the only
+thing the conversation is waiting on, which is the same rule a lone proposal is
+approved by. Anything else is said to the product manager and leaves the
+question open, so a sentence about the question reaches it as a sentence and
+the question is still listed for you to answer.
+
+What a message must never do is answer one thing by deciding another. A
+question and a proposal can be waiting at the same time — a turn can raise a
+concern and propose an item in the same breath — and until 2026-09-20 a `yes`
+meant for the question, sent as a message, approved whatever proposal was
+undecided instead: the approval was real, recorded, and created the item,
+because a message could decide a proposal and had no way to reach a concern at
+all. So when a question is waiting and more than one thing is, a message that
+names nothing is refused with the list of what is waiting and how to name each
+— `answer c3.1 …` for the question, `approve 3.1` or `decline 3.1 …` for the
+proposal — and is applied to none of them and said to nobody. Naming what you
+mean is what gets through: `answer c3.1 …` answers the question with the
+proposal left exactly where it was, and `approve 3.1` decides the proposal with
+the question still open. A batch of proposals with no question beside it keeps
+the grammar below, since `decline all` and `approve 1,3` can only be about
+proposals.
+
+An interactive `yoyo chat` puts a question still waiting from an earlier
+process to you as it opens, before anything else, for the reason it puts an
+undecided proposal: a question nobody was ever shown would otherwise be named
+as unanswered at the end of a conversation it was never asked in.
 
 ## Steering the work from the conversation
 
