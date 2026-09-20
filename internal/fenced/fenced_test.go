@@ -43,6 +43,61 @@ func TestAFenceQuotedInsideProseIsText(t *testing.T) {
 	}
 }
 
+// SplitLast is Split for a channel that keeps a reply's final word rather than
+// refusing a second block: it counts them, reads the last, and lifts every one
+// of them out of what was said.
+func TestSplitLastKeepsTheLastBlockAndCountsThem(t *testing.T) {
+	t.Parallel()
+
+	reply := "before\n\n```yoyodyne-thing\n{\"a\":1}\n```\nbetween\n\n```yoyodyne-thing\n{\"a\":2}\n```\nafter\n"
+	block, count, err := SplitLast(reply, "```yoyodyne-thing", "thing")
+	if err != nil {
+		t.Fatalf("SplitLast() error = %v", err)
+	}
+	if count != 2 || !block.Found || block.Payload != `{"a":2}` {
+		t.Fatalf("SplitLast() = %#v, %d; want the second of two blocks", block, count)
+	}
+	if block.Before != "before" {
+		t.Fatalf("Before = %q", block.Before)
+	}
+	if strings.Contains(block.Rest, "yoyodyne-thing") || strings.Contains(block.Rest, `{"a":`) {
+		t.Fatalf("a block stayed in what was said: %q", block.Rest)
+	}
+	for _, want := range []string{"before", "between", "after"} {
+		if !strings.Contains(block.Rest, want) {
+			t.Fatalf("Rest = %q, want what was said around both blocks", block.Rest)
+		}
+	}
+
+	// With one block it is exactly Split, and with none it finds none.
+	one := "before\n\n```yoyodyne-thing\n{\"a\":1}\n```\nafter\n"
+	fromSplit, err := Split(one, "```yoyodyne-thing", "thing")
+	if err != nil {
+		t.Fatalf("Split() error = %v", err)
+	}
+	fromLast, count, err := SplitLast(one, "```yoyodyne-thing", "thing")
+	if err != nil {
+		t.Fatalf("SplitLast() error = %v", err)
+	}
+	if count != 1 || fromLast != fromSplit {
+		t.Fatalf("SplitLast() = %#v, %d; Split() = %#v", fromLast, count, fromSplit)
+	}
+	none, count, err := SplitLast("nothing here\n", "```yoyodyne-thing", "thing")
+	if err != nil || count != 0 || none.Found || none.Before != "nothing here" {
+		t.Fatalf("SplitLast() = %#v, %d, %v; want no block", none, count, err)
+	}
+
+	// A second block is tolerated; a second block that cannot be read is not.
+	broken := "Done.\n\n```yoyodyne-thing\n{}\n```\n\n```yoyodyne-thing json\n{}\n```\n"
+	block, count, err = SplitLast(broken, "```yoyodyne-thing", "thing")
+	if err == nil {
+		t.Fatalf("SplitLast() accepted %q", broken)
+	}
+	if !strings.Contains(err.Error(), "thing") || block.Before != "Done." || count != 1 {
+		t.Fatalf("SplitLast() = %#v, %d, %v; want the kind named and what was said kept", block, count, err)
+	}
+}
+
 func TestWhatIsSaidSurvivesABlockThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 

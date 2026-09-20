@@ -265,3 +265,37 @@ func TestSweepListingNamesALineItCouldNotReadAndShowsTheRest(t *testing.T) {
 		t.Errorf("rendered = %q, want the readable reports shown beside it", rendered)
 	}
 }
+
+// The turn a woken role hands back reads the reply the way the record needs it:
+// a single block is the account and nothing else; two blocks are the last one
+// as the account with the slip noted beside it, rather than a pass whose
+// decisions were taken and whose record was thrown away; and a reply with no
+// readable block is a problem and no account.
+func TestReadSweepRecordsTheLastOfSeveralBlocksAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	more := "```yoyodyne-sweep\n" + `{"status":"more","summary":"twelve decided, more behind them"}` + "\n```\n"
+	complete := "```yoyodyne-sweep\n" + `{"status":"complete","summary":"twelve decided, nothing behind them"}` + "\n```\n"
+
+	result, problem := readSweep(domain.RoleProductManager, "Worked the pile.\n\n"+complete)
+	if result == nil || result.Status != sweep.StatusComplete || problem != "" {
+		t.Errorf("one block: result = %+v, problem = %q; want the account and no problem", result, problem)
+	}
+
+	result, problem = readSweep(domain.RoleProductManager, "Worked the pile.\n\n"+more+"\nThat was all of it.\n\n"+complete)
+	if result == nil || result.Status != sweep.StatusComplete {
+		t.Errorf("two blocks: result = %+v, want the last block's account", result)
+	}
+	if !strings.Contains(problem, "more than one sweep block") || !strings.Contains(problem, string(domain.RoleProductManager)) {
+		t.Errorf("two blocks: problem = %q, want the slip noted and the role named", problem)
+	}
+
+	result, problem = readSweep(domain.RoleProductManager, "Worked the pile.")
+	if result != nil || !strings.Contains(problem, "without a sweep block") {
+		t.Errorf("no block: result = %+v, problem = %q; want no account and the problem", result, problem)
+	}
+	result, problem = readSweep(domain.RoleProductManager, more+"```yoyodyne-sweep\nnot json\n```\n")
+	if result != nil || !strings.Contains(problem, "cannot read") {
+		t.Errorf("an unreadable block: result = %+v, problem = %q; want no account and the problem", result, problem)
+	}
+}

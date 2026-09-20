@@ -132,7 +132,11 @@ type Turn struct {
 	Result *sweep.Result `json:"result,omitempty"`
 	// ResultProblem names an account that could not be read, or a turn that
 	// carried none. It is not a failed turn: the role answered, and what is lost
-	// is the structure rather than the work.
+	// is the structure rather than the work. It is also set beside a Result the
+	// turn did carry, where something about how it was carried is worth the
+	// record saying — a reply with more than one block, of which the last was
+	// read — so a problem here does not by itself mean the turn's account is
+	// missing.
 	ResultProblem string `json:"result_problem,omitempty"`
 }
 

@@ -28,8 +28,11 @@ type wokenRole struct {
 // cost, and the failure where the turn is meant to fail.
 type scriptedTurn struct {
 	result *sweep.Result
-	err    error
-	cost   float64
+	// problem is what the turn says about its account beside it, where a test
+	// hands back one that was read with something worth noting.
+	problem string
+	err     error
+	cost    float64
 }
 
 func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, message string) (Turn, error) {
@@ -42,7 +45,7 @@ func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, message string) 
 	}
 	answer := r.answers[0]
 	r.answers = r.answers[1:]
-	return Turn{ConversationID: "chat-1", CostUSD: answer.cost, Result: answer.result}, answer.err
+	return Turn{ConversationID: "chat-1", CostUSD: answer.cost, Result: answer.result, ResultProblem: answer.problem}, answer.err
 }
 
 func sweepStore(t *testing.T) *runstate.SweepStore {
@@ -157,6 +160,43 @@ func TestAHeavyPassIteratesItsTurns(t *testing.T) {
 	}
 	if fired.Fired[0].Truncated {
 		t.Error("a pass that finished inside its bound is reported as truncated")
+	}
+}
+
+// A turn can carry its account and something worth saying about it at once — a
+// reply with more than one block, of which the last was read. The account is
+// recorded exactly as a clean one is, and the note goes on the record beside it
+// rather than in place of it: the pass's decisions were taken, and a problem
+// that cost the record would be the report-pile problem in miniature.
+func TestATurnWithAnAccountAndANoteRecordsBoth(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{{
+		result:  complete("twelve decided, nothing behind them", sweep.Finding{Issue: "a stale report", Disposition: sweep.DispositionFiled, Filed: []string{"yoyodyne-ifd.400"}}),
+		problem: "the development-manager answered with more than one sweep block: the reply carried 2 sweep blocks where the contract asks for one, and the last of them is the account recorded",
+	}}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if fired.Fired[0].Turns != 1 || fired.Fired[0].Findings != 1 {
+		t.Errorf("fired = %+v, want the account read in one turn", fired.Fired[0])
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "more than one sweep block") {
+		t.Errorf("problem = %q, want the note carried", fired.Fired[0].Problem)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 || recorded[0].Result == nil || len(recorded[0].Result.Findings) != 1 {
+		t.Fatalf("recorded = %+v, want the durable report to carry the account", recorded)
+	}
+	if !strings.Contains(recorded[0].Problem, "more than one sweep block") {
+		t.Errorf("recorded problem = %q, want the note on the record beside the account", recorded[0].Problem)
 	}
 }
 

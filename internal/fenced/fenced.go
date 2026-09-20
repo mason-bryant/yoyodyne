@@ -8,7 +8,10 @@
 // splitting is identical for all of them: a fence that opens its own line, a
 // payload up to the closing fence, and a refusal for a second block of the same
 // kind. It is here once rather than copied per channel, so a channel added
-// later inherits these rules instead of a copy of them that drifts.
+// later inherits these rules instead of a copy of them that drifts. The one
+// channel that keeps the last of several blocks rather than refusing them
+// (SplitLast) reads a block by the same rules; only what it does with a second
+// one differs.
 package fenced
 
 import (
@@ -44,26 +47,75 @@ func Split(reply, fence, kind string) (Block, error) {
 		return Block{Before: strings.TrimSpace(reply)}, nil
 	}
 	block := Block{Before: strings.TrimSpace(reply[:opensAt])}
-	tail := reply[opensAt+len(fence):]
-	if line := tail[:lineEnd(tail)]; strings.TrimSpace(line) != "" {
-		return block, fmt.Errorf("%s block opens with trailing text %q", kind, strings.TrimSpace(line))
+	payload, after, err := readBlock(reply[opensAt+len(fence):], kind)
+	if err != nil {
+		return block, err
 	}
-	tail = tail[lineEnd(tail):]
-	closesAt := strings.Index(tail, "\n```")
-	if closesAt < 0 {
-		return block, fmt.Errorf("%s block is not closed", kind)
-	}
-	// Whatever shares the closing fence's line belongs to the fence; the reply
-	// resumes on the line after it.
-	after := tail[closesAt+len("\n```"):]
-	after = after[lineEnd(after):]
 	if indexFence(after, fence) >= 0 {
 		return block, errors.New("a reply carries at most one " + kind + " block")
 	}
 	block.Rest = strings.TrimSpace(reply[:opensAt] + "\n" + after)
-	block.Payload = tail[:closesAt]
+	block.Payload = payload
 	block.Found = true
 	return block, nil
+}
+
+// SplitLast takes a reply apart around the last block of the named kind, and
+// says how many it carried. It is for a channel that would rather keep a reply's
+// final word than lose the reply over a second block: a role that sent two
+// accounts of one turn has slipped, and the slip is worth saying, but the
+// second is what it settled on and discarding both throws away decisions that
+// were made. Every block still has to be well formed, because a malformed one
+// among them is not a slip in discipline but a block nobody can read.
+//
+// With one block it is exactly Split. With more, Before is what was said ahead
+// of the first, Rest is the reply with every block of the kind lifted out — all
+// of them are the channel's, whichever one is read — and Payload is the last.
+func SplitLast(reply, fence, kind string) (Block, int, error) {
+	opensAt := indexFence(reply, fence)
+	if opensAt < 0 {
+		return Block{Before: strings.TrimSpace(reply)}, 0, nil
+	}
+	block := Block{Before: strings.TrimSpace(reply[:opensAt])}
+	var prose []string
+	count := 0
+	rest := reply
+	for {
+		opensAt := indexFence(rest, fence)
+		if opensAt < 0 {
+			prose = append(prose, rest)
+			break
+		}
+		prose = append(prose, rest[:opensAt])
+		payload, after, err := readBlock(rest[opensAt+len(fence):], kind)
+		if err != nil {
+			return block, count, err
+		}
+		count++
+		block.Payload = payload
+		rest = after
+	}
+	block.Rest = strings.TrimSpace(strings.Join(prose, "\n"))
+	block.Found = true
+	return block, count, nil
+}
+
+// readBlock reads one block from just past its opening fence: the rest of the
+// fence's line has to be blank, and the payload runs to the closing fence. It
+// gives back the payload and what the reply says after the closing fence's
+// line, because whatever shares that line belongs to the fence.
+func readBlock(tail, kind string) (payload, after string, err error) {
+	if line := tail[:lineEnd(tail)]; strings.TrimSpace(line) != "" {
+		return "", "", fmt.Errorf("%s block opens with trailing text %q", kind, strings.TrimSpace(line))
+	}
+	tail = tail[lineEnd(tail):]
+	closesAt := strings.Index(tail, "\n```")
+	if closesAt < 0 {
+		return "", "", fmt.Errorf("%s block is not closed", kind)
+	}
+	after = tail[closesAt+len("\n```"):]
+	after = after[lineEnd(after):]
+	return tail[:closesAt], after, nil
 }
 
 // indexFence finds a fence that opens its own line, so a fence quoted inside
