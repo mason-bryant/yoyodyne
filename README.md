@@ -322,8 +322,10 @@ curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/inst
 The README that `bd init` writes into `.beads/` still links the repository's
 older name; GitHub redirects it, and it is the same project.
 
-`yoyo init` writes a complete `.yoyodyne/config.yaml` and copies the five
-personas into `.yoyodyne/personas/`, naming the product after the directory
+`yoyo init` writes a complete `.yoyodyne/config.yaml`, copies the five
+personas into `.yoyodyne/personas/`, and records what the template supplied in
+`.yoyodyne/config.lock` — the baseline `yoyo doctor` and `yoyo config drift`
+later compare your file against — naming the product after the directory
 unless you pass `--product`. Nothing already there is overwritten without
 `--force`, and the refusal happens before any file is written, so a project is
 never left half-configured. See [Configuring a project](#configuring-a-project)
@@ -586,9 +588,11 @@ A project owns its configuration outright. `yoyo init` writes it:
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
 backend, model selector, provider account, instance count, and persona
-reference, plus the execution, approval, and product settings — and copies the five personas into
+reference, plus the execution, approval, and product settings — copies the five personas into
 `.yoyodyne/personas/`, where they are ordinary Markdown files in your
-repository. Nothing is inherited when the file loads, so
+repository, and records what the template supplied beside them in
+`.yoyodyne/config.lock`, the baseline the drift report below reads. Nothing is
+inherited when the file loads, so
 `yoyo config show --origins` names the project file for every configured value —
 the one exception being `product.repository_id`, which is reported as
 `derived:product.id` because the file states the product id and lets the
