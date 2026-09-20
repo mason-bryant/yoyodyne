@@ -2,11 +2,14 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -138,6 +141,138 @@ func TestAPreferringSlotPullsItsLabelFirstAndFallsBackOnceItIsExhausted(t *testi
 		"yoyodyne-dash-1":  "pulled into developer slot 1, which prefers the dashboard label this item carries",
 		"yoyodyne-plain-1": "pulled into developer slot 2, which prefers no label",
 		"yoyodyne-plain-3": "pulled into developer slot 1, which prefers the dashboard label and found none of that work ready, so it fell back to the rest of the backlog",
+	} {
+		if reason := harness.selectionFor(id).Reason; !strings.Contains(reason, want) {
+			t.Errorf("%s reason = %q, want it to say %q", id, reason, want)
+		}
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want the queue drained", schedule.Stopped)
+	}
+}
+
+// configurationGuide is the operator document whose developer-slot example is
+// this project's own configuration: one slot preferring the reliability label.
+const configurationGuide = "../../docs/configuration.md"
+
+// configurationGuideSlotsHeading opens the section that example sits in. The
+// test below reads the first fenced YAML block under it as data, so renaming the
+// heading or moving the block is a change to the test as much as to the guide.
+const configurationGuideSlotsHeading = "### A developer slot that prefers a label"
+
+// guideDeveloperSlots reads the guide's developer-slot example and loads it as a
+// project configuration, so what the replay drives is the block the operator is
+// told to paste rather than a copy of it kept here. The block states only the
+// execution section; the rest of a loadable project is wrapped around it, with
+// as many developer instances as the block's capacity asks for.
+func guideDeveloperSlots(t *testing.T) (capacity int, slots []domain.DeveloperSlot) {
+	t.Helper()
+	guide, err := os.ReadFile(configurationGuide)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", configurationGuide, err)
+	}
+	_, section, found := strings.Cut(string(guide), configurationGuideSlotsHeading+"\n")
+	if !found {
+		t.Fatalf("%s has no %q section", configurationGuide, configurationGuideSlotsHeading)
+	}
+	_, fenced, found := strings.Cut(section, "```yaml\n")
+	if !found {
+		t.Fatalf("the %q section of %s has no yaml block", configurationGuideSlotsHeading, configurationGuide)
+	}
+	block, _, found := strings.Cut(fenced, "```")
+	if !found {
+		t.Fatalf("the yaml block under %q in %s is not closed", configurationGuideSlotsHeading, configurationGuide)
+	}
+	if !strings.HasPrefix(block, "execution:\n") {
+		t.Fatalf("the block under %q is not an execution section:\n%s", configurationGuideSlotsHeading, block)
+	}
+
+	project := t.TempDir()
+	directory := filepath.Join(project, config.DirectoryName)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	contents := "version: 1\nextends: builtin:v1\nproduct:\n  id: example\n  repository: .\n" + block +
+		"agents:\n  developer:\n    instances: 3\n"
+	if err := os.WriteFile(filepath.Join(directory, config.FileName), []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg, err := config.Load(filepath.Join(directory, config.FileName))
+	if err != nil {
+		t.Fatalf("the guide's developer-slot block does not load as a configuration: %v\n%s", err, block)
+	}
+	return cfg.Execution.MaxConcurrentDevelopers, cfg.Execution.DeveloperSlots
+}
+
+// The reliability seat as a replay, over the block the guide shows: three slots,
+// the first preferring the reliability label. A reliability-labelled bug at
+// priority 2 is pulled by slot 1 ahead of the unlabelled item at priority 1 while
+// the other two slots take the unlabelled work in the product manager's order,
+// the next reliability item goes to slot 1 the moment it frees, and once no
+// reliability work remains slot 1 falls back to the rest of the backlog rather
+// than idling.
+func TestTheReliabilitySlotPullsReliabilityWorkFirstAndFallsBackWhenNoneRemains(t *testing.T) {
+	t.Parallel()
+
+	capacity, slots := guideDeveloperSlots(t)
+	if capacity != 3 || len(slots) != 1 || !slots[0].Prefers([]string{"reliability"}) || slots[0].Prefers([]string{"dashboard"}) {
+		t.Fatalf("the guide's block gives capacity %d and slots %+v, want three slots with the first preferring reliability alone", capacity, slots)
+	}
+
+	replay := newSlotReplay(
+		labelled("yoyodyne-plain-1", 1),
+		labelled("yoyodyne-reliability-1", 2, "reliability", "bug"),
+		labelled("yoyodyne-plain-2", 3),
+		labelled("yoyodyne-plain-3", 4),
+		labelled("yoyodyne-reliability-2", 5, "reliability"),
+	)
+	harness := replay.harness
+	harness.capacity = capacity
+	harness.slots = slots
+
+	go func() {
+		// Pull 1 fills all three slots: reliability-1 into slot 1 ahead of the
+		// higher-priority plain-1, which slot 2 takes, and plain-2 into slot 3.
+		// Freeing slot 1 pulls reliability-2 ahead of the higher-priority plain-3;
+		// freeing it again finds no reliability work and falls back to plain-3.
+		replay.release(t, "yoyodyne-reliability-1", 3)
+		replay.release(t, "yoyodyne-reliability-2", 4)
+		replay.release(t, "yoyodyne-plain-1", 5)
+		replay.release(t, "yoyodyne-plain-2", 5)
+		replay.release(t, "yoyodyne-plain-3", 5)
+	}()
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	want := []string{"yoyodyne-reliability-1", "yoyodyne-plain-1", "yoyodyne-plain-2", "yoyodyne-reliability-2", "yoyodyne-plain-3"}
+	if got := startedOrder(schedule); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("pull order = %v, want %v\n%s", got, want, schedule.Render())
+	}
+	for _, started := range schedule.Started {
+		want := 1
+		switch started.WorkItemID {
+		case "yoyodyne-plain-1":
+			want = 2
+		case "yoyodyne-plain-2":
+			want = 3
+		}
+		if started.Slot != want {
+			t.Errorf("%s was pulled into slot %d, want slot %d", started.WorkItemID, started.Slot, want)
+		}
+	}
+	// plain-3 is the one item slot 1 walked past for its label with no other slot
+	// free, and the report says which slot pulled what ahead of it.
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != "yoyodyne-plain-3" ||
+		!strings.Contains(schedule.Deferred[0].Reason, "developer slot 1 prefers the reliability label and pulled yoyodyne-reliability-2 ahead of it") {
+		t.Errorf("deferred = %+v, want plain-3 alone reported as left for another slot", schedule.Deferred)
+	}
+	for id, want := range map[string]string{
+		"yoyodyne-reliability-1": "pulled into developer slot 1, which prefers the reliability label this item carries",
+		"yoyodyne-reliability-2": "pulled into developer slot 1, which prefers the reliability label this item carries",
+		"yoyodyne-plain-1":       "pulled into developer slot 2, which prefers no label",
+		"yoyodyne-plain-3":       "pulled into developer slot 1, which prefers the reliability label and found none of that work ready, so it fell back to the rest of the backlog",
 	} {
 		if reason := harness.selectionFor(id).Reason; !strings.Contains(reason, want) {
 			t.Errorf("%s reason = %q, want it to say %q", id, reason, want)
