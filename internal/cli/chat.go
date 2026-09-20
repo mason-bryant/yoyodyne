@@ -19,6 +19,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/evaluation"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/repositoryread"
 	"github.com/mason-bryant/yoyodyne/internal/research"
@@ -550,6 +551,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	for _, problem := range goals.Problems {
 		fmt.Fprintf(stderr, "warning: goals not read: %s\n", problem)
 	}
+	// The artifact homes a run may not write into and the documents they own,
+	// which is what an item's done-conditions are checked against as it is
+	// admitted. Homes whose documents cannot be read still check the paths: a
+	// condition naming a design by its path is refused whether or not the design
+	// set loaded, and what is lost is the check by name, which is said.
+	homes := artifactHomes(repository, cfg, stderr)
 
 	// Where this agent's turn goes if its own endpoint has no capacity, resolved
 	// here because resolving it needs the configuration, the provider registry, and
@@ -666,6 +673,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
 		Goals: goals,
+		// What an item's done-conditions may not name without a grant. It is read
+		// from the repository and the configuration for the reason the goals are,
+		// and it is the same set the run reads before it claims the item.
+		ArtifactHomes: homes,
 		// What this project asks the operator about before work reaches the queue.
 		// It is read from the configuration rather than decided here, so the same
 		// answer governs a proposal and a direct admission.
@@ -1344,4 +1355,18 @@ This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same
 options; "yoyo agent list" says who there is and what each one is in the middle
 of.`)
+}
+
+// artifactHomes reads the artifact homes a run may not write into and the
+// documents they own, for the done-condition check every admission makes. The
+// homes come from the configuration and never fail; the documents come from the
+// repository, and a set that could not be read costs the check by name rather
+// than the conversation — a condition naming a design by its path is still
+// refused, and the warning says what is not.
+func artifactHomes(repository string, cfg config.Config, stderr io.Writer) protectedpath.Homes {
+	documents, err := protectedpath.OwnedDocuments(repository, cfg.Product)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: the documents the artifact homes own could not be read, so a done-condition naming one by its name rather than its path is not refused at admission: %v\n", err)
+	}
+	return protectedpath.ArtifactHomes(cfg, documents...)
 }

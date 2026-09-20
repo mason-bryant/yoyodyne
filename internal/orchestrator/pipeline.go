@@ -954,6 +954,13 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err := validateReadyItem(item, workItemID); err != nil {
 		return Outcome{}, err
 	}
+	// And whether its done-conditions are ones a run may satisfy at all, asked
+	// here for the same reason the provider grant is asked above: the answer is
+	// in the item's text, nothing has been claimed, and a run that started on
+	// such an item spends itself finding out.
+	if err := p.refuseUngrantedCondition(item); err != nil {
+		return Outcome{}, err
+	}
 	if _, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item}); err != nil {
 		return Outcome{}, fmt.Errorf("validate work item context: %w", err)
 	}
@@ -1864,6 +1871,37 @@ func refuseProviderGrant(item beads.WorkItem) error {
 		return nil
 	}
 	return fmt.Errorf("work item %s grants a path no run can write to: %w", item.ID, errors.Join(problems...))
+}
+
+// refuseUngrantedCondition refuses to start on an item whose done-conditions
+// name a document under an artifact home that the item does not grant. Such a
+// condition is one no diff can satisfy — the path is refused in the change by
+// the gate above — so a run that started on it would land what it could and
+// park on the rest, which is what three items did in one week before admission
+// learned to refuse the clause (yoyodyne-ifd.141.1, .63, .68.25). The run stops
+// here, before the item is claimed and before an attempt is spent.
+//
+// It exists as well as the check admission makes, rather than instead of it,
+// for the reasons refuseProviderGrant does: the acceptance criteria are written
+// with the tracker's own command and reach no admission door, and the queue
+// predates the gate. It asks the same predicate admission asks, of the same
+// fields, so what a run refuses and what admission would have refused can never
+// come apart. The documents the homes own are read from the repository the run
+// is about to cut from; where that read fails the paths are still checked, and
+// the check by name is what is lost.
+func (p Pipeline) refuseUngrantedCondition(item beads.WorkItem) error {
+	documents, err := protectedpath.OwnedDocuments(p.Repository, p.Config.Product)
+	if err != nil {
+		// A repository whose artifact homes cannot be read is about to be refused
+		// by the invariants load below; what this gate can still judge, it does.
+		documents = nil
+	}
+	homes := protectedpath.ArtifactHomes(p.Config, documents...)
+	problems := homes.ConditionProblems(item.Description, item.AcceptanceCriteria, protectedpath.Grants(grantEvidence(item)...))
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("work item %s states a done-condition no developer run can satisfy, so no run was started on it: %w", item.ID, errors.Join(problems...))
 }
 
 // recordDeliveredInvariants keeps the run's account of which constraints its

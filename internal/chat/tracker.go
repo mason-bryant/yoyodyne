@@ -292,6 +292,13 @@ var trackerActionNames = []string{
 // thing standing between the contract and a role told the wrong set.
 const providerPathClause = `A work item's text can admit one of the harness's protected paths into a run's scope, by naming that path after "` + protectedpath.GrantMarker + `" on a line of its own. Two paths are beyond any such grant, and the harness refuses a creation, an update, or a proposal whose text names one: ".claude/settings.json" and ".claude/settings.local.json". Claude Code refuses an agent's writes to those files above anything this harness permits, so a grant admits nothing there — what it admits is work no run can do, and the run finds that out by spending its whole repair budget against it. Where work genuinely needs one of those files changed, say in the item what has to be in it and that the operator puts it there by hand, and admit the rest of the work as ordinary work. A grant that reaches an item some other way is refused too, one step later: a run reads the item's design guidance and acceptance criteria as well, and refuses to start on it rather than spending an attempt.`
 
+// documentConditionClause is what every role that writes an item's text is told
+// about the done-conditions no run can meet. It is carried by both contracts
+// beside the clause above for the same reason that one is: the rule is decided
+// in one predicate, and a role told a weaker version of it writes the item that
+// predicate refuses.
+const documentConditionClause = `A done-condition is never written against a document a developer run may not write. The harness refuses a creation, an update, or a proposal whose "Done means" clauses or acceptance criteria name a path under the product, designs, or decisions homes, or a document one of those homes owns by its name — "the slack-reporting design", "docs/designs/observability-and-dashboard.md" — unless the item grants that path; the refusal quotes the clause. Three items in one week were admitted with such a clause — a design's query list to mark, a design's status entry to reconcile, a ruling to record on a design — and each spent a run before anybody found the condition no diff could meet. Cite those documents freely elsewhere in the item, as the design the work builds against or the ruling it obeys; what is refused is a condition. Where the work needs the document changed, either take that clause out of what done means and say that the document's owner amends it through the governed path once the run's summary names what there is to record, or, where the change is already decided, carry the grant. A run reads the same clauses of the item it is handed, including its design guidance and acceptance criteria, and refuses to start rather than parking on the condition afterwards.`
+
 // TrackerAction is one bounded operation on the work tracker. It carries
 // authority, unlike a proposal: the harness runs it as asked, so every argument
 // is validated before anything is run and the whole of it is recorded.
@@ -497,6 +504,12 @@ type TrackerOutcome struct {
 	// re-read of the store cannot always settle.
 	Landed  []string `json:"landed,omitempty"`
 	Unknown []string `json:"unknown,omitempty"`
+	// target is the item as the tracker held it when the action was read, kept
+	// for the one action that has to judge its own words against the item's — an
+	// update rewriting a description is checked beside the grants the item's other
+	// fields already carry. It is not part of the record: the tracker holds the
+	// item, and what is recorded above is what this action saw of it.
+	target *beads.WorkItem
 }
 
 // PartlyLanded reports an action that failed with something durable behind it.
@@ -1357,6 +1370,7 @@ func (s *Session) readActionTarget(ctx context.Context, outcome *TrackerOutcome)
 		outcome.TargetUnread = singleLine(err.Error(), maxTrackerFailureBytes)
 		return
 	}
+	outcome.target = &item
 	outcome.recordTarget(item)
 }
 
@@ -1504,6 +1518,15 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.Failure = duplicateRefusal(creation, matches)
 			return
 		}
+		// A done-condition no run may satisfy is refused before the item exists,
+		// which is the only moment refusing it costs a sentence rather than a run.
+		// A creation carries two of the four fields a grant is read from, and no
+		// design guidance or acceptance criteria, so those two are the whole of
+		// what there is to read.
+		if refusal := s.conditionRefusal(action.Description, "", action.Title, action.Description); refusal != "" {
+			outcome.Failure = refusal
+			return
+		}
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
@@ -1609,6 +1632,16 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
 			Executor:    domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor))),
+		}
+		// A description rewritten to carry a done-condition no run may satisfy is
+		// the same item as one admitted with it, so it is refused at the same gate.
+		// It is judged as the item will read once the update lands — the new title
+		// and description beside the design guidance and acceptance criteria the
+		// item already has — because a grant in a field this action does not carry
+		// still admits the path.
+		if refusal := s.updateConditionRefusal(outcome, change); refusal != "" {
+			outcome.Failure = refusal
+			return
 		}
 		if note := strings.TrimSpace(action.Note); note != "" {
 			change.AppendNotes = s.trackerProvenance("Noted", action.Reason) + "\n\n" + note

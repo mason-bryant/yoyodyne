@@ -1165,6 +1165,39 @@ posture: an entry refuses work at admission, so a path added on suspicion costs
 items nobody needed to refuse. It grows the same way it started — something meets
 the wall and reports it.
 
+**A done-condition is never written against one of these homes.** The gate
+above refuses a diff; what it cannot refuse is an item whose *done-condition*
+lives in a document the run may not write — "the design's query list marks the
+query as existing", "reconcile the design document's `yoyo status` entry", "her
+ruling is recorded on the design". Such a condition is one no diff can meet, and
+a run handed it lands what it can and parks on the rest. Three items did that in
+one week (`yoyodyne-ifd.141.1`, `.63`, and `.68.25` before them), each caught by
+the reviewer after the run had spent itself, each fixed afterwards by the
+architect amending the document through the governed path. So the check is made
+where the item is written: a creation, an update that rewrites the description,
+or a proposal whose "Done means" clauses or acceptance criteria name a path
+under the product, designs, decisions, or invariants homes — or a document one
+of those homes owns, by its name — is refused unless the item grants that path,
+with the clause quoted and both fixes named: take the clause out and say the
+document's owner amends it through the governed path once the run's summary
+names what there is to record, or, where the change behind it is already
+decided, carry the grant. Only the done-conditions are read — the whole of the
+acceptance criteria, and in the description the sentences from a "Done means"
+(or "Done:", "done when") to the end of their paragraph — because an item cites
+these documents in nearly every description, as the design it builds against or
+the ruling it obeys, and a citation is not a condition. A document is named by
+its path or, where its id is two words or more, by its id however the prose
+joins the words ("the slack-reporting design" names
+`docs/designs/slack-reporting-design.md`); a one-word id such as `brief` is left
+to the path, and an invariant is named by its path only. The run asks the same
+question of the item it is handed, over the acceptance criteria as well, before
+it claims the item, and refuses to start rather than parking on the condition
+afterwards — which is what covers an item whose criteria were written with the
+tracker's own command, and an item admitted before this existed. Neither check
+reaches `.claude/settings.json` or `.claude/settings.local.json`, which stay
+beyond any grant as above. [How work flows](work.md#what-an-item-may-ask-of-a-run)
+states the rule from the item's side.
+
 **What a grant does not do.** It admits the path; it does not decide what is
 written into it. The legitimate use of the exception is recording a change
 somebody already decided — an approved amendment, an operator's decision — never

@@ -335,6 +335,52 @@ this itself: it names the harness as the next mover and the verb that resumes
 it, so the development manager is not asked to choose among decisions that
 each spend something for a stop that was never hers to decide.
 
+## What an item may ask of a run
+
+The gate above refuses a *change* that touches an artifact home the item did not
+grant. It cannot refuse an *item* whose done-condition lives there — "the
+design's query list marks the query as existing", "reconcile the design
+document's `yoyo status` entry", "her ruling is recorded on the design" — and a
+run handed one of those does what the gate lets it and parks on the rest, with
+the reviewer naming the clause after the run has spent itself. Three items did
+that in one week (`yoyodyne-ifd.141.1`, `.63`, and `.68.25` before them), and
+each was put right the same way afterwards: the clause came out of the item, and
+the architect amended the document through the governed path. The development
+manager's 2026-09-03 checklist said where that belongs — a precondition or an
+edit the done-means implies is structure at admission, not a finding at review.
+
+So it is structure. **A done-condition that names a document a developer run
+may not write is refused where the item is written**, unless the item grants the
+path. A creation, an update that rewrites the description, or a proposal whose
+"Done means" clauses or acceptance criteria name a path under the product,
+designs, decisions, or invariants homes — or a document one of those homes owns,
+by its name, so "the slack-reporting design" names
+`docs/designs/slack-reporting-design.md` as surely as the path does — is refused
+with the clause quoted and the fix named, and the fix is one of two things:
+take the clause out of what done means and say that the document's owner (the
+architect for a design or a decision record, the product manager for a product
+artifact) amends it through the governed path once the run's summary names what
+there is to record; or, where the change behind it is already decided, carry
+the grant on a `Protected-path grant:` line. Only the done-conditions are read —
+the acceptance criteria whole, and in the description the sentences from a
+"Done means" to the end of their paragraph — because an item cites these
+documents in nearly every description as the design it builds against or the
+ruling it obeys, and a citation is not a condition; measured over the 596 items
+this tracker held when the check was written, reading every clause would have
+refused a fifth of the backlog, and reading the done-conditions refuses ten,
+each of which names a document as something the work leaves in a state.
+
+**The run repeats the test on the item it is handed**, over the acceptance
+criteria as well as the description, before it claims the item: an item whose
+criteria were written with the tracker's own command, or admitted before the
+check existed, is refused at the start of the run rather than parked at the end
+of it, and nothing is spent — no worktree, no claim, no attempt. The refusal
+says the same thing admission's does, quoting the clause, so what a run refuses
+and what admission would have refused cannot come apart. Neither check reaches
+`.claude/settings.json` or `.claude/settings.local.json`, which stay
+[beyond any grant](configuration.md#protected-paths-in-a-developers-change)
+whatever an item says.
+
 ## What a landing claims
 
 Whether a change landed and whether it discharged the item it was made for are

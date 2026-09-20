@@ -554,6 +554,8 @@ One parent is not decomposed twice into the same children. Before anything is cr
 
 ` + providerPathClause + `
 
+` + documentConditionClause + `
+
 The harness carries out your actions, records each one, tells the operator what you did, and then tells you what each action actually did. An action reported as failed changed nothing: report it as failed rather than describing it as done, and never describe any action as done before you have been told that it was.
 
 ` + repositoryread.Contract + `

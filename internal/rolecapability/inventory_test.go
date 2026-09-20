@@ -318,6 +318,11 @@ var expresses = map[string]expression{
 		asks:     []capability.Capability{capability.BacklogAdmit, capability.WorkDecompose},
 		gap:      "what it refuses is a property of the item's grants rather than of the admitting role's authority",
 	},
+	"protectedpath.condition-problems": {
+		question: "the roles asked are the ones that put work in the queue",
+		asks:     []capability.Capability{capability.BacklogAdmit, capability.WorkDecompose},
+		gap:      "what it refuses is a property of the item's done-conditions against the artifact homes rather than of the admitting role's authority",
+	},
 	"run.gate-protected-paths": {
 		question: "none: the gate compares a change's paths against the set and the item's grants",
 		gap:      "physical containment again, made before a check suite is spent",
@@ -329,6 +334,10 @@ var expresses = map[string]expression{
 	"run.refuse-provider-grant": {
 		question: "none: an item granting a path no provider honours is refused before it is claimed",
 		gap:      "the same authority the provider withholds, checked at the other door",
+	},
+	"run.refuse-ungranted-condition": {
+		question: "none: an item whose done-conditions live in a document the developer may not write is refused before it is claimed",
+		gap:      "the developer's want of authority over the artifact homes, read off the item's text at the other door",
 	},
 	"run.developer-contract": {
 		question: "the developer holds its worktree and nothing upstream of it",

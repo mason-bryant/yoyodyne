@@ -27,6 +27,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/modelfailover"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/repositoryread"
 	"github.com/mason-bryant/yoyodyne/internal/research"
@@ -294,6 +295,15 @@ type Options struct {
 	// "this repository records no goals" and "the goals could not be read" lead
 	// to opposite conclusions about the same attribution.
 	Goals goal.Set
+	// ArtifactHomes are the homes a developer run may not write into and the
+	// documents they own, which is what a work item's done-conditions are checked
+	// against as the item is written: a condition that names one of those
+	// documents and carries no grant for it is a condition no run can satisfy,
+	// and refusing it here costs a sentence where a run costs itself. They are
+	// read from the repository and the configuration as the conversation opens,
+	// for the reason the goals are. The zero value checks nothing, which is what
+	// every admission did before this existed.
+	ArtifactHomes protectedpath.Homes
 	// Admission is what this project asks the operator about before work reaches
 	// the queue. Its zero value asks about every item, which is what a
 	// conversation nobody stated a policy for gets: the safe reading of no policy
@@ -1112,6 +1122,12 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// refuses it.
 		if err := s.verifyProposalGoals(parsed.Proposals); err != nil {
 			return reply, &ProposalGoalError{Err: err}
+		}
+		// What a proposal says done means is checked next, for the same reason
+		// and at the same cost: a done-condition naming a document no run may
+		// write is work no run can finish, and the operator would be approving it.
+		if err := s.verifyProposalConditions(parsed.Proposals); err != nil {
+			return reply, &ProposalConditionError{Err: err}
 		}
 		// What a proposal is placed against is confirmed to exist before the
 		// operator is asked about any of it. A block naming an item nobody created
@@ -2335,6 +2351,14 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 			fmt.Fprintf(out, "%v\nNothing was proposed and nothing was created; ask it which items it meant.\n\n", unplaced)
 			continue
 		}
+		// A proposal whose done-conditions no run could meet is the same kind of
+		// thing: the block was readable, nothing was created, and what the role
+		// has to do is reword the condition or carry the grant.
+		var unmeetable *ProposalConditionError
+		if errors.As(err, &unmeetable) {
+			fmt.Fprintf(out, "%v\nNothing was proposed and nothing was created; ask it to take the clause out or carry the grant.\n\n", unmeetable)
+			continue
+		}
 		var unreadableRead *RepositoryError
 		if errors.As(err, &unreadableRead) {
 			fmt.Fprintf(out, "%v\nNothing was read; ask it which path it wanted.\n\n", unreadableRead)
@@ -3520,6 +3544,8 @@ Naming it does two things you cannot do any other way. The item records which di
 Work is not admitted twice from one source. Before anything is created, the harness compares what you are admitting against every item the tracker holds, open and closed: an item already admitted from the report or the directive this creation cites, and a child already carved out of the parent it names carrying the same scope. Where it finds one, nothing is created, and the result names the item, the state the tracker holds it in, and why it matched. That is not a refusal to get past by rewording the title — read the item it names. Where that item is open, act on it: update it, or widen it. Where it is closed, the work is done, and a run made for a second item could not contain anything the target branch does not already carry; that is what each of the two duplicates behind this rule cost, a run and its review rounds apiece. Where you have read it and this is genuinely separate work, propose it rather than admitting it, and say in the rationale what is separate about it, so the operator decides with the same match in front of them. A source is the one case with a second answer, because one record can genuinely prompt more than one piece of work: admit the second without citing the report or the directive, which is what naming it on the one item that answers the record already meant. A proposal is never refused for any of this — the match is written onto it and put to the operator.
 
 ` + providerPathClause + `
+
+` + documentConditionClause + `
 
 The state you were given lists items by title only. When a title is not enough to judge whether proposed work belongs inside an existing item or beside it, read the item instead of guessing or asking the operator to paste it: "read" returns one in full, and its results come back to you before you finish answering.
 

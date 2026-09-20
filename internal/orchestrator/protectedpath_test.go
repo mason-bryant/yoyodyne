@@ -125,6 +125,71 @@ func TestARunRefusesToStartOnAnItemWhoseDesignGuidanceGrantsAPathNoProviderHonou
 	}
 }
 
+// The item whose done-condition lives in a document the run may not write is
+// refused before it is claimed, however the condition reached it: the acceptance
+// criteria are written with the tracker's own command and pass no admission
+// door, which is the case admission cannot cover and this has to. The document
+// is named as the incidents named it — by the design's name rather than its
+// path — so the run has to read the homes it is about to cut from.
+func TestARunRefusesToStartOnAnItemWhoseAcceptanceCriteriaNameAnUngrantedDesign(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	if err := writeUpstream(t, repository, "docs/designs/observability-and-dashboard.md",
+		"---\nid: observability-and-dashboard\nkind: design\nstatus: in-force\nowner: architect\nsupports: [v1-goals]\nrevisions: []\n---\n# Observability\n"); err != nil {
+		t.Fatalf("writeUpstream() error = %v", err)
+	}
+	runPipelineGit(t, repository, "add", "docs/designs")
+	runPipelineGit(t, repository, "commit", "-m", "record the design")
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:                 "yoyodyne-task",
+		Title:              "Add the capacity-blocked state to the read model",
+		Description:        "The observability-and-dashboard design requires a query that does not exist.",
+		AcceptanceCriteria: "The read model exposes the state; the observability-and-dashboard design's query list marks the query as existing.",
+		Status:             "open",
+	}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() on an item whose criteria name an ungranted design = nil error, want it refused before it started")
+	}
+	// The refusal quotes the clause, names the document, and names both fixes,
+	// exactly as admission's does: the run is what catches an item admission
+	// never saw, so it has to say the same thing.
+	for _, want := range []string{
+		"docs/designs/observability-and-dashboard.md",
+		"query list marks the query as existing",
+		"governed path",
+		protectedpath.GrantMarker,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q never says %q", err, want)
+		}
+	}
+	// Nothing was spent and nothing was claimed, which is the whole point of
+	// refusing here rather than parking after a run.
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+		t.Fatalf("developer invocations = %d, want none", developers)
+	}
+	if tracker.claimed {
+		t.Fatal("the item was claimed by a run that could never discharge it")
+	}
+
+	// The same item granted the design is the ordinary case the grant exists for,
+	// and it starts.
+	tracker.item.Design = protectedpath.GrantMarker + " docs/designs/observability-and-dashboard.md\n"
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+		t.Fatalf("Run() on the granted item error = %v", err)
+	}
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 1 {
+		t.Fatalf("developer invocations = %d, want the granted item run once", developers)
+	}
+}
+
 // goalsRepository is a checkout whose branch already carries the product's
 // goals, which is the state every real one is in. It matters here because what
 // the gate has to catch is then a modification of a tracked document rather than
