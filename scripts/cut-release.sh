@@ -44,9 +44,10 @@
 # nothing saying so. The `git push --atomic` this prints on a day it housekept
 # needs 2.4 of whoever runs it, which the same floor covers. Also make, go,
 # python3 -- which stamps the readiness result into the notes here as well as
-# rendering the draft in scripts/release-notes.sh -- and bd, which both the notes
-# and the release-readiness gate read the work items through. Nothing outside the
-# repository is written, and nothing is pushed.
+# rendering the draft in scripts/release-notes.sh -- and bd, which the
+# release-readiness gate reads the work items through; the notes read them from
+# the tracker's export instead. Nothing outside the repository is written, and
+# nothing is pushed.
 
 set -euo pipefail
 
@@ -72,9 +73,10 @@ tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # The tracker's derived exports. Beads keeps the issues in a local database and
 # writes these out as a passive dump, so they change whenever anything touches
 # the tracker -- including the adoption walkthrough this gate runs itself, which
-# is why they cannot simply be committed beforehand. Nothing a release ships is
-# built from them. Each one is also a change a run declares the primary checkout
-# may acquire while it works, in internal/cli/run.go.
+# is why they cannot simply be committed beforehand. The archives a release
+# ships are not built from them; the notes are drafted from the issues export,
+# and are committed before the cut. Each one is also a change a run declares the
+# primary checkout may acquire while it works, in internal/cli/run.go.
 derived_exports=(".beads/interactions.jsonl" ".beads/issues.jsonl")
 # Where the release-readiness section lives inside a release's notes, spelled
 # the way internal/cli/conformance.go renders it. The cut replaces what is
