@@ -340,8 +340,11 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		// somewhere this run may write. A developer's first act is to execute the
 		// project's checks, and the default cache is under the user's home, which
 		// the sandbox this run is confined to does not grant: without the redirect
-		// the probe dies at setup and reads as a broken toolchain.
-		Env:   execution.WithGoBuildCache(environmentFor(configDir), request.WorkingDirectory),
+		// the probe dies at setup and reads as a broken toolchain. And it carries
+		// the role it is made for, so the verbs that record a person's decision
+		// -- pause, resume, release, approve -- can refuse a shell this agent
+		// opens.
+		Env:   execution.WithGoBuildCache(execution.WithAgentRole(environmentFor(configDir), request.Role), request.WorkingDirectory),
 		Stdin: strings.NewReader(composePrompt(request)),
 		// The stream this invocation is asked for is the liveness signal: every
 		// line the process writes is an event, so the gap between lines is

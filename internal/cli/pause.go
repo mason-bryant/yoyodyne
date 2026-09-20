@@ -52,6 +52,11 @@ func pauseHarness(args []string, stdout, stderr io.Writer) int {
 		printPauseUsage(stderr)
 		return 2
 	}
+	// Read before anything else is: the hold is a person's decision, and a
+	// shell an agent opened is not a person.
+	if err := refusedToAgentProcess("yoyo pause", "a person pauses the harness"); err != nil {
+		return reportHoldError(stdout, stderr, *jsonOutput, err)
+	}
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
@@ -136,6 +141,9 @@ processes.
 A provider call already in flight is not interrupted. The hold is read before a
 call, so a generation already streaming finishes and is charged for; the pause
 takes effect at the next boundary.
+
+This is a person's verb. A process the harness launched for a role -- an
+agent's shell, marked by YOYODYNE_AGENT_ROLE -- is refused it and told so.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

@@ -2251,6 +2251,11 @@ func TestAnInvocationIsGivenAnExplicitEnvironmentWithoutTheSlackTokens(t *testin
 	if !slices.Contains(environment, "ANTHROPIC_BASE_URL=https://proxy.example") {
 		t.Errorf("the invocation's environment does not carry the provider's own setting: %v", environment)
 	}
+	// And it says which role it was made for, which is what lets a verb that
+	// records a person's decision refuse a shell this agent opens.
+	if role, launched := execution.LaunchedForRole(environment); !launched || role != domain.RoleDeveloper {
+		t.Errorf("the invocation's environment does not mark it as launched for the developer: %v", environment)
+	}
 }
 
 // A review is one turn nobody resumes, and what it writes into the cache is

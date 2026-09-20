@@ -183,6 +183,11 @@ func TestAnInvocationIsGivenAnExplicitEnvironmentWithoutTheSlackTokens(t *testin
 	if !hasEnvironment(environment, "OPENAI_BASE_URL=https://proxy.example") {
 		t.Errorf("the invocation's environment does not carry the provider's own setting: %v", environment)
 	}
+	// And it says which role it was made for, which is what lets a verb that
+	// records a person's decision refuse a shell this agent opens.
+	if role, launched := execution.LaunchedForRole(environment); !launched || role != domain.RoleDeveloper {
+		t.Errorf("the invocation's environment does not mark it as launched for the developer: %v", environment)
+	}
 }
 
 func TestRunNormalizesTheProviderStream(t *testing.T) {

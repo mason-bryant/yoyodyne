@@ -819,6 +819,17 @@ as `primary repository has uncommitted changes` from the next command you run.
 `--json` carries the same sentence as `pending_commit`. A refused approval writes
 nothing, so it says nothing.
 
+**The approval is yours, and a process an agent started cannot record one.** A
+goal you approved is what lets work be admitted without asking you, so a run
+that could approve the goals could admit whatever it liked against them. Every
+process the harness launches for a role carries `YOYODYNE_AGENT_ROLE`, and
+`approve` refuses a process that carries it before it opens the store —
+`yoyo artifact approve is refused from a process the harness launched for the
+developer: a person approves an artifact, and an agent's process is not one` —
+as [`yoyo pause`, `yoyo resume`, and `yoyo release`](operations.md#pausing-everything-and-resuming-it)
+do. Behind that, the write it would have made is to a protected path, which the
+harness refuses in a run's change whatever ran the command.
+
 **The approval names the revision it was given for**, which is the index into the
 revision log above it. The log is append-only, so that index means one change
 forever, and the arithmetic that follows is the point: an approval of the last
@@ -1836,6 +1847,16 @@ user's home, which a developer run's sandbox does not grant: without the
 redirect the first Go command in a run fails at setup with `operation not
 permitted`, which reads as a broken toolchain. A project whose checks are not Go
 is unaffected by a variable its tools never read.
+
+A provider invocation is given the same list with one thing more:
+`YOYODYNE_AGENT_ROLE`, naming the role the process was launched for —
+`developer`, `reviewer`, and so on. It is under the harness's own prefix so the
+allowlist carries it into everything the agent starts, and it is what
+[the verbs that record a person's decision](operations.md#pausing-everything-and-resuming-it)
+— `yoyo pause`, `yoyo resume`, `yoyo release`, `yoyo artifact approve` — read
+to refuse a shell an agent opened. A check the harness runs itself does not
+carry it: a check is the project's command, launched by the harness rather
+than by an agent.
 
 ### What `init` proposes for `checks`
 

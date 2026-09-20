@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/shutdown"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
@@ -27,6 +28,13 @@ const productHelperVariable = "YOYODYNE_PRODUCT_TEST_COMMAND"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(productHelperVariable) == "" {
+		// The harness develops itself, so this suite is run from a developer's
+		// own shell as often as from the harness's check -- and that shell is
+		// marked as the developer's, which the verbs that record a person's
+		// decision refuse. The tests exercise those verbs as a person would, so
+		// the marker is cleared here; the tests that assert the refusal set it
+		// again for themselves.
+		os.Unsetenv(execution.AgentRoleVariable)
 		os.Exit(m.Run())
 	}
 	// The process answers a stop signal exactly as the real binary does, and it

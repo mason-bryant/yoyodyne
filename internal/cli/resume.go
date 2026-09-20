@@ -44,6 +44,12 @@ func resumeWorkItem(args []string, stdout, stderr io.Writer) int {
 		printResumeUsage(stderr)
 		return 2
 	}
+	// Both halves are a person's to withdraw -- the operator's own hold, or the
+	// provider's deadline they know to be stale -- so both are refused to a
+	// shell an agent opened, before anything is read.
+	if err := refusedToAgentProcess("yoyo resume", "a person lifts a pause or releases a run's wait"); err != nil {
+		return reportResumeError(stdout, stderr, *jsonOutput, err)
+	}
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
@@ -148,6 +154,9 @@ run keeps its claim, its branch, its worktree, and its developer session; a
 process already serving the wait is woken rather than stopped. If the provider
 still refuses, the run records the new report and waits again, so the worst a
 premature release costs is one refused request.
+
+Both forms are a person's verb. A process the harness launched for a role -- an
+agent's shell, marked by YOYODYNE_AGENT_ROLE -- is refused it and told so.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
