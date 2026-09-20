@@ -2,6 +2,7 @@ package contextbundle
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -886,9 +887,30 @@ func TestShippedDocumentationFitsTheBriefingBesideEverythingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
-	if strings.Contains(bundle.Text, "This documentation did not fit and is not included above:") {
-		index := strings.Index(bundle.Text, "This documentation did not fit")
-		t.Fatalf("the shipped documentation passes the gate and is still dropped from the briefing:\n%s", bundle.Text[index:])
+	if index := strings.Index(bundle.Text, "This documentation did not fit and is not included above:"); index >= 0 {
+		// Which of the two grew is the whole of what a failure here has to say,
+		// or it reads as the old wall — a red gate on a documentation edit that
+		// says nothing about what to decide. The set is measured against its
+		// ceiling; everything else shares the reserve, and the specifications
+		// are the only part of it nothing bounds.
+		specifications := 0
+		if err := filepath.WalkDir("../../docs/product", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".md") {
+				return err
+			}
+			information, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			specifications += int(information.Size())
+			return nil
+		}); err != nil {
+			t.Errorf("size the specifications: %v", err)
+		}
+		t.Fatalf("the shipped documentation passes the gate and is still dropped from the briefing.\n"+
+			"The set is %d bytes against a ceiling of %d, which the gate judges; the specifications are %d bytes and share the %d-byte reserve with the bounded sections, which nothing bounds.\n"+
+			"If the set is inside its ceiling, it is the specifications that have outgrown productContextReserve, and that is a product decision about the context rather than a documentation edit to trim.\n%s",
+			bundle.ShippedDocumentationBytes, ShippedDocumentationCeiling, specifications, productContextReserve, bundle.Text[index:])
 	}
 	for _, documentPath := range HarnessShippedDocumentation {
 		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {

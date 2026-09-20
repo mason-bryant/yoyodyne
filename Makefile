@@ -41,8 +41,15 @@ build: cachecheck
 	mkdir -p $(dir $(BINARY))
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/yoyo
 
+# The shipped-documentation gate warns for the length of a margin before it
+# fails, and `go test ./...` discards everything a passing test says -- so the
+# gate's size line and its warning are printed here, after the suite that
+# judges the set, where a person running the checks can read them. The grep
+# keeps the one or two lines that matter; the suite above is still the verdict.
 test: cachecheck
 	$(GO) test ./...
+	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
+		| grep -E 'shipped documentation is|WARNING:'
 
 race: cachecheck
 	$(GO) test -race ./...

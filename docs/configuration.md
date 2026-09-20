@@ -618,11 +618,12 @@ on yoyodyne-ifd.240 and kept on yoyodyne-ifd.403 — and what they add up to is
 measured against `ShippedDocumentationCeiling` in the same file, which is set
 well above what they are today and marks the point at which the briefing's
 token cost is a product question again; the constant's comment says what that
-cost is. Inside `ShippedDocumentationMargin` of it, `make test` says so in its
-output, every conversation that opens says so on stderr, and the briefing
-itself says so to the role, naming the room left and the reduction
-(yoyodyne-ifd.117.4) that buys more — and nothing fails. Only reaching the
-ceiling fails the test. The set's size is written down on every pass, whatever
+cost is. Inside `ShippedDocumentationMargin` of it, `make test` prints a
+`WARNING:` line after the suite — printed there deliberately, since
+`go test ./...` discards what a passing test says — every conversation that
+opens says so on stderr, and the briefing itself says so to the role, naming
+the room left and the reduction (yoyodyne-ifd.117.4) that buys more; nothing
+fails. Only reaching the ceiling fails the test. The set's size is written down on every pass, whatever
 its standing: the briefing states it, the conversation's record keeps it with
 the picture it was taken for (`yoyo agent list` prints it beside the picture's
 commit), and a refresh records it on the event. Over the three weeks to
