@@ -215,6 +215,7 @@ var harnessVoice = voice{
 		KindBundleImprovement:        "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
 		KindBundleImprovements:       "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows what each one was and is, and each is adopted by hand or not at all.",
 		KindCatchUpDigest:            "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
+		KindLogLineSkipped:           "A line of the {log} log could not be read and was read past — {line}: {cause}. Whatever it recorded is not said here; everything recorded after it is.",
 	},
 }
 
@@ -283,6 +284,7 @@ var developerVoice = voice{
 		KindBundleImprovement:        "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
 		KindBundleImprovements:       "{improvement}. What the template says about each of them is what I'd be run under if this project took them up, and until somebody does I go on being run under what it holds now; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
+		KindLogLineSkipped:           "One line of the {log} log would not read back — {line}: {cause}. I can't say what it held; what was recorded after it is still being said.",
 	},
 }
 
@@ -351,6 +353,7 @@ var reviewerVoice = voice{
 		KindBundleImprovement:        "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
 		KindBundleImprovements:       "{improvement}. None of them changes the standard I hold a change to today, and each would change it for every change judged after somebody adopts it; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
+		KindLogLineSkipped:           "The {log} log has a line nothing can decode, {line}: {cause}. I cannot judge what it recorded; the records after it are read as before.",
 	},
 }
 
@@ -418,6 +421,7 @@ var developmentManagerVoice = voice{
 		KindBundleImprovement:        "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
 		KindBundleImprovements:       "{improvement}. Nothing in the queue moves for any of them, and nothing I hand out changes until one is adopted by hand; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
+		KindLogLineSkipped:           "A line of the {log} log is unreadable and reporting has stepped over it — {line}: {cause}. The queue's account carries on from the line after.",
 	},
 }
 
@@ -486,6 +490,7 @@ var productManagerVoice = voice{
 		KindBundleImprovement:        "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
 		KindBundleImprovements:       "{improvement}. Whether any of them is worth taking is the operator's to decide and nobody else's, which is why they are offered once, together, rather than one message each; `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
+		KindLogLineSkipped:           "Something recorded in the {log} log cannot be read back — {line}: {cause}. It has been read past so that nothing recorded after it goes unsaid.",
 	},
 }
 
@@ -554,6 +559,7 @@ var architectVoice = voice{
 		KindBundleImprovement:        "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
 		KindBundleImprovements:       "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; naming them once, in one message, makes the difference visible without deciding it for anybody, and `yoyo config drift` shows what each one was and is.",
 		KindCatchUpDigest:            "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
+		KindLogLineSkipped:           "The {log} log holds a line that fails to decode, {line}: {cause}. The reader keeps its place and carries on, which is the designed failure; the line itself is what somebody looks at.",
 	},
 }
 
@@ -764,6 +770,10 @@ var nextMoves = map[Kind]string{
 	KindBundleImprovement:  "nobody's — the value stands as this project has it until somebody decides otherwise, and nothing will ask again.",
 	KindBundleImprovements: "nobody's — every one of them stands as this project has it until somebody decides otherwise, and nothing will ask again.",
 	KindCatchUpDigest:      "nobody's — the record holds all of it, and the thread carries on from here.",
+	// A line nothing can read is the operator's to look at and nobody's to wait
+	// on: the reader has already stepped past it, so nothing after it is held up,
+	// and what the line held is recoverable only by somebody opening the file.
+	KindLogLineSkipped: "the operator's, only to look at the line — nothing after it is waiting, and nothing here will read it again.",
 }
 
 // directiveInForceMove is whose move follows a directive that stopped nothing.
@@ -1082,7 +1092,21 @@ func (e Event) fields(topic Topic) map[string]string {
 		"budget":   stated(detail.Budget, "a cap the record does not name"),
 		"cap":      capOf(detail.Cap),
 		"crossing": crossingOf(detail),
+		// Which log a line could not be read from, and where in the file it is. The
+		// place is said as a line and the byte it starts at, because those are the
+		// two things a person opening the file actually uses.
+		"log":  stated(detail.Log, "a log the record does not name"),
+		"line": lineOf(detail.Line, detail.Offset),
 	}
+}
+
+// lineOf is where in a file an unreadable line is. Line numbers start at one, so
+// a record that carries none says so rather than pointing at line nought.
+func lineOf(line int, offset int64) string {
+	if line <= 0 {
+		return "at a line the record does not number"
+	}
+	return "line " + strconv.Itoa(line) + " (byte " + strconv.FormatInt(offset, 10) + ")"
 }
 
 // capOf is the ceiling a crossing put in force. Zero is a record that did not

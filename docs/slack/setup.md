@@ -514,6 +514,13 @@ the first still unanswered, or the woken turn answering without asking for any
 tracker action at all — and the message says which of those it was. It is a
 `critical`, because the actions are still lost, the harness has stopped trying,
 and nothing further is scheduled.
+A line of one of the harness's own logs that the sink cannot read goes here as
+well — a write a crash tore, or a record written by a build newer than the
+sink's — said once, as a `warning` naming the log and the line, with the
+decoder's own words. The sink keeps that line's place and carries on to the
+records after it, so one torn write costs one message rather than every message
+behind it for as long as the line stands; what the line held is not said, and
+the file is yours to look at.
 Burying those in one item's thread would misfile them. A channel catching up on a backlog too deep to replay posts
 its digest here too, for the same reason: it stands for messages that were going
 to appear at this level, and one line saying how many is what both you and the
@@ -841,7 +848,8 @@ the top of the channel, whatever severity it was filed at.
 Concretely: a held intake, a braked line, a parked run, a provider that ran out of
 capacity, a merge the forge will not make, a directive that paused work, a stall,
 a stale session, a claim the harness gave back, a refused block of tracker
-actions, a change an agent proposed to a document it does not own, a cap the
+actions, a line of a harness log the sink could not read, a change an agent
+proposed to a document it does not own, a cap the
 development manager crossed on his own authority, and every turn of an ask
 exchange are all at the channel level — the released claim because the line was
 idle behind it for as long as it stood; the crossing because it is a veto by
@@ -1324,6 +1332,13 @@ command line whenever the digest is not enough.
 - **A deep backlog is summarized rather than replayed**, so the individual
   messages behind a digest line are in the durable records and not in the
   channel. What is recent, and anything critical, is always said in full.
+- **A log line the sink cannot read is read past, not repaired.** The reports,
+  proposals, watch, usage-limit, released-claim, and conversation logs are read
+  by position, and a line in one of them that will not decode keeps its
+  position: it is said once and the records after it are delivered as they
+  would have been. Whatever that line recorded is not said, and nothing here
+  rewrites the file — `yoyo status` and `yoyo reports` still refuse a log with
+  such a line rather than reading it as complete, and name the line.
 - **Reporting is not an audit trail.** The durable records under the state root
   are; this is a view of them. `yoyo status`, `yoyo reports`, and `yoyo cost`
   read the same records from the command line.

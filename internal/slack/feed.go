@@ -35,7 +35,15 @@ import (
 // the run or the conversation, because they are separate subjects rather than
 // one log; the rest are one apiece.
 const (
-	reportStream     = "reports"
+	reportStream = "reports"
+	// amendmentStream is the amendment log read by record — proposals and
+	// decisions alike, the decisions in silence. It replaced proposalStream, which
+	// counted proposals alone, when a line that will not decode had to hold a
+	// position: such a line says nothing about which of the two it was, so the
+	// only count it can hold a place in is the count of lines. A cursor still
+	// standing on the old stream is carried across once, by amendmentCursor, and
+	// the old stream is dropped with the pass that carried it.
+	amendmentStream  = "amendments"
 	proposalStream   = "proposals"
 	productStream    = "product"
 	watchStream      = "watch"
@@ -66,6 +74,20 @@ const (
 func runStream(runID string) string { return "run:" + runID }
 
 func conversationStream(conversationID string) string { return "chat:" + conversationID }
+
+// conversationLog is how a message names a conversation's log. It names the
+// role and, where the project configured more than one agent for it, the
+// agent — the way a persona is named on its own messages — and never the
+// conversation's identifier, which is not something anybody reading a channel
+// does anything with.
+func conversationLog(conversation runstate.Conversation) string {
+	identity := conversation.Identity()
+	named := conversation.Role.Title()
+	if identity.Agent != "" && identity.Agent != string(conversation.Role) {
+		named += " (" + identity.Agent + ")"
+	}
+	return named + "'s conversation"
+}
 
 // The prefixes the operator's two switches are marked under. A hold is marked
 // with the moment it was placed, so a second hold a week later is a second thing
@@ -346,9 +368,9 @@ type HarnessFeed struct {
 // rather than mistaken for history somebody has already read.
 func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) {
 	batch := Batch{Streams: map[string]struct{}{
-		reportStream:   {},
-		proposalStream: {},
-		productStream:  {},
+		reportStream:    {},
+		amendmentStream: {},
+		productStream:   {},
 	}}
 	since := cursors.Since
 
@@ -392,11 +414,11 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, conversed...)
 
-	filed, err := f.Reports.List()
+	filed, tornReports, err := f.Reports.Scan()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the collected reports: %w", err)
 	}
-	reported, err := f.logDeliveries(reportStream, cursors.Streams[reportStream], len(filed), since,
+	reported, err := f.logDeliveries(reportStream, "reports", cursors.Streams[reportStream], len(filed), tornReports, since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromReport(filed[index])
 			return filed[index].RecordedAt, notification, err
@@ -406,15 +428,23 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, reported...)
 
-	records, err := f.Proposals.List()
+	// The amendment log advances by record rather than by proposal, so that a
+	// line which will not decode — which says nothing about whether it was a
+	// proposal or a decision — holds a position the proposals behind it are
+	// counted past. A decision is read past in silence, exactly as a conversation
+	// event that is not a milestone is.
+	records, tornRecords, err := f.Proposals.Scan()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the proposed changes: %w", err)
 	}
-	proposals := amendment.Proposals(records)
-	raised, err := f.logDeliveries(proposalStream, cursors.Streams[proposalStream], len(proposals), since,
+	raised, err := f.logDeliveries(amendmentStream, "proposals", f.amendmentCursor(cursors, records, tornRecords), len(records), tornRecords, since,
 		func(index int) (time.Time, notify.Notification, error) {
-			notification, err := notify.FromProposal(proposals[index])
-			return proposals[index].RaisedAt, notification, err
+			proposal := records[index].Proposal
+			if proposal == nil {
+				return time.Time{}, notify.Notification{}, nil
+			}
+			notification, err := notify.FromProposal(*proposal)
+			return proposal.RaisedAt, notification, err
 		})
 	if err != nil {
 		return Batch{}, err
@@ -425,11 +455,11 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// doing, and for whether any session is still doing it. Reading it twice would
 	// let one pass post a session stopping and then derive a line from a log that
 	// had moved underneath it.
-	sessions, err := f.sessions()
+	sessions, tornSessions, err := f.sessions()
 	if err != nil {
 		return Batch{}, err
 	}
-	watched, err := f.watchDeliveries(cursors, batch.Streams, sessions)
+	watched, err := f.watchDeliveries(cursors, batch.Streams, sessions, tornSessions)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -608,18 +638,19 @@ func later(state, held runstate.State) bool {
 	return state.UpdatedAt.After(held.UpdatedAt)
 }
 
-// sessions reads what the watch sessions did, in the order they did it. A
-// product nobody has watched has no log rather than a broken one, and a feed
-// assembled without a watch store reads none.
-func (f *HarnessFeed) sessions() ([]runstate.WatchTransition, error) {
+// sessions reads what the watch sessions did, in the order they did it, and
+// beside it the lines of the log that would not decode. A product nobody has
+// watched has no log rather than a broken one, and a feed assembled without a
+// watch store reads none.
+func (f *HarnessFeed) sessions() ([]runstate.WatchTransition, []runstate.SkippedLine, error) {
 	if f.Watch == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	transitions, err := f.Watch.List()
+	transitions, skipped, err := f.Watch.Scan()
 	if err != nil {
-		return nil, fmt.Errorf("read what the watch sessions did: %w", err)
+		return nil, nil, fmt.Errorf("read what the watch sessions did: %w", err)
 	}
-	return transitions, nil
+	return transitions, skipped, nil
 }
 
 // switches reads the operator's two holds. Neither absence is a failure: not
@@ -651,17 +682,51 @@ func (f *HarnessFeed) switches() (switches, error) {
 	return read, nil
 }
 
+// amendmentCursor is where the amendment log is read from. It is the cursor on
+// the amendment stream where this sink has one, and where it has not — a sink
+// that last ran a build reading the log by proposal — it is the old stream's
+// count of proposals carried across to the record after the last of them, so
+// nothing already said is said again and nothing since is lost. The old stream
+// is not among the pass's streams, so it is dropped once the pass that carried
+// it has read everything.
+func (f *HarnessFeed) amendmentCursor(cursors Cursors, records []amendment.Record, skipped []runstate.SkippedLine) Cursor {
+	if cursor, found := cursors.Streams[amendmentStream]; found {
+		return cursor
+	}
+	old, found := cursors.Streams[proposalStream]
+	if !found || old.Position == 0 {
+		return Cursor{}
+	}
+	// Proposals are counted in file order, with the lines that would not decode
+	// holding their positions. The old build failed the whole pass on such a
+	// line, so nothing it counted is on the far side of one.
+	seen, torn := uint64(0), 0
+	for index := 0; index < len(records)+len(skipped); index++ {
+		if torn < len(skipped) && skipped[torn].Position == index {
+			torn++
+			continue
+		}
+		if records[index-torn].Proposal != nil {
+			seen++
+			if seen == old.Position {
+				return Cursor{Position: uint64(index + 1)}
+			}
+		}
+	}
+	return Cursor{Position: uint64(len(records) + len(skipped))}
+}
+
 // watchDeliveries says what the sessions that choose work have been doing. It is
 // an append-only log like the reports pile and advances by position, and it is a
 // stream of its own rather than part of the product's marks because it is a
 // history rather than a switch that is on or off: a session that idled all night
 // and one that stopped at midnight are both things somebody reads afterwards.
-func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct{}, transitions []runstate.WatchTransition) ([]Delivery, error) {
+func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct{}, transitions []runstate.WatchTransition, skipped []runstate.SkippedLine) ([]Delivery, error) {
 	if f.Watch == nil {
 		return nil, nil
 	}
 	streams[watchStream] = struct{}{}
-	return f.logDeliveries(watchStream, cursors.Streams[watchStream], len(transitions), cursors.Since,
+	return f.logDeliveries(watchStream, "watch", cursors.Streams[watchStream], len(transitions), skipped, cursors.Since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromWatch(transitions[index])
 			return transitions[index].At, notification, err
@@ -678,11 +743,11 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 		return nil, nil
 	}
 	streams[usageLimitStream] = struct{}{}
-	exhaustions, err := f.UsageLimits.List()
+	exhaustions, skipped, err := f.UsageLimits.Scan()
 	if err != nil {
 		return nil, fmt.Errorf("read what the provider refused: %w", err)
 	}
-	return f.logDeliveries(usageLimitStream, cursors.Streams[usageLimitStream], len(exhaustions), cursors.Since,
+	return f.logDeliveries(usageLimitStream, "usage-limits", cursors.Streams[usageLimitStream], len(exhaustions), skipped, cursors.Since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromUsageLimit(exhaustions[index])
 			return exhaustions[index].At, notification, err
@@ -892,11 +957,11 @@ func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursor
 		}
 		stream := conversationStream(conversation.ConversationID)
 		streams[stream] = struct{}{}
-		events, err := f.Conversations.LoadEvents(conversation.ConversationID)
+		events, skipped, err := f.Conversations.ScanEvents(conversation.ConversationID)
 		if err != nil {
 			return nil, fmt.Errorf("read the log of conversation %s: %w", conversation.ConversationID, err)
 		}
-		said, err := f.logDeliveries(stream, cursors.Streams[stream], len(events), cursors.Since,
+		said, err := f.logDeliveries(stream, conversationLog(conversation), cursors.Streams[stream], len(events), skipped, cursors.Since,
 			func(index int) (time.Time, notify.Notification, error) {
 				notification, err := notify.FromConversation(conversation, events, index)
 				return events[index].Timestamp, notification, err
@@ -919,18 +984,48 @@ func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursor
 // moment rather than this process's start, so a record filed while the sink was
 // down is still news when it comes back, which is the difference between an
 // outage that delays messages and one that loses them.
-func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, since time.Time, at func(int) (time.Time, notify.Notification, error)) ([]Delivery, error) {
+//
+// The position counts the log's lines rather than the records that decoded. A
+// line the log's own reader could not decode — a torn write, or a schema this
+// build does not know — holds a position exactly as a record does, so a cursor
+// standing past it stays pointed at the same record whether or not the line is
+// ever read; the records are handed to at by their own index, and the skipped
+// lines, in file order, say which positions are theirs. Each one is said once,
+// in the sink's own log and as one channel line, as the cursor crosses it, and
+// then read past like anything else: one torn write costs one message rather
+// than every message behind it for as long as the line stands. It is never read
+// past on age, because a line that will not decode names no moment, and absence
+// of a date is not evidence of age.
+func (f *HarnessFeed) logDeliveries(stream, log string, cursor Cursor, records int, skipped []runstate.SkippedLine, since time.Time, at func(int) (time.Time, notify.Notification, error)) ([]Delivery, error) {
 	var deliveries []Delivery
-	skipped := cursor.Position
-	for index := int(cursor.Position); index < count; index++ {
-		recordedAt, notification, err := at(index)
+	readPast := cursor.Position
+	// The skipped lines before the cursor were said on an earlier pass, and they
+	// are counted off here so that a record's index is its position less the
+	// skipped lines ahead of it.
+	torn := 0
+	for torn < len(skipped) && uint64(skipped[torn].Position) < cursor.Position {
+		torn++
+	}
+	for index := int(cursor.Position); index < records+len(skipped); index++ {
 		position := uint64(index + 1)
+		if torn < len(skipped) && skipped[torn].Position == index {
+			line := skipped[torn]
+			torn++
+			f.say("line %d of the %s log (byte %d) could not be decoded and was read past, keeping its position: %s", line.Line, stream, line.Offset, line.Problem)
+			deliveries = append(deliveries, Delivery{
+				Stream:       stream,
+				Cursor:       Cursor{Position: position},
+				Notification: notify.FromSkippedLine(log, line, f.now()),
+			})
+			continue
+		}
+		recordedAt, notification, err := at(index - torn)
 		if err != nil {
 			// One record nobody can address must not hold up every record behind
 			// it for as long as the process runs, so it is said once and read
 			// past rather than retried forever.
 			f.say("a record on the %s log could not be addressed and was skipped: %v", stream, err)
-			skipped = position
+			readPast = position
 			continue
 		}
 		// A record that posts nowhere is read past exactly as one selection had
@@ -938,7 +1033,7 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 		// move. It is what keeps a watch log of a thousand polls from being one
 		// cursor write per poll for the life of the sink.
 		if !notification.Posts() || predates(since, recordedAt) {
-			skipped = position
+			readPast = position
 			continue
 		}
 		deliveries = append(deliveries, Delivery{
@@ -953,8 +1048,8 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 	if len(deliveries) > 0 {
 		reached = deliveries[len(deliveries)-1].Cursor.Position
 	}
-	if skipped > reached {
-		deliveries = append(deliveries, Delivery{Stream: stream, Cursor: Cursor{Position: skipped}})
+	if readPast > reached {
+		deliveries = append(deliveries, Delivery{Stream: stream, Cursor: Cursor{Position: readPast}})
 	}
 	return deliveries, nil
 }

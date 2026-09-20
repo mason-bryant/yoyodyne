@@ -19,7 +19,6 @@ package runstate
 // and this is a moment that happened and is never revised.
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -423,38 +422,50 @@ func (s *UsageLimitStore) Record(exhaustion UsageLimitExhaustion) error {
 
 // List returns every recorded refusal in the order it happened. A log that does
 // not exist yet is a product no provider has refused, which is not a failure to
-// read.
+// read. A line that will not decode is: a hold derived from a listing that
+// quietly dropped a refusal is a hold nobody can trust. The sink reads past such
+// a line by position with Scan, and says so.
 func (s *UsageLimitStore) List() ([]UsageLimitExhaustion, error) {
+	exhaustions, skipped, err := s.Scan()
+	if err != nil {
+		return nil, err
+	}
+	if err := firstSkipped("usage limit log", skipped); err != nil {
+		return nil, err
+	}
+	return exhaustions, nil
+}
+
+// Scan returns every refusal that decoded, in the order it happened, and beside
+// them the lines that would not, each at the position it holds among the
+// records. It is the read a positional cursor is kept against, so one bad line
+// costs the reader that line and nothing behind it.
+func (s *UsageLimitStore) Scan() ([]UsageLimitExhaustion, []SkippedLine, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open usage limit log: %w", err)
+		return nil, nil, fmt.Errorf("open usage limit log: %w", err)
 	}
 	defer file.Close()
 
 	var exhaustions []UsageLimitExhaustion
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedUsageLimitBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		decoded, err := decodeUsageLimitExhaustion([]byte(line))
+	skipped, err := scanLog(file, maxEncodedUsageLimitBytes, func(line []byte) error {
+		decoded, err := decodeUsageLimitExhaustion(line)
 		if err != nil {
-			return nil, fmt.Errorf("decode usage limit log: %w", err)
+			return err
 		}
 		if err := s.validate(decoded); err != nil {
-			return nil, fmt.Errorf("decode usage limit log: %w", err)
+			return err
 		}
 		exhaustions = append(exhaustions, decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read usage limit log: %w", err)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read usage limit log: %w", err)
-	}
-	return exhaustions, nil
+	return exhaustions, skipped, nil
 }
 
 func decodeUsageLimitExhaustion(data []byte) (UsageLimitExhaustion, error) {
