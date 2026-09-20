@@ -457,6 +457,14 @@ Into the work item's thread, as they happen:
 - a goal recorded on an item already in the queue, and an item's priority changed
 - the run starting, **carrying the reason that work item was selected**
 - the checks passing or failing
+- a change refused before its checks for touching a
+  [protected path](../configuration.md#protected-paths-in-a-developers-change)
+  the item does not grant, said by the developer as a `warning` for the reason a
+  failing check is one — a repair round is being spent. It names the refused
+  paths, what the item grants, and the `protected-path grant:` line that would
+  admit them, so a reader watching a repair round happen sees why without
+  opening the item's notes. It is said once per refusal: the same paths refused
+  again on the next attempt are a second round spent, and are said again
 - the reviewer's verdict, approved or sent back for repairs
 - the promotion onto the target branch
 - the pull request, a merge the forge queued, and the merge itself

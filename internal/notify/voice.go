@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -171,6 +172,7 @@ var harnessVoice = voice{
 		KindRunStarted:               "{item} claimed and started as {run}, on account {account} at configuration {config}. Selected by {by}: {reason}",
 		KindChecksPassed:             "Checks passed on {item}.",
 		KindChecksFailed:             "Checks failed on {item}: {command} exited {exit}.",
+		KindPathRefused:              "The change on {item} was refused before any check ran: it touches {paths}, and the item grants {grants}. A line reading {grant} in the item's own text is what would admit it.",
 		KindReviewApproved:           "Review of {item} approved.",
 		KindReviewRepairs:            "Review of {item} asked for repairs: {findings}.\n\n{requested}",
 		KindPromoted:                 "{item} promoted onto {branch} at {commit}.",
@@ -240,6 +242,7 @@ var developerVoice = voice{
 		KindRunStarted:               "I've picked up {item} as {run}, on account {account} at configuration {config}. It came to me from {by}: {reason}",
 		KindChecksPassed:             "Checks are green on {item}. I ran them before calling anything done.",
 		KindChecksFailed:             "Checks are red on {item}: {command} exited {exit}. That is my next attempt, not somebody else's problem.",
+		KindPathRefused:              "My change on {item} was refused before any check ran: it touches {paths}, and the item grants {grants}. I'm taking that back out of the change. If the work genuinely needs it, a line reading {grant} in the item's own text is what would admit it, and that line is not mine to write.",
 		KindReviewApproved:           "The reviewer approved my change on {item}.",
 		KindReviewRepairs:            "{item} came back to me with {findings}. I'll take them as written.\n\n{requested}",
 		KindPromoted:                 "My change on {item} is on {branch}, at {commit}.",
@@ -309,6 +312,7 @@ var reviewerVoice = voice{
 		KindRunStarted:               "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
 		KindChecksPassed:             "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
 		KindChecksFailed:             "The checks behind {item} fail: {command} exited {exit}. There is nothing for me to judge yet.",
+		KindPathRefused:              "The change on {item} was refused before it could reach me: it touches {paths}, and the item grants {grants}. Whether the work needs a line reading {grant} in the item is a decision about the item, not a finding of mine.",
 		KindReviewApproved:           "I approve {item}: correct and complete against the criteria it was given.",
 		KindReviewRepairs:            "I'm asking for repairs on {item}: {findings}, each one specific enough to act on.\n\n{requested}",
 		KindPromoted:                 "The change I approved on {item} is on {branch} at {commit}.",
@@ -377,6 +381,7 @@ var developmentManagerVoice = voice{
 		KindRunStarted:               "I've pulled {item} off the queue, and it is claimed and started as {run}, on account {account} at configuration {config}: {reason}",
 		KindChecksPassed:             "{item} cleared its checks and is on to review.",
 		KindChecksFailed:             "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
+		KindPathRefused:              "{item} was turned back before its checks: the change touches {paths}, and the item grants {grants}. It routes to repair, spending from the same budget; if the item should have granted that, a line reading {grant} in its text is what does.",
 		KindReviewApproved:           "{item} is approved and clear to integrate.",
 		KindReviewRepairs:            "{item} routes back to the developer with {findings} intact.\n\n{requested}",
 		KindPromoted:                 "{item} is integrated into {branch}. That is one item actually done.",
@@ -446,6 +451,7 @@ var productManagerVoice = voice{
 		KindRunStarted:               "Work started on {item} as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
 		KindChecksPassed:             "{item} passed its checks — progress on what it was admitted for.",
 		KindChecksFailed:             "{item} failed its checks: {command} exited {exit}. Nothing about what it is for has changed.",
+		KindPathRefused:              "{item} reached for something it was not admitted to change: {paths}, where the item grants {grants}. If the work really needs it, the grant is a line reading {grant} in the item's text, and putting it there is a decision about scope rather than a repair.",
 		KindReviewApproved:           "{item} was approved: what was admitted is what was built.",
 		KindReviewRepairs:            "{item} needs repairs: {findings}. Still the same item, not a new one.\n\n{requested}",
 		KindPromoted:                 "{item} is integrated into {branch} and serves the goal it was admitted for.",
@@ -515,6 +521,7 @@ var architectVoice = voice{
 		KindRunStarted:               "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. The design it derives from is unchanged.",
 		KindChecksPassed:             "{item} passed its checks. The gate held.",
 		KindChecksFailed:             "{item} failed its checks: {command} exited {exit}. A gate that catches this is a gate doing its job.",
+		KindPathRefused:              "{item} was refused for touching {paths}, which the item does not grant — it grants {grants}. That is the boundary between a developer's change and the documents it is measured against holding; a line reading {grant} in the item is how an exception is decided before a run rather than by one.",
 		KindReviewApproved:           "{item} was approved against the design it derives from.",
 		KindReviewRepairs:            "{item} was sent back with {findings}, which is the loop working rather than failing.\n\n{requested}",
 		KindPromoted:                 "{item} is on {branch} at {commit}, promoted by the harness itself as the invariant requires.",
@@ -643,6 +650,7 @@ var nextMoves = map[Kind]string{
 	KindRunStarted:     "the developer's, until the checks say otherwise.",
 	KindChecksPassed:   "the reviewer's — a verdict on the change.",
 	KindChecksFailed:   "the developer's — another attempt at the same item.",
+	KindPathRefused:    "the developer's — another attempt at the same item, with the refused paths taken back out.",
 	KindReviewApproved: "the harness's — the promotion onto the target branch.",
 	KindReviewRepairs:  "the developer's — the findings as written.",
 	KindPromoted:       "the harness's — publishing the change where the product publishes.",
@@ -1013,6 +1021,9 @@ func (e Event) fields(topic Topic) map[string]string {
 		"reason":    stated(detail.SelectionReason, "no reason recorded"),
 		"command":   stated(detail.Command, "a check the record does not name"),
 		"exit":      strconv.Itoa(detail.ExitCode),
+		"paths":     pathsOf(detail.RefusedPaths, detail.OmittedPaths),
+		"grants":    grantsOf(detail.Grants),
+		"grant":     grantLineOf(detail.RefusedPaths),
 		"findings":  countOf(detail.Findings, "finding", "findings", "findings the record does not count"),
 		"requested": requestedOf(detail.Requested),
 		"branch":    stated(detail.TargetBranch, "an unnamed branch"),
@@ -1118,6 +1129,48 @@ func capOf(ceiling int) string {
 		return "a ceiling the record does not carry"
 	}
 	return strconv.Itoa(ceiling)
+}
+
+// pathsOf names the paths a change was refused for, and how many more the
+// record's bound dropped from the list. The dropped count is said rather than
+// left off because the developer has to take every one of them back out, and a
+// list that stopped without saying so would read as the whole of what the gate
+// caught. A record carrying no path says so, for the reason every absence here
+// does: the gate never refuses on nothing, so a refusal naming nothing is a
+// record with something missing rather than a refusal of nothing.
+func pathsOf(refused []string, omitted int) string {
+	if len(refused) == 0 {
+		return "paths the record does not name"
+	}
+	named := strings.Join(refused, ", ")
+	if omitted > 0 {
+		named += " and " + countOf(omitted, "further path", "further paths", "") + " not listed here"
+	}
+	return named
+}
+
+// grantsOf says what the work item grants. Nothing is the ordinary answer and
+// is said as itself, because the reader is being told what the item admits so
+// they can see whether the refusal is a change reaching outside its item or an
+// item missing a grant — and "nothing" answers that where a blank would not.
+func grantsOf(grants []string) string {
+	if len(grants) == 0 {
+		return "nothing"
+	}
+	return strings.Join(grants, ", ")
+}
+
+// grantLineOf is the line that would admit the refused paths, worded from the
+// marker the gate reads rather than described. A thread that tells somebody
+// what to write into an item has to say exactly what the gate will accept, and
+// the marker is the one token whose spelling decides that. The paths are
+// separated by spaces because that is one of the separators a grant line takes,
+// and it is the one that reads as a line rather than as a list.
+func grantLineOf(refused []string) string {
+	if len(refused) == 0 {
+		return "`" + protectedpath.GrantMarker + " <path>`"
+	}
+	return "`" + protectedpath.GrantMarker + " " + strings.Join(refused, " ") + "`"
 }
 
 // crossingOf says which of the crossings a role may take this one was. A record

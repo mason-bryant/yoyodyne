@@ -103,12 +103,14 @@ var reaches = map[Kind]Reach{
 	// One run's own arc, which is the largest block of narration there is. A run
 	// starting, its checks passing or failing, a verdict, a promotion, a
 	// publication and its merge are the thread's whole story and none of them is a
-	// move of the operator's: a failing check is the developer's next attempt, and
-	// repairs asked for are the developer's too.
+	// move of the operator's: a failing check is the developer's next attempt, a
+	// refused path is the developer's next attempt with the path taken back out,
+	// and repairs asked for are the developer's too.
 	KindRunStarted:     ReachThread,
 	KindRunContinued:   ReachThread,
 	KindChecksPassed:   ReachThread,
 	KindChecksFailed:   ReachThread,
+	KindPathRefused:    ReachThread,
 	KindReviewApproved: ReachThread,
 	KindReviewRepairs:  ReachThread,
 	KindPromoted:       ReachThread,
