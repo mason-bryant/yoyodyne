@@ -798,13 +798,30 @@ func TestStartableIsCountedFromTheSameEntriesAsTheRefusals(t *testing.T) {
 	if standing.Running[0].Stage != StageReviewing {
 		t.Fatalf("the reviewing run's stage is %q", standing.Running[0].Stage)
 	}
+	// The counts are taken over named lists, so a surface that opens a grouping
+	// lists exactly what the figure counted: every admitted item once, the
+	// carried one among them, and the startable ones in the queue's order.
+	ids := func(items []WorkItemRef) []string {
+		named := make([]string, 0, len(items))
+		for _, item := range items {
+			named = append(named, item.WorkItemID)
+		}
+		return named
+	}
+	if got := ids(standing.AdmittedItems); strings.Join(got, ",") != "item-carried,item-next,item-after,item-parked" {
+		t.Fatalf("admitted items = %v, want every entry in the queue's order", got)
+	}
+	if got := ids(standing.StartableItems); strings.Join(got, ",") != "item-next,item-after" {
+		t.Fatalf("startable items = %v, want the two nothing refuses", got)
+	}
 
 	// The same queue under the operator's hold: every pullable item is refused
-	// by the stall, and nothing is startable.
+	// by the stall, and nothing is startable — an empty list rather than an
+	// absent one, because the queue was read.
 	sources.OperatorHolds = fakeOperatorHolds{hold: runstate.OperatorHold{HeldAt: moment.Add(-time.Hour)}, held: true}
 	held := ReadStanding(context.Background(), sources)
-	if held.Startable != 0 || len(held.NotStartable) != 3 {
-		t.Fatalf("under a hold: startable %d, refused %+v", held.Startable, held.NotStartable)
+	if held.Startable != 0 || len(held.NotStartable) != 3 || held.StartableItems == nil || len(held.StartableItems) != 0 {
+		t.Fatalf("under a hold: startable %d (%v), refused %+v", held.Startable, held.StartableItems, held.NotStartable)
 	}
 	for _, refused := range held.NotStartable {
 		if refused.WorkItemID != "item-parked" && refused.Kind != backlog.HeldByStall {
@@ -1062,6 +1079,11 @@ func TestAnUnwiredSourceIsSaidRatherThanAssumedEmpty(t *testing.T) {
 		if !strings.Contains(problem, "nothing was wired") {
 			t.Fatalf("problem = %q, want a stated wiring gap", problem)
 		}
+	}
+	// The item lists follow the queue: absent where it was not read, never an
+	// empty backlog assembled from nothing.
+	if standing.AdmittedItems != nil || standing.StartableItems != nil {
+		t.Fatalf("an unread queue names items: admitted %v, startable %v", standing.AdmittedItems, standing.StartableItems)
 	}
 }
 

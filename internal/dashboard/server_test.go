@@ -13,6 +13,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,10 @@ const port = "45123"
 type stubReader struct {
 	standing   readmodel.Standing
 	throughput readmodel.Throughput
-	failure    error
+	// items is what WorkItem answers by id; an id not in it is one the tracker
+	// holds nothing under.
+	items   map[string]readmodel.WorkItem
+	failure error
 }
 
 func (r stubReader) Standing(context.Context) (readmodel.Standing, error) {
@@ -43,6 +47,17 @@ func (r stubReader) Standing(context.Context) (readmodel.Standing, error) {
 
 func (r stubReader) Throughput(context.Context) (readmodel.Throughput, error) {
 	return r.throughput, r.failure
+}
+
+func (r stubReader) WorkItem(_ context.Context, id string) (readmodel.WorkItem, error) {
+	if r.failure != nil {
+		return readmodel.WorkItem{}, r.failure
+	}
+	item, found := r.items[id]
+	if !found {
+		return readmodel.WorkItem{}, fmt.Errorf("%w: bd show failed: issue not found: %s", readmodel.ErrNoSuchWorkItem, id)
+	}
+	return item, nil
 }
 
 // world is one server, bound in name only, and the handler that answers for it.
@@ -455,6 +470,62 @@ func TestRefusesUnreadableState(t *testing.T) {
 	response, body = w.get("/api/standing", nil)
 	if response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "state root") {
 		t.Fatalf("unreadable state said to no token: %d %s", response.StatusCode, body)
+	}
+}
+
+// One work item is served whole as JSON to the token and to nobody else, at
+// /api/items/<id>. An id the tracker holds nothing under is refused as not
+// found, in fixed words that do not name the id back; an id that is not the
+// tracker's shape is refused before anything is asked, as a path nothing is
+// served at; and an item that could not be read is refused as unavailable with
+// the reason. Every value in the item reaches the page as JSON with its tags
+// escaped, the notes and the description first among them.
+func TestServesOneWorkItemToTheTokenAlone(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title"), items: map[string]readmodel.WorkItem{
+		"yoyodyne-ifd.1": {ID: "yoyodyne-ifd.1", Title: "a " + injected, Labels: []string{}, Description: injected, Notes: injected, Run: &readmodel.ItemRun{RunID: "run-1", Failure: injected}},
+	}})
+
+	response, body := w.get("/api/items/yoyodyne-ifd.1", bearer(w.server.Token()))
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("item with the token: %d %s", response.StatusCode, body)
+	}
+	for _, expected := range []string{`"id":"yoyodyne-ifd.1"`, `"labels":[]`, `"description":"`, `"notes":"`, `"failure":"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("the item lacks %s: %s", expected, body)
+		}
+	}
+	// The tag is escaped in every one of the four fields it was planted in, and
+	// nowhere does it reach the body raw.
+	if strings.Count(body, "u003cscript") != 4 || strings.Contains(body, "<script>") {
+		t.Fatalf("the item carries a raw tag, or fewer escaped ones than were planted: %s", body)
+	}
+
+	if response, body := w.get("/api/items/yoyodyne-ifd.1", nil); response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "yoyodyne-ifd.1") {
+		t.Fatalf("item without the token: %d %s", response.StatusCode, body)
+	}
+	if response, _ := w.get("/api/items/yoyodyne-ifd.1", all(bearer(w.server.Token()), withHost("evil.test"))); response.StatusCode != http.StatusForbidden {
+		t.Fatalf("item to a foreign host: %d", response.StatusCode)
+	}
+	if response, _ := w.request(http.MethodPost, "/api/items/yoyodyne-ifd.1", bearer(w.server.Token())); response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("item POST: %d", response.StatusCode)
+	}
+
+	response, body = w.get("/api/items/yoyodyne-ifd.9", bearer(w.server.Token()))
+	if response.StatusCode != http.StatusNotFound || !strings.Contains(body, `"error":"no work item is recorded under that id"`) || strings.Contains(body, "yoyodyne-ifd.9") {
+		t.Fatalf("a missing item: %d %s", response.StatusCode, body)
+	}
+	for _, malformed := range []string{"/api/items/", "/api/items/../escape", "/api/items/a%20b", "/api/items/" + url.PathEscape(injected)} {
+		response, body := w.get(malformed, bearer(w.server.Token()))
+		if response.StatusCode != http.StatusNotFound || strings.Contains(body, "script") || strings.Contains(body, "escape") {
+			t.Fatalf("a malformed id at %s: %d %s", malformed, response.StatusCode, body)
+		}
+	}
+
+	broken := serve(t, stubReader{failure: errors.New("the work item could not be read: bd show failed: " + injected)})
+	response, body = broken.get("/api/items/yoyodyne-ifd.1", bearer(broken.server.Token()))
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"error":"the work item could not be read`) || strings.Contains(body, "<script>") {
+		t.Fatalf("an unreadable item: %d %s", response.StatusCode, body)
 	}
 }
 

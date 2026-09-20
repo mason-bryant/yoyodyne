@@ -1,0 +1,16 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.436.1",
+  "title": "Release notes carry every item's description",
+  "status": "open",
+  "priority": 3,
+  "labels": [
+    "release"
+  ],
+  "parent": "yoyodyne-ifd.436",
+  "description": "",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "",
+  "run_problem": "the runs of this item could not be read: scan recorded: input/output error"
+}

@@ -62,18 +62,20 @@
                   <span class="unit">things waiting on a person</span>
                 </dd>
               </div>
-              <div class="tile tile-unreadable">
+              <div class="tile">
                 <dt>Landed</dt>
                 <dd>
-                  <span class="figure">—</span>
-                  <span class="unit">could not be read</span>
+                  <span class="figure">3</span>
+                  <span class="unit">today</span>
+                  <span class="detail">22 runs in the last 7 days</span>
                 </dd>
               </div>
-              <div class="tile tile-unreadable">
+              <div class="tile">
                 <dt>Cost</dt>
                 <dd>
-                  <span class="figure">—</span>
-                  <span class="unit">could not be read</span>
+                  <span class="figure">$92.00</span>
+                  <span class="unit">today</span>
+                  <span class="detail">at least $1,232.58 in the last 7 days</span>
                 </dd>
               </div>
             </dl>
@@ -269,19 +271,22 @@
                   </li>
                 </ul>
               </li>
-              <li class="stage stage-unreadable">
+              <li class="stage stage-landed">
                 <button class="grouping-open stage-open" type="button" data-grouping="landed:today">
                   <span class="stage-label">Landed</span>
-                  <span class="stage-figure">—</span>
+                  <span class="stage-figure">3</span>
                 </button>
-                <span class="stage-unit">could not be read</span>
+                <span class="stage-unit">today</span>
+                <button class="grouping-open stage-detail-open" type="button" data-grouping="landed:week">
+                  <span class="stage-detail">22 runs in the last 7 days</span>
+                </button>
               </li>
             </ol>
             <ul id="pipeline-problems" class="degraded" hidden></ul>
             <p id="pipeline-note" class="footnote">Needs a human: 3 things waiting on a person.</p>
           </div>
         </section>
-        <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
+        <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
           <div class="panel-head">
             <h2 id="throughput-heading">Throughput and cost</h2>
             <p class="panel-note">
@@ -290,9 +295,67 @@
               prints
             </p>
           </div>
-          <div class="section-error" role="alert">
-            <p id="throughput-problem" class="problem">Could not be read: the state root could not be resolved</p>
-            <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
+          <div class="section-ready">
+            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <ul id="throughput-problems" class="degraded" hidden></ul>
+            <div id="windows" class="windows">
+              <div class="window">
+                <h3 class="window-label">today</h3>
+                <p class="window-span">since midnight, local time</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>3 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>1 stopped for a person</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>6 runs</dd>
+                  </div>
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>$92.00 from 31 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$61.20 on 12 runs, $29.55 on 17 conversations, $1.25 on 2 exchanges</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="window">
+                <h3 class="window-label">last 7 days</h3>
+                <p class="window-span">from 2026-09-13, local days</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>22 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>2 succeeded without promoting, 9 stopped for a person, 3 cancelled, 1 timed out, 2 failed</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>41 runs</dd>
+                  </div>
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>at least $1,232.58 from 452 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$894.63 on 184 runs, $337.95 on 268 conversations</dd>
+                  </div>
+                  <div class="figure-row figure-unreadable">
+                    <dt>Not priced</dt>
+                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">
@@ -419,6 +482,78 @@
             </ul>
           </div>
         </section>
+        <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="ready">
+          <div id="card-backdrop" class="popup-backdrop"></div>
+          <div class="popup-card">
+            <div class="popup-head">
+              <div>
+                <h2 id="card-heading" class="popup-title">Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states</h2>
+                <p id="card-note" class="popup-note">yoyodyne-ifd.141.3 · read 14:05:09</p>
+              </div>
+              <button type="button" id="card-close" class="popup-close">Close</button>
+            </div>
+            <div class="section-ready">
+              <dl id="card-fields" class="card-fields">
+                <div class="card-field card-field-id">
+                  <dt>Id</dt>
+                  <dd>yoyodyne-ifd.141.3</dd>
+                </div>
+                <div class="card-field">
+                  <dt>Title</dt>
+                  <dd>Dashboard 3 of 3: the page, five sections, with its empty, loading, and error states</dd>
+                </div>
+                <div class="card-field">
+                  <dt>Status</dt>
+                  <dd>in_progress</dd>
+                </div>
+                <div class="card-field">
+                  <dt>Priority</dt>
+                  <dd>P1 (0 is the most urgent, 4 the least)</dd>
+                </div>
+                <div class="card-field">
+                  <dt>Labels</dt>
+                  <dd>dashboard</dd>
+                </div>
+                <div class="card-field card-field-id">
+                  <dt>Parent</dt>
+                  <dd>yoyodyne-ifd.141</dd>
+                </div>
+                <div class="card-field card-field-prose">
+                  <dt>Description</dt>
+                  <dd>The page: five sections drawn from the read model and from nothing else, each with an empty, a loading, and an error state beside its ready one.
+
+Every value reaches the page as JSON and is written as text; nothing loads from anywhere but this origin.</dd>
+                </div>
+                <div class="card-field card-field-prose">
+                  <dt>Design</dt>
+                  <dd>The page's own script draws the sections from /api/standing and /api/throughput. The words are the terminal's wherever the terminal has them.</dd>
+                </div>
+                <div class="card-field card-field-prose">
+                  <dt>Acceptance criteria</dt>
+                  <dd>Every section renders in every state from fixtures under the render test; every value is escaped under the content security policy; the renders are golden files.</dd>
+                </div>
+                <div class="card-field card-field-prose">
+                  <dt>Notes</dt>
+                  <dd>Goal served: the harness's surfaces read clearly.
+
+Claimed by run run-c07d6849 at 2026-09-19T13:53:00Z.</dd>
+                </div>
+                <div class="card-field card-field-run">
+                  <dt>Run</dt>
+                  <dd>
+                    <p class="card-run-flight">in flight — developing, 12m elapsed, $3.41 so far</p>
+                    <ul class="card-run-facts">
+                      <li>run run-c07d6849e1f55fd7b982600b8f97a303, started 2026-09-19 13:53:00</li>
+                      <li>branch: yoyodyne/yoyodyne-ifd-141-3/c07d6849</li>
+                      <li>worktree: /Users/somebody/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-141-3-c07d6849</li>
+                      <li>developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71</li>
+                    </ul>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
     <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>

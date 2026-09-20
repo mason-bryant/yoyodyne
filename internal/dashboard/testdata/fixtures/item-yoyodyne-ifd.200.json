@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.200",
+  "title": "Slack threads carry the item's title",
+  "status": "blocked",
+  "priority": 2,
+  "labels": [
+    "slack"
+  ],
+  "parent": "",
+  "description": "A thread opened for a work item names it by id only; the title should be beside it.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Waiting on yoyodyne-ifd.199."
+}

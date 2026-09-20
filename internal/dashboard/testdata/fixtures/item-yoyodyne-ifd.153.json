@@ -1,0 +1,30 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.153",
+  "title": "Triage names the phase a run stopped in",
+  "status": "blocked",
+  "priority": 2,
+  "labels": [
+    "triage"
+  ],
+  "parent": "",
+  "description": "The docket entry for a stopped run should say which phase it stopped in, so the development manager reads the stoppage without opening the run.",
+  "design": "Read the phase off the run record at the time the docket entry is made.",
+  "acceptance_criteria": "Every docket entry for a stopped run names the phase; a run with no phase recorded says so.",
+  "notes": "Goal served: the harness's surfaces read clearly.\n\nBlocked: run run-5035c832 stopped on it; the reviewer asked for repair and the repair budget is spent.",
+  "run": {
+    "run_id": "run-5035c832b1e04d7fa9c3e2b8d1f06a11",
+    "outcome": "stopped",
+    "phase": "reviewing",
+    "in_flight": false,
+    "preserved": true,
+    "remains": "work preserved",
+    "branch": "yoyodyne/yoyodyne-ifd-153/5035c832",
+    "worktree_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-153-5035c832",
+    "provider_session_id": "3a9e1c7d-2b4f-4e8a-9c1d-5f6b7a8e9d0c",
+    "failure": "the reviewer asked for repair 3 times and the repair budget is spent: the change reads a style it does not set",
+    "started_at": "2026-09-18T20:11:00Z",
+    "completed_at": "2026-09-18T23:47:00Z",
+    "cost_usd": 18.62
+  }
+}

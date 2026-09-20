@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -724,6 +725,39 @@ func TestClientReportsProcessAndMalformedJSONErrors(t *testing.T) {
 	if _, err := (Client{Runner: malformed}).Show(context.Background(), "yoyodyne-1"); err == nil || !strings.Contains(err.Error(), "decode bd work item") {
 		t.Fatalf("Show() malformed error = %v", err)
 	}
+}
+
+// An id bd holds nothing under is told apart from every other refusal, in bd's
+// own words, and only where bd itself wrote them: a runner that could not start
+// bd is not an item that does not exist, whatever its message says.
+func TestShowTellsAMissingItemFromATrackerThatCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	missing := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "Error: issue not found: yoyodyne-9\n"}}}
+	_, err := (Client{Runner: missing}).Show(context.Background(), "yoyodyne-9")
+	if !errors.Is(err, ErrNoSuchWorkItem) || !strings.Contains(err.Error(), "issue not found") {
+		t.Fatalf("Show() of a missing item = %v, want ErrNoSuchWorkItem carrying bd's refusal", err)
+	}
+
+	down := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "failed to open database: LOCK: operation not permitted\n"}}}
+	if _, err := (Client{Runner: down}).Show(context.Background(), "yoyodyne-9"); err == nil || errors.Is(err, ErrNoSuchWorkItem) {
+		t.Fatalf("Show() over an unreadable store = %v, want a failure that is not ErrNoSuchWorkItem", err)
+	}
+
+	_, err = (Client{Runner: failingRunner{errors.New(`exec: "bd": executable file not found in $PATH`)}}).Show(context.Background(), "yoyodyne-9")
+	if err == nil || errors.Is(err, ErrNoSuchWorkItem) {
+		t.Fatalf("Show() with no bd = %v, want a failure that is not ErrNoSuchWorkItem", err)
+	}
+	if !ValidIssueID("yoyodyne-ifd.432.1") || ValidIssueID("../escape") || ValidIssueID("") {
+		t.Fatal("ValidIssueID does not hold the tracker's own shape")
+	}
+}
+
+// failingRunner is a runner that cannot start bd at all.
+type failingRunner struct{ err error }
+
+func (f failingRunner) Run(context.Context, execution.Command, execution.OutputObserver) (execution.ProcessResult, error) {
+	return execution.ProcessResult{}, f.err
 }
 
 // The tracker is where a work item's price lives, so what is written has to be
