@@ -2106,15 +2106,31 @@ one developer run takes. By default every slot pulls in the order you set. A
 slot can instead prefer a **label** — the tracker's own labels, which the
 product manager and the development manager put on work items — and then it
 pulls the ready work carrying that label first, wherever that sits in the
-order, and the rest of the backlog only when none of its label's work is ready:
+order, and the rest of the backlog only when none of its label's work is ready.
+On 2026-09-19 the operator directed that one of Yoyodyne's own developer slots
+be dedicated to the `reliability` label, and this is the block that does it —
+the operator's to paste into the project's configuration by hand, because
+`.yoyodyne/` is a [protected path](#protected-paths-in-a-developers-change) no
+run may write, so a project whose file does not yet carry it has a seat that
+is directed and not yet configured:
 
 ```yaml
 execution:
   max_concurrent_developers: 3
   developer_slots:
-    - prefer: [dashboard]   # developer slot 1 pulls dashboard-labelled work first
+    - prefer: [reliability]   # developer slot 1 pulls reliability-labelled work first
     # slots 2 and 3 are not named, so they prefer nothing
 ```
+
+The reliability label means, in the operator's words, bugs, anything that
+keeps the system from stalling, and anything that keeps the system from making
+mistakes. The admission practice that goes with it, from the same day: every
+item admitted under the reliability directive, every bug, and every stall or
+mistake fix carries the `reliability` label from admission, put on by the
+product manager's `labels` field in the same write that admits the item, so the
+item never exists unlabelled. The [conversation guide](conversation.md#backlog-state-that-has-stopped-being-true)
+states the same practice where it describes the `labels` and `label` actions,
+in the section on an item's tracker state.
 
 `developer_slots` is one entry per slot, in slot order, and it may be shorter
 than the capacity — the slots it does not name prefer nothing — and never
@@ -2138,21 +2154,26 @@ and never widens what it may do.
 Three things follow from a preference, in the order a pull applies them:
 
 - **A preferring slot pulls its label's ready work first.** With the example
-  above and the dashboard's child items at priority 2 under an unlabelled item
-  at priority 1, slot 1 pulls a dashboard item ahead of the unlabelled one; the
-  run's recorded reason says it was pulled into developer slot 1, which prefers
-  the dashboard label the item carries.
+  above and a reliability-labelled bug at priority 2 under an unlabelled item
+  at priority 1, slot 1 pulls the bug ahead of the unlabelled one; the run's
+  recorded reason says it was pulled into developer slot 1, which prefers the
+  reliability label the item carries.
 - **A slot with no preference leaves labelled work to a preferring slot that is
-  free to take it.** With slots 1 and 2 both free, the dashboard item goes to
+  free to take it.** With slots 1 and 2 both free, the reliability item goes to
   slot 1 and slot 2 takes the next unlabelled item down the order. Where no
-  preferring slot is free — slot 1 is working on one dashboard item and another
-  is ready — the label is only a preference, and slot 2 takes the dashboard
-  item in the order like any other. A label dedicates capacity to its work; it
-  never withholds the rest of the machine from it.
+  preferring slot is free — slot 1 is working on one reliability item and
+  another is ready — the label is only a preference, and slot 2 takes the
+  reliability item in the order like any other. A label dedicates capacity to
+  its work; it never withholds the rest of the machine from it.
 - **A preferring slot never idles on an empty label.** Once none of its label's
   work is ready, slot 1 pulls from the rest of the backlog in the order like a
   slot with no preference, and its recorded reason says it fell back. The next
-  dashboard item admitted is pulled the next time slot 1 is free.
+  reliability item admitted is pulled the next time slot 1 is free.
+
+A replay test in `internal/orchestrator` reads the block above out of this
+document, loads it as a configuration, and drives the scheduler over it, so the
+example is held to doing what these three points say rather than described as
+doing it.
 
 Which slot a run is in is not written down; it is read off what is in flight
 against what the slots prefer, the same way every time, by the scheduler and by
@@ -2165,8 +2186,8 @@ scheduled one does. Where any slot prefers a label, the running line of
 [`yoyo status`](operations.md#where-the-harness-stands-the-four-lines) says which slot each run is in and what that slot
 prefers, and names each free slot with its preference under the runs; where
 none does, the line reads as it always did. An item the only free slots walked
-past for their label — an unlabelled item ranked above the dashboard item slot
-1 pulled, with no other slot free — is reported by the pass as **left for
+past for their label — an unlabelled item ranked above the reliability item
+slot 1 pulled, with no other slot free — is reported by the pass as **left for
 another developer slot** rather than as deferred, naming the slot and what it
 pulled ahead of the item: the item waits on nothing about itself, and what
 takes it is the next slot with no preference to come free, or slot 1 once its
