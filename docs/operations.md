@@ -1443,9 +1443,16 @@ Needs a human (3):
   status that took the hold to find out — which is how this was first built —
   would refuse a chat that asked for its own conversation in the same instant.
 - **Not startable** is each admitted item nothing will pull, with the refusal
-  that stops it — the queue's own account where the queue has one, the directive
+  that stops it — the queue's own account where the queue has one, the children
+  where an item's unfinished children already carry its execution, the directive
   where a directive pauses the work, and otherwise what has stopped the harness
-  choosing at all. That last one comes from a closed set of named reasons, each
+  choosing at all. The coverage is the scheduling pass's own derivation rather
+  than a second reading of it, so a decomposed epic is refused here in the same
+  words the pass passes it over in, with the covering children named: the
+  tracker reports an epic and the child doing its work as equally pullable, and
+  a status that only asked the tracker showed the epic as work about to be
+  started and merely stalled, which sent whoever read it after a stall that was
+  not one. That last one comes from a closed set of named reasons, each
   of which says whose move it is: the operator's hold, a held intake, every
   developer slot taken, a session waiting out the provider's usage window, a live
   watch session that has found nothing it can start, no watch session running any
@@ -2100,6 +2107,7 @@ dropped request.
    how many are held back, split into the piles the queue itself names — held
    for a person (awaiting a decision or awaiting carry-out), paused by a
    directive, pullable with nothing choosing, parked, waiting on other work,
+   covered by its own unfinished children,
    carried by a conversation rather than a run, and not offered for a reason
    nothing here can read — each with whose move it is, and the largest marked
    `(most)`; how many are startable and next to be pulled — or, while a stall

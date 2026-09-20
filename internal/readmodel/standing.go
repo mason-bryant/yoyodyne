@@ -886,13 +886,19 @@ func readSwitches(sources Sources) switches {
 // that stops it, how much admitted work this reading saw in all, and the stall
 // that is actually holding some of it back.
 //
-// The refusals come from three places and each is the real one. An entry the
-// queue itself calls unready carries the queue's own account. An item an
-// unresolved directive pauses carries that directive, because the pipeline
-// refuses to commit to the work for exactly that reason. Everything else is
-// pullable, and what is left is the pass-level refusal — a switch, a full
-// machine, nothing choosing — which is a fact about the harness said once
+// The refusals come from four places and each is the real one. An entry the
+// queue itself calls unready carries the queue's own account. An item whose
+// unfinished children already carry its execution carries those children, in the
+// backlog's own words, because the scheduling pass will never pull it and an
+// operator told otherwise is sent to investigate a stall that is not one. An
+// item an unresolved directive pauses carries that directive, because the
+// pipeline refuses to commit to the work for exactly that reason. Everything
+// else is pullable, and what is left is the pass-level refusal — a switch, a
+// full machine, nothing choosing — which is a fact about the harness said once
 // against each item it actually stops.
+//
+// The order the four are asked in is the scheduling pass's own, so an item
+// several of them stop is refused here for the same one the pass would name.
 //
 // The stall it returns is the one that stopped at least one item. A stall over
 // an empty queue is a state of the machine and not something waiting on
@@ -907,7 +913,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 	if sources.Tracker == nil {
 		return nil, heldWork{}, backlog.Queue{}, Stall{}, "nothing was wired to read the admitted work"
 	}
-	queue, err := readQueue(ctx, sources)
+	queue, coverage, err := readQueue(ctx, sources)
 	if err != nil {
 		return nil, heldWork{}, backlog.Queue{}, Stall{}, fmt.Sprintf("the admitted work could not be read: %v", err)
 	}
@@ -940,10 +946,17 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 			continue
 		}
 		paused := pausedBy(held.pausing, entry.ID)
+		covering := coverage.Covering(entry.ID)
 		switch {
 		case !entry.Ready:
 			waits.count(entry)
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold(), Kind: entry.HoldKind()})
+		case len(covering) > 0:
+			// A covered item is not stalled and never will be: nothing is holding it
+			// back that clearing a switch or freeing a slot would release, so the
+			// pass-level refusal below must not be the one it carries.
+			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
+				Reason: backlog.CoveredReason(covering), Kind: backlog.HeldCovered})
 		case paused != nil:
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title,
 				Reason: fmt.Sprintf("paused for unresolved directive %s: %s",
@@ -1078,16 +1091,17 @@ func alive(sessions []runstate.WatchTransition, keep func(runstate.WatchState) b
 	return kept
 }
 
-// readQueue assembles the admitted work in the product manager's order, from the
-// same three readings the scheduler makes: the listings that carry the order, the
-// tracker's own account of what can be pulled, and what the harness is holding
-// for a person.
-func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
+// readQueue assembles the admitted work in the product manager's order, and the
+// coverage over it, from the same four readings the scheduler makes: the
+// listings that carry the order, the tracker's own account of what can be
+// pulled, what the harness is holding for a person, and the work that has
+// already been pulled.
+func readQueue(ctx context.Context, sources Sources) (backlog.Queue, backlog.Coverage, error) {
 	var admitted []beads.WorkItem
 	for _, status := range backlogStatuses {
 		items, err := sources.list(ctx, status)
 		if err != nil {
-			return backlog.Queue{}, err
+			return backlog.Queue{}, nil, err
 		}
 		admitted = append(admitted, items...)
 	}
@@ -1095,7 +1109,7 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	defer cancel()
 	ready, err := sources.Tracker.Ready(trackerCtx)
 	if err != nil {
-		return backlog.Queue{}, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
+		return backlog.Queue{}, nil, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
 	}
 	pullable := make([]string, 0, len(ready))
 	for _, item := range ready {
@@ -1105,10 +1119,19 @@ func readQueue(ctx context.Context, sources Sources) (backlog.Queue, error) {
 	if sources.Stoppages != nil {
 		held, err = HeldForAPerson(ctx, sources.Stoppages, sources.Decisions, sources.Remains)
 		if err != nil {
-			return backlog.Queue{}, fmt.Errorf("read what the harness is holding for a person: %w", err)
+			return backlog.Queue{}, nil, fmt.Errorf("read what the harness is holding for a person: %w", err)
 		}
 	}
-	return backlog.Order(admitted, pullable, held), nil
+	queue := backlog.Order(admitted, pullable, held)
+	// Coverage is read one status wider than the order, exactly as the scheduling
+	// pass reads it. Leaving the claimed slice out would report an epic whose
+	// child a run is carrying right now as pullable, which is the shape of the
+	// disagreement this line exists to have none of.
+	claimed, err := sources.list(ctx, backlog.StatusClaimed)
+	if err != nil {
+		return backlog.Queue{}, nil, err
+	}
+	return queue, backlog.Cover(queue, admitted, claimed), nil
 }
 
 // readReports is how the collected pile stands. A pile that could not be read

@@ -461,6 +461,7 @@
     { kind: "stalled", label: "pullable, and nothing is choosing", whose: "whoever the refusal names" },
     { kind: "parked", label: "parked", whose: "whoever parked it" },
     { kind: "waiting", label: "waiting on other work", whose: "nobody's; it clears as that work lands" },
+    { kind: "covered", label: "covered by its children", whose: "nobody's; the children are the work, and it clears as they land" },
     { kind: "conversation", label: "carried by a conversation, not a run", whose: "the role the item names" },
     { kind: "unread", label: "not offered, and nothing here can say why", whose: "run yoyo status for the refusal in full" }
   ];
