@@ -131,6 +131,7 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	events := flags.Bool("events", false, "print a stream's recent events and exit, without following")
 	list := flags.Bool("list", false, "list the recent runs, conversations, and branch reviews")
 	spend := flags.Bool("spend", false, "report what was spent, grouped by the local day it was spent on")
+	shipped := flags.Bool("shipped", false, "list the most recently shipped work items with their price and wall clock")
 	latest := flags.Bool("latest", false, "with --follow, move to a later stream when one starts")
 	lines := flags.Int("lines", defaultStreamLines, "replay this many recorded events first (0 replays the whole log)")
 	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, exchanges, or all (default all)")
@@ -164,7 +165,7 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	mode, err := selectedStatusMode(*follow, *events, *list, *spend)
+	mode, err := selectedStatusMode(*follow, *events, *list, *spend, *shipped)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		printStatusUsage(stderr)
@@ -183,13 +184,32 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "--failed selects among the recorded runs, so it cannot narrow a stream")
 		return 2
 	}
-	if flagGiven(flags, "limit") && mode != statusReadsRecords && mode != statusListsStreams {
-		fmt.Fprintln(stderr, "--limit bounds a listing, so it needs --list or the recorded runs")
+	if flagGiven(flags, "limit") && mode != statusReadsRecords && mode != statusListsStreams && mode != statusListsShipped {
+		fmt.Fprintln(stderr, "--limit bounds a listing, so it needs --list, --shipped, or the recorded runs")
 		return 2
 	}
 	if flagGiven(flags, "lines") && mode != statusFollows && mode != statusShowsEvents {
 		fmt.Fprintln(stderr, "--lines replays a stream's recorded events, so it needs --follow or --events")
 		return 2
+	}
+	// The shipped ledger reads the run records rather than the event streams, so
+	// it is refused every stream-shaping option the recorded mode is refused below
+	// and answered from the same store the recorded mode reads.
+	if mode == statusListsShipped {
+		if *raw || *includeAll {
+			fmt.Fprintln(stderr, "--raw and --all shape a followed event stream, so they need --follow or --events")
+			return 2
+		}
+		if *kind != "" {
+			fmt.Fprintln(stderr, "--kind narrows which event streams are read, so it needs --follow, --events, --list, or --spend")
+			return 2
+		}
+		count, err := shippedCount(named, *limit, flagGiven(flags, "limit"))
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		return reportShipped(*configPath, count, *jsonOutput, stdout, stderr)
 	}
 	if !followableKinds(kinds) && mode != statusPricesStreams {
 		fmt.Fprintln(stderr, "an exchange has no event stream to follow or list; --kind exchanges needs --spend")
@@ -407,7 +427,10 @@ func statusStateRoots(configPath string) (statusRoots, error) {
 
 // statusMode is which question of the verb was asked. The record afterwards is
 // the default because it is the one that needs no argument and refuses nothing;
-// the other four are the live surface this verb absorbed.
+// four are the live surface this verb absorbed, and the last is the shipped
+// ledger, which reads the run records the default reads and answers a
+// different question of them: not what became of each attempt, but what
+// shipped and what it took.
 type statusMode int
 
 const (
@@ -416,13 +439,14 @@ const (
 	statusShowsEvents
 	statusListsStreams
 	statusPricesStreams
+	statusListsShipped
 )
 
 // selectedStatusMode reads which mode the flags asked for. They are exclusive
 // because they are different answers rather than different amounts of one:
 // combining them would have to invent a precedence, and an operator who typed
 // two of them meant one of them.
-func selectedStatusMode(follow, events, list, spend bool) (statusMode, error) {
+func selectedStatusMode(follow, events, list, spend, shipped bool) (statusMode, error) {
 	selected := statusReadsRecords
 	named := 0
 	for _, mode := range []struct {
@@ -433,6 +457,7 @@ func selectedStatusMode(follow, events, list, spend bool) (statusMode, error) {
 		{events, statusShowsEvents},
 		{list, statusListsStreams},
 		{spend, statusPricesStreams},
+		{shipped, statusListsShipped},
 	} {
 		if mode.asked {
 			selected = mode.mode
@@ -440,7 +465,7 @@ func selectedStatusMode(follow, events, list, spend bool) (statusMode, error) {
 		}
 	}
 	if named > 1 {
-		return statusReadsRecords, errors.New("--follow, --events, --list, and --spend are different questions; ask one of them")
+		return statusReadsRecords, errors.New("--follow, --events, --list, --spend, and --shipped are different questions; ask one of them")
 	}
 	return selected, nil
 }
@@ -1233,6 +1258,7 @@ func printStatusUsage(writer io.Writer) {
        yoyo status --events [options] [<id>]
        yoyo status --list [options]
        yoyo status --spend [options] [<id>|<days>]
+       yoyo status --shipped [options] [<n>]
 
 Where the harness stands, then what became of the runs it made.
 
@@ -1315,6 +1341,20 @@ and reads none of it back.
 `+"`yoyo cost`"+` is the same run spending grouped by the work item the runs were
 for.
 
+--shipped lists the n most recently shipped work items, most recent promotion
+first, ten unless a number says otherwise and 0 for every one: each with what it
+cost the provider across every run made for it, the failed and repair attempts
+included; the wall clock from the first claim to the promotion; how much of that
+it spent parked on a provider usage limit or the operator's hold; how many runs
+it took; and its title as the run that shipped it recorded it. Elapsed and
+paused are two figures on purpose, so an item that spent three of its four hours
+waiting reads as what it was. Totals across the listing close it. An item is
+shipped when a run of it recorded promoting its work; a run with no surviving
+record to price makes its cost a floor marked ≥, an elapsed the record cannot
+compute says unknown, and neither is ever reported as nothing. The join it prices
+is `+"`yoyo cost`"+`'s: the ledger is that join read for the shipped items and
+sorted by when each shipped.
+
 Every live mode leads with a banner while activity is paused or intake is held:
 a machine somebody paused and a machine that died look identical otherwise. The
 recorded mode says the same on its "Needs a human" line.
@@ -1322,7 +1362,7 @@ recorded mode says the same on its "Needs a human" line.
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --failed          only the runs that ended without succeeding
-  --limit <n>       report at most this many, newest first (default 20; 0 reports all)
+  --limit <n>       report at most this many, newest first (default 20, or 10 with --shipped; 0 reports all)
   --json            emit machine-readable JSON
 
 Live options:
@@ -1330,6 +1370,7 @@ Live options:
   --events          print a stream's recent events and exit, without following
   --list            list the recent runs, conversations, and branch reviews
   --spend           report what was spent, by the local day it was spent on
+  --shipped         list the most recently shipped items with cost, elapsed, and paused time
   --latest          with --follow, move to a later stream when one starts
   --lines <n>       replay this many recorded events first (default 50; 0 the whole log)
   --kind <kind>     runs, chats, reviews, exchanges (--spend only), or all (default all)

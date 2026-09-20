@@ -2336,6 +2336,8 @@ yoyo status --list               # list recent runs, conversations, and reviews 
 yoyo status --spend              # report the last 7 days of spend, by day and in total
 yoyo status --spend 30           # report that many days instead of 7
 yoyo status --spend 40b68275     # report spend for one run, conversation, review, or exchange, any day
+yoyo status --shipped            # the 10 most recently shipped items: cost, elapsed, paused, runs
+yoyo status --shipped 25         # that many instead of 10; 0 lists every item that shipped
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -2446,6 +2448,67 @@ and for the same reason — a conversation that discussed five items, and a revi
 of a branch that carried a dozen, cannot be attributed to any one of them. What it
 does not leave out of its total is what the roles spent asking each other, which
 sits on a row of its own above it.
+
+### What shipped lately, and what it took
+
+`yoyo status --shipped` is the same per-item join read for the items whose work
+the harness promoted, most recent promotion first, with the wall clock beside
+the money:
+
+```text
+item                     shipped                  cost   elapsed    paused  runs  title
+yoyodyne-ifd.239         09 20 2026 14:26       $26.00    19d01h      none     2  bin/yoyo-status retires: deleted or a one-line wrapper for muscle memory
+yoyodyne-ifd.366         09 20 2026 11:33       $42.05    51m08s      none     1  Conversation-side tracker writes retry like the pipeline's
+yoyodyne-ifd.12          08 17 2026 23:58     ≥ $4.50     4h02m     3h01m     3  Pause on a provider usage limit
+----------------------------------------------------------------------------------
+TOTAL (3 of 402)                             ≥ $72.55    19d05h     3h01m     6
+```
+
+Ten items unless a number says otherwise, and `0` lists every one; `--limit`
+bounds it too, because it is a listing. An item is shipped when a run of it
+recorded promoting its work — the durable evidence a
+[promotion](work.md#publishing-and-the-merge-that-follows-it) leaves on the
+run — so an item closed as evidence, or closed by
+hand, is not in it, and the tracker is not consulted at all: the ledger answers
+from the run records wherever they are. `--json` carries the same rows, each
+with the whole of its price join under `price`.
+
+**The cost is the item's, not the run's.** It is what `yoyo cost` reports for
+the same item: every run made for it at the provider's own figure, the
+rejected attempt and the repair attempts included, and a run with no surviving
+record to price makes it a floor marked `≥` rather than a lower number. There is
+one join, in `internal/runstate`, and both verbs read it; the product manager
+settled that on yoyodyne-ifd.51 so one load-bearing number could not exist in
+two implementations that drift.
+
+**The wall clock is two numbers, on purpose.** `elapsed` is first claim to
+promotion — the earliest run's recorded claim, or its start where the run
+predates claims being recorded, to when the promoting run recorded completing —
+and it includes every hour of rework and every hour parked, because that is how
+long the item took. `paused` is the parked part on its own: what the item's
+runs spent waiting out a provider usage limit or the operator's hold, summed
+across every run including the ones nothing survives to price, since a wait is
+read from a run's own record rather than from its log. They are beside each
+other rather than netted because a four-hour item that spent three of them
+parked on the night's usage window is slow in a different way from one that
+worked for four, and with concurrent runs pausing on shared windows an
+undifferentiated figure would report waiting as slowness. An item first
+attempted one week and shipped the next reads as a fortnight, which is the
+honest answer to how long it took.
+
+**An unknown is said to be unknown.** A promoting run that has not recorded
+completing — still cleaning up, or dead in it — says `unknown` under elapsed and
+makes the total elapsed a floor; a run recorded before titles were carried
+leaves the title as "(no run recorded the title)"; neither is ever reported as
+nothing. Every moment here is one the records already keep — the runs' started,
+claimed, and completed times, and the wait seconds each run commits as it
+waits — so nothing is bookkept for this ledger alone.
+
+The table closes the way `--spend`'s does — a rule, a TOTAL row, and what the
+figures mean under it — and `yoyo cost`'s ledger closes the same way, because
+the operator reads all three and asked for one shape across them. The
+conversation's `/status` is untouched: it covers work in flight, and this covers
+work that is done.
 
 The Go tests in `internal/cli` and `internal/runstate` check these claims against
 a fabricated state directory holding runs, conversations, branch reviews, and
