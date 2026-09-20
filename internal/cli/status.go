@@ -1307,6 +1307,11 @@ every day it spent on. The exchanges the roles conducted are priced beside the
 streams, each round on the day it was answered, and narrowed out with the
 streams when --kind names one of them. A number asks for a different count of
 days; naming a stream or an exchange prices that one whatever day it ran on.
+Under the total, a table per role says what each paid to write the provider's
+cache and what it paid to read it, apportioned from the provider's own figure
+at its rate multiples: the one cache-read share above it is decided by whichever
+role reads the most, and hides a role that writes its whole prompt into the cache
+and reads none of it back.
 `+"`yoyo cost`"+` is the same run spending grouped by the work item the runs were
 for.
 

@@ -476,6 +476,90 @@ func TestSpendReportTotalsAndNarrowsByItsOwnRule(t *testing.T) {
 	}
 }
 
+// A run's row mixes the developer's session with the reviewer's one-shot
+// invocations, and the two are not cached alike, so the row and the totals
+// carry each role's spend apart with its cost apportioned across what it was
+// billed for. A run log recorded before a terminal named its role is read by
+// the ledger's bracket, a branch review's terminals are the reviewer's, and a
+// conversation terminal that named nobody is nobody's rather than guessed.
+func TestStreamStoreSpendsByTheRoleThatSpent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, conversations, reviews := streamStores(t, root)
+	store := newStreamStore(t, root)
+
+	today := time.Date(2026, 9, 20, 12, 0, 0, 0, time.Local)
+	state := testState(t, StatusSucceeded)
+	if err := runs.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendStreamEvent(t, runs, state.RunID, 1, execution.EventRunStarted, today, nil)
+	// The developer's session: nearly everything read back from the cache.
+	appendStreamEvent(t, runs, state.RunID, 2, execution.EventRunCompleted, today, rolePayload("developer", 5.0, 0, 1000, 100000, 900000))
+	// The reviewer's one turn: a small prefix read, the rest written for an hour.
+	appendStreamEvent(t, runs, state.RunID, 3, execution.EventRunCompleted, today, rolePayload("reviewer", 0.615218, 2, 8680, 39517, 6076))
+	// A branch review's terminal names no role, and is the reviewer's all the same.
+	reviewID := mustBranchReviewID(t)
+	appendReviewEvent(t, reviews, reviewID, 1, execution.EventReviewStarted, today, nil)
+	appendReviewEvent(t, reviews, reviewID, 2, execution.EventRunCompleted, today, invocationPayload(1, 1, 1, 1, 1))
+	// A conversation's terminal that named no role at a schema whose terminals
+	// do is nobody's.
+	conversationID := mustConversationID(t)
+	appendConversationEvent(t, conversations, conversationID, 1, execution.EventRunCompleted, today, invocationPayload(2, 1, 1, 1, 1))
+
+	report, err := store.Spend(SpendQuery{Now: today})
+	if err != nil {
+		t.Fatalf("Spend() error = %v", err)
+	}
+	var run SpendRow
+	for _, row := range report.Rows {
+		if row.Kind == StreamRun {
+			run = row
+		}
+	}
+	if len(run.Roles) != 2 || run.Roles[0].Role != domain.RoleDeveloper || run.Roles[1].Role != domain.RoleReviewer {
+		t.Fatalf("the run's row splits by role as %+v, want the developer then the reviewer", run.Roles)
+	}
+	reviewer := run.Roles[1]
+	if reviewer.Calls != 1 || reviewer.CostUSD != 0.615218 || reviewer.Usage.CacheWrite1hTokens != 39517 {
+		t.Fatalf("the reviewer's part = %+v", reviewer)
+	}
+	if reviewer.Split.CacheWriteUSD < 0.395 || reviewer.Split.CacheWriteUSD > 0.3952 || reviewer.Split.CacheReadUSD > 0.0031 {
+		t.Fatalf("the reviewer's cost splits to %+v, want nearly two thirds of it on the cache write and almost nothing on the read", reviewer.Split)
+	}
+
+	totals := report.Totals()
+	if len(totals.ByRole) != 3 || totals.ByRole[0].Role != domain.RoleDeveloper || totals.ByRole[1].Role != domain.RoleReviewer || totals.ByRole[2].Role != "" {
+		t.Fatalf("the totals split by role as %+v, want the developer, the reviewer, and the unattributed turn last", totals.ByRole)
+	}
+	if totals.ByRole[1].Calls != 2 || totals.ByRole[1].CostUSD != 1.615218 {
+		t.Fatalf("the reviewer's total = %+v, want the run's review and the branch review together", totals.ByRole[1])
+	}
+	if totals.ByRole[2].Calls != 1 || totals.ByRole[2].CostUSD != 2 {
+		t.Fatalf("the unattributed total = %+v, want the conversation's one turn", totals.ByRole[2])
+	}
+	var spent float64
+	for _, part := range totals.ByRole {
+		spent += part.CostUSD
+	}
+	if spent != totals.CostUSD {
+		t.Fatalf("the roles add up to %v, the report to %v", spent, totals.CostUSD)
+	}
+}
+
+// rolePayload is a terminal that names its role and splits its cache write by
+// lifetime, the way the backend has recorded one since TerminalRoleSchemaVersion.
+func rolePayload(role string, cost float64, input, output, cacheWrite, cacheRead int64) map[string]any {
+	payload := invocationPayload(cost, input, output, cacheWrite, cacheRead)
+	payload["role"] = role
+	payload["usage"].(map[string]any)["cache_creation"] = map[string]any{
+		"ephemeral_1h_input_tokens": cacheWrite,
+		"ephemeral_5m_input_tokens": 0,
+	}
+	return payload
+}
+
 // streamMoment is when the fabricated streams here happened. It is fixed so
 // every assertion about ordering and dating is a fact about the code rather than
 // about when the test ran.

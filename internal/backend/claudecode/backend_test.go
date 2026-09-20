@@ -2253,6 +2253,54 @@ func TestAnInvocationIsGivenAnExplicitEnvironmentWithoutTheSlackTokens(t *testin
 	}
 }
 
+// A review is one turn nobody resumes, and what it writes into the cache is
+// mostly the patch it is judging, which nothing reads back. Its invocation is
+// given the five-minute cache lifetime, which keeps the prefix read where the
+// next review follows soon and cuts the premium on the rest from double to a
+// quarter over. The roles that resume a session — every conversation role and
+// the developer — are given no lifetime at all, so the provider's choice of an
+// hour, which is what keeps a resumed transcript warm between turns, stands.
+// An operator's own setting of the variable, carried through from the
+// harness's environment, does not decide the reviewer's: the lifetime is a
+// fact about the invocation's shape, and this adapter is what knows the shape.
+func TestAReviewIsCachedForFiveMinutesAndAResumedSessionKeepsTheProvidersLifetime(t *testing.T) {
+	// t.Setenv is this process's environment, so this cannot run in parallel.
+	t.Setenv(promptCacheLifetimeVariable, "1h")
+
+	invoke := func(role domain.AgentRole, sessionID string) []string {
+		t.Helper()
+		stream := `{"type":"result","subtype":"success","session_id":"s","is_error":false,"result":"done","total_cost_usd":0.01}` + "\n"
+		runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}
+		if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+			RunID:            testRunID,
+			Role:             role,
+			WorkingDirectory: t.TempDir(),
+			Prompt:           "judge this",
+			SystemPrompt:     "the contract",
+			SessionID:        sessionID,
+		}); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return runner.commands[0].Env
+	}
+
+	review := invoke(domain.RoleReviewer, "")
+	if !slices.Contains(review, promptCacheLifetimeVariable+"="+singleTurnCacheLifetime) {
+		t.Fatalf("a review's environment does not set the %s cache lifetime, so what it writes for nobody is kept an hour at double the rate: %v", singleTurnCacheLifetime, review)
+	}
+	if slices.Contains(review, promptCacheLifetimeVariable+"=1h") {
+		t.Fatalf("a review's environment carries the operator's own lifetime beside the reviewer's: %v", review)
+	}
+	for _, role := range []domain.AgentRole{domain.RoleDeveloper, domain.RoleProductManager, domain.RoleDevelopmentManager, domain.RoleArchitect} {
+		for _, sessionID := range []string{"", "session-to-resume"} {
+			environment := invoke(role, sessionID)
+			if slices.Contains(environment, promptCacheLifetimeVariable+"="+singleTurnCacheLifetime) {
+				t.Fatalf("a %s invocation resuming %q is given the single-turn lifetime, which lets the transcript it re-reads every turn expire between turns: %v", role, sessionID, environment)
+			}
+		}
+	}
+}
+
 func hasEnvironmentName(environment []string, name string) bool {
 	for _, entry := range environment {
 		if strings.HasPrefix(entry, name+"=") {

@@ -461,6 +461,51 @@ func printSpendTotals(writer io.Writer, report runstate.SpendReport) {
 			fmt.Fprintln(writer, "an exchange records what the provider charged and not what it used, so its rows carry no tokens")
 		}
 	}
+	printRoleSplit(writer, total)
+}
+
+// The role table's columns: the role, its invocations, what they wrote into
+// the cache and what that cost, what they read from it and what that cost, the
+// share of their input that was a read, and what they cost in all.
+const (
+	roleSplitHeader = "%-21s %6s %14s %12s %14s %12s %9s %10s\n"
+	roleSplitRow    = "%-21s %6d %14s %12s %14s %12s %9s %10s\n"
+)
+
+// printRoleSplit says what each role paid to write the cache and what it paid
+// to read it. The one cache-read share above is decided by whichever role reads
+// the most — a developer session re-reading its own conversation — and hides a
+// role that writes its whole prompt into the cache at the write premium and
+// reads none of it back, which is what the reviewer's invocations did for every
+// review before yoyodyne-ifd.205 and what this table exists to show. The
+// dollars are the report's own apportioning of each invocation's reported cost,
+// at the provider's rate multiples, so the roles' totals add up to the total
+// above and the split is a share of the provider's figure rather than a price
+// of the harness's.
+func printRoleSplit(writer io.Writer, total runstate.SpendTotals) {
+	if len(total.ByRole) == 0 {
+		return
+	}
+	fmt.Fprintln(writer)
+	fmt.Fprintln(writer, "by role, each role's cost apportioned across what its invocations were billed for")
+	fmt.Fprintln(writer, "at the provider's rate multiples (fresh 1x, cache read 0.1x, 5m write 1.25x, 1h write 2x, output 5x):")
+	fmt.Fprintf(writer, roleSplitHeader, "role", "calls", "cache_w", "cache_w USD", "cache_r", "cache_r USD", "cache_r%", "USD")
+	for _, spent := range total.ByRole {
+		name := string(spent.Role)
+		if name == "" {
+			name = "(unattributed)"
+		}
+		written, writtenUSD, read, readUSD, share := "-", "-", "-", "-", "-"
+		if spent.Usage.Reported() {
+			written = groupThousands(spent.Usage.CacheCreationTokens)
+			writtenUSD = fmt.Sprintf("$%.2f", spent.Split.CacheWriteUSD)
+			read = groupThousands(spent.Usage.CacheReadTokens)
+			readUSD = fmt.Sprintf("$%.2f", spent.Split.CacheReadUSD)
+			share = fmt.Sprintf("%.1f%%", spent.Usage.CacheReadShare()*100)
+		}
+		fmt.Fprintf(writer, roleSplitRow, name, spent.Calls, written, writtenUSD, read, readUSD, share, fmt.Sprintf("$%.2f", spent.CostUSD))
+	}
+	fmt.Fprintln(writer, "a one-shot role reads only the prefix it shares with the invocation before it; what it writes and nothing reads back is the cache_w USD column")
 }
 
 // renderKindSplit says how much of a total was each kind of work, and says it

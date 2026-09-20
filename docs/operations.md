@@ -2232,6 +2232,22 @@ and says since when, rather than reading like a machine that spent nothing.
 `--json` carries the same rows and the same window, so a script reads the figures
 rather than the columns.
 
+Under the total, a table per role says what each role's invocations paid to
+write the provider's cache and what they paid to read it, beside the tokens
+each way and the role's cache-read share. The one share on the `tokens:` line
+above it is decided by whichever role reads the most — a developer session
+re-reading its own conversation — and hides a role that writes its whole prompt
+into the cache at the write premium and reads none of it back, which is what
+every review did before yoyodyne-ifd.205 and what the table exists to show. The
+dollars are the report's own apportioning of each invocation's reported cost
+across what it was billed for, at the provider's rate multiples (fresh 1×,
+cache read 0.1×, five-minute write 1.25×, one-hour write 2×, output 5×), so a
+role's parts add up to the provider's figure and no price of the harness's
+enters it; a model priced off those multiples shifts a role's split and never
+its total. `--json` carries the same split on every row, under `roles`.
+[`docs/diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md`](diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md)
+is the measurement the table was built for.
+
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out of the *items*, deliberately
