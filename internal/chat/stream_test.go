@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/console"
@@ -27,15 +28,28 @@ type replyingBackend struct {
 	costUSD float64
 	// fail ends the invocation after the fragments have been shown, which is a
 	// reply cut off part way.
-	fail     error
-	sinks    int
-	requests []backendapi.RunRequest
+	fail error
+	// refusals is how many of the first invocations the provider declines for
+	// want of capacity, and refusedFragments is what one of them manages to write
+	// before it does — the preamble that arrived while the rest never did. It is a
+	// refusal rather than a failure: the harness waits it out and asks again, so
+	// what it leaves on screen is the start of an answer about to be replaced
+	// rather than the end of one.
+	refusals         int
+	refusedFragments []string
+	limit            *backendapi.UsageLimit
+	sinks            int
+	requests         []backendapi.RunRequest
 }
 
 func (b *replyingBackend) Run(_ context.Context, request backendapi.RunRequest) (backendapi.RunResult, error) {
 	b.requests = append(b.requests, request)
 	sequence := request.LastSequence
-	for _, fragment := range b.fragments {
+	written := b.fragments
+	if b.refusals > 0 {
+		written = b.refusedFragments
+	}
+	for _, fragment := range written {
 		sequence++
 		event, err := execution.NewEvent(request.RunID, sequence, fixedClock{}.Now(), execution.EventAgentMessage,
 			"provider.claude-code", map[string]any{"text": fragment})
@@ -51,6 +65,10 @@ func (b *replyingBackend) Run(_ context.Context, request backendapi.RunRequest) 
 			b.sinks++
 			request.ReplySink(fragment)
 		}
+	}
+	if b.refusals > 0 {
+		b.refusals--
+		return backendapi.RunResult{IsError: true, StopReason: "usage_limit", UsageLimit: b.limit, LastEvent: sequence}, nil
 	}
 	if b.fail != nil {
 		return backendapi.RunResult{LastEvent: sequence}, b.fail
@@ -220,6 +238,48 @@ func TestAnInterruptedStreamSaysItWasInterrupted(t *testing.T) {
 	}
 	if !strings.Contains(transcript, replyCutOff) {
 		t.Fatalf("half an answer was left looking whole: %q", transcript)
+	}
+}
+
+// A turn refused for want of capacity is asked again, so what it had written by
+// then is neither a whole answer nor the start of the one that replaces it. It
+// is closed off and said to be so, and the reissued reply opens underneath it —
+// otherwise the operator reads one paragraph running into another, written by
+// two attempts, as a single answer.
+func TestAStreamInterruptedByAUsageLimitIsClosedOffBeforeTheReissue(t *testing.T) {
+	t.Parallel()
+
+	clock := &waitingClock{now: fixedClock{}.Now()}
+	answer := "I would start with the first goal, because it is the one the brief turns on."
+	provider := &replyingBackend{
+		fragments:        []string{answer},
+		reply:            answer,
+		refusals:         1,
+		refusedFragments: []string{"I would start with the first goal, because"},
+		limit:            &backendapi.UsageLimit{Kind: "five_hour", ResetsAt: clock.now.Add(45 * time.Minute)},
+	}
+	session := openTestSession(t, waitingOptions(testOptions(t, provider), clock))
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), dressed(strings.NewReader("what next?\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	transcript := escapes.ReplaceAllString(out.String(), "")
+	if !strings.Contains(transcript, replyInterrupted) {
+		t.Fatalf("the interrupted attempt was left looking whole: %q", transcript)
+	}
+	if !strings.Contains(transcript, "it is the one the brief turns on.") {
+		t.Fatalf("the reissued answer was not shown: %q", transcript)
+	}
+	// The turn was not cut off: it completed, after waiting, and saying otherwise
+	// would teach the operator to discount the warning that means it did not.
+	if strings.Contains(transcript, replyCutOff) {
+		t.Fatalf("a turn that waited and completed was reported as cut off: %q", transcript)
+	}
+	// Each attempt opens its own answer, so what the operator reads is one whole
+	// reply rather than two run together.
+	if strings.Count(transcript, strings.TrimSpace(replyOpening)) != 2 {
+		t.Fatalf("the reissued reply did not open an answer of its own: %q", transcript)
 	}
 }
 

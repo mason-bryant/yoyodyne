@@ -45,10 +45,13 @@ var providerInvocations = map[string]string{
 	"internal/review/reviewer.go": "a review: the refusal travels back on review.Result, and whoever asked for the " +
 		"review accounts for it — the pipeline by parking the run, BranchReviewer by recording it",
 	"internal/chat/chat.go": "a conversation turn: Session.noteUsageLimit records the refusal against the " +
-		"conversation, because a turn has no run to park. A turn an operator typed then fails at their " +
-		"terminal; one the harness took to put a stopped run to the development manager fails carrying " +
-		"chat.ErrProviderCapacity, and the stoppage keeps its delivery for after the limit resets rather " +
-		"than counting as having been put to her",
+		"conversation, because a turn has no run to park. A turn an operator typed — `yoyo chat`, " +
+		"interactive or --message — is waited out by Session.waitOutUsageLimit under the bounds a run " +
+		"waits under and reissued on the same session, and fails at their terminal with the reset stated " +
+		"only where that wait is one the harness will not take; one the harness took to put a stopped run " +
+		"to the development manager is given no such bounds and fails carrying chat.ErrProviderCapacity, " +
+		"and the stoppage keeps its delivery for after the limit resets rather than counting as having " +
+		"been put to her",
 	"internal/cli/exchange.go": "an inter-role ask exchange answering a round: exchangeVoice.noteUsageLimit " +
 		"records the refusal naming the exchange it stopped, because an answering round has neither a run " +
 		"to park nor a conversation of its own to fail at anybody's terminal",

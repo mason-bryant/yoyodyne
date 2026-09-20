@@ -844,3 +844,25 @@ func TestAWithinProviderAlternateNeedsNoEndpointToResolve(t *testing.T) {
 		t.Fatalf("warning = %q, want none: nothing failed to resolve", stderr.String())
 	}
 }
+
+// The operator's own `yoyo chat` — interactive or --message — waits out a
+// provider with no capacity under the bounds a run waits under, read from the
+// same configuration. A turn the harness takes for itself is given no bounds at
+// all: a stopped run delivered to the development manager, a recurring firing,
+// and a correction each already pace themselves on the refusal, and one that
+// slept through the window would hold the scheduler that took it for hours.
+func TestOnlyTheOperatorsOwnConversationWaitsOutAUsageLimit(t *testing.T) {
+	t.Parallel()
+
+	var cfg config.Config
+	cfg.Execution.UsageLimitMaxPause = config.Duration(6 * time.Hour)
+	cfg.Execution.UsageLimitInProcessPause = config.Duration(time.Hour)
+
+	attended := usageLimitPause(cfg, true)
+	if attended.Maximum != 6*time.Hour || attended.InProcess != time.Hour {
+		t.Fatalf("attended pause = %+v, want the run's own bounds", attended)
+	}
+	if background := usageLimitPause(cfg, false); background != (chat.UsageLimitPause{}) {
+		t.Fatalf("background pause = %+v, want a turn the harness takes for itself to wait for nothing", background)
+	}
+}

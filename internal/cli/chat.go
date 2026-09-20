@@ -373,15 +373,23 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // the role itself may ask for, and that is the contract and the authority table
 // in the chat package rather than anything decided here.
 //
-// waitForTurn is what to do about a turn already in flight, and it is the one
-// thing the two callers genuinely disagree about. The operator waits: they have
-// already typed the command, a turn ends on its own, and being turned away by
-// one was the seam that made the product manager unreachable. A background
-// delivery does not: nothing was asked of the agent yet, the attempt is given
-// back and a later pass makes it, and a dispatcher holding its lease and its
-// budget open for the length of somebody else's turn is a worse answer than
-// coming back.
-func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh, waitForTurn bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
+// attended says the operator's own command is at the other end of this
+// conversation — `yoyo chat`, interactive or `--message` — rather than a turn the
+// harness is taking for itself, and it is the one thing the two kinds of caller
+// genuinely disagree about. It decides two waits the same way. A turn already in
+// flight: the operator waits, because they have already typed the command, a
+// turn ends on its own, and being turned away by one was the seam that made the
+// product manager unreachable; a background delivery does not, because nothing
+// was asked of the agent yet, the attempt is given back and a later pass makes
+// it, and a dispatcher holding its lease and its budget open for the length of
+// somebody else's turn is a worse answer than coming back. And a provider with
+// no capacity: the operator's turn waits the limit out under the bounds a run
+// waits under, because the alternative is the work the turn was about to do
+// being lost and an unattended `--message` caller having nobody to retry it;
+// a background turn does not, because every one of those callers already paces
+// itself on the refusal — the next cadence, the next pull — and one that slept
+// through the window would hold the scheduler that took it for hours.
+func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh, attended bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
@@ -489,7 +497,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	var hold *runstate.ConversationHold
 	if err := chat.AwaitConversation(role, stderr, func() error {
 		var err error
-		if waitForTurn {
+		if attended {
 			hold, err = store.Claim(ctx, identity)
 		} else {
 			hold, err = store.TryClaim(identity)
@@ -679,14 +687,22 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// one on. Without it the conversation would re-ask an exhausted model every
 		// turn and announce the substitution every turn with it.
 		UsageLimitUnknownResetPause: cfg.Execution.UsageLimitUnknownResetPause.Duration(),
-		Persona:                     agent.Persona.Text,
-		Agent:                       name,
-		Provider:                    agent.Backend,
-		Providers:                   providerRegistry(cfg),
-		Repository:                  repository,
-		ProductID:                   cfg.Product.ID,
-		RepositoryID:                string(cfg.Product.RepositoryID),
-		Briefing:                    briefing,
+		// And how long a turn the provider refused may wait for it to serve again,
+		// for the operator's own command and for nothing else. They are the bounds a
+		// run waits under, taken from the same configuration: an exhausted limit
+		// stops a conversation exactly as it stops a run, and an operator who said
+		// how long the harness may wait out one said it about every invocation they
+		// pay for. The zero value a background turn gets waits for nothing, which
+		// is the fail-fast those callers pace themselves on.
+		UsageLimitPause: usageLimitPause(cfg, attended),
+		Persona:         agent.Persona.Text,
+		Agent:           name,
+		Provider:        agent.Backend,
+		Providers:       providerRegistry(cfg),
+		Repository:      repository,
+		ProductID:       cfg.Product.ID,
+		RepositoryID:    string(cfg.Product.RepositoryID),
+		Briefing:        briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,
@@ -699,6 +715,19 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		return nil, nil, errors.Join(err, hold.Release())
 	}
 	return session, hold, nil
+}
+
+// usageLimitPause is what a conversation's turn may spend waiting out a provider
+// with no capacity for it: the run's own bounds for the operator's attended
+// command, and nothing at all for a turn the harness takes for itself.
+func usageLimitPause(cfg config.Config, attended bool) chat.UsageLimitPause {
+	if !attended {
+		return chat.UsageLimitPause{}
+	}
+	return chat.UsageLimitPause{
+		Maximum:   cfg.Execution.UsageLimitMaxPause.Duration(),
+		InProcess: cfg.Execution.UsageLimitInProcessPause.Duration(),
+	}
 }
 
 // conversationAccount picks the provider account one agent's conversation is
