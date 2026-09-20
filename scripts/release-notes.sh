@@ -179,7 +179,11 @@ REASON = "Reason:"
 # harness writes them onto an item's notes at creation (internal/chat): a
 # decomposition names its parent and the role that made it, and an admission
 # from a collected report names the report, its severity, the role that filed
-# it, and the reporter's own words.
+# it, and the reporter's own words. These are copies of that wording, so
+# internal/chat's TestTheReleaseNotesReadTheAdmissionThisPackageWrites runs
+# this script over notes the real writers produced: a change to the wording
+# there fails that test rather than silently reading every item as the
+# operator's.
 DECOMPOSED = re.compile(r"^Created under (\S+), decomposing it by the ([a-z][a-z ]*?) in conversation ")
 REPORTED = re.compile(r'^Admitted from report \S+, filed at "[^"]*" by the ([a-z][a-z ]*?): ?(.*)$')
 

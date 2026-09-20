@@ -530,7 +530,11 @@ change. [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh)
 executes the placement rule, the section order, the entry shape — three items
 side by side, one the operator asked for, one from a reviewer's report, one the
 development manager decomposed — and the refusals against a fabricated
-repository and a fabricated export, and `make test` runs it.
+repository and a fabricated export, and `make test` runs it. The script reads
+the requester off the admission wording `internal/chat` writes onto an item's
+notes, and `TestTheReleaseNotesReadTheAdmissionThisPackageWrites` in that
+package runs the script over notes the real writers produced, so a change to
+that wording fails there rather than silently dropping the line.
 
 The release workflow publishes that same file as the release page's body, with
 the install preamble under it, so the release page and the repository tell one
