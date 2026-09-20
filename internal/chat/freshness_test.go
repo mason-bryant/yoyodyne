@@ -169,9 +169,10 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 	ground := &fakeGround{
 		movement: Movement{Commits: 14, TrackerChanges: 3},
 		briefing: Briefing{
-			Text:       "# Product context\n\nThe documentation was renamed.\n",
-			GatheredAt: refreshedAt,
-			Commit:     "b2b2b2b2",
+			Text:                      "# Product context\n\nThe documentation was renamed.\n",
+			GatheredAt:                refreshedAt,
+			Commit:                    "b2b2b2b2",
+			ShippedDocumentationBytes: 912345,
 		},
 	}
 	options := testOptions(t, provider)
@@ -239,6 +240,11 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 	}
 	if !recorded.ContextGatheredAt.Equal(refreshedAt) || recorded.ContextCommit != "b2b2b2b2" {
 		t.Fatalf("the delivered picture was not adopted: %#v", recorded)
+	}
+	// The size of the shipped documentation the picture carried is recorded
+	// with it, on every delivery, so the set's growth is on the record.
+	if recorded.ContextShippedDocumentationBytes != 912345 {
+		t.Fatalf("the delivered picture's shipped documentation size = %d, want 912345", recorded.ContextShippedDocumentationBytes)
 	}
 	// The refresh is in the conversation's own log, because it changed what the
 	// product manager is reasoning from.

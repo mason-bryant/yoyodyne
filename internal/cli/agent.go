@@ -106,7 +106,12 @@ type conversationReport struct {
 	ResolvedModel     string    `json:"resolved_model,omitempty"`
 	ContextGatheredAt time.Time `json:"context_gathered_at,omitempty"`
 	ContextCommit     string    `json:"context_commit,omitempty"`
-	LastRunWorkItemID string    `json:"last_run_work_item_id,omitempty"`
+	// ContextShippedDocumentationBytes is what the shipped documentation in
+	// that picture added up to on disk, recorded on every pass so the set's
+	// growth toward its ceiling is readable here rather than only from the
+	// test that fails once it is reached.
+	ContextShippedDocumentationBytes int    `json:"context_shipped_documentation_bytes,omitempty"`
+	LastRunWorkItemID                string `json:"last_run_work_item_id,omitempty"`
 	// Resumable says whether a later process can continue this conversation. A
 	// record whose first turn never completed has no provider session, and
 	// speaking to it starts again rather than carrying on.
@@ -358,17 +363,18 @@ func readAgents(parts components) ([]agentReport, error) {
 		switch {
 		case err == nil:
 			report.Conversation = &conversationReport{
-				ID:                recorded.ConversationID,
-				Turns:             recorded.Turns,
-				StartedAt:         recorded.StartedAt,
-				UpdatedAt:         recorded.UpdatedAt,
-				ProviderSessionID: recorded.ProviderSessionID,
-				RequestedModel:    recorded.ProviderModel,
-				ResolvedModel:     recorded.ProviderResolvedModel,
-				ContextGatheredAt: recorded.ContextGatheredAt,
-				ContextCommit:     recorded.ContextCommit,
-				LastRunWorkItemID: recorded.LastRunWorkItemID,
-				Resumable:         recorded.ProviderSessionID != "",
+				ID:                               recorded.ConversationID,
+				Turns:                            recorded.Turns,
+				StartedAt:                        recorded.StartedAt,
+				UpdatedAt:                        recorded.UpdatedAt,
+				ProviderSessionID:                recorded.ProviderSessionID,
+				RequestedModel:                   recorded.ProviderModel,
+				ResolvedModel:                    recorded.ProviderResolvedModel,
+				ContextGatheredAt:                recorded.ContextGatheredAt,
+				ContextCommit:                    recorded.ContextCommit,
+				ContextShippedDocumentationBytes: recorded.ContextShippedDocumentationBytes,
+				LastRunWorkItemID:                recorded.LastRunWorkItemID,
+				Resumable:                        recorded.ProviderSessionID != "",
 			}
 		case errors.Is(err, runstate.ErrNoConversation):
 		default:
@@ -513,6 +519,9 @@ func renderAgent(report agentReport) string {
 			fmt.Fprintf(&rendered, "  working from a picture taken %s", conversation.ContextGatheredAt.UTC().Format(time.RFC3339))
 			if conversation.ContextCommit != "" {
 				fmt.Fprintf(&rendered, " at %s", conversation.ContextCommit)
+			}
+			if conversation.ContextShippedDocumentationBytes > 0 {
+				fmt.Fprintf(&rendered, ", carrying %d bytes of shipped documentation", conversation.ContextShippedDocumentationBytes)
 			}
 			fmt.Fprintln(&rendered)
 		}

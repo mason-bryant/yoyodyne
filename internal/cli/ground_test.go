@@ -13,6 +13,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
@@ -163,6 +164,74 @@ func TestGatherRecordsWhenAndWhatItWasTakenAgainst(t *testing.T) {
 	}
 	if len(briefing.Problems) != 0 {
 		t.Fatalf("problems = %#v, want none", briefing.Problems)
+	}
+}
+
+// The picture records what the shipped documentation adds up to, on every
+// pass, and warns the operator once the set is inside the margin under its
+// ceiling — before the gate on it fails, which is the only thing that used to
+// say so.
+func TestGatherRecordsTheShippedDocumentationSizeAndWarnsInsideTheMargin(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	specifications := filepath.Join(repository, "docs", "product")
+	if err := os.MkdirAll(specifications, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(specifications, "brief.md"),
+		[]byte("# Brief\n\nWhat this is for.\n\n## Goals\n\n- ship bounded work\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	// A handbook one byte inside the margin: every byte of it counts toward the
+	// set whether or not the briefing carries it whole.
+	handbook := "# Handbook\n\nA sentence about the product.\n"
+	handbook += strings.Repeat("x", (contextbundle.ShippedDocumentationCeiling-contextbundle.ShippedDocumentationMargin)-len(handbook)+1)
+	if err := os.WriteFile(filepath.Join(repository, "handbook.md"), []byte(handbook), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ground := conversationGround{
+		runner:               &scriptedRunner{outputs: map[string]string{"bd": "[]", "git": "a1a1a1a1a1a1\n"}},
+		repository:           repository,
+		specifications:       "docs/product",
+		shippedDocumentation: []string{"handbook.md"},
+		gitBinary:            "git",
+		clock:                stoppedClock{at: time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)},
+		timeout:              time.Second,
+	}
+	briefing, err := ground.Gather(context.Background())
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	if briefing.ShippedDocumentationBytes != len(handbook) {
+		t.Fatalf("briefing.ShippedDocumentationBytes = %d, want %d", briefing.ShippedDocumentationBytes, len(handbook))
+	}
+	problems := strings.Join(briefing.Problems, "\n")
+	if !strings.Contains(problems, fmt.Sprintf("the shipped documentation is %d bytes, within", len(handbook))) || !strings.Contains(problems, "bytes of room remain") {
+		t.Fatalf("problems = %#v, want the set's standing inside the margin", briefing.Problems)
+	}
+	// The role is told as well: the size is in the picture it reads, and so is
+	// the product question the margin puts.
+	if !strings.Contains(briefing.Text, fmt.Sprintf("The shipped documentation is %d bytes across 1 document(s) on disk.", len(handbook))) ||
+		!strings.Contains(briefing.Text, "Note: the shipped documentation is") {
+		t.Fatalf("briefing text does not carry the set's size and standing:\n%s", briefing.Text[len(briefing.Text)-1500:])
+	}
+
+	// One byte fewer and the set has the margin to spare: the size is still
+	// recorded, and nothing is said about it.
+	if err := os.WriteFile(filepath.Join(repository, "handbook.md"), []byte(handbook[:len(handbook)-1]), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	briefing, err = ground.Gather(context.Background())
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	if briefing.ShippedDocumentationBytes != len(handbook)-1 {
+		t.Fatalf("briefing.ShippedDocumentationBytes = %d, want %d", briefing.ShippedDocumentationBytes, len(handbook)-1)
+	}
+	if len(briefing.Problems) != 0 {
+		t.Fatalf("problems = %#v, want none with the margin to spare", briefing.Problems)
 	}
 }
 

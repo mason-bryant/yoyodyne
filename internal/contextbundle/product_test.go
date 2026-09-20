@@ -2,6 +2,7 @@ package contextbundle
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -765,13 +766,18 @@ func TestShippedDocumentationNoteFitsWhatIsReservedForIt(t *testing.T) {
 
 	shipped := HarnessShippedDocumentation
 	reserved := longestShippedDocumentationNote(shipped)
-	for _, note := range []string{
-		noShippedDocumentation,
-		noShippedDocumentationNamed,
-		renderShippedDocumentationNote(shipped, "", shipped),
-		renderShippedDocumentationNote(shipped, "### Shipped documentation: README.md", shipped[1:]),
-		renderShippedDocumentationNote(shipped, "### Shipped documentation: README.md", nil),
-	} {
+	// The size line and the standing grow with the figure, so each shape is
+	// rendered at every standing the set can have: with room to spare, inside
+	// the margin, and at the ceiling.
+	var notes []string
+	for _, bytes := range []int{1, ShippedDocumentationCeiling - ShippedDocumentationMargin + 1, ShippedDocumentationCeiling, 9 * ShippedDocumentationCeiling} {
+		notes = append(notes,
+			renderShippedDocumentationNote(shipped, shippedDocumentation{omitted: shipped, bytes: bytes, found: len(shipped)}),
+			renderShippedDocumentationNote(shipped, shippedDocumentation{rendered: "### Shipped documentation: README.md", omitted: shipped[1:], bytes: bytes, found: len(shipped)}),
+			renderShippedDocumentationNote(shipped, shippedDocumentation{rendered: "### Shipped documentation: README.md", bytes: bytes, found: len(shipped)}),
+		)
+	}
+	for _, note := range append([]string{noShippedDocumentation, noShippedDocumentationNamed}, notes...) {
 		if len(note) > reserved {
 			t.Fatalf("a note renders %d bytes against a reserve of %d:\n%s", len(note), reserved, note)
 		}
@@ -834,14 +840,106 @@ func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
 		}
 		total += int(information.Size())
 	}
-	// Naming the README's siblings moved content out of the README rather than
-	// adding it, so the set must not cost the budget twice. This is the figure
-	// that claim is worth checking against, and it is reported either way: what
-	// the reduction bought is only visible as a number.
-	if total > defaultMaxProductBytes {
-		t.Errorf("the shipped documentation is %d bytes against a product budget of %d, so some of it cannot be carried", total, defaultMaxProductBytes)
+	// The set is measured against a ceiling with a margin under it, and only
+	// the ceiling fails. A budget the set was always within bytes of made every
+	// documentation edit a red gate unrelated to the change — four raises in
+	// three weeks, and a report per run asking the same product question — so
+	// the question is asked once, in the constant's comment, and the gate warns
+	// for the length of the margin before it fails. The size is logged either
+	// way: what yoyodyne-ifd.117.4's reduction buys is only visible as a number.
+	t.Logf("shipped documentation is %d bytes across %d documents; the ceiling is %d bytes and the warning starts %d bytes under it",
+		total, len(HarnessShippedDocumentation), ShippedDocumentationCeiling, ShippedDocumentationMargin)
+	switch standing := ShippedDocumentationStanding(total); {
+	case total >= ShippedDocumentationCeiling:
+		t.Error(standing)
+	case standing != "":
+		t.Logf("WARNING: %s", standing)
 	}
-	t.Logf("shipped documentation is %d bytes across %d documents, against a product budget of %d", total, len(HarnessShippedDocumentation), defaultMaxProductBytes)
+}
+
+// The gate measures the set on disk, and the briefing gives the set what is left
+// once the specifications, the tracker, the help, and the docket have taken
+// theirs — so a set that passes the gate has to still fit the briefing with all
+// of those at their largest, or the gate is green over a product manager that is
+// not being shown the last document on the list. That is what happened at 896
+// KiB: the set was 19 KiB under the budget and docs/configuration.md was
+// dropped from every briefing. This assembles this repository's own set with
+// the bounded sections at their bounds and refuses any omission.
+func TestShippedDocumentationFitsTheBriefingBesideEverythingElse(t *testing.T) {
+	t.Parallel()
+
+	items := make([]beads.WorkItem, maxProductWorkItems)
+	for index := range items {
+		items[index] = beads.WorkItem{
+			ID:       fmt.Sprintf("yoyodyne-ifd.%d", index),
+			Title:    strings.Repeat("t", maxWorkItemTitleBytes),
+			Status:   "open",
+			Priority: 2,
+		}
+	}
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          "../..",
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    HarnessShippedDocumentation,
+		WorkItems:               items,
+		CommandHelp:             strings.Repeat("usage: yoyo <command>\n", maxCommandHelpBytes/len("usage: yoyo <command>\n")+1),
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if index := strings.Index(bundle.Text, "This documentation did not fit and is not included above:"); index >= 0 {
+		// Which of the two grew is the whole of what a failure here has to say,
+		// or it reads as the old wall — a red gate on a documentation edit that
+		// says nothing about what to decide. The set is measured against its
+		// ceiling; everything else shares the reserve, and the specifications
+		// are the only part of it nothing bounds.
+		specifications := 0
+		if err := filepath.WalkDir("../../docs/product", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".md") {
+				return err
+			}
+			information, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			specifications += int(information.Size())
+			return nil
+		}); err != nil {
+			t.Errorf("size the specifications: %v", err)
+		}
+		t.Fatalf("the shipped documentation passes the gate and is still dropped from the briefing.\n"+
+			"The set is %d bytes against a ceiling of %d, which the gate judges; the specifications are %d bytes and share the %d-byte reserve with the bounded sections, which nothing bounds.\n"+
+			"If the set is inside its ceiling, it is the specifications that have outgrown productContextReserve, and that is a product decision about the context rather than a documentation edit to trim.\n%s",
+			bundle.ShippedDocumentationBytes, ShippedDocumentationCeiling, specifications, productContextReserve, bundle.Text[index:])
+	}
+	for _, documentPath := range HarnessShippedDocumentation {
+		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Errorf("%s is in the shipped set and has no section in the briefing", documentPath)
+		}
+	}
+	if !strings.Contains(bundle.Text, fmt.Sprintf("The shipped documentation is %d bytes across %d document(s) on disk.", bundle.ShippedDocumentationBytes, len(HarnessShippedDocumentation))) {
+		t.Errorf("the briefing does not record the set's size:\n%s", bundle.Text[len(bundle.Text)-2000:])
+	}
+}
+
+// The standing is one derivation shared by the gate, the briefing, and the
+// operator's warning, so the three thresholds are pinned here: silence with room
+// to spare, a warning naming the room left once inside the margin, and the
+// ceiling reached once at it.
+func TestShippedDocumentationStanding(t *testing.T) {
+	t.Parallel()
+
+	if standing := ShippedDocumentationStanding(ShippedDocumentationCeiling - ShippedDocumentationMargin); standing != "" {
+		t.Errorf("a set exactly the margin under the ceiling has room to spare and got %q", standing)
+	}
+	inside := ShippedDocumentationStanding(ShippedDocumentationCeiling - ShippedDocumentationMargin + 1)
+	if !strings.Contains(inside, fmt.Sprintf("%d bytes of room remain", ShippedDocumentationMargin-1)) || !strings.Contains(inside, "yoyodyne-ifd.117.4") {
+		t.Errorf("a set one byte inside the margin should warn with the room left and name the reduction, got %q", inside)
+	}
+	at := ShippedDocumentationStanding(ShippedDocumentationCeiling)
+	if !strings.Contains(at, "at or past") || !strings.Contains(at, "make test fails") {
+		t.Errorf("a set at the ceiling should say the gate fails, got %q", at)
+	}
 }
 
 // The harness's own set is eight generic paths — docs/work.md, docs/reporting.md,
