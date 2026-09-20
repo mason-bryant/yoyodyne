@@ -136,8 +136,11 @@ four places rather than trusting the argument above:
   forge's answer is recorded queued on either answer, as a re-arm records one,
   and the next sweep's run settlement finishes the publication and closes the
   docket entry. A request already merged or already holding a merge is recorded
-  as that, with the account of the loss cleared, and left to the sweeps that
-  finish those; a moved head, a remote target that no longer passes, or a forge
+  as that in the same write, with the account of the loss replaced — by nothing
+  for a queued merge, and by the unconfirmed-merge line for a performed one, so
+  the finishing sweep selects and finishes it as it finishes any merge the run
+  could not confirm — and left to the sweeps that finish those; a moved head, a
+  remote target that no longer passes, or a forge
   refusal is recorded as the dropped merge it is, on the same docket entry. The
   sweep never repeats a dropped merge — that stays `yoyo triage rearm`.
 - Every docket entry about a run that published — stopped, escalated, or a
@@ -152,7 +155,10 @@ wired with forge access either way. The store held thirteen records of that
 bare shape when this was written, every one completed on 2026-08-15 or
 2026-08-16 — before or on the day publishing landed (yoyodyne-ifd.29, merged
 2026-08-16) — and every one a local promotion; they are out of scope, and
-nothing written since has the shape.
+nothing written since has the shape. That is a narrowing of the item's stated
+criterion, and it is deliberate: a record that loses its request by some path
+that writes neither the account nor goes through the run's own completion is
+not recovered by this, and `docs/operations.md` says so.
 
 ## Tests
 

@@ -649,6 +649,21 @@ func TestReconcileFinishesARecoveredRequestTheForgeAlreadyMerged(t *testing.T) {
 	if len(fixture.forge.merges) != 0 {
 		t.Fatalf("forge merges = %#v, want nothing asked for a merged request", fixture.forge.merges)
 	}
+	// Before anything finishes it, the record already says the truth: the request
+	// is merged and the merge is unconfirmed — never that nothing was asked.
+	recovered, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recovered.PullRequest == nil || !recovered.PullRequest.Merged {
+		t.Fatalf("recovered pull request = %#v, want it recorded merged", recovered.PullRequest)
+	}
+	if strings.Contains(recovered.PublishFailure, "nothing was asked of the forge") {
+		t.Fatalf("publish failure = %q still says nothing was asked, on a request the forge reports merged", recovered.PublishFailure)
+	}
+	if !strings.Contains(recovered.PublishFailure, "has not confirmed the merge on main") {
+		t.Fatalf("publish failure = %q, want the unconfirmed merge named for the finishing sweep", recovered.PublishFailure)
+	}
 	settlements, err := fixture.reconciler(t).FinishPublications(context.Background())
 	if err != nil {
 		t.Fatalf("FinishPublications() error = %v", err)

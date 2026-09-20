@@ -1121,14 +1121,26 @@ re-arm records one, and the next sweep settles the run on what the forge does
 with it — confirms the merge, records the merge commit, catches your local
 branch up, deletes the consumed branch, and closes the docket entry the
 promotion had open. A request the forge has already merged, or already holds a
-merge for, needs no arming and is recorded as that, with the account of the
-loss cleared because something has now asked the forge; a request
+merge for, needs no arming: something has asked the forge, so the account of
+the loss is replaced in the same write that records the request — with nothing,
+for a merge the forge holds, since settling it writes what became of it; and for
+a merge the forge has performed, with the line every unconfirmed merge carries,
+so the finishing above confirms it on the remote and records the merge commit
+exactly as it finishes a merge the run itself could not confirm; a request
 whose head has moved, a remote target that no longer passes the check, or a
 merge the forge refuses is recorded as the dropped merge it is, which puts it on
 the docket for triage and holds the item exactly as a drop the run itself met.
 The sweep never repeats a merge the forge dropped: that is still `yoyo triage
 rearm`, a decision, once. A forge that holds no request for the branch leaves the
-record as the run wrote it, and the sweep says so on every pass it stands.
+record as the run wrote it, and the sweep says so on every pass it stands. What
+the sweep, the docket, and the status line select on is that account and only
+that account — a promoted run that recorded it, with the approving verdict
+beside it — and not the bare shape of a promotion with no request on its
+record: the record carries nothing else that tells a local promotion from a
+publishing one, and every promotion of that bare shape the store held when this
+was built was a local one from before publishing existed. A record that lost its
+request by some path that wrote neither the account nor went through the run's
+own completion is therefore not recovered by this, and is not claimed to be.
 docs/diagnoses/yoyodyne-ifd-402-publication-record-not-lost.md is the account
 of the two runs this was built on, neither of which turned out to have lost
 anything.

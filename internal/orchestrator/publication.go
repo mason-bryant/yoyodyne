@@ -259,6 +259,21 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 		MergeQueued: observed.AutoMerge && !observed.Merged,
 	}
 	state.PullRequest = &published
+	// The account of the loss said nothing was asked of the forge. Where the
+	// forge reports the request merged or holds a merge for it, somebody has
+	// asked — by hand, since the run did not — and the account is replaced in the
+	// same write that records the request, so no record ever says both. A queued
+	// merge leaves nothing outstanding: what settles it writes what became of it.
+	// A merged one leaves the merge to confirm on the remote, which is the same
+	// unfinished publication a merge the run could not confirm leaves, said in
+	// the same words so the finishing sweep selects and finishes it as it
+	// finishes those.
+	switch {
+	case published.Merged:
+		state.PublishFailure = unconfirmedRecoveredMerge(published, state.Integration.TargetBranch)
+	case published.MergeQueued:
+		state.PublishFailure = ""
+	}
 	state.UpdatedAt = r.clock().Now()
 	if err := r.Store.Save(state); err != nil {
 		recovery.Failure = fmt.Errorf("record pull request %d for branch %s on run %s: %w",
@@ -272,21 +287,20 @@ func (r Reconciler) recoverPublication(ctx context.Context, recorded runstate.St
 		recovery.Kept = fmt.Sprintf("the forge reports pull request %d merged, so there is nothing to arm; the next sweep confirms the merge on the remote and finishes the publication", published.Number)
 		return recovery
 	case published.MergeQueued:
-		// The account of the loss said nothing was asked of the forge, and
-		// somebody has asked — by hand, since the run did not. It is cleared as the
-		// armed path clears it, so the record does not say both that a merge is
-		// queued and that none was asked for; what settles the queued merge writes
-		// what became of it.
-		state.PublishFailure = ""
-		state.UpdatedAt = r.clock().Now()
-		if err := r.Store.Save(state); err != nil {
-			recovery.Failure = fmt.Errorf("record that the merge of pull request %d is queued on run %s: %w", published.Number, state.RunID, err).Error()
-			return recovery
-		}
 		recovery.Kept = fmt.Sprintf("the forge already holds a merge for pull request %d, so there is nothing to arm; the next sweep settles the run on what the forge does with it", published.Number)
 		return recovery
 	}
 	return r.armRecoveredMerge(ctx, state, published, recovery)
+}
+
+// unconfirmedRecoveredMerge is what the record says about a recovered request
+// the forge reports merged: the merge is real and nothing here has confirmed it
+// on the remote. It is the state the finishing sweep exists for, and it is the
+// account the work item carries until that sweep confirms it and says which
+// line it replaced.
+func unconfirmedRecoveredMerge(published runstate.PullRequest, targetBranch string) string {
+	return fmt.Sprintf("the forge reports pull request %d merged and the harness has not confirmed the merge on %s: the request was recovered from the forge by branch after the run recorded none, and `yoyo reconcile` confirms the merge, records the merge commit, and finishes the publication",
+		published.Number, targetBranch)
 }
 
 // armRecoveredMerge makes the merge request the run's own merge would have
