@@ -149,6 +149,15 @@ harness does not admit it on an approved goal's authority: it comes to you with
 the item it looks like named on it, and whether the two are the same work is
 yours to say.
 
+The check needs a listing of the tracker, and a listing the tracker would not
+give is not a pass. The listing is asked for again under the same rule a run's
+tracker writes are retried under — see
+[waiting out a network that dropped](operations.md#waiting-out-a-network-that-dropped)
+— and a listing that still fails after that refuses the creation with the reason,
+and brings a proposal to you with the same reason where the goals would otherwise
+have admitted it unasked. On 2026-09-18 the listing timed out under an admission
+and the admission went in unchecked, which is what a guard that fails open costs.
+
 What it is worth is two runs. `yoyodyne-ifd.274` duplicated the closed
 `yoyodyne-ifd.229`, both admitted from one developer report; `yoyodyne-ifd.241`
 was decomposed twice into the same pair of children. A duplicate cannot be

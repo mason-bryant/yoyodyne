@@ -48,6 +48,16 @@ func (a *turnActivity) doing(phase string) {
 	a.display.Doing(phase)
 }
 
+// current is the last phase named, so a wait that names its own phase can put
+// the turn's back afterwards. It is empty where nothing is displayed or nothing
+// has been named yet, and there is then nothing to put back.
+func (a *turnActivity) current() string {
+	if a == nil {
+		return ""
+	}
+	return a.phase
+}
+
 // observe reports one recorded event to the operator's display. It reads the
 // event rather than the provider's own stream, so the display can never say
 // anything the durable record does not.

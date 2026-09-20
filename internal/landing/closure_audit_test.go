@@ -119,6 +119,11 @@ var auditedClosures = []closureSite{
 		Why: "the product manager closing or retiring an item in conversation. Nothing integrated, no developer claimed anything and no reviewer approved anything, so there is nothing to read; what authorizes it is the role, and the two calls are the close and the retirement.",
 	},
 	{
+		File: "internal/chat/trackerrecovery.go", Declaration: "(recoveringTracker) Complete", Calls: 1,
+		ConsultsDischarge: false, Kind: kindHuman,
+		Why: "the conversation's tracker with the recovery rule around it, forwarding the one closure above to the configured tracker and asking again while it fails recoverably. It decides nothing: the only route that reaches it is carryOutTrackerAction, so what authorizes the closure is the role that asked for it there, and what this adds is the wait.",
+	},
+	{
 		File: "internal/orchestrator/pipeline.go", Declaration: "(*activeRun) complete", Calls: 1,
 		ConsultsDischarge: true, Kind: kindSettlement,
 		Why: "a run settling its own item once its promotion is where it will stay. It closes only where the change discharges the item — the developer's claim and the reviewer's approval both saying so; anything else goes to settleUndischarged instead, and a merge the forge only queued defers the whole settlement to reconciliation.",

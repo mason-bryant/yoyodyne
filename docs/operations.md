@@ -795,6 +795,34 @@ item — with the attempts and the time in front of it, so a run handed to a per
 says the network was retried and for how long instead of reporting the last reset
 as though it were the first.
 
+**A conversation's tracker calls are under the same rule.** Every decision a
+role makes in conversation — a triage decision, an admission, a note, a closure
+— is a write to the same store, and the reads that gate those writes go to it
+too; until yoyodyne-ifd.366 not one of them was retried, which is how a triage
+re-run of yoyodyne-ifd.142 came to be reported as unrecorded on a single `bd
+update` that timed out. Now a call that fails the way a killed or contended
+`bd` does is waited out on the same series and asked again, and only a call
+that has spent the window is reported the way it always was, with the attempts
+and the time in front of it and then the account of what a timed-out write left
+behind. The window is per operator message rather than per boundary, and every
+call in the message shares it — forty calls each waiting a whole window is a
+message nobody gets an answer from. Each wait is recorded on the conversation
+before it is taken, as a `tracker.retried` event, and an interactive turn shows
+it on screen — `waiting out a tracker failure a later attempt may survive; asking
+again at 3:04PM (attempt 3, after 2s)` — so a turn waiting out a contended store
+is distinguishable from one that has hung. Stopping the turn ends the waiting,
+all of it: the call is left as it failed, the window is closed for every later
+call in the message — including the read that settles what a timed-out write
+left behind, which runs under a context nothing can cancel — and what is
+reported says the turn was stopped rather than that the window ran out. An
+action that landed after waiting says so on its own line. One guard changed
+with it: the duplicate check an admission makes used to let the admission
+through when its listing failed, on the argument that the tracker was briefly
+unavailable. Now that the listing is retried, a listing that still fails refuses
+the creation with the reason, and puts a proposal the goals would have admitted
+unasked to the operator instead, rather than admitting work on the strength of a
+guard that never ran.
+
 **One consequence is worth knowing before you raise
 `execution.max_concurrent_developers`, and it is not free.** Five of these
 boundaries run under the target branch's promotion lease, which is what keeps
