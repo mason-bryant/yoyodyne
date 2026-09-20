@@ -1962,7 +1962,7 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Seven things keep an item out of a pass, reported at two different grains. Four are
+Eight things keep an item out of a pass, reported at two different grains. Five are
 named against the item, because nothing else would report that this item was
 passed over. An unresolved directive is named with the directive's own words: it
 needs a person. An item whose unfinished children already carry its execution is
@@ -1988,7 +1988,11 @@ symbol the repository no longer has, or that says in its own authored words that
 something must land before it starts — is named with the unmet prerequisite and
 routed to the [triage docket](#triage-thresholds) rather than
 to a run; [how work flows](work.md#letting-the-harness-choose-the-work) says what
-the two readings are and who releases each. The tracker not
+the two readings are and who releases each. And an item every free
+[developer slot](#a-developer-slot-that-prefers-a-label) walked past for its
+preferred label is named as left for another slot, with the slot and what it
+pulled ahead of the item: it waits on nothing about itself, and the next slot
+with no preference to come free takes it in the order. The tracker not
 reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
@@ -2000,7 +2004,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A seventh thing deliberately keeps nothing out: an item whose goal was amended
+A ninth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
@@ -2010,6 +2014,79 @@ why staleness reports rather than decides.
 configured, and the default of `1` is deliberate: raising it is a decision about
 your machine, and [how long a check may take](#how-long-a-check-may-take) is the
 setting that has to move with it.
+
+### A developer slot that prefers a label
+
+Each unit of `max_concurrent_developers` is a **developer slot**: the capacity
+one developer run takes. By default every slot pulls in the order you set. A
+slot can instead prefer a **label** — the tracker's own labels, which the
+product manager and the development manager put on work items — and then it
+pulls the ready work carrying that label first, wherever that sits in the
+order, and the rest of the backlog only when none of its label's work is ready:
+
+```yaml
+execution:
+  max_concurrent_developers: 3
+  developer_slots:
+    - prefer: [dashboard]   # developer slot 1 pulls dashboard-labelled work first
+    # slots 2 and 3 are not named, so they prefer nothing
+```
+
+`developer_slots` is one entry per slot, in slot order, and it may be shorter
+than the capacity — the slots it does not name prefer nothing — and never
+longer, because a preference for a slot the capacity does not have is one
+nothing would ever act on, so a longer list is refused when the file loads. An
+entry names the labels it prefers under `prefer`, any one of which on an item is
+enough; an entry written as `{}` or with `prefer: []` is a slot with no
+preference, which is how the first slot is left alone and the second given one.
+A slot may prefer more than one label, and more than one slot may prefer the
+same label. Each label is held to the rule the tracker's actions hold a label to
+— one word of letters, digits, dots, underscores, and hyphens, up to 64 bytes —
+and compared exactly, so `Dashboard` and `dashboard` are two labels. A list in a
+later layer replaces an inherited one whole, as `checks` does.
+
+**What a preference changes is which item a slot pulls first, and nothing
+else.** The item a preferring slot starts is claimed, developed, checked,
+reviewed, and promoted exactly as it would be from any slot, under the same
+contract and the same authority table. Configuration selects what a slot pulls
+and never widens what it may do.
+
+Three things follow from a preference, in the order a pull applies them:
+
+- **A preferring slot pulls its label's ready work first.** With the example
+  above and the dashboard's child items at priority 2 under an unlabelled item
+  at priority 1, slot 1 pulls a dashboard item ahead of the unlabelled one; the
+  run's recorded reason says it was pulled into developer slot 1, which prefers
+  the dashboard label the item carries.
+- **A slot with no preference leaves labelled work to a preferring slot that is
+  free to take it.** With slots 1 and 2 both free, the dashboard item goes to
+  slot 1 and slot 2 takes the next unlabelled item down the order. Where no
+  preferring slot is free — slot 1 is working on one dashboard item and another
+  is ready — the label is only a preference, and slot 2 takes the dashboard
+  item in the order like any other. A label dedicates capacity to its work; it
+  never withholds the rest of the machine from it.
+- **A preferring slot never idles on an empty label.** Once none of its label's
+  work is ready, slot 1 pulls from the rest of the backlog in the order like a
+  slot with no preference, and its recorded reason says it fell back. The next
+  dashboard item admitted is pulled the next time slot 1 is free.
+
+Which slot a run is in is not written down; it is read off what is in flight
+against what the slots prefer, the same way every time, by the scheduler and by
+`yoyo status` alike. A run over labelled work is in a slot that prefers its
+label while one is unassigned, and everything else is in a slot with no
+preference first and in a preferring slot only once those are full — which is
+that slot having fallen back. Labels are read from what each run recorded at
+its claim, so a run started by `yoyo run` counts against the slots exactly as a
+scheduled one does. Where any slot prefers a label, the running line of
+[`yoyo status`](operations.md#where-the-harness-stands-the-four-lines) says which slot each run is in and what that slot
+prefers, and names each free slot with its preference under the runs; where
+none does, the line reads as it always did. An item the only free slots walked
+past for their label — an unlabelled item ranked above the dashboard item slot
+1 pulled, with no other slot free — is reported by the pass as **left for
+another developer slot** rather than as deferred, naming the slot and what it
+pulled ahead of the item: the item waits on nothing about itself, and what
+takes it is the next slot with no preference to come free, or slot 1 once its
+label's work is exhausted.
 
 ### Watching instead of draining
 
@@ -4201,6 +4278,10 @@ These are all errors, reported before any work is claimed:
   serves no role, holds no tool posture, names a role or posture the harness does
   not have, reads nothing its provider says, or tries to replace a backend this
   build ships;
+- an `execution.developer_slots` list longer than `max_concurrent_developers`,
+  since a preference for a slot the capacity does not have is one nothing would
+  act on; and a slot preferring a label the tracker would not carry — anything
+  but one identifier-shaped word — or naming one label twice;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;

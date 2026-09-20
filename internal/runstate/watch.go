@@ -150,6 +150,14 @@ const (
 	PassedOverPausedByDirective   PassedOverClass = "paused by a directive"
 	PassedOverSequencedBehindWork PassedOverClass = "sequenced behind work in flight"
 	PassedOverPrerequisiteUnmet   PassedOverClass = "the tree does not meet what it asks for"
+	// PassedOverLeftForAnotherSlot is an item the only free developer slots
+	// passed over for their preferred label: each of them pulled work carrying
+	// the label it prefers ahead of this item, and no slot with no preference was
+	// free to take it. It is not a wait on anything about the item — a slot with
+	// no preference takes it in the product manager's order, and a preferring
+	// slot falls back to it once its label's work is exhausted — which is why it
+	// is named apart from a deferral.
+	PassedOverLeftForAnotherSlot PassedOverClass = "left for another developer slot"
 )
 
 // PassedOverClasses is the whole taxonomy, in the order a pull meets them. A
@@ -169,6 +177,7 @@ func PassedOverClasses() []PassedOverClass {
 		PassedOverPausedByDirective,
 		PassedOverSequencedBehindWork,
 		PassedOverPrerequisiteUnmet,
+		PassedOverLeftForAnotherSlot,
 	}
 }
 

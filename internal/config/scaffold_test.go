@@ -132,7 +132,9 @@ func TestScaffoldStatesExactlyWhatTheBundleWouldHaveSupplied(t *testing.T) {
 			t.Errorf("agent %q = %+v, want %+v", name, got, want)
 		}
 	}
-	if generated.Execution != inherited.Execution {
+	// Compared deeply because the execution block carries the developer slots'
+	// preferences, which is a slice.
+	if !reflect.DeepEqual(generated.Execution, inherited.Execution) {
 		t.Errorf("execution = %+v, want %+v", generated.Execution, inherited.Execution)
 	}
 	if !reflect.DeepEqual(generated.Approvals, inherited.Approvals) {

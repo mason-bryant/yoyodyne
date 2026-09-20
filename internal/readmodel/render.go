@@ -133,18 +133,41 @@ func (s Standing) renderRunning() string {
 	if s.RunningProblem != "" {
 		return unreadable("Running", s.RunningProblem)
 	}
-	if len(s.Running) == 0 {
-		return "Running: nothing\n"
-	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "Running (%s):\n", count(len(s.Running), "developer run"))
-	listed, further := bound(len(s.Running))
-	for _, run := range s.Running[:listed] {
-		fmt.Fprintf(&rendered, "  %s — %s, %s elapsed, %s\n",
-			run.WorkItemID, phaseOf(run), age(run.Elapsed), spendOf(run))
+	if len(s.Running) == 0 {
+		rendered.WriteString("Running: nothing\n")
+	} else {
+		fmt.Fprintf(&rendered, "Running (%s):\n", count(len(s.Running), "developer run"))
+		listed, further := bound(len(s.Running))
+		for _, run := range s.Running[:listed] {
+			fmt.Fprintf(&rendered, "  %s — %s, %s elapsed, %s%s\n",
+				run.WorkItemID, phaseOf(run), age(run.Elapsed), spendOf(run), slotOf(run))
+		}
+		rendered.WriteString(remainder(further, "developer run"))
 	}
-	rendered.WriteString(remainder(further, "developer run"))
+	// The slots with nothing in them, each with what it prefers, said under the
+	// runs where some slot prefers a label. A free slot that prefers a label is
+	// the one fact about capacity a reader cannot infer from the runs: it says
+	// what the next pull will look for first. Nothing is said where no slot
+	// prefers anything, so the line reads as it always did.
+	for _, slot := range s.DeveloperSlots {
+		if slot.Free() {
+			fmt.Fprintf(&rendered, "  developer slot %d is free and prefers %s\n", slot.Number, slot.Preference())
+		}
+	}
 	return rendered.String()
+}
+
+// slotOf is which developer slot a run occupies, and what that slot prefers,
+// said after the spend where some configured slot prefers a label. It is empty
+// where none does — a project that configured no preference reads exactly as it
+// did — and for a run in flight beyond the configured capacity, which no slot
+// holds.
+func slotOf(run RunningRun) string {
+	if run.Slot == 0 {
+		return ""
+	}
+	return ", in " + (DeveloperSlotStanding{Number: run.Slot, Preferred: run.SlotPrefers}).Says()
 }
 
 func (s Standing) renderWorking() string {

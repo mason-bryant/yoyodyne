@@ -325,6 +325,20 @@ type Execution struct {
 	// records ends the wait wherever the cooldown stands. Zero waits for her
 	// summoned turn and no longer.
 	BrakeCooldown Duration `yaml:"brake_cooldown" json:"brake_cooldown"`
+	// DeveloperSlots is what each developer slot prefers, one entry per slot in
+	// slot order, and empty for a project whose every slot pulls in the product
+	// manager's order. A slot is one unit of MaxConcurrentDevelopers, so the list
+	// may be shorter than that — the slots it does not name prefer nothing — and
+	// never longer, because a preference for a slot the capacity does not have is
+	// a preference nothing will ever act on. A slot that prefers a label pulls the
+	// backlog's ready work carrying it first, and the rest of the backlog only
+	// when none of its label's work is ready; a slot with no preference passes
+	// labelled work over while a slot preferring its label is free to take it.
+	//
+	// It selects what a slot pulls first and nothing else. A slot with a
+	// preference runs what any slot runs, under the same contract, checks, and
+	// reviewer, so there is nothing here a persona or a role could be widened by.
+	DeveloperSlots []domain.DeveloperSlot `yaml:"developer_slots,omitempty" json:"developer_slots,omitempty"`
 	// DeclarativeDelivery is how a new run is executed, and it defaults on: each
 	// run compiles the built-in delivery definition, records a workflow instance
 	// of it, and steps that instance beside the run, so the sequence the
@@ -729,6 +743,7 @@ func (c Config) Validate() error {
 	if c.Execution.MaxConcurrentDevelopers < 1 {
 		problems = append(problems, "max_concurrent_developers must be at least 1")
 	}
+	problems = append(problems, developerSlotProblems(c.Execution)...)
 	if c.Execution.RepairAttemptsBeforeReplan < 0 {
 		problems = append(problems, "repair_attempts_before_replan cannot be negative")
 	}
@@ -988,6 +1003,27 @@ func (c Config) Validate() error {
 		return ValidationError{Problems: problems}
 	}
 	return nil
+}
+
+// developerSlotProblems refuses a slot list the capacity cannot carry out and a
+// preference no item could ever satisfy. A list longer than the capacity names
+// a slot that does not exist, and a preference on it is one nothing will ever
+// act on — refused here rather than left to read as a slot the operator
+// believes is dedicated. A label the tracker would not carry is refused for the
+// same reason: a slot preferring one would pull nothing first, forever, and
+// nothing downstream would say so.
+func developerSlotProblems(execution Execution) []string {
+	var problems []string
+	if len(execution.DeveloperSlots) > execution.MaxConcurrentDevelopers && execution.MaxConcurrentDevelopers >= 1 {
+		problems = append(problems, fmt.Sprintf("execution.developer_slots names %d slot(s) and max_concurrent_developers is %d; a developer slot is one unit of that capacity, so the list may be shorter than it and never longer",
+			len(execution.DeveloperSlots), execution.MaxConcurrentDevelopers))
+	}
+	for index, slot := range execution.DeveloperSlots {
+		for _, err := range slot.Problems() {
+			problems = append(problems, fmt.Sprintf("execution.developer_slots slot %d: %v", index+1, err))
+		}
+	}
+	return problems
 }
 
 // namedWorkItemClasses lists the classes a project may exempt, so a refusal

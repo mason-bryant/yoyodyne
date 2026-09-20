@@ -98,6 +98,13 @@ type executionDocument struct {
 	WorkPoll                               *Duration `yaml:"work_poll"`
 	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
 	BrakeCooldown                          *Duration `yaml:"brake_cooldown"`
+	// DeveloperSlots is what each developer slot prefers, one entry per slot in
+	// slot order. A supplied list replaces an inherited one wholesale rather than
+	// merging with it, the way the check list does: which slot prefers what is one
+	// statement, and a list half from a bundle and half from a project is a
+	// preference nobody wrote down. Absent leaves every slot preferring nothing,
+	// which is what every file written before slots could prefer anything means.
+	DeveloperSlots *[]domain.DeveloperSlot `yaml:"developer_slots"`
 	// DeclarativeDelivery is absent from every file written before it existed and
 	// from every file whose project is content with the default. A layer that does
 	// not supply it leaves the harness default in force, which is the declarative

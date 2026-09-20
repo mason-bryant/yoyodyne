@@ -146,6 +146,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/developerslot"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
@@ -498,6 +499,14 @@ type Pull struct {
 	// same number across every process, and this only keeps the scheduler from
 	// walking into a refusal it can see coming.
 	Capacity int
+	// Slots is execution.developer_slots as this pull read it: what each of the
+	// Capacity developer slots prefers, in slot order, with the slots the list
+	// does not name preferring nothing. A slot that prefers a label pulls the
+	// ready work carrying it first and the rest of the backlog only when none is
+	// ready; see developerslot for how the free slots are read off what is in
+	// flight. Empty is every slot pulling in the product manager's order, which
+	// is what every pull did before slots could prefer anything.
+	Slots []domain.DeveloperSlot
 	// Poll is execution.work_poll as this pull read it: how long a watch session
 	// waits before reading the queue again. It is read per pull like everything
 	// else here, so an interval changed under a running session takes effect at
@@ -698,6 +707,11 @@ type Started struct {
 	// decided the hold, and a reader of the schedule has to be able to see which
 	// run that was.
 	Probe bool `json:"probe,omitempty"`
+	// Slot is the developer slot the item was pulled into, counted from 1 as the
+	// configuration counts them. It is on the record beside the reason, which
+	// says why that slot took it, so a reader checking a slot's preference against
+	// what it actually pulled has both in one place.
+	Slot int `json:"developer_slot,omitempty"`
 	// awayCause is set when Failure is the provider turning the dispatch away —
 	// a login nobody has renewed, an API nothing reaches — which the settle reads
 	// to count the start toward nothing. It is not on the record because the
@@ -713,11 +727,13 @@ type Started struct {
 
 // Deferred is one pullable item this pass declined to start, and why.
 //
-// Five things land here: an unresolved directive, an item whose unfinished
+// Six things land here: an unresolved directive, an item whose unfinished
 // children already carry its execution, an item that would have raced work
 // already in flight over the same epic or the same files, an item whose
-// executor is a persona conversation rather than a developer run, and an item
-// somebody parked. Each is named
+// executor is a persona conversation rather than a developer run, an item
+// somebody parked, and an item every free developer slot walked past for the
+// label it prefers — left for another slot, which is a wait on capacity rather
+// than on anything about the item. Each is named
 // against the item rather than counted, because each is a fact about that item
 // that nothing else in the harness would report — the first needs a person, and
 // the rest are the scheduler passing over something the tracker called ready.
@@ -1444,7 +1460,7 @@ pulling:
 			// with no identifier to name; one that has reserved is already here under
 			// the identifier the store gave it.
 			if _, recorded := occupied[id]; !recorded {
-				occupied[id] = ""
+				occupied[id] = runstate.State{WorkItemID: id}
 			}
 		}
 		schedule.Capacity = pull.Capacity
@@ -1500,7 +1516,16 @@ pulling:
 		// pull starts things.
 		flight := newInFlight()
 		for id, run := range occupied {
-			flight.take(read.items[id], run)
+			flight.take(read.items[id], run.RunID)
+		}
+		// Which developer slots are free, in the order this pull fills them: the
+		// slots that prefer a label first, so labelled work is pulled into the slot
+		// configured for it before a slot with no preference reaches it. It is
+		// read from what is in flight rather than remembered, like everything
+		// else here, and it is the same reading the standing status makes.
+		freeSlots := pull.slotsOf(occupied, read.items).Free()
+		if len(freeSlots) > free {
+			freeSlots = freeSlots[:free]
 		}
 		// sequenced names the items this pull has held back for a conflict so
 		// far, in the order the product manager set. An item started after one of
@@ -1511,120 +1536,36 @@ pulling:
 		// it found nothing. It is this pull's own reading and is discarded with it.
 		poll := idlePoll{}
 
+		// eligible is whether one entry may be started this pull, decided once per
+		// entry however many slots ask about it, with what passed it over recorded
+		// at the first asking. Every question but the conflict one is asked here:
+		// the conflict depends on what this pull has already started, so it is
+		// asked again at every attempt, where the others hold for the whole pull.
+		//
+		// It is asked lazily — of the entries a slot actually reaches — rather than
+		// of the whole queue up front, because the last of its questions reads the
+		// repository and a pull with one free slot has no business reading the tree
+		// for forty items to fill it.
+		decided := make(map[string]eligibility)
+		eligible := func(entry backlog.Entry) (eligibility, error) {
+			if answer, asked := decided[entry.ID]; asked {
+				return answer, nil
+			}
+			answer, err := s.eligibility(entry, eligibilityReading{
+				pull: pull, read: read, tried: tried, occupied: occupied,
+				schedule: &schedule, poll: &poll, passOver: passOver,
+			})
+			if err == nil {
+				decided[entry.ID] = answer
+			}
+			return answer, err
+		}
+		// start spends one free slot on one entry. It reports false where the
+		// probe's record would not take the item, which ends the choosing for this
+		// pull exactly as it did before slots had preferences.
 		started := 0
-		for _, entry := range queue.Entries {
-			if started == free {
-				break
-			}
-			if s.Limit > 0 && len(schedule.Started) >= s.Limit {
-				break
-			}
-			if !entry.Ready {
-				// Unready entries are counted rather than listed, with two exceptions:
-				// an item no developer run can carry, and an item somebody parked.
-				// Neither is waiting for anything, so the count they would otherwise
-				// disappear into — work that will become pullable — is a count neither
-				// of them will ever join. Each is named once, like every other
-				// deferral, and what it names is what somebody does about it.
-				if reason, named := passedOverReason(entry); named {
-					passOver(entry.ID, reason)
-				}
-				poll.pass(entry.ID, unreadyClass(entry), entry.Executor.Role())
-				continue
-			}
-			if s.cooling(tried, read.items[entry.ID]) {
-				poll.passTried(entry.ID, tried[entry.ID].reason)
-				continue
-			}
-			if _, busy := occupied[entry.ID]; busy {
-				poll.pass(entry.ID, runstate.PassedOverAlreadyInFlight, "")
-				continue
-			}
-			// A decomposed item is not itself a run. Its children are where the work
-			// went, and starting the parent beside them buys the same change a second
-			// time — two developers rewriting one file, the second of them guaranteed
-			// a conflict at integration. Nothing downstream would catch it: the
-			// reservation sees two different items, and the tracker reports the parent
-			// as ready because nothing blocks it.
-			//
-			// A child covers whether it is queued or already claimed, because both are
-			// work that has not been done yet. This is re-read at every pull like
-			// everything else, so an item stops being covered when its last child
-			// closes, and one that is decomposed while the session watches stops being
-			// pullable at the next selection.
-			if covering := read.children[entry.ID]; len(covering) > 0 {
-				passOver(entry.ID, coveredReason(covering))
-				poll.pass(entry.ID, runstate.PassedOverCoveredByChildren, "")
-				continue
-			}
-			// An unresolved directive stops the work whether it is read here or in
-			// the pipeline, so this is not the enforcement — it is the scheduler
-			// declining to spend a slot on a start it can see will not proceed, and
-			// saying which directive it was.
-			pausing, err := pull.Directives.Pausing(entry.ID)
-			if err != nil {
-				if !unreadable(fmt.Errorf("read the directives that pause %s: %w", entry.ID, err)) {
-					break pulling
-				}
-				// The items this pull already started keep running and are collected
-				// like any other; the pull that follows re-reads the queue and passes
-				// over them because they are in flight.
-				continue pulling
-			}
-			if len(pausing) > 0 {
-				// The directive is re-read at every pull rather than remembered,
-				// because what clears it is a person and the whole point of a pass
-				// that outlives them answering is that it notices. What is
-				// remembered is only that this was said: an item paused all night
-				// is one line in the report rather than one per poll.
-				passOver(entry.ID, "an unresolved directive pauses it: "+pausing[0].Summary())
-				poll.pass(entry.ID, runstate.PassedOverPausedByDirective, "")
-				continue
-			}
-			// Work that would race something already going is sequenced behind it
-			// rather than started beside it. This enforces nothing — the promotion
-			// lease and the replay still do all of that — and buys the difference
-			// between a wait and a replayed, re-checked, re-reviewed run. It is
-			// re-read at every pull like everything else here, so an item held back
-			// now is pulled at the first pull where the run it would have raced has
-			// ended. The line it leaves on the schedule names the run this pull found
-			// it behind, so a session that held an item behind three runs in turn
-			// reports the last of them rather than the first.
-			if racing, races := flight.against(read.items[entry.ID]); races {
-				passOver(entry.ID, racing.reason())
-				sequencedEarlier[entry.ID] = racing
-				sequenced = append(sequenced, entry.ID)
-				poll.pass(entry.ID, runstate.PassedOverSequencedBehindWork, "")
-				continue
-			}
-			// The last question asked before a slot is spent, and the only one that
-			// reads the repository: does the tree hold what this item says it needs?
-			// It is asked last because everything above it is cheaper and because
-			// everything above it clears on its own, where this needs a person; and
-			// it is asked at all because the four times it was not, the answer cost
-			// a full run each to discover. See readiness for the incidents and for
-			// what the two readings are.
-			//
-			// A reading that failed is not a refusal. The tree is unreadable, which
-			// says nothing about the item, so the item is dispatched exactly as it
-			// would have been and the failed reading is reported beside the pass.
-			unmet, problem := pull.unready(read.items[entry.ID])
-			if problem != "" && schedule.ReadinessProblem == "" {
-				schedule.ReadinessProblem = problem
-			}
-			if len(unmet) > 0 {
-				// Routed to the development manager rather than only reported, because
-				// a refusal that lives in one pass's output is one nobody reads: the
-				// docket is where work nothing will pick up already goes. The write is
-				// keyed to the item and what was found, so a session polling every
-				// fifteen seconds dockets this once rather than once a poll.
-				if err := pull.route(read.items[entry.ID], unmet); err != nil && schedule.ReadinessProblem == "" {
-					schedule.ReadinessProblem = err.Error()
-				}
-				passOver(entry.ID, unreadyReason(unmet))
-				poll.pass(entry.ID, runstate.PassedOverPrerequisiteUnmet, "")
-				continue
-			}
+		startedNow := make(map[string]bool)
+		start := func(entry backlog.Entry, slot developerslot.Slot, into pulledInto) bool {
 			delete(deferred, entry.ID)
 			// The exclusion is made as the start is, and says what it is for from the
 			// first poll that meets it. A start in flight is the one state here nobody
@@ -1645,7 +1586,7 @@ pulling:
 			index := len(schedule.Started)
 			selection := runstate.Selection{
 				By:     runstate.SelectedByScheduler,
-				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID], ordering),
+				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID], ordering) + into.reason(pull.Slots),
 			}
 			if probing {
 				// The probe is named on the hold's own record before it starts,
@@ -1656,18 +1597,146 @@ pulling:
 				selection = runstate.Selection{By: runstate.SelectedByBrake, Reason: probeReason(hold, selection.Reason)}
 				if !s.recordProbe(&schedule, pull, entry.ID) {
 					delete(tried, entry.ID)
-					break
+					return false
 				}
 			}
-			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason, Probe: probing})
+			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason, Probe: probing, Slot: slot.Number})
 			flight.take(read.items[entry.ID], "")
 			mine[entry.ID] = index
+			startedNow[entry.ID] = true
 			running++
 			started++
 			go func(workItemID string) {
 				outcome, err := pull.Start(ctx, workItemID, selection)
 				completions <- completed{index: index, outcome: outcome, err: err}
 			}(entry.ID)
+			return true
+		}
+		bounded := func() bool {
+			return started == len(freeSlots) || (s.Limit > 0 && len(schedule.Started) >= s.Limit)
+		}
+
+		// racedNow is the entries this pull found racing work in flight. The
+		// flight only grows within a pull, so an entry that raced once races at
+		// every later asking, and it is accounted for at the first.
+		racedNow := make(map[string]bool)
+		// fill walks the queue in the product manager's order for one free slot
+		// and starts the first entry the slot may take. A slot asking for its
+		// preferred label walks past everything not carrying it without asking
+		// anything else about it, and where it then takes something, what it
+		// walked past on the way is remembered: an entry ranked above the one it
+		// took, that no slot then reaches, is what the pass reports as left for
+		// another slot. A walk that takes nothing leaves nothing for anyone — the
+		// slot falls back over the same entries, or the pass's bound stops it.
+		var leftBehind []walkedPast
+		fill := func(slot developerslot.Slot, labelled bool) (walk, error) {
+			var past []walkedPast
+			for _, entry := range queue.Entries {
+				if startedNow[entry.ID] || racedNow[entry.ID] {
+					continue
+				}
+				if labelled && !slot.Prefers(read.items[entry.ID].Labels) {
+					past = append(past, walkedPast{entry: entry, slot: slot})
+					continue
+				}
+				answer, err := eligible(entry)
+				if err != nil {
+					return walkUnreadable, err
+				}
+				if answer != startable {
+					continue
+				}
+				// Work that would race something already going is sequenced behind it
+				// rather than started beside it. This enforces nothing — the promotion
+				// lease and the replay still do all of that — and buys the difference
+				// between a wait and a replayed, re-checked, re-reviewed run. It is
+				// re-read at every pull like everything else here, so an item held back
+				// now is pulled at the first pull where the run it would have raced has
+				// ended. The line it leaves on the schedule names the run this pull found
+				// it behind, so a session that held an item behind three runs in turn
+				// reports the last of them rather than the first.
+				if racing, races := flight.against(read.items[entry.ID]); races {
+					racedNow[entry.ID] = true
+					passOver(entry.ID, racing.reason())
+					sequencedEarlier[entry.ID] = racing
+					sequenced = append(sequenced, entry.ID)
+					poll.pass(entry.ID, runstate.PassedOverSequencedBehindWork, "")
+					continue
+				}
+				if !start(entry, slot, pulledInto{slot: slot, labelled: labelled}) {
+					return walkStopped, nil
+				}
+				for index := range past {
+					past[index].took = entry.ID
+				}
+				leftBehind = append(leftBehind, past...)
+				return walkStarted, nil
+			}
+			return walkNothing, nil
+		}
+
+		// The slots are filled in three passes. First every free preferring slot
+		// pulls its own label's work, wherever that sits in the order. Then every
+		// free slot with no preference pulls what is left, in the order. Last, a
+		// preferring slot that found none of its label's work ready falls back to
+		// the rest of the backlog — which is the difference between a slot that
+		// prefers a label and one reserved for it: it never idles on an empty label.
+		filled := make(map[int]bool, len(freeSlots))
+		passes := []struct{ labelled, preferring bool }{{true, true}, {false, false}, {false, true}}
+	filling:
+		for _, pass := range passes {
+			for _, slot := range freeSlots {
+				if filled[slot.Number] || slot.Preferring() != pass.preferring || bounded() {
+					continue
+				}
+				walked, err := fill(slot, pass.labelled)
+				switch walked {
+				case walkStarted:
+					filled[slot.Number] = true
+				case walkStopped:
+					break filling
+				case walkUnreadable:
+					if !unreadable(err) {
+						break pulling
+					}
+					// The items this pull already started keep running and are collected
+					// like any other; the pull that follows re-reads the queue and passes
+					// over them because they are in flight.
+					continue pulling
+				}
+			}
+		}
+		// What a preferring slot walked past for want of its label on the way to
+		// what it took, and that no slot then reached, is accounted for here. Each
+		// is asked the same questions a slot would have asked it — these are the
+		// entries a walk with no preference would have reached, so this reads no
+		// more of the harness than that walk did — and one that could have been
+		// started is left for another slot, while one that could not keeps the
+		// account those questions gave it. An entry some slot did reach has its
+		// own account already.
+		for _, past := range leftBehind {
+			if _, asked := decided[past.entry.ID]; asked || startedNow[past.entry.ID] || racedNow[past.entry.ID] {
+				continue
+			}
+			answer, err := eligible(past.entry)
+			if err != nil {
+				if !unreadable(err) {
+					break pulling
+				}
+				continue pulling
+			}
+			if answer != startable {
+				continue
+			}
+			if racing, races := flight.against(read.items[past.entry.ID]); races {
+				racedNow[past.entry.ID] = true
+				passOver(past.entry.ID, racing.reason())
+				sequencedEarlier[past.entry.ID] = racing
+				poll.pass(past.entry.ID, runstate.PassedOverSequencedBehindWork, "")
+				continue
+			}
+			passOver(past.entry.ID, leftForAnotherSlotReason(past.slot, past.took))
+			poll.pass(past.entry.ID, runstate.PassedOverLeftForAnotherSlot, "")
 		}
 		if probing && started == 0 {
 			// Nothing was startable under the hold, so the probe found nothing to
@@ -3076,19 +3145,46 @@ func environmentalStop(outcome Outcome) bool {
 // holds neither a slot nor an epic. The store's listing already answers in these
 // terms, and the predicate is applied here as well so that the guard's reading
 // is the status's own rather than whatever the listing it was handed returns.
-func occupiedItems(runs ScheduleRuns) (map[string]string, error) {
+//
+// Each item is held against the run's whole record rather than only its id,
+// because the developer slot a run occupies is read off what the record says the
+// item carried when the run started — see developerslot for the derivation.
+func occupiedItems(runs ScheduleRuns) (map[string]runstate.State, error) {
 	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return nil, fmt.Errorf("read what is already in flight: %w", err)
 	}
-	occupied := make(map[string]string, len(incomplete))
+	occupied := make(map[string]runstate.State, len(incomplete))
 	for _, state := range incomplete {
 		if !state.Status.InFlight() {
 			continue
 		}
-		occupied[state.WorkItemID] = state.RunID
+		occupied[state.WorkItemID] = state
 	}
 	return occupied, nil
+}
+
+// slotsOf reads which developer slot each run in flight occupies and which are
+// free, from the same derivation the standing status reads. A run whose record
+// carries no labels — one this session started and that has not reserved yet,
+// or one recorded before labels were written onto records — is read as its item
+// reads now, so a labelled item this pull just started into a preferring slot is
+// counted in that slot at the next pull rather than in one preferring nothing.
+func (p Pull) slotsOf(occupied map[string]runstate.State, items map[string]beads.WorkItem) developerslot.Assignment {
+	inFlight := make([]developerslot.Run, 0, len(occupied))
+	for id, state := range occupied {
+		labels := state.WorkItemLabels
+		if len(labels) == 0 {
+			labels = items[id].Labels
+		}
+		inFlight = append(inFlight, developerslot.Run{
+			RunID:      state.RunID,
+			WorkItemID: id,
+			Labels:     labels,
+			StartedAt:  state.StartedAt,
+		})
+	}
+	return developerslot.Assign(p.Capacity, p.Slots, inFlight)
 }
 
 // pulled is one reading of the queue: the admitted work in the product
