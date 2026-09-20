@@ -45,8 +45,8 @@ const (
 	stallStream      = "stall"
 	// capacityStream is the provider holding every role, said again while it
 	// stands. It is a stream of its own rather than a mark on the stall's for the
-	// reason the resident is: it is a state said on a clock rather than a record
-	// said once, and it is true at a time the stall's own record is silent.
+	// reason the resident is: it is true at a time the stall's own record is
+	// silent, and the two say opposite things about one quiet.
 	capacityStream  = "capacity"
 	directiveStream = "directives"
 	// providerStream is the provider answering nobody, said once when it is seen
@@ -88,9 +88,12 @@ const (
 	// is already the cursor's standing state: a different build is a different
 	// cursor, and the mark goes with it.
 	escalatedMark = "escalated"
-	// stallMark names the stall this cursor has already said something about. It
-	// names the stall rather than the state for the reason the build mark names a
-	// build: a second stall is a second thing to say, and the same one is not.
+	// stallMark names the stall this cursor is standing on, and said last at the
+	// cursor's Said. It names the stall rather than the state for the reason the
+	// build mark names a build: a second stall is a second thing to say afresh,
+	// and the same one is said again on the heartbeat's clock. Before
+	// yoyodyne-ifd.354 it was a delivered mark meaning said once; a cursor still
+	// carrying one is read as a stall this sink has not yet said.
 	stallMark = "stall:"
 	// windowMark names the provider usage window this cursor has already said
 	// something about, by the deadline the provider named for it. It shares the
@@ -145,10 +148,14 @@ type Delivery struct {
 	// reading of the durable records holding an opinion about a workspace.
 	Direct bool
 	// Tag asks for this delivery to name the operators by member id in the
-	// channel, so the workspace notifies them. It is set on the one class of
-	// message that is both important and theirs to act on: a provider nobody is
-	// logged into is ended by a person and nothing else. Like Direct it names
-	// nobody; who the operators are is the surface's.
+	// channel, so the workspace notifies them. It is set on the class of message
+	// that is both important and theirs to act on: a provider nobody is logged
+	// into is ended by a person and nothing else, and so are a line that has
+	// stopped for reasons no record names and a brake hold the development
+	// manager has handed to the operator — both said again while they stand,
+	// tagged each time, because a stopped line is the most serious thing this
+	// surface reports and the one message it must not let go stale. Like Direct
+	// it names nobody; who the operators are is the surface's.
 	Tag bool
 }
 
@@ -267,6 +274,11 @@ type HarnessFeed struct {
 	// hold is said as critical and taken to the operators with every repetition
 	// rather than the first. Zero takes DefaultCapacityEscalation.
 	CapacityEscalation time.Duration
+	// StallEscalation is how long a line may stand stopped on a person — a stall
+	// the record holds, or a brake hold that waits on the operator — before it
+	// is said as critical rather than as a warning. Zero takes
+	// DefaultStallEscalation.
+	StallEscalation time.Duration
 	// Stalls is the durable record of this product having gone quiet — nothing
 	// started, over work the tracker calls ready, with nothing accounting for it.
 	// It is read here and never written: what notices and records a stall is

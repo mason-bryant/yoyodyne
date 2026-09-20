@@ -809,9 +809,10 @@ So something reads the absence. When nothing has started for ten minutes, the
 tracker reports work ready, and no hold, no full machine, no still-moving run and
 no provider usage window accounts for it, that is a stall: it is recorded durably
 against the product, and each one is sent as a direct message to every person the
-project granted direct-work, exactly once. What it says is how long nothing has
-happened, how much was waiting, the four lines, and — the fact that decides what
-to do about it — what the thing that chooses work last said before it went
+project granted direct-work and tagged to them by member id in the channel — and
+sent again, louder, for as long as it stands. What it says is how long nothing
+has happened, how much was waiting, the four lines, and — the fact that decides
+what to do about it — what the thing that chooses work last said before it went
 silent, because a session whose last word was `stopped` wants starting and one
 still claiming to be watching wants killing first.
 
@@ -888,22 +889,54 @@ not go on accounting for every hour after it. `yoyo status` opens with the same
 sentence while the window
 stands, above [the four lines](operations.md#where-the-harness-stands-the-four-lines).
 
-It is said once per stall rather than repeated while it stands, which is the
-opposite of the waiting line above and deliberate: an hourly repetition is right
-for a state somebody may have to sit with and wrong for one that is either acted
-on or is not. Saying it once is a property of the record rather than of the sink,
-so a session and a sweep both reading the same standing stall open nothing, and a
-restarted sink says nothing about a stall that was already open. The tracker
+**It gets louder as it stands, not quieter.** It used to be said once per stall
+and then nothing while the stall stood, on the reasoning that a stopped machine
+is either acted on or it is not. On 2026-09-07 it was not: the alarm fired at
+02:48Z, said nothing more by design, and a line fully stopped for over four
+hours had produced one message, four hours old, by the time anybody read it. The
+operator's direction inverted the design — a line that is completely stopped is
+the most serious thing the harness can report — so the message is **said again
+every `--heartbeat` while the stall stands**, to the operators directly and
+tagged to them by member id every time; it is a **`warning` while the stall is
+young and `critical` once nothing has started for two hours** — two heartbeats,
+so the warning is said and said once more before it is raised — and each
+repetition re-reads the cause and whose move it is, so a louder message is also a
+more current one. Four silent hours replayed produce a rising sequence rather
+than one message:
+
+> :warning: Warning — Nothing at all has started on this product for 10 minutes …
+> :warning: Warning — Nothing at all has started on this product for one hour …
+> :rotating_light: Critical — Nothing at all has started on this product for 2 hours …
+> :rotating_light: Critical — Nothing at all has started on this product for 3 hours …
+
+The age is the stall's rather than the sink's, so a stall a sink first sees hours
+old is critical from its first word, and a restarted sink over a standing stall
+says it again rather than reading it past as history: the stall is the present
+state of the line, and a sink silent over it would be silent over the one thing
+it exists to say. A session and a sweep both reading the same standing stall
+still open nothing, because one stall at a time is the record's rule. The tracker
 behind it is asked once per reading and only where nothing else already accounts
 for the quiet — once per `--stall-after` in a watching session, once per sweep in
 `yoyo reconcile` — so an idle product spawns no `bd` storm; the waiting line above
-keeps its own hourly read and this surface now spends none of its own on stalls. When
+keeps its own hourly read and this surface spends none of its own on stalls. When
 it clears the record closes, saying what accounted for it, and the channel hears
 nothing — what cleared it said so itself, as the run that started. The whole history is
 read back afterwards by
 [`yoyo status`](operations.md#when-nothing-happened-at-all), which is the only
 place it exists: a stall leaves no other trace, because the process that would
 have left one is the process a stall means has died.
+
+The brake's hold is the same shape one layer over, and is said the same way.
+A hold [the brake placed](operations.md#pausing-everything-and-resuming-it) asks a
+person for nothing while the development manager is deciding about it or a
+probe is running under it, and the hourly line says so at note severity, naming
+her move. Once it waits on the operator — she escalated it, or it was written
+before the brake summoned anybody, which is the hold that stood for two hours
+on 2026-09-19 with a free slot idle — the hourly line is **tagged to the
+operators every time it is said, a `warning` while it is young, and `critical`
+and sent to them directly once it has stood two hours**, until intake is
+released. The operator's own intake hold is a state they chose to sit with and
+stays the hourly note it was.
 
 ### The provider holding every role
 
@@ -945,9 +978,9 @@ where `execution.usage_limit_max_pause` ships and for the same reason: a
 capacity problem that has outlasted every timer needs a person — it is said as
 **critical and taken to the operators again with every repetition**. A hold
 nothing but a person ends early is the one state where getting quieter as it
-stands is the wrong shape. The stall alarm's own escalation is
-`yoyodyne-ifd.354`; this is the capacity half, and a line stopped on a known
-reset is a different message from a line stopped for reasons nobody can name.
+stands is the wrong shape. The stall alarm above escalates the same way on a
+shorter bar; this is the capacity half, and a line stopped on a known reset is
+a different message from a line stopped for reasons nobody can name.
 
 The hold is marked by the reset the provider named, so the same window is one
 thing to say and a later one is another; the sweep adding a refusal an hour

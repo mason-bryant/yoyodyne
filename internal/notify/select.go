@@ -466,6 +466,13 @@ type Line struct {
 	// missed that message has nothing else that would ever tell them — so the
 	// count is said with the line for as long as the publication is unsettled.
 	Outstanding int
+	// Mover is whose move follows what stopped the line, worded by the read model
+	// beside the state itself rather than here, so the clause this message ends
+	// on and the attention line `yoyo status` prints name one move. A line
+	// stopped by the brake's hold is the development manager's or the harness's
+	// while the brake works it and the operator's once she has escalated it, and
+	// one fixed clause could not be right about both.
+	Mover string
 	// Standing is where the harness stands, in the four lines the read model
 	// renders. It is said with the line because the two answer one question at
 	// different grains: the sentence says the choosing has stopped and for how
@@ -485,14 +492,24 @@ type Line struct {
 // The moment is the reading rather than the state's own start, because that is
 // what it is: an account of what was true when somebody looked, whose whole
 // point is that it is being looked at again.
-func FromLine(line Line, at time.Time) Notification {
-	return productNotification(KindLineWaiting, at, Detail{
+//
+// The severity is the caller's rather than derived here, for the reason the
+// resident's is: how loud this is is a question about how long the line has
+// stood and who is holding it, and both are the reporting surface's to hold. A
+// hold somebody placed and may have to sit with is a note every hour; a hold
+// that waits on a person nobody has told is a warning, and critical once it has
+// stood long enough.
+func FromLine(line Line, severity report.Severity, at time.Time) Notification {
+	notification := productNotification(KindLineWaiting, at, Detail{
 		Stopped:     strings.TrimSpace(line.Stopped),
 		Since:       line.Since,
 		Ready:       line.Ready,
 		Outstanding: line.Outstanding,
+		Mover:       strings.TrimSpace(line.Mover),
 		Standing:    strings.TrimRight(line.Standing, "\n"),
 	})
+	notification.Event.Severity = severity
+	return notification
 }
 
 // Resident is the binary a live watch session is running: the revision it was
@@ -591,12 +608,14 @@ type Stall struct {
 // It is addressed to the product and spoken by the harness for the reason the
 // line and the holds are: it is about every item rather than any one of them.
 //
-// It is a warning rather than a note, and that is the whole difference between
-// this and the hourly line. A line waiting on a hold somebody placed is a state
-// they already know about; a machine that has silently stopped doing anything is
-// a degraded harness, which is the one class of thing this surface takes to
-// somebody directly.
-func FromStall(stall Stall, at time.Time) Notification {
+// It is never a note, and that is the whole difference between this and the
+// hourly line. A line waiting on a hold somebody placed is a state they already
+// know about; a machine that has silently stopped doing anything is a degraded
+// harness, which is the one class of thing this surface takes to somebody
+// directly. The severity is the caller's, because it is what the caller
+// escalates as the stall stands: a warning while it is young, and critical once
+// it has stood long enough that nobody has acted on the warning.
+func FromStall(stall Stall, severity report.Severity, at time.Time) Notification {
 	notification := productNotification(KindStallNoticed, at, Detail{
 		Stopped:  strings.TrimSpace(stall.Chooser),
 		Since:    stall.Since,
@@ -605,7 +624,7 @@ func FromStall(stall Stall, at time.Time) Notification {
 		Mover:    strings.TrimSpace(stall.Mover),
 		Standing: strings.TrimRight(stall.Standing, "\n"),
 	})
-	notification.Event.Severity = report.SeverityWarning
+	notification.Event.Severity = severity
 	return notification
 }
 

@@ -180,6 +180,29 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		// to spend one every fifteen seconds on a machine that is behaving.
 		return []Delivery{{Stream: heartbeatStream, Cursor: armed}}, nil
 	}
+	// A line stopped by a hold the brake placed and then handed to a person is
+	// the one state the heartbeat says louder as it stands rather than at the
+	// same pitch. A hold the operator placed is a state they may have to sit
+	// with, and an hourly note is right for it; a hold the harness is working
+	// itself is the development manager's, and she is summoned about it. A brake
+	// hold that waits on the operator — escalated by her, or written before the
+	// brake summoned anybody — is a stopped line nobody has told him about
+	// except by a message that is getting older, which on 2026-09-19 stood for
+	// two hours with a free slot idle. So it is tagged to the operators by
+	// member id every time it is said, a warning while it is young, and critical
+	// and taken to them directly once it has stood past the bar the stall alarm
+	// uses, for the reason the alarm uses it: it is a person's now, and nothing
+	// else ends it.
+	severity := report.SeverityNote
+	tag, direct := false, false
+	if state.Reason == readmodel.ReasonIntakeHold && held.intake.HeldBy == runstate.IntakeHolderBrake && held.intake.WaitsOnAPerson() {
+		severity = report.SeverityWarning
+		tag = true
+		if now.Sub(state.Since) >= f.stallEscalation() {
+			severity = report.SeverityCritical
+			direct = true
+		}
+	}
 	// The four lines are read here rather than assembled from what this pass
 	// happens to hold, because they are the read model's answer and not the
 	// sink's: a channel and a terminal saying one standing two ways is the
@@ -189,14 +212,29 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 	return []Delivery{{
 		Stream: heartbeatStream,
 		Cursor: armed,
+		Tag:    tag,
+		Direct: direct,
 		Notification: notify.FromLine(notify.Line{
 			Stopped:     state.Says,
 			Since:       state.Since,
 			Ready:       count,
 			Outstanding: awaitingForge,
+			Mover:       lineMover(state, held),
 			Standing:    f.standing(ctx),
-		}, now),
+		}, severity, now),
 	}}, nil
+}
+
+// lineMover is whose move follows what stopped the line, in the read model's
+// words. The intake hold is the one reason whose vocabulary cannot see who holds
+// it — the operator's own hold is theirs, and the brake's is whoever its record
+// says — so that one is read from the hold itself, which is the same record the
+// attention line of `yoyo status` words it from.
+func lineMover(state readmodel.Stall, held switches) string {
+	if state.Reason == readmodel.ReasonIntakeHold && held.intakeHeld {
+		return held.intake.Whose()
+	}
+	return state.Reason.Whose()
 }
 
 // standing is where the harness stands, in the four lines, or nothing at all
