@@ -434,5 +434,7 @@ it writes can make the gate perform anything beyond reading this repository and
 the tracker.
 
 [Cutting a release](developing-yoyo.md#cutting-a-release) runs this before it
-tags, and the passing result is stamped into that tag's notes, so a published
-release says what was true of the tree it names.
+tags, and the passing result is stamped into that tag's notes — through a pull
+request of its own, ahead of the tag, since the cut writes nothing to the
+default branch — so a published release says what was true of the tree it
+names.

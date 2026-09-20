@@ -170,6 +170,9 @@ func printConformance(stdout io.Writer, result conformance.Result) {
 // conformanceNotes is the result as a release's notes carry it: one Markdown
 // section, headed and delimited so a cut can put a fresh result in place of an
 // older one without disturbing anything the product manager wrote around it.
+// The "ended in" line and the "Pinned to" line are what scripts/cut-release.sh
+// reads back to decide whether the result the notes already carry is current:
+// the verdict and the definition, not the counts, which move every day.
 func conformanceNotes(result conformance.Result) string {
 	var rendered strings.Builder
 	rendered.WriteString(conformanceNotesBegin + "\n")
