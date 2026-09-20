@@ -1005,6 +1005,17 @@ does the opposite and comes back later instead of waiting: nothing has been aske
 of the agent yet, so there is nothing to lose by trying again, and a delivery that
 waited would hold its budget open for the length of somebody else's turn.
 
+The exception is an agent configured to
+[hold side threads](configuration.md#queueing-a-question-or-holding-it-on-a-side-thread).
+A `--message` that finds such an agent mid-turn is answered beside that turn
+rather than after it, on a side thread with its own record and its own lease, and
+the answer says so. What comes back is the agent's judgment and never an action:
+a side thread creates, decides, proposes, and admits nothing, and anything it
+promised is tentative until the main conversation — whose next turn reads what
+the side thread concluded, as memory rather than as dialogue — ratifies or
+adjusts it. Commands and decisions never go aside; they reach the main
+conversation and wait for it as they always have.
+
 Your own window takes the conversation back when you press enter, waits there
 the same way, and re-reads the record before it answers — so a turn taken
 elsewhere while you were typing is one your next turn continues from rather than

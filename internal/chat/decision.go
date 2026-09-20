@@ -170,6 +170,21 @@ func decidesAsAMessage(answer string) bool {
 	return onlyDecisionWords(answer)
 }
 
+// IsDecision reports a single message that Decide would take as an answer to
+// something this conversation is waiting on — a proposal decided, or a concern
+// answered — rather than as speech. It is the same two rules Decide reads,
+// asked without a session, for a caller that has to know before it opens one:
+// a decision has to reach the main thread, which holds what is being decided,
+// and a caller that routed one somewhere the main thread is not would spend the
+// operator's "y" on a question nobody asked.
+func IsDecision(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if _, _, names := namesAConcern(trimmed); names {
+		return true
+	}
+	return decidesAsAMessage(trimmed)
+}
+
 // onlyDecisionWords reports an answer with no prose in it at all: a decision
 // verb, and after it nothing but more verbs, the words that join them, and the
 // proposals they name.

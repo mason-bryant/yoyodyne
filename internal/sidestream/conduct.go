@@ -58,8 +58,11 @@ var ErrTurnsSpent = errors.New("side stream turn cap reached")
 // SpentError reports a side thread asked something after it had spent every turn
 // it was opened with. It is a record left behind rather than the ordinary
 // ending: the turn that spends the last one concludes the thread on its way out,
-// so a stream still open with nothing remaining is one whose process died
-// between the two, and what it needs is to be concluded rather than asked again.
+// so a stream still open with nothing remaining is one whose last turn produced
+// nothing to conclude with — a process that died between counting the turn and
+// merging, a provider that failed the turn, or a reply refused whole with no
+// prose around its block — and what it needs is to be concluded rather than
+// asked again.
 type SpentError struct {
 	StreamID string
 	Cap      int
@@ -416,6 +419,20 @@ func (r Runner) Put(ctx context.Context, ask Ask) (Answer, error) {
 		// The prose is still handed back where there was any: a block the harness
 		// could not read belongs to an answer somebody wrote, and the turn is spent
 		// either way. What is refused is the block, which decides nothing here.
+		//
+		// A refused reply on the thread's last turn still ends the thread, where
+		// there is prose to end it with: the cap is reached whichever way the turn
+		// was read, and a stream left open with nothing remaining over a block the
+		// harness would not carry out is a thread whose substance reaches nobody.
+		// What merges is the prose alone — the block asked for something and was
+		// refused, so it drafted nothing the main thread is asked to ratify.
+		if stream.TurnsRemaining() == 0 && strings.TrimSpace(reply.Prose) != "" {
+			concluded, mergeErr := r.mergeBack(ctx, stream, reply.Prose, nil, OutcomeSpent)
+			if mergeErr != nil {
+				return answer, errors.Join(err, mergeErr)
+			}
+			answer.Stream = concluded
+		}
 		return answer, err
 	}
 	answer.Commitments = reply.Commitments

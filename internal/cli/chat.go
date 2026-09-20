@@ -109,6 +109,13 @@ type chatOutput struct {
 	// hears about it when it is next spoken to.
 	Decisions []chat.DecisionOutcome `json:"decisions,omitempty"`
 	Answers   []chat.AnswerOutcome   `json:"answers,omitempty"`
+	// SideThread is set when the message was answered on a side thread rather
+	// than on the main conversation — because that conversation was mid-turn and
+	// the agent holds side threads, or because the message continued one. Reply
+	// is then the side thread's prose, and nothing else in this document is
+	// filled: a side thread proposes, admits, decides, and acts on nothing, and
+	// what it promised is listed here as tentative.
+	SideThread *sideThreadOutput `json:"side_thread,omitempty"`
 	// Pending are the proposals still awaiting a decision once this message is
 	// over, which is what a script deciding them next has to name. It is not the
 	// same list as Proposals: that one is what this turn proposed, and this one is
@@ -127,6 +134,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	message := flags.String("message", "", "send one message and print the reply instead of opening an interactive conversation")
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
+	sideThread := flags.String("side-thread", "", "continue the named side thread with --message instead of reaching the main conversation")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -139,12 +147,17 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		fmt.Fprintln(stderr, "chat --json requires --message: an interactive conversation has no single result to encode")
 		return 2
 	}
+	if err := sideThreadFlagProblems("chat", *sideThread, *message, *fresh); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 
 	return converse(ctx, domain.RoleProductManager, conversationRequest{
 		configPath: *configPath,
 		message:    *message,
 		fresh:      *fresh,
 		jsonOutput: *jsonOutput,
+		sideThread: *sideThread,
 	}, stdin, stdout, stderr)
 }
 
@@ -164,16 +177,66 @@ type conversationRequest struct {
 	message    string
 	fresh      bool
 	jsonOutput bool
+	// sideThread names a side thread the message continues, and is empty for
+	// every message that reaches the main conversation or opens a side thread of
+	// its own. It is only ever set with a message: a side thread is a bounded
+	// number of turns and not a prompt somebody sits at.
+	sideThread string
 }
 
 // converse holds one conversation with one role: a single message and its reply,
 // or the interactive conversation the operator stays inside.
+//
+// A single message meets the role's main thread busy in one of two ways, and
+// the agent's configuration chooses which. An agent that queues — every agent
+// until it says otherwise — has the message wait behind the turn in flight,
+// which is what every message did before side threads existed. An agent that
+// holds side threads has it answered beside the busy turn instead, on a side
+// thread of its own, and what that thread works out reaches the main thread as
+// memory rather than as a turn. Nothing about the choice is authority: a side
+// thread judges and drafts, and the main thread ratifies.
 func converse(ctx context.Context, role domain.AgentRole, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
-	session, hold, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, true, stderr)
+	prepared, err := prepareChat(ctx, role, request.agentName, request.configPath, stderr)
+	if err != nil {
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
+	}
+	// A message continuing a side thread is that thread's next turn and never
+	// touches the main conversation, held or not.
+	if request.sideThread != "" {
+		return askAside(ctx, prepared, request, "", stdout, stderr)
+	}
+	var hold *runstate.ConversationHold
+	switch {
+	case request.mayGoAside(prepared):
+		// The claim that refuses rather than waits is what decides: a main thread
+		// held right now is what a side thread is for, and one nobody holds takes
+		// the message itself exactly as it always has.
+		hold, err = prepared.store.TryClaim(prepared.identity)
+		if errors.Is(err, runstate.ErrConversationHeld) {
+			beside, loadErr := prepared.store.Load(prepared.identity)
+			if loadErr == nil {
+				return askAside(ctx, prepared, request, beside.ConversationID, stdout, stderr)
+			}
+			// A main thread held with no record to read yet — its first turn is
+			// still in flight — is one no side thread can be opened beside, because
+			// a side stream names the conversation it belongs to. The message waits
+			// for it, which is what it would have done before the knob was set, and
+			// says so rather than waiting silently.
+			fmt.Fprintf(stderr, "the %s is mid-turn and its conversation has no record yet to hold a side thread beside, so this message waits for it: %v\n",
+				chat.RoleTitle(role), loadErr)
+			hold, err = prepared.claim(ctx, true, stderr)
+		}
+	default:
+		hold, err = prepared.claim(ctx, true, stderr)
+	}
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
 	defer hold.Release()
+	session, err := prepared.open(ctx, hold, request.fresh, true, stderr)
+	if err != nil {
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
+	}
 
 	if request.message != "" {
 		return runChatMessage(ctx, session, role, request.message, request.jsonOutput, stdout, stderr)
@@ -423,28 +486,63 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // itself on the refusal — the next cadence, the next pull — and one that slept
 // through the window would hold the scheduler that took it for hours.
 func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh, attended bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
+	prepared, err := prepareChat(ctx, role, agentName, configPath, stderr)
+	if err != nil {
+		return nil, nil, err
+	}
+	hold, err := prepared.claim(ctx, attended, stderr)
+	if err != nil {
+		return nil, nil, err
+	}
+	session, err := prepared.open(ctx, hold, fresh, attended, stderr)
+	if err != nil {
+		return nil, nil, errors.Join(err, hold.Release())
+	}
+	return session, hold, nil
+}
+
+// preparedChat is one role's conversation resolved as far as it can be without
+// taking it: the agent that fills the role, the provider and the account that
+// serve it, and the stores it is recorded in. It is where both ways of reaching
+// the role start from — the main thread, claimed and opened below, and a side
+// thread held beside it while the main thread is busy — so the agent a side
+// question reaches is the agent the main conversation would have been with,
+// under the same account and the same provider.
+type preparedChat struct {
+	parts    components
+	name     string
+	agent    config.AgentConfig
+	account  config.AccountEndpoint
+	provider chat.Backend
+	store    *runstate.ConversationStore
+	memories *runstate.MemoryStore
+	identity runstate.ConversationIdentity
+}
+
+// prepareChat resolves everything a conversation with the role needs that does
+// not depend on holding it.
+func prepareChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, stderr io.Writer) (preparedChat, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
 	parts, err := buildComponents(configPath)
 	if err != nil {
-		return nil, nil, err
+		return preparedChat{}, err
 	}
 	cfg := parts.config
-	repository := parts.repository
 
 	name, agent, err := conversationAgent(cfg, role, agentName)
 	if err != nil {
-		return nil, nil, err
+		return preparedChat{}, err
 	}
 	// A conversation runs on whatever adapter this build has, so what is asked is
 	// whether the backend the agent named resolves to one — which a provider the
 	// project declared does, and a backend nothing can launch does not.
 	if !providerRuns(cfg, agent.Backend) {
-		return nil, nil, fmt.Errorf("a conversation requires an agent on a backend this build can launch, and the %s agent %s is configured for %q", role, name, agent.Backend)
+		return preparedChat{}, fmt.Errorf("a conversation requires an agent on a backend this build can launch, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
-		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)
+		return preparedChat{}, fmt.Errorf("%s agent %s %s", role, name, err)
 	}
 
 	processRunner := parts.runner
@@ -454,7 +552,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// account nobody had signed in to.
 	account, err := conversationAccount(cfg, parts.stateRoot, name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve the account %s agent %s runs under: %w", role, name, err)
+		return preparedChat{}, fmt.Errorf("resolve the account %s agent %s runs under: %w", role, name, err)
 	}
 	// The provider is built from what the project declares — its adapter, its
 	// executable, and its dialect — and then pointed at the account's own
@@ -463,7 +561,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	provider := providerBackendIn(cfg, agent.Backend, processRunner, account.Directory)
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
-		return nil, nil, err
+		return preparedChat{}, err
 	}
 	// The refusals name the backend the agent is configured for rather than one
 	// provider for all of them. The login they hand back is Claude Code's, and
@@ -471,7 +569,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// management roles, and Codex serves neither of them, so every agent that
 	// reaches here runs on the Claude Code adapter.
 	if !availability.Installed {
-		return nil, nil, fmt.Errorf("the %s backend is not installed", agent.Backend)
+		return preparedChat{}, fmt.Errorf("the %s backend is not installed", agent.Backend)
 	}
 	if !availability.Authenticated {
 		// A login nobody has renewed is a wait rather than a refusal, and it is
@@ -488,9 +586,9 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 			Waiting:      fmt.Sprintf("the %s conversation", role.Title()),
 			At:           time.Now().UTC(),
 		}); recordErr != nil {
-			return nil, nil, errors.Join(refused, fmt.Errorf("record that the provider is answering nobody: %w", recordErr))
+			return preparedChat{}, errors.Join(refused, fmt.Errorf("record that the provider is answering nobody: %w", recordErr))
 		}
-		return nil, nil, refused
+		return preparedChat{}, refused
 	}
 	// A provider that reports itself logged in ends an outage of that kind, on
 	// the same evidence the scheduler clears one on. An unreachable one is left
@@ -504,7 +602,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
 	if err != nil {
-		return nil, nil, err
+		return preparedChat{}, err
 	}
 	// What this agent knows, read for the side conversations it held beside this
 	// one: each concluded side thread merges its substance in here, and this
@@ -513,32 +611,53 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// nothing may be written through — and reading is all this wiring does.
 	memories, err := runstate.NewMemoryStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
 	if err != nil {
-		return nil, nil, err
+		return preparedChat{}, err
 	}
-	// The conversation is held, recorded, and resumed under the agent that holds
-	// it, so two agents configured for one role are two conversations rather than
-	// one they would take turns overwriting.
-	//
-	// Claiming queues behind whoever is mid-turn rather than refusing, which is
-	// the whole of what makes the product manager reachable: `yoyo chat
-	// --message` from another terminal, and a second window the operator opens
-	// beside the first, both wait out a turn instead of being turned away by one.
-	// Ctrl-C ends the wait, and the wait is said out loud once it lasts long
-	// enough to notice, so an operator whose command has not come back knows what
-	// it is behind. The refusing claim comes back at once and so says nothing.
-	identity := runstate.ConversationIdentity{Agent: name, Role: role}
+	return preparedChat{
+		parts:    parts,
+		name:     name,
+		agent:    agent,
+		account:  account,
+		provider: provider,
+		store:    store,
+		memories: memories,
+		// The conversation is held, recorded, and resumed under the agent that
+		// holds it, so two agents configured for one role are two conversations
+		// rather than one they would take turns overwriting.
+		identity: runstate.ConversationIdentity{Agent: name, Role: role},
+	}, nil
+}
+
+// claim takes the role's main conversation for this process.
+//
+// Claiming queues behind whoever is mid-turn rather than refusing, which is the
+// whole of what makes the product manager reachable: `yoyo chat --message` from
+// another terminal, and a second window the operator opens beside the first,
+// both wait out a turn instead of being turned away by one. Ctrl-C ends the
+// wait, and the wait is said out loud once it lasts long enough to notice, so an
+// operator whose command has not come back knows what it is behind. The refusing
+// claim comes back at once and so says nothing.
+func (p preparedChat) claim(ctx context.Context, attended bool, stderr io.Writer) (*runstate.ConversationHold, error) {
 	var hold *runstate.ConversationHold
-	if err := chat.AwaitConversation(role, stderr, func() error {
+	if err := chat.AwaitConversation(p.identity.Role, stderr, func() error {
 		var err error
 		if attended {
-			hold, err = store.Claim(ctx, identity)
+			hold, err = p.store.Claim(ctx, p.identity)
 		} else {
-			hold, err = store.TryClaim(identity)
+			hold, err = p.store.TryClaim(p.identity)
 		}
 		return err
 	}); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	return hold, nil
+}
+
+// open builds the conversation over a hold this process has already taken.
+func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold, fresh, attended bool, stderr io.Writer) (*chat.Session, error) {
+	parts, cfg, repository := p.parts, p.parts.config, p.parts.repository
+	name, agent, account, provider, processRunner := p.name, p.agent, p.account, p.provider, p.parts.runner
+	role, store, memories := p.identity.Role, p.store, p.memories
 
 	// The goals the repository records, which is what work admitted in this
 	// conversation has to name. A repository whose goals cannot be read still
@@ -568,7 +687,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
-		return nil, nil, errors.Join(err, hold.Release())
+		return nil, err
 	}
 	for _, problem := range briefing.Problems {
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
@@ -759,9 +878,9 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Fresh:                fresh,
 	})
 	if err != nil {
-		return nil, nil, errors.Join(err, hold.Release())
+		return nil, err
 	}
-	return session, hold, nil
+	return session, nil
 }
 
 // usageLimitPause is what a conversation's turn may spend waiting out a provider
@@ -1326,6 +1445,7 @@ Options:
   --message <text>   send one message and print the reply instead of conversing
   --new              start a new conversation instead of resuming the recorded one
   --json             emit machine-readable JSON (requires --message)
+  --side-thread <id> continue the named side thread with --message
 
 A conversation also carries out operator commands: /backlog, /status, /show,
 /diff, /reports, /refresh, /work, /wait, /stop, and /redirect. Ask it for /help
@@ -1350,6 +1470,15 @@ or the number of an answer it offered, and a bare "yes" or "no" answers it where
 it is the only thing waiting. With a question and a proposal both waiting, a
 message that names neither is refused with the list rather than applied to
 either, so an answer meant for the question never approves the proposal.
+
+A --message that finds the conversation mid-turn waits for it, unless the agent is
+configured with "conversations: side-threads": then it is answered beside the busy
+turn on a side thread of its own, and the answer says so. A side thread judges and
+answers and takes no action, so anything it promises is tentative until the main
+conversation's next turn — which reads what the side thread concluded — ratifies
+it. A side thread the agent left open for a further turn is continued with
+--side-thread <id> and --message; commands and decisions always reach the main
+conversation.
 
 This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same

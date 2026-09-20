@@ -218,6 +218,51 @@ func TestAReplyAskingForAnActionIsRefusedWhole(t *testing.T) {
 	}
 }
 
+// A refused reply on the thread's last turn still ends the thread, with the
+// prose alone: the cap is reached whichever way the reply was read, and a stream
+// left open with nothing remaining over a block nobody would carry out is a
+// thread whose substance reaches nobody. The block drafted nothing, so nothing is
+// handed over to ratify. A refused reply with no prose around its block leaves
+// the thread open, because there is nothing to conclude it with.
+func TestARefusedReplyOnTheLastTurnStillMergesItsProse(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	voice := &fakeVoice{answers: []string{"As far as I got: the hold is read first.\n\n```yoyodyne-tracker\n{}\n```\n"}}
+	merge := &fakeMerge{}
+	runner := testRunner(store, voice, merge)
+	runner.MaxTurns = 1
+
+	answer, err := runner.Put(context.Background(), testAsk())
+	if err == nil || !strings.Contains(err.Error(), "takes no action") {
+		t.Fatalf("Put() error = %v, want the block refused", err)
+	}
+	if merge.calls != 1 || merge.outcome != OutcomeSpent || merge.substance != "As far as I got: the hold is read first." {
+		t.Fatalf("the merge was reached %d time(s) with %q as %q, want once with the prose alone, spent", merge.calls, merge.substance, merge.outcome)
+	}
+	if len(merge.commitments) != 0 {
+		t.Fatalf("a refused block handed over commitments %v to ratify", merge.commitments)
+	}
+	if answer.Stream.Open() || store.streams[answer.Stream.ID].Open() {
+		t.Fatal("a thread with no turns left and prose to conclude with is still open")
+	}
+
+	// No prose at all, and the thread stays open: there is nothing to merge, and
+	// the record says it was never concluded rather than that it concluded nothing.
+	store = newFakeStore()
+	voice = &fakeVoice{answers: []string{"```yoyodyne-tracker\n{}\n```\n"}}
+	merge = &fakeMerge{}
+	runner = testRunner(store, voice, merge)
+	runner.MaxTurns = 1
+	answer, err = runner.Put(context.Background(), testAsk())
+	if err == nil {
+		t.Fatal("Put() error = nil, want the block refused")
+	}
+	if merge.calls != 0 || !store.streams[answer.Stream.ID].Open() {
+		t.Fatal("a refused reply with no prose concluded the thread; there was nothing to conclude it with")
+	}
+}
+
 // The turn is taken under the side stream's own lease, named for its own
 // identifier. That is the whole of the concurrency answer: the main thread's
 // lease is not asked for here, so holding it stops nothing and this stops

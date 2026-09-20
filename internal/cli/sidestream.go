@@ -21,9 +21,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/agentcontext"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -273,6 +275,230 @@ func (v sideVoice) failoverPolicy(question sidestream.Question, name string, end
 func (v sideVoice) waitingOn(question sidestream.Question) string {
 	return fmt.Sprintf("the %s on side thread %s, held beside conversation %s",
 		chat.RoleTitle(question.Role), question.StreamID, question.Conversation)
+}
+
+// sideThreads assembles the runner that holds this agent's side conversations,
+// over the same durable stores every other process addresses: the side stream
+// store is the record and the lease, the voice above is the turn, and the merge
+// is the agent-context write — so a thread concluded here is one the main
+// conversation's next turn reads, in this process or in any other.
+//
+// It is the one place a runner is built outside a test, and it is the harness's
+// own hand: no role asks for a side thread, and the runner it is handed carries
+// no authority the role does not already have on its main thread — less, since
+// `sidestream.Permits` takes every action away.
+func (p preparedChat) sideThreads() (sidestream.Runner, error) {
+	cfg := p.parts.config
+	streams, err := runstate.NewSideStreamStore(p.parts.stateRoot, cfg.Product.ID)
+	if err != nil {
+		return sidestream.Runner{}, err
+	}
+	return sidestream.Runner{
+		Store: streams,
+		// The stream's own lease and never the main thread's, which is what lets a
+		// side turn be taken while the main conversation is held.
+		Leases: streams,
+		Voice: sideVoice{
+			config:       cfg,
+			provider:     p.provider,
+			repository:   p.parts.repository,
+			usageLimits:  p.parts.usageLimits,
+			spend:        p.parts.spend,
+			productID:    cfg.Product.ID,
+			stateRoot:    p.parts.stateRoot,
+			redactValues: p.parts.redactValues,
+		},
+		// The merge is the memory write and nothing beside it: what a concluded
+		// thread worked out goes through `agentcontext`, where it is refused for a
+		// role that keeps no memory, redacted, budgeted, and numbered, and the
+		// stream is recorded as ended only once that write is durable.
+		Merge:        agentcontext.Merger{Streams: streams, Memory: p.memories},
+		ProductID:    cfg.Product.ID,
+		RepositoryID: string(cfg.Product.RepositoryID),
+	}, nil
+}
+
+// sideThreadFlagProblems is what `--side-thread` may be combined with: a
+// message, and nothing that replaces or converses with the main conversation.
+func sideThreadFlagProblems(command, sideThread, message string, fresh bool) error {
+	if strings.TrimSpace(sideThread) == "" {
+		return nil
+	}
+	switch {
+	case !sidestream.ValidID(strings.TrimSpace(sideThread)):
+		return fmt.Errorf("%s --side-thread %q does not name a side thread; one is `side-` and thirty-two hex digits, as the answer that opened it printed", command, sideThread)
+	case message == "":
+		return fmt.Errorf("%s --side-thread requires --message: a side thread is a bounded number of turns, not a prompt to sit at", command)
+	case fresh:
+		return fmt.Errorf("%s --side-thread cannot be combined with --new: a side thread is held beside the recorded conversation, and --new replaces it", command)
+	default:
+		return nil
+	}
+}
+
+// mayGoAside reports a message that is answered on a side thread if the main
+// conversation turns out to be held. It is the agent's own knob read here, and
+// the knob is the whole of the choice: an agent that queues never has a side
+// thread opened for it however busy it is.
+//
+// Three things never go aside whatever the knob says, because each has to reach
+// the main thread to mean anything. A command is the harness's to carry out
+// against the conversation. A decision or an answer settles something the main
+// conversation is waiting on, and a side thread holds none of it. And a message
+// with `--new` is about to replace the recorded conversation, which is not a
+// thread anything can be held beside.
+func (r conversationRequest) mayGoAside(p preparedChat) bool {
+	if r.message == "" || r.fresh || chat.IsCommand(r.message) || chat.IsDecision(r.message) {
+		return false
+	}
+	return p.parts.config.AgentHoldsSideThreads(p.name)
+}
+
+// sideThreadOutput is what a message answered on a side thread reports about the
+// thread beside the reply itself, in the machine-readable form.
+type sideThreadOutput struct {
+	// Stream is the side thread's own identifier, which is what a later message
+	// continues it by and what its merge is named for.
+	Stream string `json:"stream"`
+	// Conversation is the main thread it is held beside.
+	Conversation string `json:"conversation"`
+	Turn         int    `json:"turn"`
+	MaxTurns     int    `json:"max_turns"`
+	// Outcome is how the thread ended, and is empty while it is still open. A
+	// thread that ended has merged what it reached into the agent's memory.
+	Outcome sidestream.Outcome `json:"outcome,omitempty"`
+	// Tentative reports an answer that promised something, and Commitments are the
+	// promises. Every one is best effort until the main conversation ratifies it,
+	// which is the design's requirement of any surface carrying a side thread's
+	// answer rather than a nicety.
+	Tentative   bool     `json:"tentative"`
+	Commitments []string `json:"commitments,omitempty"`
+	CostUSD     float64  `json:"cost_usd"`
+}
+
+// askAside puts one message to the role on a side thread — a new one beside the
+// main conversation named, or the one the request continues — and reports what
+// came back, saying that it came from a side thread and what that means.
+//
+// The operator's pause covers this exactly as it covers a turn on the main
+// thread, and it is read here rather than in the runner because the runner is
+// the harness's own and knows nothing of the operator's switches. Nothing else
+// about the turn is decided here: the record, the lease, the cap, and the merge
+// are the runner's, and what the reply may carry is the contract's.
+func askAside(ctx context.Context, p preparedChat, request conversationRequest, conversation string, stdout, stderr io.Writer) int {
+	role := p.identity.Role
+	if hold, held, err := p.parts.holds.Held(); err != nil {
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil,
+			fmt.Errorf("read whether the operator has paused harness activity: %w", err))
+	} else if held {
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, &chat.OperatorHoldError{Hold: hold})
+	}
+	runner, err := p.sideThreads()
+	if err != nil {
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
+	}
+	ask := sidestream.Ask{Stream: request.sideThread, Question: request.message}
+	if request.sideThread == "" {
+		ask.Agent = p.name
+		ask.Role = role
+		ask.Conversation = conversation
+		ask.Topic = sideTopic(request.message)
+		fmt.Fprintf(stderr, "the %s is mid-turn, so this is answered beside that turn on a side thread\n", chat.RoleTitle(role))
+	}
+	answer, err := runner.Put(ctx, ask)
+	if err != nil {
+		// The prose travels with the failure where there was any: a reply whose
+		// block the harness refused is still an answer somebody paid for, and the
+		// turn is spent either way.
+		if answer.Prose != "" && !request.jsonOutput {
+			fmt.Fprintln(stdout, answer.Prose)
+		}
+		if answer.Stream.ID != "" {
+			err = fmt.Errorf("side thread %s: %w", answer.Stream.ID, err)
+		}
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
+	}
+	stream := answer.Stream
+	aside := sideThreadOutput{
+		Stream:       stream.ID,
+		Conversation: stream.Conversation,
+		Turn:         stream.Turns,
+		MaxTurns:     stream.MaxTurns,
+		Outcome:      stream.Outcome,
+		Tentative:    answer.Tentative(),
+		Commitments:  answer.Commitments,
+		CostUSD:      stream.CostUSD,
+	}
+	if request.jsonOutput {
+		return writeJSON(stdout, stderr, chatOutput{Reply: answer.Prose, SideThread: &aside})
+	}
+	fmt.Fprintln(stdout, answer.Prose)
+	printSideThread(stdout, role, p.name, aside)
+	return 0
+}
+
+// printSideThread says where an answer came from and what it is worth, which the
+// design makes the carrying surface's job: a side thread's answer is judgment
+// with no action behind it, and what it promised is tentative until the main
+// conversation ratifies it.
+func printSideThread(writer io.Writer, role domain.AgentRole, agent string, aside sideThreadOutput) {
+	title := chat.RoleTitle(role)
+	fmt.Fprintf(writer, "\nAnswered on side thread %s, beside the %s's conversation %s while that was mid-turn. This is the %s's judgment and not an action: nothing was created, changed, admitted, or decided by it.\n",
+		aside.Stream, title, aside.Conversation, title)
+	if aside.Tentative {
+		fmt.Fprintf(writer, "It tentatively committed to the following. Each is best effort until the %s's main conversation ratifies or adjusts it, which is the only path that acts:\n", title)
+		for _, commitment := range aside.Commitments {
+			fmt.Fprintf(writer, "  - %s\n", commitment)
+		}
+	}
+	switch aside.Outcome {
+	case sidestream.OutcomeConcluded:
+		fmt.Fprintf(writer, "The thread concluded after %d of %d turn(s), and what it worked out is merged into the %s's memory, where the main conversation reads it on its next turn.\n",
+			aside.Turn, aside.MaxTurns, title)
+	case sidestream.OutcomeSpent:
+		fmt.Fprintf(writer, "The thread reached its limit of %d turn(s) without saying it had finished; what it had reached is merged into the %s's memory anyway, where the main conversation reads it on its next turn.\n",
+			aside.MaxTurns, title)
+	default:
+		fmt.Fprintf(writer, "The thread is still open, with %d of %d turn(s) left; continue it with `%s --side-thread %s --message ...`.\n",
+			aside.MaxTurns-aside.Turn, aside.MaxTurns, continueSideCommand(role, agent), aside.Stream)
+	}
+	fmt.Fprintf(writer, "side thread cost so far: $%.4f\n", aside.CostUSD)
+}
+
+// continueSideCommand is the command that reaches this agent again, in the form
+// the operator would type: the product manager's conversation is `yoyo chat`,
+// and every other agent is reached by name.
+func continueSideCommand(role domain.AgentRole, agent string) string {
+	if role == domain.RoleProductManager && agent == string(domain.RoleProductManager) {
+		return "yoyo chat"
+	}
+	return "yoyo agent chat " + agent
+}
+
+// sideTopic is what a side thread opened for one message is recorded as being
+// about: the message's first line, held to what a topic may be. The topic is a
+// label on the record and in the merge's subject, so a long one is cut rather
+// than refused — a question lost over the length of its own first line would be
+// the thread never opened.
+func sideTopic(message string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
+	first = strings.TrimSpace(first)
+	if len(first) <= sidestream.MaxTopicBytes {
+		return first
+	}
+	// Cut on a rune boundary rather than a byte one, for the reason the merge's
+	// subject is: a label a person reads with half a character on the end is not a
+	// shorter label but a broken one.
+	const ellipsis = "..."
+	room := sidestream.MaxTopicBytes - len(ellipsis)
+	kept := 0
+	for index := range first {
+		if index > room {
+			break
+		}
+		kept = index
+	}
+	return strings.TrimSpace(first[:kept]) + ellipsis
 }
 
 // renderSideQuestion is what the role holding a side thread is sent.

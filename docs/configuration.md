@@ -3486,6 +3486,24 @@ in a later layer removes an inherited choice and puts the agent back to queueing
 A value that is neither word is refused at load, naming the two that are.
 `yoyo agent list` says which agents hold side threads.
 
+**Where the choice is made.** A single message — `yoyo chat --message` for the
+product manager, `yoyo agent chat <name> --message` for any agent — that finds
+the agent's conversation mid-turn is the moment the knob decides. An agent that
+queues has the message wait for the turn, which is what every message did before
+the key existed. An agent that holds side threads has it answered beside the busy
+turn instead, on a side thread of its own, and the answer says so: which thread
+it came from, that it is the agent's judgment and not an action, and what the
+agent tentatively committed to. Three kinds of message always reach the main
+conversation whatever the knob says, because each has to: a `/command`, which the
+harness carries out against the conversation; a decision or an answer, which
+settles something the main conversation is waiting on; and a message with
+`--new`, which replaces the conversation rather than sitting beside it. An
+interactive `yoyo chat` and a message from Slack queue as they always have — a
+side thread is a bounded number of turns, not a prompt to sit at. A side thread
+the agent left open for a further turn is continued with
+`--side-thread <id> --message`, and it takes its turns on its own record and
+its own lease, so it neither waits for the main conversation nor holds it.
+
 **The knob selects behaviour and never authority.** A side thread judges,
 answers, and tentatively plans: it reads the tracker and the evidence its role
 was given, and every intent it forms is a draft. It admits no work, mutates no
