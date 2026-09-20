@@ -163,6 +163,13 @@ a decision somebody owns and this run does not; two earlier runs reported the
 same wall as a prediction and this is the first documentation it has actually
 turned away. Whoever settles it should move the section there.
 
+It was settled, and not by trimming. The product manager decided on
+yoyodyne-ifd.240 that the budget is raised rather than the guides trimmed or the
+set narrowed, and yoyodyne-ifd.403 then replaced the budget with a 2 MiB
+`ShippedDocumentationCeiling` and a warning margin under it, so a paragraph of
+documentation no longer turns `make test` red. The section itself was never
+moved: yoyodyne-ifd.247 made the guidance unnecessary, as the next heading says.
+
 That is guidance rather than a wall, deliberately: Claude Code sets `TMPDIR`
 itself in sandbox mode, to a directory it derives per user, so a `TMPDIR` the
 harness passed in would be replaced before the run's first command ran. The

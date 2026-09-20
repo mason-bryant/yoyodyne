@@ -940,6 +940,16 @@ func TestShippedDocumentationStanding(t *testing.T) {
 	if !strings.Contains(at, "at or past") || !strings.Contains(at, "make test fails") {
 		t.Errorf("a set at the ceiling should say the gate fails, got %q", at)
 	}
+	// Both sentences name the decision the next reader of them is about to
+	// re-ask: yoyodyne-ifd.240 is where the product manager chose raising the
+	// bound over trimming the guides or narrowing the set, and a warning that
+	// only said how much room was left would send its reader back to the same
+	// question with no record that it has been answered.
+	for _, standing := range []string{inside, at} {
+		if !strings.Contains(standing, "yoyodyne-ifd.240") {
+			t.Errorf("the standing should name yoyodyne-ifd.240 as the precedent for raising the bound, got %q", standing)
+		}
+	}
 }
 
 // The harness's own set is eight generic paths — docs/work.md, docs/reporting.md,
