@@ -1466,6 +1466,32 @@ type State struct {
 	// cleared once the deadline passes and the attempt is reissued, so a run
 	// carrying one is a run that is still waiting.
 	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
+	// UsageLimitPausedSince is when the pause the deadline above belongs to
+	// began. It is written beside the deadline and cleared with it, and it is
+	// here because the deadline alone cannot say how long the run has been
+	// parked: every probe re-records the wait, so UpdatedAt is the start of the
+	// probe being slept rather than of the pause. The capacity hold is read off
+	// this — a run parked on a limit is a refusal like any in the usage-limit
+	// log, and the hold's age is measured from its earliest standing refusal —
+	// and a hold whose start moved with every probe would never stand long
+	// enough to be said as critical.
+	UsageLimitPausedSince *time.Time `json:"usage_limit_paused_since,omitempty"`
+	// UsageLimitResetUnknown reports that the deadline above is the harness's own
+	// next probe rather than a reset the provider named: an exhausted limit the
+	// provider gave no reset for, a server overload, or an outage. A reader
+	// saying when the wait lifts has to know which, because a probe interval
+	// said as the provider's reset is a time the provider never named — and a
+	// hold marked by it would be a fresh hold every probe. Records written before
+	// this was carried read as a reset the provider named, which is what nearly
+	// every recorded deadline was.
+	UsageLimitResetUnknown bool `json:"usage_limit_reset_unknown,omitempty"`
+	// UsageLimitModel is the model selector the refused invocation asked for,
+	// recorded so a run's park can be read back as a refusal of that model in the
+	// same way a refusal outside a run is. It is written with the deadline and
+	// outlives it like the kind does: the developer's model is already on the
+	// record as ProviderModel, but the reviewer's is recorded only once a review
+	// has answered, and a refused review has not.
+	UsageLimitModel string `json:"usage_limit_model,omitempty"`
 	// UsageLimitKind is the provider's own name for the limit that paused the
 	// run, kept as evidence for whoever reads the record afterwards. It outlives
 	// the deadline: what stopped the run is worth knowing even once the run has
@@ -1920,6 +1946,16 @@ func (s State) Validate() error {
 		}
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
+		}
+	}
+	if s.UsageLimitPausedSince != nil {
+		// The start of a pause belongs beside the deadline of one: on its own it
+		// would describe a wait the run is not taking.
+		if s.UsageLimitPausedSince.IsZero() {
+			problems = append(problems, errors.New("usage_limit_paused_since cannot be the zero time"))
+		}
+		if s.UsageLimitResetsAt == nil {
+			problems = append(problems, errors.New("usage_limit_paused_since requires usage_limit_resets_at"))
 		}
 	}
 	if _, outage := PausedForProviderOutage(s.PauseCause); s.PauseCause != "" && !outage &&

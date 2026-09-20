@@ -20,10 +20,20 @@ package readmodel
 // idle over items waiting on a decision, and the role that would have decided
 // was the one being refused.
 //
-// So this derives the hold from the log and the agents' configuration, once,
-// for every surface that says it: the channel repeats it while it stands, the
-// four lines carry it as the banner, and the attention line names whose move it
-// is.
+// So this derives the hold from the refusals and the agents' configuration,
+// once, for every surface that says it: the channel repeats it while it stands,
+// the four lines carry it as the banner, and the attention line names whose
+// move it is.
+//
+// The refusals are in two records, and the hold reads both. The usage-limit log
+// holds every refusal met outside a run — a conversation turn, an exchange, a
+// side thread, a standalone review — and a run's own park on a limit is in the
+// run's state and nowhere else, because a pause is revised as the run serves it
+// and the log is never revised. A product with no recurring task and no open
+// conversation, whose developer runs are all asleep on the reset, is held
+// exactly as September was held, and the log alone says nothing about it; the
+// alarm would rest on the development manager's sweep being the thing refused.
+// So a parked run is read here as the refusal it is, in the log's own shape.
 
 import (
 	"fmt"
@@ -89,8 +99,14 @@ type CapacityHold struct {
 	// when.
 	ResetsAt time.Time `json:"resets_at,omitempty"`
 	// Refusals is how many turns the provider has actually stopped inside this
-	// hold. A substitution is not one of them: the work carried on.
+	// hold, as the usage-limit log records them. A substitution is not one of
+	// them: the work carried on.
 	Refusals int `json:"refusals,omitempty"`
+	// ParkedRuns is how many runs are asleep on the limit inside this hold, read
+	// from the runs' own records rather than the log. Each is one invocation the
+	// provider stopped, and is counted apart from the turns above because a run
+	// parked for a day is one refusal in the record however many probes it made.
+	ParkedRuns int `json:"parked_runs,omitempty"`
 	// Kind is the provider's own name for the limit, from the latest refusal, and
 	// empty where it named none.
 	Kind string `json:"kind,omitempty"`
@@ -106,12 +122,15 @@ type CapacityHold struct {
 }
 
 // ReadCapacityHold says whether the provider is holding every configured agent
-// at the moment asked about.
+// at the moment asked about, from the two records a refusal is written in: the
+// runs, for the ones parked on a limit, and the usage-limit log, for every
+// refusal met outside a run.
 //
 // A refusal stands for as long as runstate.UsageLimitExhaustion.WindowClosed
 // says it does, which is the same reading failover takes of the same log: the
 // provider's own reset time where it named a usable one, and the configured
-// probe interval where it did not.
+// probe interval where it did not. A parked run is read as the refusal it is —
+// see ParkedRunRefusals — and stands on the same rule.
 //
 // An agent is held when the model its turn ends on is refused: its alternate
 // where it names one, since the alternate is only asked once its own model has
@@ -140,7 +159,7 @@ type CapacityHold struct {
 // and every agent has to be held, not most of them: a project with one agent
 // still being served is a project whose work is moving, and that is the stall
 // alarm's business rather than this reading's.
-func ReadCapacityHold(agents []AgentEndpoint, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration) CapacityHold {
+func ReadCapacityHold(agents []AgentEndpoint, runs []runstate.State, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration) CapacityHold {
 	if len(agents) == 0 {
 		return CapacityHold{}
 	}
@@ -150,7 +169,11 @@ func ReadCapacityHold(agents []AgentEndpoint, refusals []runstate.UsageLimitExha
 	refused := map[string]bool{}
 	var stopped []runstate.UsageLimitExhaustion
 	unnamed := false
-	for _, refusal := range refusals {
+	// The parked runs go first, so that the count of them below is the count of
+	// the standing ones among the first entries rather than a second pass.
+	parked := ParkedRunRefusals(runs)
+	parkedStanding := 0
+	for index, refusal := range append(parked, refusals...) {
 		if refusal.Substituted() && refusal.Reason() == runstate.SubstitutedForAvailability {
 			continue
 		}
@@ -165,6 +188,9 @@ func ReadCapacityHold(agents []AgentEndpoint, refusals []runstate.UsageLimitExha
 			continue
 		}
 		stopped = append(stopped, refusal)
+		if index < len(parked) {
+			parkedStanding++
+		}
 		if model == "" {
 			unnamed = true
 		}
@@ -206,7 +232,9 @@ func ReadCapacityHold(agents []AgentEndpoint, refusals []runstate.UsageLimitExha
 	// When the hold began and when the provider says it lifts are read from the
 	// refusals that actually stopped something: the earliest of them is the
 	// start, and the latest reset any of them named is the end. The kind is the
-	// latest refusal's, because that is the limit the provider is quoting now.
+	// latest refusal's, because that is the limit the provider is quoting now —
+	// latest by when it happened, since the two records are not one sequence.
+	latest := stopped[0]
 	for _, refusal := range stopped {
 		if hold.Since.IsZero() || refusal.At.Before(hold.Since) {
 			hold.Since = refusal.At.UTC()
@@ -214,10 +242,87 @@ func ReadCapacityHold(agents []AgentEndpoint, refusals []runstate.UsageLimitExha
 		if refusal.ResetsAt != nil && refusal.ResetsAt.After(hold.ResetsAt) {
 			hold.ResetsAt = refusal.ResetsAt.UTC()
 		}
+		if !refusal.At.Before(latest.At) {
+			latest = refusal
+		}
 	}
-	hold.Refusals = len(stopped)
-	hold.Kind = strings.TrimSpace(stopped[len(stopped)-1].Kind)
+	hold.ParkedRuns = parkedStanding
+	hold.Refusals = len(stopped) - parkedStanding
+	hold.Kind = strings.TrimSpace(latest.Kind)
 	return hold
+}
+
+// ParkedRunRefusals is every run asleep on an exhausted usage limit, each as the
+// refusal it is, in the shape the usage-limit log records one in. A run parks
+// on a limit in its own state rather than in the log, so whatever reads the log
+// for what the provider has refused reads this beside it.
+//
+// A run is parked when it is in flight and carries a recorded deadline for an
+// exhausted usage limit: the empty cause beside a deadline is a usage limit,
+// which is what every deadline written before the cause was carried was. A
+// server overload shares the deadline and is not a usage window — it lifts in
+// seconds on the provider's own clock — and an outage is the provider answering
+// nobody, which the outage reading says; neither is a refusal for want of
+// capacity, and neither is here. One run per work item, and only the latest,
+// so a run a later one superseded describes nothing.
+//
+// The refusal's moment is when the pause began where the record kept it, and
+// the start of the probe being slept where it did not — which is every record
+// written before the start was carried. Its reset is the run's deadline where
+// the provider named that deadline, and none where the deadline is the
+// harness's own next probe: a probe interval said as the provider's reset
+// would be a time the provider never named, and a hold marked by it would be a
+// fresh hold every probe. Its model is the one the run recorded as refused, and
+// for a record written before that was carried, the developer's model where the
+// run was developing — which is on the record already — and nothing otherwise,
+// because a refused review recorded no model at all. An unnamed model is then
+// read as the log's unnamed refusals are: a refusal of what every agent asks
+// for first, where they all ask for the same thing, and nobody's otherwise.
+func ParkedRunRefusals(runs []runstate.State) []runstate.UsageLimitExhaustion {
+	var parked []runstate.UsageLimitExhaustion
+	for _, run := range latestRunPerItem(runs) {
+		if refusal, held := parkedRunRefusal(run); held {
+			parked = append(parked, refusal)
+		}
+	}
+	// Sorted by when each parked, so two readings of one store say the same
+	// earliest refusal whatever order the store scanned the runs in.
+	sort.Slice(parked, func(i, j int) bool {
+		if parked[i].At.Equal(parked[j].At) {
+			return parked[i].WorkItemID < parked[j].WorkItemID
+		}
+		return parked[i].At.Before(parked[j].At)
+	})
+	return parked
+}
+
+func parkedRunRefusal(run runstate.State) (runstate.UsageLimitExhaustion, bool) {
+	if !run.Status.InFlight() || run.UsageLimitResetsAt == nil {
+		return runstate.UsageLimitExhaustion{}, false
+	}
+	if run.PauseCause != runstate.PauseUsageLimit && run.PauseCause != "" {
+		return runstate.UsageLimitExhaustion{}, false
+	}
+	refusal := runstate.UsageLimitExhaustion{
+		SchemaVersion: runstate.UsageLimitSchemaVersion,
+		ProductID:     run.ProductID,
+		At:            run.UpdatedAt.UTC(),
+		Waiting:       fmt.Sprintf("run %s of %s", run.RunID, run.WorkItemID),
+		Kind:          strings.TrimSpace(run.UsageLimitKind),
+		WorkItemID:    run.WorkItemID,
+		Model:         strings.TrimSpace(run.UsageLimitModel),
+	}
+	if run.UsageLimitPausedSince != nil {
+		refusal.At = run.UsageLimitPausedSince.UTC()
+	}
+	if !run.UsageLimitResetUnknown {
+		resetsAt := run.UsageLimitResetsAt.UTC()
+		refusal.ResetsAt = &resetsAt
+	}
+	if refusal.Model == "" && run.Phase == runstate.PhaseDeveloping {
+		refusal.Model = strings.TrimSpace(run.ProviderModel)
+	}
+	return refusal, true
 }
 
 // Says is the hold as the one sentence every surface states it in. It carries
@@ -249,8 +354,22 @@ func (h CapacityHold) Says() string {
 	default:
 		why = fmt.Sprintf("%s run on %s and fail over to %s, and the provider is refusing both", agents, list(h.Models), list(h.Alternates))
 	}
-	return fmt.Sprintf("%s: %s; %s refused since %s",
-		head, why, count(h.Refusals, "turn"), h.Since.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("%s: %s; %s since %s",
+		head, why, h.stoppedSays(), h.Since.UTC().Format(time.RFC3339))
+}
+
+// stoppedSays is what the provider has stopped inside the hold, from whichever
+// of the two records holds it: the turns the log refused, the runs parked on
+// the limit, or both.
+func (h CapacityHold) stoppedSays() string {
+	switch {
+	case h.ParkedRuns > 0 && h.Refusals > 0:
+		return fmt.Sprintf("%s parked and %s refused", count(h.ParkedRuns, "run"), count(h.Refusals, "turn"))
+	case h.ParkedRuns > 0:
+		return count(h.ParkedRuns, "run") + " parked"
+	default:
+		return count(h.Refusals, "turn") + " refused"
+	}
 }
 
 // Whose is whose move it is. The window is the provider's, and that is not the
@@ -294,17 +413,35 @@ func (h CapacityHold) Attention() (Attention, bool) {
 }
 
 // CapacityHoldOf reads the hold from a set of sources, and says why it could
-// not where it could not. A reading with no log wired, or no agents to hold, is
-// not a hold and not a problem: it is a caller that never asked.
+// not where it could not. A reading with neither record wired, or no agents to
+// hold, is not a hold and not a problem: it is a caller that never asked.
+//
+// The two records only ever add refusals, so a hold read from the one that
+// could be read is a hold whatever the other holds, and it is said beside the
+// problem rather than withheld for it: a broken log must not hide a product
+// whose every run is parked, which is the case this reading exists for.
 func CapacityHoldOf(sources Sources, now time.Time) (CapacityHold, string) {
-	if sources.UsageLimits == nil || len(sources.Agents) == 0 {
+	if (sources.UsageLimits == nil && sources.Runs == nil) || len(sources.Agents) == 0 {
 		return CapacityHold{}, ""
 	}
-	refusals, err := sources.UsageLimits.List()
-	if err != nil {
-		return CapacityHold{}, fmt.Sprintf("what the provider has refused could not be read: %v", err)
+	var problem string
+	var runs []runstate.State
+	if sources.Runs != nil {
+		incomplete, err := sources.Runs.Incomplete()
+		if err != nil {
+			problem = fmt.Sprintf("which runs are parked on the provider could not be read: %v", err)
+		}
+		runs = incomplete
 	}
-	return ReadCapacityHold(sources.Agents, refusals, now, sources.UnknownResetPause), ""
+	var refusals []runstate.UsageLimitExhaustion
+	if sources.UsageLimits != nil {
+		listed, err := sources.UsageLimits.List()
+		if err != nil {
+			problem = joinProblems(problem, fmt.Sprintf("what the provider has refused could not be read: %v", err))
+		}
+		refusals = listed
+	}
+	return ReadCapacityHold(sources.Agents, runs, refusals, now, sources.UnknownResetPause), problem
 }
 
 func sortedKeys(set map[string]struct{}) []string {

@@ -4583,6 +4583,14 @@ func TestRunPausesForAnExhaustedUsageLimitAndResumesWhenItResets(t *testing.T) {
 	if pausedState.UsageLimitKind != "five_hour" || pausedState.Status.Terminal() {
 		t.Fatalf("paused state = %#v, want a non-terminal run recording the limit", pausedState)
 	}
+	// The park reads back as a refusal wherever refusals are read: when it began,
+	// that the deadline is the provider's own reset, and which model was refused.
+	if pausedState.UsageLimitPausedSince == nil || !pausedState.UsageLimitPausedSince.Equal(baseTime) {
+		t.Fatalf("paused since = %v, want the moment the pause began, %s", pausedState.UsageLimitPausedSince, baseTime)
+	}
+	if pausedState.UsageLimitResetUnknown || pausedState.UsageLimitModel != testDeveloperModel {
+		t.Fatalf("paused state = %#v, want the reset recorded as the provider's and the developer's model as refused", pausedState)
+	}
 	// The worktree, branch, and developer session all survive the pause, which is
 	// what lets the reissued attempt continue rather than start over.
 	if pausedState.WorktreePath == "" || pausedState.Branch == "" || pausedState.ProviderSessionID != provider.developerSession {
@@ -4617,8 +4625,8 @@ func TestRunPausesForAnExhaustedUsageLimitAndResumesWhenItResets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if finished.UsageLimitResetsAt != nil {
-		t.Fatalf("a finished run still carries a pause deadline: %s", finished.UsageLimitResetsAt)
+	if finished.UsageLimitResetsAt != nil || finished.UsageLimitPausedSince != nil {
+		t.Fatalf("a finished run still carries a pause deadline or start: %s, %v", finished.UsageLimitResetsAt, finished.UsageLimitPausedSince)
 	}
 }
 
@@ -4975,6 +4983,13 @@ func TestRunPausesWhenTheReviewerHitsAnExhaustedUsageLimit(t *testing.T) {
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	clock := &pausingClock{now: baseTime}
 	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+	// A reviewer on a model of its own, so the record of which model was refused
+	// can be told from the developer's.
+	const reviewerRefusedModel = "sonnet"
+	reviewer := pipeline.Config.Agents["reviewer"]
+	reviewer.Model = reviewerRefusedModel
+	pipeline.Config.Agents["reviewer"] = reviewer
+	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: reviewerRefusedModel}
 
 	var pausedState runstate.State
 	clock.onSleep = func() {
@@ -5003,6 +5018,11 @@ func TestRunPausesWhenTheReviewerHitsAnExhaustedUsageLimit(t *testing.T) {
 	}
 	if !pausedForUsageLimit(pausedState) {
 		t.Fatalf("a review-time pause is not resumable: %#v", pausedState)
+	}
+	// The model refused is the reviewer's, which nothing else on the record says
+	// for a review that never answered.
+	if pausedState.UsageLimitModel != reviewerRefusedModel {
+		t.Fatalf("refused model = %q, want the reviewer's %q", pausedState.UsageLimitModel, reviewerRefusedModel)
 	}
 	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
 		t.Fatalf("the run did not complete after the reviewer's limit reset: %#v (blocked=%t)", outcome, tracker.blocked)
@@ -5034,6 +5054,18 @@ func TestRunPollsAUsageLimitThatNamesNoResetTime(t *testing.T) {
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	clock := &pausingClock{now: baseTime}
 	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+	// The deadline the poll records is the harness's own, and the record has to
+	// say so: read back as a reset the provider named, it would be a time the
+	// provider never quoted.
+	var pausedState runstate.State
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		pausedState = loaded
+	}
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err != nil {
@@ -5044,6 +5076,9 @@ func TestRunPollsAUsageLimitThatNamesNoResetTime(t *testing.T) {
 	}
 	if len(clock.slept) == 0 {
 		t.Fatal("nothing was waited for; a limit with no reset time should poll")
+	}
+	if !pausedState.UsageLimitResetUnknown || pausedState.UsageLimitResetsAt == nil {
+		t.Fatalf("paused state = %#v, want the probe deadline recorded as the harness's own rather than the provider's", pausedState)
 	}
 	if got := clock.waited(); got != 30*time.Minute {
 		t.Errorf("waited %s, want the configured unknown-reset interval of 30m", got)

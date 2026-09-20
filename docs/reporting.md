@@ -949,11 +949,18 @@ alternate. Each of the 134 refusals was said once in the channel as itself, at
 warning severity, and nothing said what they added up to. The operator heard
 five days later, from his assistant.
 
-So the sink reads the refusals against the configuration and says the sum. When
-the refusals the provider has not said lifts yet cover the model every agent's
-turn ends on — its alternate where it names one, its own model otherwise — and
-at least one of them stopped a turn rather than being served through, that is
-**the provider holding every role**, and it is said as a state:
+So the sink reads the refusals against the configuration and says the sum. The
+refusals are in two records, and it reads both: the usage-limit log, which holds
+every refusal met outside a run — a conversation turn, an exchange, a side
+thread, a standalone review — and the runs' own records, where a run parked on
+a limit writes its deadline and nothing in the log says so. A product with no
+recurring task and no open conversation, whose developer runs are all asleep on
+the reset, is held exactly as September was, and the log alone would never say
+it. When the refusals the provider has not said lifts yet cover the model every
+agent's turn ends on — its alternate where it names one, its own model
+otherwise — and at least one of them stopped a turn or parked a run rather than
+being served through, that is **the provider holding every role**, and it is
+said as a state:
 
 > Every role is paused on the provider's usage window until
 > 2026-09-13T03:00:00Z: all 5 agents run on opus and none names an alternate,
@@ -983,20 +990,32 @@ shorter bar; this is the capacity half, and a line stopped on a known reset is
 a different message from a line stopped for reasons nobody can name.
 
 The hold is marked by the reset the provider named, so the same window is one
-thing to say and a later one is another; the sweep adding a refusal an hour
-does not restart the clock. It lifts at the reset — or, for a refusal the
-provider named no reset for, after `execution.usage_limit_unknown_reset_pause`
-with nothing recorded since, which is the same reading failover takes of the
-same log — and nothing is said about that: the turn that is served says it. A
-refusal that names no model, which is every one written before the model was
-recorded, counts only where every agent asks for the same thing, and then only
-as a refusal of the model they ask for first — never of an alternate, which is
-asked only after that model has refused and which a record naming no model
-cannot have asked. On a project whose agents differ it cannot be attributed,
-and a hold invented over it would send somebody to look at roles that are being
-served; on a project that enabled failover after such refusals were written,
-the unexpired ones hold nobody while the alternate is being served, rather
-than reading as the provider refusing both. Failover working is the
+thing to say and a later one is another; the sweep adding a refusal an hour, or
+a parked run probing every half hour, does not restart the clock. It lifts at
+the reset — or, for a refusal the provider named no reset for, after
+`execution.usage_limit_unknown_reset_pause` with nothing recorded since, which
+is the same reading failover takes of the same log — and nothing is said about
+that: the turn that is served says it. A parked run is read on the same rule:
+it stands until the reset it is parked on where the provider named that reset,
+and for the probe interval from when it parked where the deadline it recorded
+is the harness's own next probe, which is never said as a time the provider
+named. The hold's age, which is what decides when it becomes critical, runs
+from the earliest standing refusal — for a run, from when it parked rather
+than from its latest probe, which its record keeps for exactly this reason.
+The sentence counts the two records as what they are: turns the log refused,
+and runs parked on the limit, a run being one refusal however many probes it
+has made. A refusal that names no model, which is every one written before the
+model was recorded, counts only where every agent asks for the same thing, and
+then only as a refusal of the model they ask for first — never of an
+alternate, which is asked only after that model has refused and which a record
+naming no model cannot have asked. On a project whose agents differ it cannot
+be attributed, and a hold invented over it would send somebody to look at
+roles that are being served; on a project that enabled failover after such
+refusals were written, the unexpired ones hold nobody while the alternate is
+being served, rather than reading as the provider refusing both. A run's park
+records the model it was refused on; one recorded before it did is read as a
+refusal of the developer's model where the run was developing, which its record
+carries already, and as unnamed otherwise. Failover working is the
 opposite of a hold: a window that closed and was served through by an
 alternate stopped nothing, however many times it is recorded. The condition
 that makes a hold possible at all — every agent on one model with nothing to

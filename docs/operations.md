@@ -478,11 +478,14 @@ told what happened — and a turn that slept through the window would hold the
 `yoyo work` session that took it for hours. An independent `yoyo review` still
 fails on a refusal exactly as it did before too.
 
-What those refusals add up to is read as well as each one on its own. When the
-refusals standing cover the model every agent's turn ends on, and at least one
-of them stopped a turn rather than being served through by an alternate, **the
-provider is holding every role**, and that is said as a state rather than as
-one more refusal: it heads [the four lines](#where-the-harness-stands-the-four-lines)
+What those refusals add up to is read as well as each one on its own, and the
+runs parked on a limit are read with them — a run's park is in its own record
+rather than in the log above, and a product whose only refusals are runs
+parking is held all the same. When the refusals standing cover the model every
+agent's turn ends on, and at least one of them stopped a turn or parked a run
+rather than being served through by an alternate, **the provider is holding
+every role**, and that is said as a state rather than as one more refusal: it
+heads [the four lines](#where-the-harness-stands-the-four-lines)
 with the reset the provider named, it is on the attention line as your move,
 and the channel [says it again while it stands](reporting.md#the-provider-holding-every-role).
 It is the message that was missing between 2026-09-08 and 09-13, when 134
@@ -1523,11 +1526,15 @@ Needs a human (1):
 ```
 
 It is read from the [refusals the harness records outside a run](#a-provider-refusal-outside-a-run)
-against what each agent is configured to ask for and to fail over to: a hold
-stands while a refusal the provider has not said lifts yet covers the model
-every agent's turn ends on — its alternate where it names one, its own model
-otherwise — and at least one of those refusals was a turn that actually stopped
-rather than one an alternate served through. A refusal that names no model,
+and from the runs parked on a limit — each run's own record, since a park is
+written there and not in the log — against what each agent is configured to
+ask for and to fail over to: a hold stands while a refusal the provider has
+not said lifts yet covers the model every agent's turn ends on — its alternate
+where it names one, its own model otherwise — and at least one of those
+refusals was a turn that actually stopped, or a run that actually parked,
+rather than one an alternate served through. The sentence counts the two as
+what they are, `2 runs parked and 20 turns refused since …`, and a run is one
+refusal however many probes it makes while it waits. A refusal that names no model,
 which is every one recorded before 2026-09-13, counts only where every agent
 asks for the same thing, because on a project whose agents differ it cannot be
 attributed — and it counts as a refusal of the model they ask for first, never
