@@ -166,6 +166,9 @@ var reaches = map[Kind]Reach{
 	KindDirectiveCarriedOut: ReachThread,
 	KindDirectiveRefused:    ReachThread,
 	KindDirectiveWithdrawn:  ReachThread,
+	// A question's receipt is the same shape: addressed by name to whoever asked,
+	// in the thread they asked in, with the answer following it there.
+	KindQuestionHeard: ReachThread,
 	// The operator's two switches, which are about the whole line and are his own
 	// to lift.
 	KindIntakeHeld:     ReachChannel,
@@ -227,6 +230,12 @@ var reaches = map[Kind]Reach{
 	// from the no-thread rule in reachOf, because a digest is only ever produced in
 	// place of messages that were going to post.
 	KindCatchUpDigest: ReachThread,
+	// A line of a durable log the sink could not read. It is the harness degraded
+	// rather than any item's news — whatever that line recorded is not going to be
+	// said, and the file is a person's to look at — and it is said once per line,
+	// so the channel level costs one message and buys the operator the one fact
+	// no thread would carry.
+	KindLogLineSkipped: ReachChannel,
 }
 
 // Reach is how far one kind goes on its own, before anything about a particular

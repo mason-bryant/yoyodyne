@@ -1166,13 +1166,24 @@ every run's environment from an allowlist rather than handing down its own, so
 no agent's subprocess tree ever has a credential for your workspace in it, even
 where the pair was exported in the shell that started the harness.
 
-Replies go the other way. A reply in a work item's thread, from somebody this
-project granted `direct-work` with a bound Slack member id, is recorded as a
+Replies go the other way, and what a reply is for is read before anything is
+written down. An instruction in a work item's thread, from somebody this project
+granted `direct-work` with a bound Slack member id, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
-and the same resolution, so a run meets it whichever way it arrived. Every reply
-is answered in its own thread, tagging whoever wrote it, with what was recorded
-or why nothing was; the reply itself is marked with where its directive stands,
+and the same resolution, so a run meets it whichever way it arrived. A question
+in the same thread — one ending with a question mark — is recorded as nothing
+and carried to the product manager instead, in the same durable conversation
+`yoyo chat` holds; the thread gets a one-line receipt saying it was heard as a
+question, and then the product manager's answer, in the product manager's own
+name. A reply that is neither outright is asked back in one line rather than
+guessed at. The record used to take everything, and on 2026-08-30 it took the
+operator's question about a phrase in a receipt as a standing instruction and
+acknowledged it with the same phrase: a question in the directive record is a
+directive nobody gave, and `yoyo directive list` marks any entry that still
+applies and reads as one, so the ones recorded before this can be withdrawn. Every reply is
+answered in its own thread, tagging whoever wrote it, with what was recorded or
+why nothing was; the reply itself is marked with where its directive stands,
 recorded and open or settled; and when the record later says the directive was
 settled, that is said in the same thread, tagged the same way, and the mark on
 the reply moves with it. A project that has granted nobody is steered by nobody.

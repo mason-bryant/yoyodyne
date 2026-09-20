@@ -10,7 +10,6 @@ package runstate
 // the run finished, and nobody left holding the question.
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -102,39 +100,53 @@ func (s *AmendmentStore) Decide(decision amendment.Decision) error {
 
 // List returns every record in the order it was written. A log that does not
 // exist yet is a product nobody has proposed anything about, which is not a
-// failure to read.
+// failure to read. A line that will not decode is, for the reason it is on the
+// reports pile: a decision taken over a listing that quietly dropped a proposal
+// is a decision about a log nobody can trust. The sink reads past such a line by
+// position with Scan, and says so.
 func (s *AmendmentStore) List() ([]amendment.Record, error) {
+	records, skipped, err := s.Scan()
+	if err != nil {
+		return nil, err
+	}
+	if err := firstSkipped("amendment log", skipped); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// Scan returns every record that decoded, in the order it was written, and
+// beside them the lines that would not, each at the position it holds among the
+// records — a proposal or a decision alike, since a line that will not decode
+// says nothing about which it was. It is the read a positional cursor is kept
+// against, so one bad line costs the reader that line and nothing behind it.
+func (s *AmendmentStore) Scan() ([]amendment.Record, []SkippedLine, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open amendment log: %w", err)
+		return nil, nil, fmt.Errorf("open amendment log: %w", err)
 	}
 	defer file.Close()
 
 	var records []amendment.Record
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedAmendmentBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		decoded, err := decodeAmendmentRecord([]byte(line))
+	skipped, err := scanLog(file, maxEncodedAmendmentBytes, func(line []byte) error {
+		decoded, err := decodeAmendmentRecord(line)
 		if err != nil {
-			return nil, fmt.Errorf("decode amendment log: %w", err)
+			return err
 		}
 		if decoded.Proposal != nil && decoded.Proposal.ProductID != s.productID {
-			return nil, fmt.Errorf("decode amendment log: proposal product %q does not match store product %q",
+			return fmt.Errorf("proposal product %q does not match store product %q",
 				decoded.Proposal.ProductID, s.productID)
 		}
 		records = append(records, decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read amendment log: %w", err)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read amendment log: %w", err)
-	}
-	return records, nil
+	return records, skipped, nil
 }
 
 // write appends one validated record. It is an append rather than a rewrite for

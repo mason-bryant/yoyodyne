@@ -20,7 +20,6 @@ package runstate
 // value is that it is short.
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -31,7 +30,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -652,38 +650,50 @@ func (s *WatchStore) Record(transition WatchTransition) error {
 
 // List returns every recorded transition in the order it happened. A log that
 // does not exist yet is a product nobody has watched, which is not a failure to
-// read.
+// read. A line that will not decode is: a session nobody can read must not be
+// reported as one in whatever state the readable lines happen to end on. The
+// sink reads past such a line by position with Scan, and says so.
 func (s *WatchStore) List() ([]WatchTransition, error) {
+	transitions, skipped, err := s.Scan()
+	if err != nil {
+		return nil, err
+	}
+	if err := firstSkipped("watch log", skipped); err != nil {
+		return nil, err
+	}
+	return transitions, nil
+}
+
+// Scan returns every transition that decoded, in the order it happened, and
+// beside them the lines that would not, each at the position it holds among the
+// records. It is the read a positional cursor is kept against, so one bad line
+// costs the reader that line and nothing behind it.
+func (s *WatchStore) Scan() ([]WatchTransition, []SkippedLine, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open watch log: %w", err)
+		return nil, nil, fmt.Errorf("open watch log: %w", err)
 	}
 	defer file.Close()
 
 	var transitions []WatchTransition
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedWatchBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		decoded, err := decodeWatchTransition([]byte(line))
+	skipped, err := scanLog(file, maxEncodedWatchBytes, func(line []byte) error {
+		decoded, err := decodeWatchTransition(line)
 		if err != nil {
-			return nil, fmt.Errorf("decode watch log: %w", err)
+			return err
 		}
 		if err := s.validate(decoded); err != nil {
-			return nil, fmt.Errorf("decode watch log: %w", err)
+			return err
 		}
 		transitions = append(transitions, decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read watch log: %w", err)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read watch log: %w", err)
-	}
-	return transitions, nil
+	return transitions, skipped, nil
 }
 
 // Latest is the last transition recorded, which is where a session got to. A

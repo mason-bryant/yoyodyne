@@ -571,6 +571,15 @@ func (d Directive) Render() string {
 		}
 	}
 	rendered.WriteString("  affects: " + d.scope() + "\n")
+	// A question in the record is a directive nobody gave, and every one there
+	// was recorded before questions were told from instructions. It is said on
+	// the entry rather than filtered out of the listing, because the record is
+	// evidence rather than a worklist: what ends it is the operator withdrawing
+	// it, and this line is what tells them which entries to look at. One already
+	// withdrawn or settled is over and needs no marking.
+	if d.InForce() && d.ReadsAsQuestion() {
+		rendered.WriteString("  reads as a question rather than an instruction: it directs nothing, and withdrawing it is what ends it\n")
+	}
 	if d.Resolved() {
 		fmt.Fprintf(&rendered, "  %s %s: %s\n", d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339), indented(d.Resolution))
 	}

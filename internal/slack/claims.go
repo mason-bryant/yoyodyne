@@ -35,11 +35,11 @@ func (f *HarnessFeed) claimDeliveries(cursor Cursor, since time.Time, streams ma
 		return nil, nil
 	}
 	streams[claimStream] = struct{}{}
-	released, err := f.Claims.List()
+	released, skipped, err := f.Claims.Scan()
 	if err != nil {
 		return nil, err
 	}
-	deliveries, err := f.logDeliveries(claimStream, cursor, len(released), since,
+	deliveries, err := f.logDeliveries(claimStream, "released claims", cursor, len(released), skipped, since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromReleasedClaim(released[index])
 			return released[index].ReleasedAt, notification, err
@@ -53,8 +53,11 @@ func (f *HarnessFeed) claimDeliveries(cursor Cursor, since time.Time, streams ma
 		// an item nothing would ever pull again, on a line that reads as busy — and a
 		// channel is somewhere somebody chooses to look, which is exactly what an
 		// overnight does not include. A cursor advance with nothing to say is left
-		// alone: reading past a release older than this sink is not news.
-		if !deliveries[index].Silent() {
+		// alone: reading past a release older than this sink is not news. Nor is
+		// a line of the log the reader could not decode, which is said the way
+		// every log's is and is the operator's to look at rather than to be woken
+		// for.
+		if deliveries[index].Notification.Event.Kind == notify.KindClaimReleased {
 			deliveries[index].Direct = true
 		}
 	}
@@ -63,7 +66,9 @@ func (f *HarnessFeed) claimDeliveries(cursor Cursor, since time.Time, streams ma
 
 // ReleasedClaims is where the claims the harness gave back are read from. It is
 // an interface rather than the store itself so a test can hand the feed a log
-// without a filesystem, exactly as the other readings here are given one.
+// without a filesystem, exactly as the other readings here are given one. It is
+// read by position, with the lines that would not decode holding theirs, for the
+// reason every log the sink reads is.
 type ReleasedClaims interface {
-	List() ([]runstate.ReleasedClaim, error)
+	Scan() ([]runstate.ReleasedClaim, []runstate.SkippedLine, error)
 }

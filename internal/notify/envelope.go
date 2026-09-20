@@ -172,6 +172,13 @@ const (
 	KindDirectiveCarriedOut Kind = "directive.carried-out"
 	KindDirectiveRefused    Kind = "directive.refused"
 	KindDirectiveWithdrawn  Kind = "directive.withdrawn"
+	// A reply that was a question rather than an instruction. Nothing is
+	// recorded from it — a question in the directive record is a directive
+	// nobody gave — and what the person is owed is an answer, which the product
+	// manager gives in the same thread. This is the receipt that says so in the
+	// meantime, and it is its own kind rather than a refusal because nothing was
+	// refused: the question was heard, and the answer is on its way.
+	KindQuestionHeard Kind = "question.heard"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -326,6 +333,13 @@ const (
 	// starts dropping them. So the accumulation is said once per thread, naming
 	// how much of it there is and the record that holds all of it.
 	KindCatchUpDigest Kind = "catch-up.digest"
+	// One line of a durable log the sink could not read, and read past. Every
+	// other kind here is something the record says; this is the one place the
+	// record itself could not be read, said so that a torn write or a schema the
+	// sink's build does not know costs one message rather than every message
+	// behind it. It is said once per line, because the reader keeps the line's
+	// position and does not meet it again.
+	KindLogLineSkipped Kind = "log.line-skipped"
 )
 
 // Kinds is the whole reportable set, in the order work reaches them: the queue
@@ -371,6 +385,7 @@ func Kinds() []Kind {
 		KindDirectiveCarriedOut,
 		KindDirectiveRefused,
 		KindDirectiveWithdrawn,
+		KindQuestionHeard,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -392,6 +407,7 @@ func Kinds() []Kind {
 		KindBundleImprovement,
 		KindBundleImprovements,
 		KindCatchUpDigest,
+		KindLogLineSkipped,
 	}
 }
 
@@ -410,13 +426,13 @@ func (k Kind) Valid() bool {
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
-		KindDirectiveWithdrawn,
+		KindDirectiveWithdrawn, KindQuestionHeard,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
 		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,
 		KindClaimReleased,
-		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest:
+		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest, KindLogLineSkipped:
 		return true
 	default:
 		return false
@@ -970,6 +986,15 @@ type Detail struct {
 	// where the harness refuses one carrying no reason before it is ever recorded,
 	// so an absence there is a record written by something that should not exist.
 	Reason string `json:"reason,omitempty"`
+	// Log, Line, and Offset are which durable log a line could not be read from
+	// and where in the file that line is, read by KindLogLineSkipped beside the
+	// decoder's own words in Cause. The line is numbered from one and the offset
+	// is the byte it begins at, so a reader can open the file at it; the log is
+	// named as the sink names its streams rather than by path, because the path
+	// is under the state root and the message is read somewhere that is not.
+	Log    string `json:"log,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
 }
 
 // Event is one reportable thing the record says happened. It carries no words of

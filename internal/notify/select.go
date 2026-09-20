@@ -917,6 +917,28 @@ func FromAccumulation(gathered Accumulation) Notification {
 	}
 }
 
+// FromSkippedLine says that one line of a durable log could not be read and
+// was read past. It is addressed to the product and spoken by the harness for
+// the reason the holds are: a torn write in the reports log is about every item
+// rather than any one of them, and no persona's judgement is in a decoder
+// refusing a line.
+//
+// It is a warning: whatever the line recorded is not going to be said, which
+// is something already lost, and the file is a person's to look at. It is
+// dated by when the sink read it rather than by anything the line says, because
+// a line that will not decode names no moment — which is also why it is never
+// read past as history, since absence of a date is not evidence of age.
+func FromSkippedLine(log string, skipped runstate.SkippedLine, at time.Time) Notification {
+	notification := productNotification(KindLogLineSkipped, at, Detail{
+		Log:    strings.TrimSpace(log),
+		Line:   skipped.Line,
+		Offset: skipped.Offset,
+		Cause:  strings.TrimSpace(skipped.Problem),
+	})
+	notification.Event.Severity = report.SeverityWarning
+	return notification
+}
+
 func FromOperatorHold(hold runstate.OperatorHold) Notification {
 	return productNotification(KindHoldPlaced, hold.HeldAt, Detail{})
 }

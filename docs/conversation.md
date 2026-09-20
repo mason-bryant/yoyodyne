@@ -853,6 +853,18 @@ you gave to an agent other than the product manager gets written down:
   --reason "recorded in error: that was a question" directive-05d6
 ```
 
+That last one is the shape of a real repair. Until questions were told from
+instructions, a question typed in a Slack thread was recorded as a standing
+directive — the operator's *What does 'in force from now' mean?* of 2026-08-30
+and his *Did you restart?* a week later both were — and a question in the record
+is a directive nobody gave. The listing reads its entries by the same rule the
+channel now reads replies with, and marks any operational directive that still
+applies and whose words are a question: *reads as a question rather than an
+instruction: it directs nothing, and withdrawing it is what ends it*. `/directives` in the
+conversation carries the same mark. Nothing is withdrawn for you — the record is
+evidence rather than a worklist — but the mark is what says which entries to
+look at.
+
 What the harness enforces is the pause; what it does not do yet is work out
 which items derive from a changed artifact. A directive that names no work
 therefore pauses all of it, which is the safe reading rather than a clever one.

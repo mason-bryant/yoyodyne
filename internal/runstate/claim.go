@@ -24,7 +24,6 @@ package runstate
 // overwrite each other's record.
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -174,38 +173,51 @@ func (s *ClaimStore) Append(released ReleasedClaim) error {
 
 // List returns every recorded release in the order it was recorded. A log that
 // does not exist yet is a product no claim has ever been given back on, which is
-// not a failure to read.
+// not a failure to read. A line that will not decode is, for the reason it is on
+// the reports pile: a listing that quietly dropped a release is one nobody can
+// trust to be complete. The sink reads past such a line by position with Scan,
+// and says so.
 func (s *ClaimStore) List() ([]ReleasedClaim, error) {
+	released, skipped, err := s.Scan()
+	if err != nil {
+		return nil, err
+	}
+	if err := firstSkipped("released claim log", skipped); err != nil {
+		return nil, err
+	}
+	return released, nil
+}
+
+// Scan returns every release that decoded, in the order it was recorded, and
+// beside them the lines that would not, each at the position it holds among the
+// records. It is the read a positional cursor is kept against, so one bad line
+// costs the reader that line and nothing behind it.
+func (s *ClaimStore) Scan() ([]ReleasedClaim, []SkippedLine, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open released claim log: %w", err)
+		return nil, nil, fmt.Errorf("open released claim log: %w", err)
 	}
 	defer file.Close()
 
 	var released []ReleasedClaim
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedReleasedClaimBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		decoded, err := decodeReleasedClaim([]byte(line))
+	skipped, err := scanLog(file, maxEncodedReleasedClaimBytes, func(line []byte) error {
+		decoded, err := decodeReleasedClaim(line)
 		if err != nil {
-			return nil, fmt.Errorf("decode released claim log: %w", err)
+			return err
 		}
 		if err := s.validate(decoded); err != nil {
-			return nil, fmt.Errorf("decode released claim log: %w", err)
+			return err
 		}
 		released = append(released, decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read released claim log: %w", err)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read released claim log: %w", err)
-	}
-	return released, nil
+	return released, skipped, nil
 }
 
 func decodeReleasedClaim(data []byte) (ReleasedClaim, error) {

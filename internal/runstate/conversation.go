@@ -1,7 +1,6 @@
 package runstate
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -1097,38 +1096,57 @@ func (s *ConversationStore) AppendEvent(event execution.Event) error {
 }
 
 // LoadEvents returns one conversation's normalized events in the order they
-// were recorded.
+// were recorded. A line that will not decode fails the read: what is rebuilt
+// from this log is what a provider is told the conversation has said, and a
+// rebuild over a listing that quietly dropped a turn would be a conversation
+// told to itself with a hole in it. The sink reads past such a line by position
+// with ScanEvents, and says so.
 func (s *ConversationStore) LoadEvents(conversationID string) ([]execution.Event, error) {
-	path, err := s.eventPathForConversation(conversationID)
+	events, skipped, err := s.ScanEvents(conversationID)
 	if err != nil {
 		return nil, err
 	}
+	if err := firstSkipped("conversation event log for "+conversationID, skipped); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// ScanEvents returns every event of one conversation that decoded, in the order
+// it was recorded, and beside them the lines that would not, each at the
+// position it holds among the records. It is the read a positional cursor is
+// kept against, so one bad line costs the reader that line and nothing behind
+// it.
+func (s *ConversationStore) ScanEvents(conversationID string) ([]execution.Event, []SkippedLine, error) {
+	path, err := s.eventPathForConversation(conversationID)
+	if err != nil {
+		return nil, nil, err
+	}
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open conversation event log: %w", err)
+		return nil, nil, fmt.Errorf("open conversation event log: %w", err)
 	}
 	defer file.Close()
 
 	var events []execution.Event
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
-	for scanner.Scan() {
-		event, err := execution.DecodeEvent(scanner.Bytes())
+	skipped, err := scanLog(file, maxEncodedEventBytes, func(line []byte) error {
+		event, err := execution.DecodeEvent(line)
 		if err != nil {
-			return nil, fmt.Errorf("decode conversation event log for %s: %w", conversationID, err)
+			return err
 		}
 		if event.RunID != conversationID {
-			return nil, fmt.Errorf("decode conversation event log for %s: event belongs to %s", conversationID, event.RunID)
+			return fmt.Errorf("event belongs to %s", event.RunID)
 		}
 		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read conversation event log: %w", err)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read conversation event log: %w", err)
-	}
-	return events, nil
+	return events, skipped, nil
 }
 
 // identity is where a record belongs. A record written before the agent was part

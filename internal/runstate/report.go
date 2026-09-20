@@ -1,7 +1,6 @@
 package runstate
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -134,43 +132,58 @@ func (s *ReportStore) appendLine(path, what string, encoded []byte) error {
 
 // List returns every collected report in the order it was recorded. A log that
 // does not exist yet is a product nothing has reported about, which is not a
-// failure to read.
+// failure to read. A line that will not decode is: a pile that quietly dropped
+// what it could not parse is one nobody can trust to be complete, and a surface
+// that lists the pile names the failure instead. The sink reads past such a line
+// by position with Scan, and says so.
 func (s *ReportStore) List() ([]report.Report, error) {
-	file, err := os.Open(s.Path())
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	reports, skipped, err := s.Scan()
 	if err != nil {
-		return nil, fmt.Errorf("open report log: %w", err)
+		return nil, err
 	}
-	defer file.Close()
-
-	var reports []report.Report
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedReportBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		decoded, err := decodeReport([]byte(line))
-		if err != nil {
-			return nil, fmt.Errorf("decode report log: %w", err)
-		}
-		if err := s.validate(decoded); err != nil {
-			return nil, fmt.Errorf("decode report log: %w", err)
-		}
-		reports = append(reports, decoded)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read report log: %w", err)
+	if err := firstSkipped("report log", skipped); err != nil {
+		return nil, err
 	}
 	return reports, nil
 }
 
+// Scan returns every report that decoded, in the order it was recorded, and
+// beside them the lines that would not, each at the position it holds among the
+// records. It is the read a positional cursor is kept against: a report after a
+// torn line has the position it would have had without the tear, so one bad
+// line costs the reader that line and nothing behind it.
+func (s *ReportStore) Scan() ([]report.Report, []SkippedLine, error) {
+	file, err := os.Open(s.Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("open report log: %w", err)
+	}
+	defer file.Close()
+
+	var reports []report.Report
+	skipped, err := scanLog(file, maxEncodedReportBytes, func(line []byte) error {
+		decoded, err := decodeReport(line)
+		if err != nil {
+			return err
+		}
+		if err := s.validate(decoded); err != nil {
+			return err
+		}
+		reports = append(reports, decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("read report log: %w", err)
+	}
+	return reports, skipped, nil
+}
+
 // Handlings returns every recorded disposition in the order it was recorded. A
 // log that does not exist yet is a pile nobody has worked through, which is not
-// a failure to read.
+// a failure to read. A line that will not decode is, for the reason it is on the
+// pile itself.
 func (s *ReportStore) Handlings() ([]report.Handling, error) {
 	file, err := os.Open(s.HandlingPath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -182,24 +195,22 @@ func (s *ReportStore) Handlings() ([]report.Handling, error) {
 	defer file.Close()
 
 	var handlings []report.Handling
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 8*1024), maxEncodedReportBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
+	skipped, err := scanLog(file, maxEncodedReportBytes, func(line []byte) error {
 		var decoded report.Handling
-		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
-			return nil, fmt.Errorf("decode report handling log: %w", err)
+		if err := json.Unmarshal(line, &decoded); err != nil {
+			return err
 		}
 		if err := s.validateHandling(decoded); err != nil {
-			return nil, fmt.Errorf("decode report handling log: %w", err)
+			return err
 		}
 		handlings = append(handlings, decoded)
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("read report handling log: %w", err)
+	}
+	if err := firstSkipped("report handling log", skipped); err != nil {
+		return nil, err
 	}
 	return handlings, nil
 }

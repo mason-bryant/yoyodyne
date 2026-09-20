@@ -127,18 +127,31 @@ func TestAMentionInAThreadThisSinkNeverOpenedIsAnsweredThere(t *testing.T) {
 }
 
 // A reply in one of this sink's own threads is untouched by any of this: it is
-// still the directive path, and the door for messages outside those threads is
-// not a second way into the record.
+// still the thread path, and the door for messages outside those threads is not
+// a second way into the record. An instruction there is recorded whether or not
+// it names the app, and a question there is the thread path's to answer rather
+// than this door's — it gets no four lines, and it is not recorded either.
 func TestAReplyInThisSinksOwnThreadStillRecordsADirective(t *testing.T) {
 	t.Parallel()
 
-	sink, directives, _ := newSteeringSink(t, testOperator)
+	sink, directives, posts := newSteeringSink(t, testOperator)
 	sink.steering.handle(context.Background(),
-		reply(testOperator, "<@"+testApp+"> what is running?", "1750000001.000200"))
+		reply(testOperator, "<@"+testApp+"> prefer the smaller change here", "1750000001.000200"))
 
 	recorded := onlyDirective(t, directives)
 	if !recorded.Affects(testItem) {
 		t.Fatalf("recorded = %+v, want a directive against the thread's item", recorded)
+	}
+
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "<@"+testApp+"> what is running?", "1750000002.000200"))
+	if listed, err := directives.List(); err != nil {
+		t.Fatalf("List() error = %v", err)
+	} else if len(listed) != 1 {
+		t.Fatalf("recorded = %+v, want the question in the thread recorded as nothing", listed)
+	}
+	if len(posts.requests) != 2 || strings.Contains(posts.requests[1].Text, "Running:") {
+		t.Fatalf("posts = %#v, want the question answered by the thread path rather than with the standing", posts.requests)
 	}
 }
 

@@ -178,10 +178,19 @@ func (s *steering) converse(ctx context.Context, message inboundMessage, said st
 	}
 	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is taking it to the product manager",
 		message.user, singleLine(message.text, maxAskedBytes))
-	// Only the wait is counted here. What the sink's shutdown waits for is the
-	// thread being answered, which always happens; the call underneath may still
-	// be running, and waiting on that is the hang this whole bound exists to
-	// remove.
+	s.carry(ctx, message, said)
+}
+
+// carry takes one thing said to the product manager, on a goroutine of its own,
+// with the turn already begun by whoever is calling. It is the half of converse
+// a question in a work item's thread shares: that door takes the turn before it
+// posts the receipt promising an answer, so that a turn it cannot take is a
+// refusal and never a promise.
+//
+// Only the wait is counted. What the sink's shutdown waits for is the thread
+// being answered, which always happens; the call underneath may still be
+// running, and waiting on that is the hang this whole bound exists to remove.
+func (s *steering) carry(ctx context.Context, message inboundMessage, said string) {
 	s.turns.Add(1)
 	go func() {
 		defer s.turns.Done()
