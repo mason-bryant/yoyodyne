@@ -1763,6 +1763,31 @@ finishing without giving it back, which is a hole in the pipeline, and a run
 still recorded as in flight is a process something killed. What is done about
 them is the same either way, so neither line hands you a chore.
 
+## Conversation-carried work that has landed
+
+The other thing a pull closes for you is work no run ever carried. An item
+admitted for a role's conversation — `executor: conversation:architect` — lands
+as a revision in a document that role owns, and until 2026-09-20 nothing read
+that revision back to the tracker: the product manager closed such items on
+evidence some turns later, and one of them had a developer run spent on it
+first. Now every pull reads the documents each marked role owns, and an item
+whose identifier opens the reason of a revision in one of them, made by that
+role, is closed at that pull:
+
+```text
+yoyodyne-ifd.330 was closed: its architect landed as the 2026-09-07 05:30:00Z revision of docs/designs/management-and-supervision.md
+```
+
+The close reason on the item names the document, the revision, the convention
+it was read by, and the revision's own words, so a close you disagree with is
+one you can read and reopen with a note. A revision that mentions an item
+further into its reason closes nothing, which is what keeps an item with two
+deliverables open on a revision that carries one; a landing the tracker will
+not close is reported on the pass and left for you. [How work
+flows](work.md#letting-the-harness-choose-the-work) says what is read and why,
+and [the artifacts manual](artifacts.md#artifact-identity) says how to write
+the revision so it is read.
+
 ## What became of the runs, and what remains of them
 
 Under the stalls, `yoyo status` reads back what the runs themselves recorded

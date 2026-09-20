@@ -88,6 +88,17 @@ change instead, the proposal reaches the owner and you, and only a decision on i
 is ever recorded — see [what agents propose changing, and who
 decides](reporting.md#what-agents-propose-changing-and-who-decides).
 
+A revision's reason is also read back to the tracker, in one narrow way. A work
+item a role's conversation carries — admitted with `executor:
+conversation:architect`, say — is closed by the harness when a document that
+role owns records a revision, by that role, whose reason *opens* with the
+item's identifier: `yoyodyne-ifd.330 - side conversations designed`. Opening
+with it is the convention and the whole of the judgement; a reason that mentions
+an item further in is about something else and closes nothing. So when the
+revision is the landing of a tracked item, write the identifier first, and when
+it is not, do not. [How work flows](work.md#letting-the-harness-choose-the-work)
+says what the close records and how it is undone.
+
 The chain that identity makes expressible is then checked, every time the
 artifacts are loaded: a `supports` entry naming an id no artifact answers to is
 reported with both ends named, and an artifact that nothing connects back to the

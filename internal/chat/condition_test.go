@@ -9,6 +9,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 )
 
@@ -247,5 +248,84 @@ func TestTheContractsStateTheDoneConditionRule(t *testing.T) {
 				t.Fatalf("the %s contract never says %q", contract.who, want)
 			}
 		}
+	}
+}
+
+// yoyodyne-ifd.330's admission replayed as the product manager made it at turn
+// 468: the architect's design work by its title and its done-means, and no
+// executor. It went into the queue as a developer run and was handed to one. Now
+// the creation is refused with the marker named, and the same creation carrying
+// the marker is admitted with it — the condition it states being exactly what
+// the architect's conversation does.
+func TestConversationShapedWorkIsAdmittedOnlyWithItsExecutorNamed(t *testing.T) {
+	t.Parallel()
+
+	const item330 = `"title":"The architect designs side conversations with merge-back","description":"Operator capability direction, 2026-09-07, design routed to the architect as directed. Done means the design is recorded in the governed documents - the stream shape, the merge write, the action-authority answer, the config knob - and implementation items can cite it.","goal":"Run development nearly autonomously.","reason":"operator-directed with the authority question reserved to the architect"`
+	tracker := &fakeTracker{}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting the design item.", `{"action":"create",`+item330+`}`)},
+		{SessionID: "session-1", FinalText: trackerReply("Refused; marking it as the architect's.", `{"action":"create",`+item330+`,"executor":"conversation:architect"}`)},
+		{SessionID: "session-1", FinalText: "Admitted as the architect's."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
+	options.ArtifactHomes = testHomes()
+	session := openTestSession(t, options)
+
+	// The refusal is put back to the role on the same send, and its correction
+	// carries the marker: one send, two actions, the second the admission.
+	reply, err := session.Send(context.Background(), "Admit the side-conversation design for the architect.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 2 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the unmarked creation refused and then corrected", reply.Actions)
+	}
+	for _, want := range []string{"the design is recorded in the governed documents", `executor "conversation:architect"`, "never selected for a developer run"} {
+		if !strings.Contains(reply.Actions[0].Failure, want) {
+			t.Fatalf("refusal %q never says %q", reply.Actions[0].Failure, want)
+		}
+	}
+	if !reply.Actions[1].Applied {
+		t.Fatalf("the marked creation was refused: %q", reply.Actions[1].Failure)
+	}
+	if len(tracker.created) != 1 || tracker.created[0].Executor != domain.ConversationWith(domain.RoleArchitect) {
+		t.Fatalf("created = %#v, want the item admitted once, carrying the architect's conversation", tracker.created)
+	}
+}
+
+// An item already in the queue in 330's shape is brought under the guard by an
+// update that sets the executor, and that update is judged as the item will
+// then read: the same description that was refused unmarked is right once the
+// item says the architect carries it.
+func TestMarkingAnAdmittedItemIsJudgedWithTheMarkerItSets(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.330": {
+			ID: "yoyodyne-ifd.330", Title: "The architect designs side conversations with merge-back", Status: "open",
+			Description: "Done means the design is recorded in the governed documents and implementation items can cite it.",
+		},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Marking it and tightening the description.",
+			`{"action":"update","id":"yoyodyne-ifd.330","executor":"conversation:architect","description":"Done means the design is recorded in the management-and-supervision design and implementation items can cite it.","reason":"it was admitted as a run's by mistake"}`)},
+		{SessionID: "session-1", FinalText: "Marked."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.ArtifactHomes = testHomes()
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Mark 330 as the architect's.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the marking update applied", reply.Actions)
+	}
+	if len(tracker.updates) != 1 || tracker.updates[0].change.Executor != domain.ConversationWith(domain.RoleArchitect) {
+		t.Fatalf("updates = %#v, want the executor written", tracker.updates)
 	}
 }

@@ -740,6 +740,16 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 			Releases:  parts.releasedClaims,
 			ProductID: parts.config.Product.ID,
 		},
+		// The close of a conversation-carried item whose design has landed. It is
+		// wired into the pull for the reason the audit is: the landing is a
+		// revision in the primary checkout's artifact homes, which no run made and
+		// no run reads back, and the pull is the one process that reads both the
+		// queue and the tree on every interval.
+		Landings: orchestrator.ConversationLander{
+			Tracker:    tracker,
+			Repository: parts.repository,
+			Product:    parts.config.Product,
+		},
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record

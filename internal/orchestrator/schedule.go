@@ -489,6 +489,20 @@ type ScheduleCorrections interface {
 	Correct(ctx context.Context) (CorrectionSweep, error)
 }
 
+// ScheduleLandings closes the items a conversation carries whose landing is
+// already in the repository — a revision of a document the conversation's role
+// owns, opening with the item's identifier. It is satisfied by
+// ConversationLander.
+//
+// It is optional, and a pull wired without one pulls exactly the same work:
+// what is lost is the closing, so a design-only item waits on the product
+// manager closing it on evidence after the fact, which is what every one of
+// them waited on before this existed — and what two of them cost a turn each
+// for, one of them after a developer run had been spent on it.
+type ScheduleLandings interface {
+	Settle(ctx context.Context, entries []backlog.Entry) (LandingSweep, error)
+}
+
 // ScheduleClaims audits the items the tracker says are claimed against the runs
 // the harness actually has, and gives back the ones with nothing alive behind
 // them. It is satisfied by ClaimAuditor.
@@ -623,7 +637,12 @@ type Pull struct {
 	// Claims gives back the claims with nothing alive behind them. Optional; see
 	// ScheduleClaims.
 	Claims ScheduleClaims
-	Start  Starter
+	// Landings closes conversation-carried work whose landing is in the
+	// repository. Optional; see ScheduleLandings. It is re-read at every pull
+	// like everything else here, so an item whose design lands is closed at the
+	// first pull after the revision is in the tree.
+	Landings ScheduleLandings
+	Start    Starter
 }
 
 // ScheduleOutages is the product's record of the provider answering nobody, as
@@ -954,6 +973,19 @@ type Schedule struct {
 	// is exactly what the audit exists to stop being invisible.
 	ReleasedClaims []runstate.ReleasedClaim `json:"released_claims,omitempty"`
 	ClaimProblem   string                   `json:"claim_problem,omitempty"`
+	// Landed is the conversation-carried items this pass found landed in the
+	// repository and closed. It is on the schedule for the reason the released
+	// claims are: a pass that closed work somebody would otherwise have closed by
+	// hand some turns later is a pass that did something, and a reader must not
+	// have to infer it from the item's own record.
+	//
+	// LandingProblem names a landing the pass found and could not close, or a
+	// reading of the homes that failed. It costs the pass nothing it was doing,
+	// so it is reported beside the pull rather than stopping it — and never left
+	// unsaid, because an item whose work is done and which nothing will close is
+	// exactly the ceremony this exists to end.
+	Landed         []LandedConversation `json:"landed,omitempty"`
+	LandingProblem string               `json:"landing_problem,omitempty"`
 	// Braked is the intake hold this session's own failure-storm brake placed,
 	// and BlockedInARow is what tripped it. What lifts it is on the hold's own
 	// record: the development manager's decision, or a probe run that lands.
@@ -1726,6 +1758,13 @@ pulling:
 			continue
 		}
 		queue := read.queue
+		// Work a conversation carries whose landing is already in the repository
+		// is closed here, off the queue this pull just read, before anything is
+		// chosen from it. It is done here rather than beside the four sweeps above
+		// because it needs the queue — it reads the entries' executors — and
+		// because the entries it closes must not then be passed over on this same
+		// pull as work still waiting on somebody opening a conversation.
+		queue.Entries = s.land(ctx, &schedule, pull, queue.Entries)
 		schedule.Admitted = len(queue.Entries)
 		schedule.Pullable = queue.Ready()
 		schedule.BacklogRead = true
@@ -3031,6 +3070,44 @@ func (s Scheduler) audit(ctx context.Context, schedule *Schedule, pull Pull) ([]
 	return claimed, true
 }
 
+// land closes the conversation-carried entries whose landing is in the
+// repository, records what it did on the schedule, and returns the queue with
+// the closed entries taken out of it.
+//
+// Nothing here stops the pass, for the reason the audit above does not: a
+// close that failed costs the pass nothing it was doing, so it is reported
+// beside the pull rather than in place of it. What the pass says is replaced by
+// what this sweep found, and cleared by a sweep that found nothing wrong —
+// every pull reads every landing, so a sweep with no problems means the
+// problem before it is gone or the item it was about is closed.
+func (s Scheduler) land(ctx context.Context, schedule *Schedule, pull Pull, entries []backlog.Entry) []backlog.Entry {
+	if pull.Landings == nil {
+		return entries
+	}
+	sweep, err := pull.Landings.Settle(ctx, entries)
+	var problems []string
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the landings of conversation-carried work could not be read, so an item whose design has landed stays open until somebody closes it: %v", err))
+	}
+	problems = append(problems, sweep.Problems...)
+	schedule.LandingProblem = strings.Join(problems, "; ")
+	if len(sweep.Landed) == 0 {
+		return entries
+	}
+	schedule.Landed = append(schedule.Landed, sweep.Landed...)
+	closed := make(map[string]bool, len(sweep.Landed))
+	for _, landed := range sweep.Landed {
+		closed[landed.WorkItemID] = true
+	}
+	remaining := make([]backlog.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if !closed[entry.ID] {
+			remaining = append(remaining, entry)
+		}
+	}
+	return remaining
+}
+
 // priceRun is what one finished run cost, from the recorded evidence. A run that
 // never got as far as a record is priced at nothing because there is nothing to
 // price, which is the truth about a start that failed before it began; evidence
@@ -3914,6 +3991,13 @@ func (s Schedule) Render() string {
 	}
 	if s.ClaimProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.ClaimProblem)
+	}
+	// What the pass closed because its landing was already in the tree, said
+	// beside what it pulled: an item closed by the harness rather than by the
+	// product manager is one she would otherwise go looking for.
+	rendered.WriteString(LandingSweep{Landed: s.Landed}.Render())
+	if s.LandingProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.LandingProblem)
 	}
 	if s.IntakeHeld != nil {
 		fmt.Fprintf(&rendered, "intake has been held since %s: %s\n",

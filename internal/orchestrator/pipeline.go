@@ -1889,6 +1889,13 @@ func refuseProviderGrant(item beads.WorkItem) error {
 // come apart. The documents the homes own are read from the repository the run
 // is about to cut from; where that read fails the paths are still checked, and
 // the check by name is what is lost.
+//
+// The item's executor is part of the question. An item a conversation carries
+// is never chosen here, but it can be named — `yoyo run <id>` is the operator
+// deciding — and it is then judged as that conversation's work rather than
+// refused for stating what that work is. An item nobody marked whose title or
+// done-condition reads as conversation work is refused with the marker named,
+// which is what yoyodyne-ifd.330 would have met instead of a run.
 func (p Pipeline) refuseUngrantedCondition(item beads.WorkItem) error {
 	documents, err := protectedpath.OwnedDocuments(p.Repository, p.Config.Product)
 	if err != nil {
@@ -1897,7 +1904,13 @@ func (p Pipeline) refuseUngrantedCondition(item beads.WorkItem) error {
 		documents = nil
 	}
 	homes := protectedpath.ArtifactHomes(p.Config, documents...)
-	problems := homes.ConditionProblems(item.Description, item.AcceptanceCriteria, protectedpath.Grants(grantEvidence(item)...))
+	problems := homes.ConditionProblems(protectedpath.Subject{
+		Title:              item.Title,
+		Description:        item.Description,
+		AcceptanceCriteria: item.AcceptanceCriteria,
+		Granted:            protectedpath.Grants(grantEvidence(item)...),
+		Executor:           item.Executor,
+	})
 	if len(problems) == 0 {
 		return nil
 	}

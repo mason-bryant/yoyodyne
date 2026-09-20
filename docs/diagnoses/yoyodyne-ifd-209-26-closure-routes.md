@@ -26,9 +26,11 @@ sixteen hours.
 
 ## Every route that closes a work item
 
-There are four calls in this repository that close one, in three declarations
-that settle a run and one that carries out a person's decision. Each was read
-against the run's landing claim:
+When this was written there were four calls in this repository that close
+one, in three declarations that settle a run and one that carries out a
+person's decision. Each was read against the run's landing claim. A fifth was
+added by yoyodyne-ifd.367 on 2026-09-20 for an item no run carries, and is
+listed last:
 
 | Route | What it settles | What it consults |
 | --- | --- | --- |
@@ -36,13 +38,14 @@ against the run's landing claim:
 | `(Reconciler) closeSettledMerge` — `internal/orchestrator/reconcile.go` | a run whose queued merge the forge has since performed | `state.LandingDischarges()`, read back from the durable record the ended run left |
 | `(Reconciler) completeIntegrated` — `internal/orchestrator/reconcile.go` | a run somebody interrupted after its change was promoted | `landingSettled` and `state.LandingDischarges()` |
 | `(*Session) carryOutTrackerAction` — `internal/chat/tracker.go` | the product manager closing or retiring an item in conversation | nothing, and correctly: nothing integrated and no developer claimed anything |
+| `(ConversationLander) Settle` — `internal/orchestrator/conversationlanding.go` | an item a conversation carries, once its landing is in the repository | the owner's own record rather than a run's claim: a revision of a document the item's role owns, by that role, whose reason opens with the item's identifier ([the 367 diagnosis](yoyodyne-ifd-367-conversation-item-dispatched.md)) |
 
 ifd.284 was closed by the second of these — its notes carry
 `Yoyodyne settled the merge this run left queued with the forge` — and that route
 did consult the claim. `TestEveryRouteThatClosesAWorkItemIsAudited` in
-`internal/landing/closure_audit_test.go` holds this table to the code: a fifth
-closure, or a settlement that stops asking, fails a check rather than being
-found by the next diagnosis.
+`internal/landing/closure_audit_test.go` holds this table to the code: a
+closure the table does not list, or a settlement that stops asking, fails a
+check rather than being found by the next diagnosis.
 
 ## What actually happened
 
