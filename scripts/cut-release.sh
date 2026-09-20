@@ -369,7 +369,9 @@ else:
     elif stamp[0] != reading[0]:
         reason = "the notes record that the workflow ended in **%s** and this reading ended in **%s**" % (stamp[0], reading[0])
     else:
-        reason = "the notes record a reading pinned to `%s` and this one is pinned to `%s`" % (stamp[1], reading[1])
+        def pinned(pin):
+            return "pinned to nothing" if pin is None else "pinned to `%s`" % pin
+        reason = "the notes record a reading %s and this one is %s" % (pinned(stamp[1]), pinned(reading[1]))
     updated = notes[:start] + section + notes[stop + len(end):]
 
 with open(stamped_path, "w", encoding="utf-8") as handle:

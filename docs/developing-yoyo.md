@@ -480,7 +480,9 @@ anything is stamped.
 A release nobody can read is a release nobody adopts, so
 [`docs/releases/<tag>.md`](releases/README.md) is a gate rather than a courtesy.
 The cut checks for it before it spends the walkthrough, and a tag with no notes
-is the one refusal that leaves something behind: it drafts them and stops.
+is the first of the two refusals that leave something behind: it drafts them
+and stops. The second is the readiness stamp, committed on a branch and opened
+as a pull request, which is the third `make release` in the loop below.
 
 ```sh
 make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
