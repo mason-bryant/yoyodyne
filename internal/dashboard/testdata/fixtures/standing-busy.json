@@ -169,5 +169,57 @@
     "oldest_age": 191109000000000,
     "worst": "warning"
   },
-  "startable": 3
+  "startable": 3,
+  "admitted_items": [
+    {
+      "work_item_id": "yoyodyne-ifd.200",
+      "title": "Slack threads carry the item's title"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.222",
+      "title": "Recurring tasks say when a firing was skipped"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.153",
+      "title": "Triage names the phase a run stopped in"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.150",
+      "title": "A blocked status carries the account of what moved it"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.188",
+      "title": "The goals document gains a legibility clause"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.219",
+      "title": "Reconcile prints the branch it caught up"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.141.4",
+      "title": "Dashboard: the standing view under review"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.432.1",
+      "title": "Work item details are viewable from the dashboard"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.436.1",
+      "title": "Release notes carry every item's description"
+    }
+  ],
+  "startable_items": [
+    {
+      "work_item_id": "yoyodyne-ifd.141.4",
+      "title": "Dashboard: the standing view under review"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.432.1",
+      "title": "Work item details are viewable from the dashboard"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.436.1",
+      "title": "Release notes carry every item's description"
+    }
+  ]
 }

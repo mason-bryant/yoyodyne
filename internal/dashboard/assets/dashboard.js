@@ -22,7 +22,9 @@
 // event log a week holds, so it is asked for once a minute. Each section says
 // which of its sources it is still waiting for, which one could not be read, and
 // what to do about it; none of them ever shows a zero in place of an answer the
-// model did not give.
+// model did not give. A third reading is taken only when asked for: one work
+// item whole, for the card a reader opens on it from Running now or from a
+// grouping of the pipeline.
 //
 // The words are the terminal's. Where `yoyo status` has a way of saying a
 // thing — "no developer runs", "cost unknown", "12m", "approved, resuming
@@ -370,9 +372,13 @@
     head.appendChild(el("span", "card-kind", "developer run"));
     head.appendChild(el("span", "phase", phaseOf(run)));
     card.appendChild(head);
-    card.appendChild(el("h3", "card-title", run.title || run.work_item_id));
+    // The title and the id each open the item's card: two things to click on
+    // because a reader's eye lands on either.
+    var title = el("h3", "card-title");
+    title.appendChild(itemOpener(run.work_item_id, run.title || run.work_item_id));
+    card.appendChild(title);
     var meta = el("p", "card-meta");
-    meta.appendChild(el("span", "item-id", run.work_item_id));
+    meta.appendChild(itemOpener(run.work_item_id, run.work_item_id, "item-id"));
     meta.appendChild(el("span", "sep", " · "));
     meta.appendChild(el("span", "elapsed", age(run.elapsed) + " elapsed"));
     meta.appendChild(el("span", "sep", " · "));
@@ -464,12 +470,25 @@
   // is the model's to say, and each run arrives carrying its stage.
   var stageOrder = ["developing", "reviewing", "integrating"];
 
-  function stage(label, figure, unit, className) {
+  // stage is one stage of the pipeline. Its label is a button that opens the
+  // list of the items the figure counts — or, for a stage whose source could
+  // not be read or is still being priced, the pop-up saying so with the reason
+  // in full.
+  function stage(label, figure, unit, className, grouping) {
     var item = el("li", "stage" + (className ? " " + className : ""));
-    item.appendChild(el("span", "stage-label", label));
+    item.appendChild(groupingOpener(grouping, "stage-label", label));
     item.appendChild(el("span", "stage-figure", figure));
     item.appendChild(el("span", "stage-unit", unit));
     return item;
+  }
+
+  // pile is one pile under a stage: a figure, and a label that opens the list
+  // of the items in it.
+  function pile(grouping, figure, label, className) {
+    var entry = el("li", "pile" + (className ? " " + className : ""));
+    entry.appendChild(el("span", "pile-figure", figure));
+    entry.appendChild(groupingOpener(grouping, "pile-label", label));
+    return entry;
   }
 
   function renderPipeline() {
@@ -496,14 +515,14 @@
     clear(stages);
     var refused = standing.not_startable_problem ? [] : standing.not_startable;
     if (standing.not_startable_problem) {
-      stages.appendChild(stage("Admitted", "—", "could not be read", "stage-unreadable"));
-      stages.appendChild(stage("Held back", "—", "could not be read", "stage-unreadable"));
-      stages.appendChild(stage("Startable", "—", "could not be read", "stage-unreadable"));
+      stages.appendChild(stage("Admitted", "—", "could not be read", "stage-unreadable", "admitted"));
+      stages.appendChild(stage("Held back", "—", "could not be read", "stage-unreadable", "held"));
+      stages.appendChild(stage("Startable", "—", "could not be read", "stage-unreadable", "startable"));
     } else {
       appendQueueStages(stages, standing, refused);
     }
 
-    var runningStage = stage("Running", standing.running_problem ? "—" : String(running.length), standing.running_problem ? "could not be read" : (running.length === 1 ? "developer run" : "developer runs"), standing.running_problem ? "stage-unreadable" : (running.length > 0 ? "stage-flowing" : "stage-clear"));
+    var runningStage = stage("Running", standing.running_problem ? "—" : String(running.length), standing.running_problem ? "could not be read" : (running.length === 1 ? "developer run" : "developer runs"), standing.running_problem ? "stage-unreadable" : (running.length > 0 ? "stage-flowing" : "stage-clear"), "running");
     if (!standing.running_problem && running.length > 0) {
       var byStage = el("ul", "piles");
       stageOrder.forEach(function (name) {
@@ -511,10 +530,7 @@
         if (number === 0) {
           return;
         }
-        var entry = el("li", "pile");
-        entry.appendChild(el("span", "pile-figure", String(number)));
-        entry.appendChild(el("span", "pile-label", name));
-        byStage.appendChild(entry);
+        byStage.appendChild(pile("stage:" + name, String(number), name));
       });
       runningStage.appendChild(byStage);
     }
@@ -524,13 +540,14 @@
     if (throughput && !throughput.runs_problem) {
       var today = windowNamed(throughput, "today");
       var week = windowNamed(throughput, "last 7 days");
-      var landed = stage("Landed", String(today.landed), "today", "stage-landed");
-      landed.appendChild(el("span", "stage-detail", count(week.landed, "run") + " in the last 7 days"));
+      var landed = stage("Landed", String(today.landed), "today", "stage-landed", "landed:today");
+      // The week is a grouping of its own, opened from its own line.
+      landed.appendChild(groupingOpener("landed:week", "stage-detail", count(week.landed, "run") + " in the last 7 days"));
       stages.appendChild(landed);
     } else if (throughput || model.throughputError) {
-      stages.appendChild(stage("Landed", "—", "could not be read", "stage-unreadable"));
+      stages.appendChild(stage("Landed", "—", "could not be read", "stage-unreadable", "landed:today"));
     } else {
-      stages.appendChild(stage("Landed", "…", "pricing the week", "stage-waiting"));
+      stages.appendChild(stage("Landed", "…", "pricing the week", "stage-waiting", "landed:today"));
     }
 
     listProblems("pipeline-problems", [standing.not_startable_problem, standing.running_problem, throughput ? throughput.runs_problem : ""]);
@@ -543,31 +560,25 @@
   // appendQueueStages draws the three stages the queue fills: what is admitted,
   // what is held back and in which piles, and what the harness pulls next.
   function appendQueueStages(stages, standing, refused) {
-    stages.appendChild(stage("Admitted", String(standing.admitted), plural(standing.admitted, "item"), "stage-admitted"));
+    stages.appendChild(stage("Admitted", String(standing.admitted), plural(standing.admitted, "item"), "stage-admitted", "admitted"));
 
-    var held = stage("Held back", String(refused.length), refused.length === 1 ? "item nothing will pull" : "items nothing will pull", refused.length > 0 ? "stage-held" : "stage-clear");
+    var held = stage("Held back", String(refused.length), refused.length === 1 ? "item nothing will pull" : "items nothing will pull", refused.length > 0 ? "stage-held" : "stage-clear", "held");
     var byKind = {};
     refused.forEach(function (item) {
       byKind[item.kind] = (byKind[item.kind] || 0) + 1;
     });
     var breakdown = el("ul", "piles");
     var largest = 0;
-    piles.forEach(function (pile) {
-      largest = Math.max(largest, byKind[pile.kind] || 0);
+    piles.forEach(function (named) {
+      largest = Math.max(largest, byKind[named.kind] || 0);
     });
-    piles.forEach(function (pile) {
-      var number = byKind[pile.kind] || 0;
+    piles.forEach(function (named) {
+      var number = byKind[named.kind] || 0;
       if (number === 0) {
         return;
       }
-      var entry = el("li", "pile" + (number === largest ? " pile-largest" : ""));
-      var label = pile.label;
-      if (pile.kind === "held" && (standing.awaiting_decision || standing.awaiting_carry_out)) {
-        label += ": " + standing.awaiting_decision + " awaiting a decision, " + standing.awaiting_carry_out + " awaiting carry-out";
-      }
-      entry.appendChild(el("span", "pile-figure", String(number)));
-      entry.appendChild(el("span", "pile-label", label + (number === largest ? " (most)" : "")));
-      entry.appendChild(el("span", "pile-whose", "whose move: " + pile.whose));
+      var entry = pile("pile:" + named.kind, String(number), pileLabel(named, standing) + (number === largest ? " (most)" : ""), number === largest ? "pile-largest" : null);
+      entry.appendChild(el("span", "pile-whose", "whose move: " + named.whose));
       breakdown.appendChild(entry);
     });
     if (breakdown.firstChild) {
@@ -582,12 +593,31 @@
     // it would pull.
     var stalled = refused.filter(function (item) { return item.kind === "stalled"; });
     if (stalled.length > 0) {
-      stages.appendChild(stage("Startable", "none", "the harness is choosing nothing: " + stalled[0].reason, "stage-held"));
+      stages.appendChild(stage("Startable", "none", "the harness is choosing nothing: " + stalled[0].reason, "stage-held", "startable"));
     } else if (standing.startable > 0) {
-      stages.appendChild(stage("Startable", String(standing.startable), standing.startable === 1 ? "item the harness pulls next" : "items the harness pulls next", "stage-flowing"));
+      stages.appendChild(stage("Startable", String(standing.startable), standing.startable === 1 ? "item the harness pulls next" : "items the harness pulls next", "stage-flowing", "startable"));
     } else {
-      stages.appendChild(stage("Startable", "0", "nothing is waiting to be pulled", "stage-clear"));
+      stages.appendChild(stage("Startable", "0", "nothing is waiting to be pulled", "stage-clear", "startable"));
     }
+  }
+
+  // pileLabel is a pile's name, with the held pile split by whose move it is.
+  function pileLabel(named, standing) {
+    var label = named.label;
+    if (named.kind === "held" && (standing.awaiting_decision || standing.awaiting_carry_out)) {
+      label += ": " + standing.awaiting_decision + " awaiting a decision, " + standing.awaiting_carry_out + " awaiting carry-out";
+    }
+    return label;
+  }
+
+  function pileNamed(kind) {
+    var found = null;
+    piles.forEach(function (named) {
+      if (named.kind === kind) {
+        found = named;
+      }
+    });
+    return found;
   }
 
   // ---- section 4: throughput and cost ------------------------------------
@@ -746,6 +776,303 @@
     section("capacity", "ready");
   }
 
+  // ---- the pop-ups: a grouping's items, and one item's card -------------------
+
+  // Two pop-ups, each a dialog over the page with the four states a section
+  // has. The grouping lists the work items behind one figure of the pipeline —
+  // a stage, or a pile under one — by title, drawn from the readings the page
+  // already holds and drawn again on every poll while it is open, so it stays
+  // as live as the figure it was opened from. The card is one work item whole,
+  // read from /api/items/<id> when it is opened and not before, because it costs
+  // a tracker command; a card opens over a grouping, and each closes on its
+  // button, on its backdrop, or on Escape, putting focus back where it was.
+  //
+  // Nothing here reads the tracker: the card is the read model's projection of
+  // the item, served by the same process behind the same token.
+
+  var groupingPopup = document.getElementById("grouping");
+  var cardPopup = document.getElementById("card");
+  // openGrouping is the key of the grouping that is open, or null; openCard is
+  // the id of the item whose card is open, or null. Each pop-up remembers the
+  // element that opened it, to give focus back to.
+  var openGrouping = null;
+  var openCard = null;
+  var openers = { grouping: null, card: null };
+
+  function itemOpener(id, text, className) {
+    var button = el("button", "item-open" + (className ? " " + className : ""), text);
+    button.setAttribute("type", "button");
+    button.setAttribute("data-item", id);
+    button.addEventListener("click", function () { showCard(id, button); });
+    return button;
+  }
+
+  function groupingOpener(key, className, text) {
+    var button = el("button", "grouping-open" + (className ? " " + className : ""), text);
+    button.setAttribute("type", "button");
+    button.setAttribute("data-grouping", key);
+    button.addEventListener("click", function () { showGrouping(key, button); });
+    return button;
+  }
+
+  function open(popup) {
+    setHidden(popup, false);
+  }
+
+  function close(popup, which) {
+    setHidden(popup, true);
+    var back = openers[which];
+    openers[which] = null;
+    if (back && back.focus) {
+      back.focus();
+    }
+  }
+
+  // ---- the grouping pop-up
+
+  // groupingOf is what one grouping key lists, from the readings in hand: its
+  // title and a note saying what the list is, and either the items — each with
+  // the word the pipeline had for it — or why there are none to list. The keys
+  // are the pipeline's own: a stage, `pile:<kind>` for a pile under Held back,
+  // `stage:<name>` for a pile under Running, and `landed:today` or
+  // `landed:week`.
+  function groupingOf(key) {
+    var standing = model.standing;
+    var parts = key.split(":");
+    var kind = parts[0];
+    var which = parts[1];
+    if (kind === "landed") {
+      return landedGrouping(which);
+    }
+    if (!standing) {
+      return { title: "Where the work stands", note: "", state: model.standingError ? "error" : "loading", problem: model.standingError, remedy: whatToDoAboutTheStanding() };
+    }
+    if (kind === "running" || kind === "stage") {
+      var running = standing.running_problem ? [] : standing.running;
+      var named = kind === "stage" ? running.filter(function (run) { return run.stage === which; }) : running;
+      return listing(
+        kind === "stage" ? "Running: " + which : "Running",
+        kind === "stage" ? "the developer runs in flight whose phase is in the " + which + " stage" : "the developer runs in flight, each with its phase",
+        standing.running_problem, whatToDoAboutTheStanding(),
+        kind === "stage" ? "No developer run is " + which + "." : "No developer run is in flight.",
+        named.map(function (run) { return { id: run.work_item_id, title: run.title, detail: phaseOf(run) + ", " + age(run.elapsed) + " elapsed" }; })
+      );
+    }
+    var refused = standing.not_startable_problem ? [] : standing.not_startable;
+    var withReason = function (item) { return { id: item.work_item_id, title: item.title, detail: item.reason }; };
+    switch (kind) {
+      case "admitted":
+        return listing("Admitted", "every admitted item, in the product manager's order", standing.not_startable_problem, whatToDoAboutTheQueue(), "No work item is admitted.",
+          (standing.admitted_items || []).map(function (item) { return { id: item.work_item_id, title: item.title }; }));
+      case "held":
+        return listing("Held back", "admitted items nothing will pull, each with the refusal that stops it", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is held back.", refused.map(withReason));
+      case "pile":
+        var found = pileNamed(which);
+        return listing("Held back: " + (found ? found.label : which), found ? "whose move: " + found.whose : "", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is in this pile.",
+          refused.filter(function (item) { return item.kind === which; }).map(withReason));
+      case "startable":
+        var stalled = refused.filter(function (item) { return item.kind === "stalled"; });
+        return listing("Startable", stalled.length > 0 ? "the harness is choosing nothing: " + stalled[0].reason : "the admitted items nothing refuses, which the harness pulls next in this order",
+          standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is startable.",
+          (standing.startable_items || []).map(function (item) { return { id: item.work_item_id, title: item.title }; }));
+      default:
+        return listing(key, "", "the page asked for a grouping it does not have", "", "", []);
+    }
+  }
+
+  function landedGrouping(which) {
+    var throughput = model.throughput;
+    var label = which === "week" ? "last 7 days" : "today";
+    var title = "Landed " + label;
+    if (!throughput) {
+      return { title: title, note: "", state: model.throughputError ? "error" : "loading", problem: model.throughputError, remedy: whatToDoAboutTheThroughput() };
+    }
+    var period = windowNamed(throughput, label);
+    return listing(title, period ? (which === "week" ? "runs whose work reached the target branch from " + period.since + ", local days, newest first" : "runs whose work reached the target branch since midnight, local time, newest first") : "",
+      throughput.runs_problem, whatToDoAboutTheThroughput(), "No run landed its work " + label + ".",
+      (period && period.landed_items ? period.landed_items : []).map(function (run) { return { id: run.work_item_id, title: run.title, detail: "landed " + dayAndClock(run.landed_at) }; }));
+  }
+
+  // listing folds a grouping's readings into one of the four states: error
+  // where its source could not be read, empty where the source was read and
+  // holds nothing, and ready otherwise.
+  function listing(title, note, problem, remedy, empty, items) {
+    if (problem) {
+      return { title: title, note: note, state: "error", problem: problem, remedy: remedy };
+    }
+    if (items.length === 0) {
+      return { title: title, note: note, state: "empty", empty: empty };
+    }
+    return { title: title, note: note, state: "ready", items: items };
+  }
+
+  function renderGrouping() {
+    if (!openGrouping) {
+      return;
+    }
+    var described = groupingOf(openGrouping);
+    document.getElementById("grouping-heading").textContent = described.title + (described.state === "ready" ? " (" + count(described.items.length, "item") + ")" : "");
+    document.getElementById("grouping-note").textContent = described.note || "";
+    section("grouping", described.state, described.state === "error" ? described.problem : described.empty, described.remedy);
+    var list = document.getElementById("grouping-items");
+    clear(list);
+    (described.items || []).forEach(function (item) {
+      var entry = el("li", "grouping-item");
+      entry.appendChild(itemOpener(item.id, item.title || item.id, "grouping-title"));
+      entry.appendChild(el("span", "item-id", item.id));
+      if (item.detail) {
+        entry.appendChild(el("span", "grouping-detail", item.detail));
+      }
+      list.appendChild(entry);
+    });
+  }
+
+  function showGrouping(key, opener) {
+    openGrouping = key;
+    openers.grouping = opener || null;
+    renderGrouping();
+    open(groupingPopup);
+    document.getElementById("grouping-close").focus();
+  }
+
+  function closeGrouping() {
+    openGrouping = null;
+    close(groupingPopup, "grouping");
+  }
+
+  // ---- the card
+
+  // field is one labeled line of the card. Prose keeps its line breaks; a
+  // field the item has nothing in says "none" in words, so a blank is never
+  // mistaken for a field the page did not read.
+  function field(label, value, className) {
+    var row = el("div", "card-field" + (className ? " " + className : ""));
+    row.appendChild(el("dt", null, label));
+    var body = el("dd", value === "" || value === null || value === undefined ? "card-none" : null, value === "" || value === null || value === undefined ? "none" : value);
+    row.appendChild(body);
+    return row;
+  }
+
+  // runField is the run the harness last made for the item, in the words the
+  // terminal lists a run in: in flight with its phase and spend, ended with
+  // its outcome and what remains of its change, and the facts under it.
+  function runField(item) {
+    var row = el("div", "card-field card-field-run");
+    row.appendChild(el("dt", null, "Run"));
+    var body = el("dd");
+    row.appendChild(body);
+    if (item.run_problem) {
+      body.appendChild(el("p", "problem", "Could not be read: " + item.run_problem));
+      return row;
+    }
+    var run = item.run;
+    if (!run) {
+      body.appendChild(el("p", "card-none", "none is recorded"));
+      return row;
+    }
+    var lines = [];
+    var facts = [];
+    if (run.in_flight) {
+      lines.push("in flight — " + phaseOf(run) + ", " + age(run.elapsed) + " elapsed, " + spendOf(run));
+      facts.push("run " + run.run_id + ", started " + dayAndClock(run.started_at));
+    } else {
+      var ending = run.outcome + (run.phase ? ", " + phaseOf(run) : "") + " — " + (run.remains || "no artifacts recorded");
+      lines.push(run.preserved ? "preserved: " + ending : "nothing is in flight or preserved; the latest run " + ending);
+      facts.push("run " + run.run_id + ", started " + dayAndClock(run.started_at) + (run.completed_at ? ", ended " + dayAndClock(run.completed_at) : ""));
+      facts.push(run.unknown_cost ? "cost unknown (" + run.unknown_cost + ")" : "cost " + money(run.cost_usd || 0));
+    }
+    if (run.failure) {
+      facts.push("reason: " + run.failure);
+    }
+    if (run.branch) {
+      facts.push("branch: " + run.branch);
+    }
+    if (run.worktree_path) {
+      facts.push("worktree: " + run.worktree_path);
+    }
+    if (run.provider_session_id) {
+      facts.push("developer session: " + run.provider_session_id);
+    }
+    lines.forEach(function (text) { body.appendChild(el("p", run.in_flight ? "card-run-flight" : (run.preserved ? "card-run-preserved" : "card-run-ended"), text)); });
+    var list = el("ul", "card-run-facts");
+    facts.forEach(function (text) { list.appendChild(el("li", null, text)); });
+    body.appendChild(list);
+    return row;
+  }
+
+  function renderCard(item) {
+    document.getElementById("card-heading").textContent = item.title || item.id;
+    document.getElementById("card-note").textContent = item.id + " · read " + clock(item.observed_at);
+    var fields = document.getElementById("card-fields");
+    clear(fields);
+    fields.appendChild(field("Id", item.id, "card-field-id"));
+    fields.appendChild(field("Title", item.title));
+    fields.appendChild(field("Status", item.status));
+    fields.appendChild(field("Priority", item.priority === undefined || item.priority === null ? "" : "P" + item.priority + " (0 is the most urgent, 4 the least)"));
+    fields.appendChild(field("Labels", (item.labels || []).join(", ")));
+    fields.appendChild(field("Parent", item.parent, "card-field-id"));
+    fields.appendChild(field("Description", item.description, "card-field-prose"));
+    fields.appendChild(field("Design", item.design, "card-field-prose"));
+    fields.appendChild(field("Acceptance criteria", item.acceptance_criteria, "card-field-prose"));
+    fields.appendChild(field("Notes", item.notes, "card-field-prose"));
+    fields.appendChild(runField(item));
+    section("card", "ready");
+  }
+
+  // showCard opens the card on one item and asks for it. A 404 is the tracker
+  // holding nothing under the id — an item closed or removed since the page
+  // last read the standing — which is the card's empty state rather than a
+  // failure; a 401 sends the page back to asking for the token, as every
+  // reading does; anything else is the card's error state, with the reason.
+  function showCard(id, opener) {
+    openCard = id;
+    openers.card = opener || null;
+    document.getElementById("card-heading").textContent = id;
+    document.getElementById("card-note").textContent = "";
+    clear(document.getElementById("card-fields"));
+    section("card", "loading");
+    open(cardPopup);
+    document.getElementById("card-close").focus();
+    var current = token();
+    read("/api/items/" + encodeURIComponent(id), current, function (item) {
+      if (openCard !== id) {
+        return;
+      }
+      renderCard(item);
+    }, function (reason, status) {
+      if (openCard !== id) {
+        return;
+      }
+      if (status === 404) {
+        section("card", "empty", "No work item is recorded under " + id + ": it may have been closed or removed since the page last read where the work stands.");
+        return;
+      }
+      section("card", "error", reason, "The card asks once, when it is opened; close it and open it again to ask again. yoyo status " + id + " says the same thing at the terminal, and bd show " + id + " prints the item itself.");
+    });
+  }
+
+  function closeCard() {
+    openCard = null;
+    close(cardPopup, "card");
+  }
+
+  document.getElementById("grouping-close").addEventListener("click", closeGrouping);
+  document.getElementById("grouping-backdrop").addEventListener("click", closeGrouping);
+  document.getElementById("card-close").addEventListener("click", closeCard);
+  document.getElementById("card-backdrop").addEventListener("click", closeCard);
+  // Escape closes the pop-up on top: the card where one is open, else the
+  // grouping.
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (openCard !== null) {
+      closeCard();
+    } else if (openGrouping !== null) {
+      closeGrouping();
+    }
+  });
+
   // ---- what to do -----------------------------------------------------------
 
   function whatToDoAboutTheStanding() {
@@ -783,6 +1110,9 @@
     renderPipeline();
     renderThroughput();
     renderCapacity();
+    // An open grouping is drawn again from the reading just taken, so it stays
+    // as live as the figure it was opened from.
+    renderGrouping();
   }
 
   // ---- the token ------------------------------------------------------------
@@ -828,9 +1158,10 @@
   // ---- fetching ---------------------------------------------------------------
 
   // read asks for one reading with the token and hands back the body, or the
-  // reason there is none. A 401 is the token being wrong — a mistyped one and a
-  // restarted dashboard look the same — and sends the page back to asking for
-  // it rather than being reported as a failure of the read model.
+  // reason there is none, with the status where there was one. A 401 is the
+  // token being wrong — a mistyped one and a restarted dashboard look the same
+  // — and sends the page back to asking for it rather than being reported as a
+  // failure of the read model.
   function read(path, current, onBody, onFailure) {
     fetch(path, {
       headers: { Accept: "application/json", Authorization: "Bearer " + current },
@@ -844,12 +1175,12 @@
         }
         return response.json().then(function (body) {
           if (!response.ok) {
-            onFailure((body && body.error) || (response.status + " " + response.statusText));
+            onFailure((body && body.error) || (response.status + " " + response.statusText), response.status);
             return null;
           }
           return body;
         }, function () {
-          onFailure(response.status + " " + response.statusText + ", and the answer was not JSON");
+          onFailure(response.status + " " + response.statusText + ", and the answer was not JSON", response.status);
           return null;
         });
       })
@@ -887,6 +1218,12 @@
 
   function start(current) {
     model = { standing: null, standingError: "", throughput: null, throughputError: "" };
+    // A page starting over — a token just entered — opens with nothing over it.
+    openGrouping = null;
+    openCard = null;
+    openers = { grouping: null, card: null };
+    setHidden(groupingPopup, true);
+    setHidden(cardPopup, true);
     render();
     refreshStanding(current);
     refreshThroughput(current);

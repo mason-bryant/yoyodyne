@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.150",
+  "title": "A blocked status carries the account of what moved it",
+  "status": "blocked",
+  "priority": 1,
+  "labels": [
+    "tracker"
+  ],
+  "parent": "",
+  "description": "A status moved backwards without a note is a status nobody can account for.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Decision recorded: re-run once the provider window lifts.",
+  "run": {
+    "run_id": "run-a17c9b40e6f24c1d8b3a5f0e9d2c7b44",
+    "outcome": "stopped",
+    "phase": "reviewing",
+    "in_flight": false,
+    "preserved": true,
+    "remains": "work preserved",
+    "branch": "yoyodyne/yoyodyne-ifd-150/a17c9b40",
+    "failure": "the provider refused the review on an exhausted usage limit (five_hour) and the pause budget is spent",
+    "started_at": "2026-09-18T18:02:00Z",
+    "completed_at": "2026-09-19T02:12:00Z",
+    "cost_usd": 7.05
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.222",
+  "title": "Recurring tasks say when a firing was skipped",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": "",
+  "description": "Parked while the design is reworked.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Parked: the design is being reworked."
+}

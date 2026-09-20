@@ -1,0 +1,29 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.219",
+  "title": "Reconcile prints the branch it caught up",
+  "status": "open",
+  "priority": 2,
+  "labels": [
+    "reconcile"
+  ],
+  "parent": "",
+  "description": "The convergence sweep catches a target branch up and prints nothing; it should print the branch and the commit.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Paused for directive-4f2c: which branch does this land on?",
+  "run": {
+    "run_id": "run-2c8f4a6e9b1d4f3a8e7c5d2b0a9f6e41",
+    "outcome": "failed",
+    "phase": "developing",
+    "in_flight": false,
+    "preserved": false,
+    "remains": "work removed",
+    "branch": "yoyodyne/yoyodyne-ifd-219/2c8f4a6e",
+    "failure": "create isolated worktree: primary checkout is not ready for integration",
+    "started_at": "2026-09-17T08:30:00Z",
+    "completed_at": "2026-09-17T08:30:40Z",
+    "cost_usd": 0,
+    "unknown_cost": "no priced invocation is recorded for it"
+  }
+}

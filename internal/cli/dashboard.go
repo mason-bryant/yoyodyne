@@ -24,8 +24,11 @@ import (
 	"io"
 	"os"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/dashboard"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -72,7 +75,7 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 
 	fmt.Fprintf(stdout, "dashboard for %s serving at %s\n", resolved.Config.Product.ID, url)
 	fmt.Fprintf(stdout, "token: %s\n", server.Token())
-	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing and /api/throughput")
+	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>")
 	fmt.Fprintln(stdout, "it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c")
 
 	if err := server.Serve(ctx); err != nil {
@@ -121,15 +124,63 @@ func (r dashboardReader) Standing(ctx context.Context) (readmodel.Standing, erro
 	return readmodel.ReadStanding(ctx, standingSources(r.configPath)), nil
 }
 
-// The two readers the throughput is handed are the terminal's own stores, held
-// here to the model's interfaces so the substitution of a second pricing would
-// not compile: *runstate.StreamStore is what reportSpend prices `yoyo status
-// --spend` from, through its Spend method, and *runstate.Store is what
-// `yoyo status` reads each run's Outcome from.
+// The readers the throughput and the work item are handed are the terminal's
+// own stores and client, held here to the model's interfaces so the
+// substitution of a second pricing or a second tracker would not compile:
+// *runstate.StreamStore is what reportSpend prices `yoyo status --spend` from,
+// through its Spend method; *runstate.Store is what `yoyo status` reads each
+// run's Outcome from and, through History, what `yoyo status <item>` lists the
+// item's runs with; and beads.Client is the one tracker every role reads.
 var (
-	_ readmodel.Ledger = (*runstate.StreamStore)(nil)
-	_ readmodel.Runs   = (*runstate.Store)(nil)
+	_ readmodel.Ledger      = (*runstate.StreamStore)(nil)
+	_ readmodel.Runs        = (*runstate.Store)(nil)
+	_ readmodel.Histories   = (*runstate.Store)(nil)
+	_ readmodel.ItemTracker = beads.Client{}
 )
+
+// WorkItem is one work item whole — the tracker's own fields, and the run the
+// harness last made for it as `yoyo status <item>` lists it — for the card the
+// page opens on an item. It is read from the same tracker client and the same
+// run store the standing is read from, one item at a time, when the card is
+// opened: the page never reads the tracker, and this is the projection it reads
+// instead.
+func (r dashboardReader) WorkItem(ctx context.Context, id string) (readmodel.WorkItem, error) {
+	if err := r.ready(); err != nil {
+		return readmodel.WorkItem{}, err
+	}
+	sources, err := workItemSources(r.configPath)
+	if err != nil {
+		return readmodel.WorkItem{}, err
+	}
+	return readmodel.ReadWorkItem(ctx, sources, id)
+}
+
+// workItemSources opens the tracker and the run store one work item is read
+// from. The tracker not resolving refuses the reading, because the item is the
+// tracker's; the run store not opening costs the run beside it, and the reading
+// says so.
+func workItemSources(configPath string) (readmodel.WorkItemSources, error) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return readmodel.WorkItemSources{}, err
+	}
+	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), resolved.Config.Product.Repository)
+	if err != nil {
+		return readmodel.WorkItemSources{}, fmt.Errorf("resolve product repository: %w", err)
+	}
+	sources := readmodel.WorkItemSources{
+		Tracker:        beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository},
+		TrackerTimeout: chatTrackerTimeout,
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return sources, nil
+	}
+	if store, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID); err == nil {
+		sources.Runs = store
+	}
+	return sources, nil
+}
 
 // Throughput is what landed and what it cost over the model's two windows.
 // readmodel.ReadThroughput derives nothing of its own about money or endings:
@@ -186,8 +237,10 @@ token every request for the read model has to carry as
 `+"`Authorization: Bearer <token>`"+`: the page asks for it and keeps it in the tab's
 session storage, scoped to this port, and never in a URL or a cookie. It serves
 the read model as JSON behind the token -- the four lines and the capacity state
-at /api/standing, and what landed and what it cost over today and the last seven
-days at /api/throughput; the page shell at / and its own script and style are
+at /api/standing, what landed and what it cost over today and the last seven
+days at /api/throughput, and one work item whole -- its tracker fields and the
+run last made for it -- at /api/items/<work-item-id>, which is what the page's
+card on an item reads; the page shell at / and its own script and style are
 static text with nothing of the read model in them, served to the browser before
 it has a token. Everything else is refused: a request for the read model with no
 token or the wrong one, a Host or Origin that is not the address it bound, and

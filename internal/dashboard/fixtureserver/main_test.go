@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 )
 
 // Every scenario loads from the fixtures and answers the way its name says: a
@@ -37,6 +40,27 @@ func TestEveryScenarioLoadsAndAnswersAsNamed(t *testing.T) {
 			throughput, err := model.Throughput(context.Background())
 			if err != nil || len(throughput.Windows) != 2 {
 				t.Fatalf("%s: throughput %+v, %v", name, throughput, err)
+			}
+			// Every item the standing names has a card behind it, so a page on
+			// this scenario can open any of them, and an id nobody wrote a fixture
+			// for is the tracker holding nothing.
+			for _, run := range standing.Running {
+				if item, err := model.WorkItem(context.Background(), run.WorkItemID); err != nil || item.ID != run.WorkItemID {
+					t.Fatalf("%s: running item %s has no fixture card: %+v, %v", name, run.WorkItemID, item, err)
+				}
+			}
+			for _, refused := range standing.NotStartable {
+				if item, err := model.WorkItem(context.Background(), refused.WorkItemID); err != nil || item.ID != refused.WorkItemID {
+					t.Fatalf("%s: refused item %s has no fixture card: %+v, %v", name, refused.WorkItemID, item, err)
+				}
+			}
+			for _, startable := range standing.StartableItems {
+				if item, err := model.WorkItem(context.Background(), startable.WorkItemID); err != nil || item.ID != startable.WorkItemID {
+					t.Fatalf("%s: startable item %s has no fixture card: %+v, %v", name, startable.WorkItemID, item, err)
+				}
+			}
+			if _, err := model.WorkItem(context.Background(), "nobody-wrote-this"); !errors.Is(err, readmodel.ErrNoSuchWorkItem) {
+				t.Fatalf("%s: an id with no fixture = %v, want ErrNoSuchWorkItem", name, err)
 			}
 		}
 	}

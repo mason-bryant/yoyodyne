@@ -7,6 +7,10 @@
       "pipeline": "loading",
       "throughput": "loading",
       "capacity": "loading"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "loading": {
@@ -17,6 +21,10 @@
       "pipeline": "loading",
       "throughput": "loading",
       "capacity": "loading"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "quiet": {
@@ -27,6 +35,10 @@
       "pipeline": "empty",
       "throughput": "empty",
       "capacity": "empty"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "busy": {
@@ -37,6 +49,10 @@
       "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "held": {
@@ -47,6 +63,10 @@
       "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "degraded": {
@@ -57,6 +77,10 @@
       "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "unreadable": {
@@ -67,6 +91,10 @@
       "pipeline": "error",
       "throughput": "error",
       "capacity": "error"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "throughput-pending": {
@@ -77,6 +105,10 @@
       "pipeline": "ready",
       "throughput": "loading",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "throughput-refused": {
@@ -87,6 +119,10 @@
       "pipeline": "ready",
       "throughput": "error",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "refused": {
@@ -97,6 +133,10 @@
       "pipeline": "loading",
       "throughput": "loading",
       "capacity": "loading"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "unreachable": {
@@ -107,6 +147,10 @@
       "pipeline": "loading",
       "throughput": "loading",
       "capacity": "loading"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "wrong-token": {
@@ -117,6 +161,10 @@
       "pipeline": "loading",
       "throughput": "loading",
       "capacity": "loading"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "stale": {
@@ -127,6 +175,10 @@
       "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   },
   "throughput-stale": {
@@ -137,6 +189,164 @@
       "pipeline": "ready",
       "throughput": "ready",
       "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
+    }
+  },
+  "card": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "ready"
+    }
+  },
+  "card-loading": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "loading"
+    }
+  },
+  "card-missing": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "empty"
+    }
+  },
+  "card-refused": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "error"
+    }
+  },
+  "grouping": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "closed"
+    }
+  },
+  "grouping-landed": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "closed"
+    }
+  },
+  "grouping-empty": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "empty",
+      "card": "closed"
+    }
+  },
+  "grouping-error": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "error",
+      "card": "closed"
+    }
+  },
+  "grouping-loading": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "loading",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "loading",
+      "card": "closed"
+    }
+  },
+  "grouping-card": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "ready"
+    }
+  },
+  "closed": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
     }
   }
 }

@@ -116,5 +116,24 @@
     "collected": 0,
     "unhandled": 0
   },
-  "startable": 0
+  "startable": 0,
+  "admitted_items": [
+    {
+      "work_item_id": "yoyodyne-ifd.212",
+      "title": "Recurring tasks say when a firing was skipped"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.230",
+      "title": "The sweep names the ref it preserved work on"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.200",
+      "title": "Slack threads carry the item's title"
+    },
+    {
+      "work_item_id": "yoyodyne-ifd.219",
+      "title": "Reconcile prints the branch it caught up"
+    }
+  ],
+  "startable_items": []
 }

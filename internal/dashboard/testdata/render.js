@@ -13,17 +13,28 @@
 //
 // The document model is deliberately small. The script uses getElementById,
 // createElement, textContent, appendChild, removeChild, firstChild, className,
-// setAttribute, removeAttribute, addEventListener, focus, and value, and this
-// implements those and no more, so a new DOM call in the script fails here
-// loudly rather than passing on a shim that quietly did nothing. It is not a
-// browser: layout, style, and the policy are checked elsewhere, and what this
-// checks is that the right words land in the right places.
+// setAttribute, removeAttribute, addEventListener (on an element and on the
+// document), focus, and value, and this implements those and no more, so a
+// new DOM call in the script fails here loudly rather than passing on a shim
+// that quietly did nothing. It is not a browser: layout, style, and the policy
+// are checked elsewhere, and what this checks is that the right words land in
+// the right places.
+//
+// A scenario can also act on the page once it is drawn: open a grouping or an
+// item's card by clicking the element that carries its key, and press Escape.
+// That is how the pop-ups reach each of their states, from the same fixtures.
+// Such a scenario's render is the pop-ups it left open and nothing else: the
+// page beneath them is another scenario's render already, named in the file,
+// and a copy of it under every pop-up would be the same page once per pop-up
+// scenario — which is more than a reviewer is handed at once, so a change
+// carrying it could not be approved.
 //
 // Usage: node render.js --out <directory>
 // Writes <directory>/<scenario>.html for every scenario below — the document
 // as the page's script left it, with the one page state and the one state per
-// panel the stylesheet would show and the hidden ones dropped — and a
-// <directory>/matrix.json saying which state each section reached in each.
+// panel the stylesheet would show, the hidden ones dropped, and a pop-up kept
+// only while it is open — and a <directory>/matrix.json saying which state
+// each section and each pop-up reached in each.
 
 "use strict";
 
@@ -160,9 +171,16 @@ class Document {
   constructor() {
     this.root = null;
     this.byId = new Map();
+    this.listeners = {};
   }
   createElement(tagName) {
     return new Element(this, tagName);
+  }
+  addEventListener(name, listener) {
+    (this.listeners[name] = this.listeners[name] || []).push(listener);
+  }
+  dispatch(name, event) {
+    (this.listeners[name] || []).forEach((listener) => listener(event));
   }
   index() {
     this.byId = new Map();
@@ -262,7 +280,25 @@ function refused(status, error) {
 const pending = { pending: true };
 const unreachable = { unreachable: true };
 
-const scenarios = [
+// items answers /api/items/<id> for the ids named, from the item fixtures.
+function items(...ids) {
+  const answers = {};
+  ids.forEach((id) => { answers["/api/items/" + id] = ok(fixture("item-" + id)); });
+  return answers;
+}
+
+// A scenario's `open` is what a reader clicks once the page is drawn, in
+// order: a grouping by its key, or an item by its id; `escape` presses Escape
+// afterwards. The pop-ups answer from the standing and the throughput already
+// in hand, and the card from the item answers. `beneath` names the scenario
+// whose render is the page under the pop-ups, which is what the render of one
+// of these leaves out; over() is such a scenario, made from the one beneath.
+function over(name, beneath, steps) {
+  const page = pages.find((scenario) => scenario.name === beneath);
+  return Object.assign({}, page, { name, beneath }, steps);
+}
+
+const pages = [
   { name: "signin", token: "", standing: pending, throughput: pending },
   { name: "loading", token: "t", standing: pending, throughput: pending },
   { name: "quiet", token: "t", standing: ok(fixture("standing-quiet")), throughput: ok(fixture("throughput-quiet")) },
@@ -281,6 +317,30 @@ const scenarios = [
   { name: "throughput-stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/throughput": refused(503, "the state root could not be resolved") } }
 ];
 
+const scenarios = pages.concat([
+  // The pop-ups, each over a page rendered above. A pop-up scenario is that
+  // page's scenario with what a reader clicks after it is drawn, and its
+  // render is the pop-ups alone. The card, opened from Running now: an item in
+  // flight, read whole; one still being read; one the tracker holds nothing
+  // under; one that could not be read.
+  over("card", "busy", { items: items("yoyodyne-ifd.141.3"), open: [{ item: "yoyodyne-ifd.141.3" }] }),
+  over("card-loading", "busy", { items: { "/api/items/yoyodyne-ifd.201": pending }, open: [{ item: "yoyodyne-ifd.201" }] }),
+  over("card-missing", "busy", { items: { "/api/items/yoyodyne-ifd.212": refused(404, "no work item is recorded under that id") }, open: [{ item: "yoyodyne-ifd.212" }] }),
+  over("card-refused", "busy", { items: { "/api/items/yoyodyne-ifd.230": refused(503, "the work item could not be read: bd show failed with status failed and exit code 1: failed to open database: embeddeddolt: openat LOCK: operation not permitted") }, open: [{ item: "yoyodyne-ifd.230" }] }),
+  // The grouping pop-up: a stage listed by title with each item's refusal;
+  // the week's landed runs; a stage with nothing in it; a stage whose source
+  // could not be read; the landed stage still being priced; the card opened
+  // from a pile's entry, over it — a stopped run with its change preserved —
+  // and then both closed with Escape, twice.
+  over("grouping", "busy", { open: [{ grouping: "held" }] }),
+  over("grouping-landed", "degraded", { open: [{ grouping: "landed:week" }] }),
+  over("grouping-empty", "held", { open: [{ grouping: "startable" }] }),
+  over("grouping-error", "degraded", { open: [{ grouping: "admitted" }] }),
+  over("grouping-loading", "throughput-pending", { open: [{ grouping: "landed:today" }] }),
+  over("grouping-card", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }] }),
+  over("closed", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }], escape: 2 })
+]);
+
 function settle() {
   return new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
 }
@@ -295,7 +355,7 @@ async function run(scenario) {
     storage.set("yoyo-dashboard-token", scenario.token);
   }
   const intervals = [];
-  let answers = { "/api/standing": scenario.standing, "/api/throughput": scenario.throughput };
+  let answers = Object.assign({ "/api/standing": scenario.standing, "/api/throughput": scenario.throughput }, scenario.items || {});
   const requests = [];
 
   const fetch = (url, options) => {
@@ -337,11 +397,43 @@ async function run(scenario) {
     await settle();
   }
 
+  // What a reader clicks: the one element carrying the key, found the way a
+  // reader finds it — by what it opens, not where it is. An opener that is
+  // not on the page is a failure of the page, and is said so.
+  const openerFor = (attribute, value) => {
+    const found = document.find((element) => element.tagName === "button" && element.getAttribute(attribute) === value);
+    if (found.length === 0) {
+      throw new Error(`${scenario.name}: nothing on the page opens ${attribute}=${value}`);
+    }
+    return found[0];
+  };
+  const opened = [];
+  for (const step of scenario.open || []) {
+    const opener = step.item ? openerFor("data-item", step.item) : openerFor("data-grouping", step.grouping);
+    opened.push(opener);
+    opener.dispatch("click", {});
+    await settle();
+  }
+  for (let presses = scenario.escape || 0; presses > 0; presses -= 1) {
+    document.dispatch("keydown", { key: "Escape" });
+    await settle();
+  }
+  // A pop-up closed with Escape gives focus back to what opened it.
+  if (scenario.escape && opened.length > 0 && !opened[0].focused) {
+    throw new Error(`${scenario.name}: focus did not return to the opener after Escape`);
+  }
+
   const page = document.getElementById("page");
   const sections = ["band", "live", "pipeline", "throughput", "capacity"];
-  const matrix = { page: page.getAttribute("data-state"), sections: {} };
+  const popups = ["grouping", "card"];
+  const matrix = { page: page.getAttribute("data-state"), sections: {}, popups: {} };
   sections.forEach((id) => {
     matrix.sections[id] = document.getElementById(id).getAttribute("data-state");
+  });
+  // A pop-up that is hidden is closed, whatever state it was last drawn in.
+  popups.forEach((id) => {
+    const popup = document.getElementById(id);
+    matrix.popups[id] = popup.getAttribute("hidden") !== null ? "closed" : popup.getAttribute("data-state");
   });
   // No token ever left the page except as a bearer to this origin.
   requests.forEach((request) => {
@@ -350,7 +442,8 @@ async function run(scenario) {
     }
   });
   // Nothing set an inline style or wrote markup: every element's attributes
-  // are the shell's or a class, data-state, hidden, datetime, or an id.
+  // are the shell's or a class, data-state, hidden, datetime, an id, or the
+  // key of what an opener opens.
   document.find(() => true).forEach((element) => {
     for (const name of element.attributes.keys()) {
       if (name === "style" || name.startsWith("on")) {
@@ -379,7 +472,38 @@ async function run(scenario) {
   sections.forEach((id) => {
     prune(document.getElementById(id), matrix.sections[id], "section-");
   });
+  // A closed pop-up is dropped from the render, and an open one keeps the one
+  // state it shows, which is under its card rather than at its root.
+  popups.forEach((id) => {
+    const popup = document.getElementById(id);
+    if (matrix.popups[id] === "closed") {
+      popup.parentNode.removeChild(popup);
+      return;
+    }
+    popup.childNodes.forEach((child) => {
+      if (child instanceof Element && classes(child).includes("popup-card")) {
+        prune(child, matrix.popups[id], "section-");
+      }
+    });
+  });
   prune(page, matrix.page, "state-");
+
+  // A scenario that opened a pop-up renders the pop-ups it left open and
+  // nothing else — the page beneath them is `beneath`'s render, and the
+  // sentence that replaces it says so. The head stays, so the render opens
+  // beside the real stylesheet exactly as the others do.
+  if (scenario.beneath) {
+    const body = document.find((element) => element.tagName === "body")[0];
+    const kept = popups.map((id) => document.getElementById(id)).filter(Boolean);
+    body.childNodes.slice().forEach((child) => body.removeChild(child));
+    const note = document.createElement("p");
+    note.className = "render-note";
+    note.textContent = kept.length > 0
+      ? `What the ${scenario.name} scenario opened over the page: the page beneath it is the ${scenario.beneath} render, and is not repeated here.`
+      : `The ${scenario.name} scenario closed everything it opened: what is left is the ${scenario.beneath} render, and it is not repeated here.`;
+    body.appendChild(note);
+    kept.forEach((popup) => body.appendChild(popup));
+  }
 
   const html = document.root.childNodes
     .map((child) => (child instanceof Text ? child.data.trim() : child.serialize("")))

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">What the grouping-card scenario opened over the page: the page beneath it is the busy render, and is not repeated here.</p>
+    <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="ready">
+      <div id="grouping-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="grouping-heading" class="popup-title">Held back: held for a person (2 items)</h2>
+            <p id="grouping-note" class="popup-note">whose move: the development manager's, or the harness carrying her decision out</p>
+          </div>
+          <button type="button" id="grouping-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-ready">
+          <ol id="grouping-items" class="grouping-items">
+            <li class="grouping-item">
+              <button class="item-open grouping-title" type="button" data-item="yoyodyne-ifd.153">Triage names the phase a run stopped in</button>
+              <span class="item-id">yoyodyne-ifd.153</span>
+              <span class="grouping-detail">run run-5035c832 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has</span>
+            </li>
+            <li class="grouping-item">
+              <button class="item-open grouping-title" type="button" data-item="yoyodyne-ifd.150">A blocked status carries the account of what moved it</button>
+              <span class="item-id">yoyodyne-ifd.150</span>
+              <span class="grouping-detail">run run-a17c9b40 stopped on it and its change is preserved, so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision</span>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+    <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="ready">
+      <div id="card-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="card-heading" class="popup-title">Triage names the phase a run stopped in</h2>
+            <p id="card-note" class="popup-note">yoyodyne-ifd.153 · read 14:05:09</p>
+          </div>
+          <button type="button" id="card-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-ready">
+          <dl id="card-fields" class="card-fields">
+            <div class="card-field card-field-id">
+              <dt>Id</dt>
+              <dd>yoyodyne-ifd.153</dd>
+            </div>
+            <div class="card-field">
+              <dt>Title</dt>
+              <dd>Triage names the phase a run stopped in</dd>
+            </div>
+            <div class="card-field">
+              <dt>Status</dt>
+              <dd>blocked</dd>
+            </div>
+            <div class="card-field">
+              <dt>Priority</dt>
+              <dd>P2 (0 is the most urgent, 4 the least)</dd>
+            </div>
+            <div class="card-field">
+              <dt>Labels</dt>
+              <dd>triage</dd>
+            </div>
+            <div class="card-field card-field-id">
+              <dt>Parent</dt>
+              <dd class="card-none">none</dd>
+            </div>
+            <div class="card-field card-field-prose">
+              <dt>Description</dt>
+              <dd>The docket entry for a stopped run should say which phase it stopped in, so the development manager reads the stoppage without opening the run.</dd>
+            </div>
+            <div class="card-field card-field-prose">
+              <dt>Design</dt>
+              <dd>Read the phase off the run record at the time the docket entry is made.</dd>
+            </div>
+            <div class="card-field card-field-prose">
+              <dt>Acceptance criteria</dt>
+              <dd>Every docket entry for a stopped run names the phase; a run with no phase recorded says so.</dd>
+            </div>
+            <div class="card-field card-field-prose">
+              <dt>Notes</dt>
+              <dd>Goal served: the harness's surfaces read clearly.
+
+Blocked: run run-5035c832 stopped on it; the reviewer asked for repair and the repair budget is spent.</dd>
+            </div>
+            <div class="card-field card-field-run">
+              <dt>Run</dt>
+              <dd>
+                <p class="card-run-preserved">preserved: stopped, reviewing — work preserved</p>
+                <ul class="card-run-facts">
+                  <li>run run-5035c832b1e04d7fa9c3e2b8d1f06a11, started 2026-09-18 20:11:00, ended 2026-09-18 23:47:00</li>
+                  <li>cost $18.62</li>
+                  <li>reason: the reviewer asked for repair 3 times and the repair budget is spent: the change reads a style it does not set</li>
+                  <li>branch: yoyodyne/yoyodyne-ifd-153/5035c832</li>
+                  <li>worktree: /Users/somebody/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-153-5035c832</li>
+                  <li>developer session: 3a9e1c7d-2b4f-4e8a-9c1d-5f6b7a8e9d0c</li>
+                </ul>
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1514,7 +1514,12 @@ nothing refuses — the work the harness pulls next, counted over the same
 entries as the refusals, and zero whenever the pass-level stall stands — and
 each running run's `stage` is its phase folded onto `developing`, `reviewing`,
 or `integrating`. Both are there for the dashboard's pipeline, so it reads the
-model's count and the model's fold rather than making its own.
+model's count and the model's fold rather than making its own. Beside the
+counts, `standing.admitted_items` and `standing.startable_items` name the
+items each count counts, by id and title, in the product manager's order — so
+the page's pop-up on a grouping lists what the figure counted rather than a
+list assembled from the other lines — and both are absent, like the refusals,
+where the queue could not be read.
 
 One thing is carried there that the four lines do not print: what is parked or
 held on provider capacity, one run and one conversation at a time, under
@@ -1937,7 +1942,7 @@ It prints two things when it starts, and the second of them once:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
 token: 9f2c41ab7e05…
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing and /api/throughput
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
 
@@ -1950,7 +1955,15 @@ so the page and the terminal cannot disagree about a number; and at
 days, counted from the run records `yoyo status` derives each run's outcome
 from and priced by the same reading `yoyo status --spend 7` prints. The second
 reading prices every event log a week holds, which is seconds of work, so the
-page asks for it once a minute rather than every ten seconds.
+page asks for it once a minute rather than every ten seconds. A third answer is
+served one item at a time, at `/api/items/<work-item-id>`: the work item whole
+— the tracker's own fields, and the run the harness last made for it as
+`yoyo status <item>` lists it — which is what the page's
+[card on an item](#opening-a-work-item) reads. It costs a tracker command, so
+the page asks for it when a card is opened and not before, and never reads the
+tracker itself. An id the tracker holds nothing under is refused as not found,
+in fixed words that do not name the id back; an id that is not the tracker's
+shape is refused before anything is asked.
 
 ### What the page presents
 
@@ -1976,7 +1989,8 @@ dropped request.
    turn in flight: the work item's title and id, the phase (or `approved,
    resuming integration` where that is what the run is doing), how long it has
    been going, what it has spent so far or `cost unknown` and why, and the
-   provider, model, and account alias it is spending. A conversation card says
+   provider, model, and account alias it is spending. The title and the id
+   each open [the item's card](#opening-a-work-item). A conversation card says
    the agent, its role, how long the turn has been in flight, and how many turns
    are recorded before it.
 3. **Where the work stands** — the pipeline, read left to right: admitted items;
@@ -1988,7 +2002,8 @@ dropped request.
    `(most)`; how many are startable and next to be pulled — or, while a stall
    holds every pullable item, that the harness is choosing nothing and why;
    how many are running, by stage; and how many landed today and this week.
-   Under it, in words, how many things wait on a person.
+   Under it, in words, how many things wait on a person. Every stage's label
+   and every pile's label is a button that opens [the list of the items in it](#opening-a-work-item).
 4. **Throughput and cost** — two columns, today and the last seven days, each
    labeled with the local days it covers: how many runs landed their work on
    the target branch; the other endings, in the run history's own words
@@ -2039,6 +2054,53 @@ the refusal each item carries, the remedy each parked run carries — because th
 page and `yoyo status` are two projections of one model and a reader moving
 between them should not have to translate.
 
+### Opening a work item
+
+The sections show counts and names; the items behind them open in two pop-ups,
+each a dialog over the page that closes on its **Close** button, on a click
+outside it, or on Escape, and puts focus back where it was.
+
+**A grouping's items.** In *Where the work stands*, the label of each stage —
+Admitted, Held back, Startable, Running, Landed — and of each pile under one
+(`held for a person`, `pullable, and nothing is choosing`, `developing`, and
+the rest; the week's landed line is a grouping of its own beside today's) ends
+in a chevron and opens a list of the work items in it, by title, with the id
+under each and, where the pipeline
+has a word for the item, that word beside it: the refusal for a held-back item,
+the phase and elapsed time for a running one, when it landed for a landed one.
+The list is read from the readings the page already holds — the standing names
+the admitted, startable, and refused items and the throughput names the landed
+runs, so the list is what the figure counted rather than a list assembled on the
+page — and it is drawn again on every poll while it is open. It has the four
+states a section has: **loading** while the landed figure is still being priced,
+**empty** saying in a sentence that no item is in the grouping, **error** with
+the reason the grouping's source could not be read — a stage showing a dash
+still opens, so the reason is readable in full — and **ready**. Each title in it
+opens the item's card, over the list.
+
+**One item's card.** Opened from a running item's title or id, or from any
+entry of a grouping, the card shows the item whole under plain labels: **Id**,
+**Title**, **Status**, **Priority** (bd's `P0` to `P4`, 0 the most urgent),
+**Labels**, **Parent**, **Description**, **Design**, **Acceptance criteria**,
+**Notes**, and **Run**. A field the item has nothing in says `none`, so a blank
+is never mistaken for a field the page did not read, and prose keeps its line
+breaks. **Run** is the run the harness last made for the item, in the words
+`yoyo status <item>` lists it in: `in flight — developing, 12m elapsed, $3.41
+so far` for one still going; `preserved: stopped, reviewing — work preserved`
+for one that ended with its change still on a branch or in a checkout; and
+otherwise that nothing is in flight or preserved and what the latest run came
+to, `work removed` or `no artifacts recorded`. Under the line are the run's id
+and when it started and ended, its cost or `cost unknown` and why, the reason it
+gave for ending, and the branch, worktree, and developer session it preserved.
+An item never run says `none is recorded`; run records that could not be read
+say so in the run's place rather than the card showing an item nothing ever
+touched. The card is read once, when it is opened, from `/api/items/<id>`; it
+has the same four states, and its **empty** state is the tracker holding nothing
+under the id — an item closed or removed since the page last read the standing
+— which is a different answer from the item not being readable, and is said as
+one. Every value on it reaches the page as JSON and is written as text, under
+the same policy as the rest of the page.
+
 **Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
 holds the page as its own script renders it from the fixtures under
 `internal/dashboard/testdata/fixtures` — the document as the script left it,
@@ -2046,12 +2108,17 @@ keeping the one page state and the one state per section a browser would show
 and dropping the hidden ones — one file per scenario — `quiet`, `busy`,
 `held`, `degraded`, `unreadable`, `loading`, `throughput-pending`,
 `throughput-refused`, `throughput-stale`, `refused`, `unreachable`,
-`wrong-token`, `stale`, and `signin` — which together show every section in
-each of its four states. They are golden files:
+`wrong-token`, `stale`, and `signin` for the page, and `card`, `card-loading`,
+`card-missing`, `card-refused`, `grouping`, `grouping-landed`,
+`grouping-empty`, `grouping-error`, `grouping-loading`, `grouping-card`, and
+`closed` for the pop-ups, each opened by clicking what a reader would click on
+one of the pages and holding the pop-ups alone, over the page render it names
+— which together show every section and each pop-up in each of its four
+states. They are golden files:
 `TestThePageRendersEverySectionInEveryState` runs the page's script under Node
-against the fixtures, checks that each section reaches each state and that the
-fixtures' words land on the page as text, and fails when a render differs from
-what is recorded; `go test ./internal/dashboard -run TestThePageRendersEverySectionInEveryState -update-renders`
+against the fixtures, checks that each section and each pop-up reaches each
+state and that the fixtures' words land on the page as text, and fails when a
+render differs from what is recorded; `go test ./internal/dashboard -run TestThePageRendersEverySectionInEveryState -update-renders`
 rewrites them after a deliberate change. Each render opens in a browser beside
 the real stylesheet. To look at the live page in each state, with the real
 server and the real policy in front of it, `go run ./internal/dashboard/fixtureserver`
@@ -2059,8 +2126,9 @@ serves one dashboard per scenario on a loopback port of its own and prints each
 URL with its token.
 
 **It is a projection and nothing else.** It reads the same durable records the
-terminal reads and writes none of them; there is no button, no form but the one
-that takes the token, and nothing but `GET` and `HEAD` is answered at all. Restarting it
+terminal reads and writes none of them; the only form is the one that takes the
+token, every button on the page opens or closes one of its own pop-ups and
+nothing else, and nothing but `GET` and `HEAD` is answered at all. Restarting it
 changes nothing about the harness and loses nothing, because the history it
 shows lives in the records rather than in the page. It is not a second control
 plane, and work is still directed from the conversation and the commands above.
@@ -2095,8 +2163,9 @@ plane, and work is still directed from the conversation and the commands above.
   no CDN, no inline script, and no framing by another page. A value that reached
   the page unescaped would have nowhere to run, and none does: the product's own
   name is the one value the server writes into the page, escaped, and everything
-  the read model says — work-item titles, refusals, the reason a source could
-  not be read — reaches the page as JSON and is written by the page as text.
+  the read model says — work-item titles, an item's description and notes,
+  refusals, the reason a source could not be read — reaches the page as JSON
+  and is written by the page as text.
 - **Every failure is a refusal, never part of an answer.** No token, the wrong
   token, a foreign `Host` or `Origin`, and durable state that cannot be read
   each get a status and a one-line reason, and nothing of the read model beside

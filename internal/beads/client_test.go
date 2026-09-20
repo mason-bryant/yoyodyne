@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -724,6 +725,46 @@ func TestClientReportsProcessAndMalformedJSONErrors(t *testing.T) {
 	if _, err := (Client{Runner: malformed}).Show(context.Background(), "yoyodyne-1"); err == nil || !strings.Contains(err.Error(), "decode bd work item") {
 		t.Fatalf("Show() malformed error = %v", err)
 	}
+}
+
+// An id bd holds nothing under is told apart from every other refusal, by bd's
+// own line for it — `Issue <id> not found` — and only where bd itself wrote it:
+// a refusal that happens to say "not found" about something else, and a runner
+// that could not start bd, are each a tracker that did not answer.
+func TestShowTellsAMissingItemFromATrackerThatCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	missing := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "Issue yoyodyne-9 not found\n", Stdout: `{"error":"no issues found matching the provided IDs"}`}}}
+	_, err := (Client{Runner: missing}).Show(context.Background(), "yoyodyne-9")
+	if !errors.Is(err, ErrNoSuchWorkItem) || !strings.Contains(err.Error(), "Issue yoyodyne-9 not found") {
+		t.Fatalf("Show() of a missing item = %v, want ErrNoSuchWorkItem carrying bd's refusal", err)
+	}
+
+	for _, stderr := range []string{
+		"failed to open database: LOCK: operation not permitted\n",
+		"Error: database file not found: .beads/beads.db\n",
+		"Issue yoyodyne-8 not found\n",
+	} {
+		down := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stderr: stderr}}}
+		if _, err := (Client{Runner: down}).Show(context.Background(), "yoyodyne-9"); err == nil || errors.Is(err, ErrNoSuchWorkItem) {
+			t.Fatalf("Show() refused with %q = %v, want a failure that is not ErrNoSuchWorkItem", stderr, err)
+		}
+	}
+
+	_, err = (Client{Runner: failingRunner{errors.New(`exec: "bd": executable file not found in $PATH`)}}).Show(context.Background(), "yoyodyne-9")
+	if err == nil || errors.Is(err, ErrNoSuchWorkItem) {
+		t.Fatalf("Show() with no bd = %v, want a failure that is not ErrNoSuchWorkItem", err)
+	}
+	if !ValidIssueID("yoyodyne-ifd.432.1") || ValidIssueID("../escape") || ValidIssueID("") {
+		t.Fatal("ValidIssueID does not hold the tracker's own shape")
+	}
+}
+
+// failingRunner is a runner that cannot start bd at all.
+type failingRunner struct{ err error }
+
+func (f failingRunner) Run(context.Context, execution.Command, execution.OutputObserver) (execution.ProcessResult, error) {
+	return execution.ProcessResult{}, f.err
 }
 
 // The tracker is where a work item's price lives, so what is written has to be

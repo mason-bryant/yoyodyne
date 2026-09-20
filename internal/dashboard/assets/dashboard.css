@@ -239,6 +239,49 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+/* ---- the openers ----------------------------------------------------------- */
+
+/* A title, an id, a stage's label, a pile's label, or the week's landed line
+   that opens a pop-up is a button carrying the class of the text it stands in
+   for, reset here so that class's own rule below styles it, and says it opens
+   something without colour: an item is underlined, and a grouping's label
+   ends in a chevron. */
+.item-open,
+.grouping-open {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  justify-self: start;
+  cursor: pointer;
+}
+
+.item-open {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 0.15em;
+  overflow-wrap: anywhere;
+}
+
+.grouping-open::after {
+  content: " \203A";
+}
+
+.item-open:hover,
+.item-open:focus-visible {
+  text-decoration-color: currentColor;
+}
+
+.grouping-open:hover,
+.grouping-open:focus-visible {
+  text-decoration: underline;
+}
+
 /* ---- the strips above the sections ---------------------------------------- */
 
 .stale,
@@ -305,7 +348,11 @@ input:focus-visible {
 .panel[data-state="loading"] .section-loading,
 .panel[data-state="error"] .section-error,
 .panel[data-state="empty"] .section-empty,
-.panel[data-state="ready"] .section-ready {
+.panel[data-state="ready"] .section-ready,
+.popup[data-state="loading"] .section-loading,
+.popup[data-state="error"] .section-error,
+.popup[data-state="empty"] .section-empty,
+.popup[data-state="ready"] .section-ready {
   display: block;
 }
 
@@ -844,6 +891,156 @@ input:focus-visible {
   padding-top: 0.4rem;
 }
 
+/* ---- the pop-ups --------------------------------------------------------------------- */
+
+/* A pop-up is a dialog over the page: a backdrop that closes it, and a card
+   with the four states a panel has. */
+.popup {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.popup-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 24, 30, 0.45);
+}
+
+.popup-card {
+  position: relative;
+  width: min(46rem, 100%);
+  max-height: min(90vh, 100%);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.popup[data-state="error"] .popup-card {
+  border-color: var(--attention);
+  border-left-width: 6px;
+}
+
+.popup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.popup-title {
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.popup-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 0.15rem;
+}
+
+.popup-close {
+  flex: none;
+  padding: 0.35rem 0.7rem;
+}
+
+/* The grouping: one entry per item, its title opening the item's card. */
+.grouping-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.grouping-item {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--panel-inset);
+}
+
+.grouping-title {
+  font-weight: 600;
+}
+
+.grouping-detail {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+/* The card: every field the item has, under a plain label; prose keeps its
+   line breaks, and a field with nothing in it says so. */
+.card-fields {
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.card-field {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.card-field dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card-field dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.card-field-prose dd {
+  white-space: pre-wrap;
+}
+
+.card-field-id dd {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+
+.card-none {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.card-run-flight {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.card-run-preserved {
+  color: var(--held);
+  font-weight: 600;
+}
+
+.card-run-ended {
+  color: var(--ink-soft);
+}
+
+.card-run-facts {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
 /* ---- narrow screens ------------------------------------------------------------ */
 
 @media (max-width: 40rem) {
@@ -863,9 +1060,14 @@ input:focus-visible {
     content: none;
   }
 
-  .figure-row {
+  .figure-row,
+  .card-field {
     grid-template-columns: 1fr;
     gap: 0.1rem;
+  }
+
+  .popup {
+    padding: 0.5rem;
   }
 }
 
@@ -876,11 +1078,17 @@ input:focus-visible {
 @media (forced-colors: active) {
   .phase,
   .held-state,
-  .mark {
+  .mark,
+  .popup-card {
     border: 1px solid CanvasText;
   }
 
   .pulse {
     background: CanvasText;
+  }
+
+  .popup-backdrop {
+    background: Canvas;
+    opacity: 0.8;
   }
 }
