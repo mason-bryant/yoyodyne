@@ -212,6 +212,13 @@ func approveArtifact(args []string, stdout, stderr io.Writer) int {
 	if code, ok := flags.parse(args, 1); !ok {
 		return code
 	}
+	// An approval is the operator's, and it is what admits work against the
+	// goals without asking them -- so a run that could record one could approve
+	// a goal for itself. A shell an agent opened is refused before the store is
+	// even opened; the protected-path gate refuses the write it would have made.
+	if err := refusedToAgentProcess("yoyo artifact approve", "a person approves an artifact"); err != nil {
+		return reportArtifactError(stdout, stderr, *flags.jsonOutput, err)
+	}
 	store, policy, code := flags.store(stderr)
 	if code != 0 {
 		return code
@@ -440,7 +447,9 @@ writes, naming the checkout, which is the one this configuration points at rathe
 than whichever one you are standing in. What your approval
 of the goals decides is what reaches the work queue: under approvals.work_items:
 automatic, work that traces to a goal an approved goals document states is
-admitted without asking you, and anything else is still put to you.
+admitted without asking you, and anything else is still put to you. That is why
+approve is a person's verb: a process the harness launched for a role -- an
+agent's shell, marked by YOYODYNE_AGENT_ROLE -- is refused it and told so.
 
   list [--kind <kind>]   list the recorded artifacts, and name what is not one
   show <id>              print one artifact and its recorded revisions

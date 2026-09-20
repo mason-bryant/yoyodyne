@@ -57,6 +57,12 @@ func releaseIntake(args []string, stdout, stderr io.Writer) int {
 		printReleaseUsage(stderr)
 		return 2
 	}
+	// The hold is lifted by a person or by the development manager's recorded
+	// decision, never by a shell an agent opened: a developer told to unblock
+	// the queue is exactly the mistake this refuses.
+	if err := refusedToAgentProcess("yoyo release", "a person releases intake"); err != nil {
+		return reportReleaseError(stdout, stderr, *jsonOutput, err)
+	}
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
@@ -131,6 +137,9 @@ ended is started again with `+"`yoyo work`"+`.
 Holding intake is not here: it is a decision with a reason worth recording, and
 `+"`/hold`"+` in `+"`yoyo chat`"+` is where that is said. This verb is the
 recovery path that works with no conversation open.
+
+This is a person's verb. A process the harness launched for a role -- an
+agent's shell, marked by YOYODYNE_AGENT_ROLE -- is refused it and told so.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

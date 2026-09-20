@@ -447,7 +447,11 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if strings.TrimSpace(configDir) == "" {
 		configDir = b.ConfigDir
 	}
-	environment := environmentFor(configDir)
+	// The invocation carries the role it is made for, so the verbs that record
+	// a person's decision -- pause, resume, release, approve -- can refuse a
+	// shell this agent opens. It is under the harness's own family, which the
+	// allowlist carries through to everything the agent goes on to start.
+	environment := execution.WithAgentRole(environmentFor(configDir), request.Role)
 	if singleTurnRole(request.Role) {
 		environment = withPromptCacheLifetime(environment, singleTurnCacheLifetime)
 	}

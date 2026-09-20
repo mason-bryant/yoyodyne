@@ -307,6 +307,44 @@ with `yoyo run` was never subject to the hold, and a watching `yoyo work` sessio
 starts choosing again at its next poll. Placing a hold stays in the conversation,
 where the reason for it can be recorded with it.
 
+**These three verbs, and `yoyo artifact approve`, are a person's, and a
+process an agent started is refused them.** Every process the harness launches
+for a role carries the role it was launched for in its environment, as
+`YOYODYNE_AGENT_ROLE`, on top of [the explicit environment](configuration.md#the-environment-a-check-runs-in)
+every invocation is built from; the variable is under the harness's own
+prefix, so a shell the agent opens and every `yoyo` that shell runs carry it
+too. `yoyo pause`, `yoyo resume` in both its forms, `yoyo release`, and
+`yoyo artifact approve` read it before they read anything else, and a process
+that carries it is told, in a sentence rather than a permission error, whose
+act this is:
+
+```text
+yoyo release is refused from a process the harness launched for the developer: a person releases intake, and an agent's process is not one
+```
+
+Nothing is written by a refused verb, and `--json` carries the same sentence
+under `error`. What that stops is a mistake the system could make on its own —
+a developer told to unblock the queue and reaching for `yoyo release`, or
+approving the goals it was about to admit work against — which until it
+existed was stopped by nothing but this page saying nobody does that. The
+honest boundary is that an environment variable identifies an agent that is
+being one: a shell can strip its own environment, and the refusal is then
+gone. What stands behind it is different for the two kinds of record. An
+approval is written into the goals document, and that document is a protected
+path: a run's change carrying it is refused before any check runs or any
+reviewer sees it, whatever wrote it, and that is tested end to end
+(`TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed` in
+`internal/orchestrator`, with the join to the path `approve` writes pinned
+beside the refusal tests in `internal/cli`). The holds live under the state
+root, outside any worktree, and nothing the harness tests stands between a
+stripped environment and a write there: a developer run enables Claude Code's
+OS-level sandbox over its shell (`sandbox.enabled`, failing if it is
+unavailable), and that sandbox's write policy is the provider's own rather
+than anything the harness declares or verifies, so it is not counted on here.
+A person at a shell an agent opened clears the variable and the verbs are
+theirs again. The same refusal is what `yoyo gate record` will give, once the
+human gate (`yoyodyne-ifd.209.20`) lands.
+
 **A hold the brake placed asks a person for nothing unless the development
 manager has escalated it.** That was not always so: the brake tripped on
 2026-09-02, 09-05, 09-13, 09-17, and 09-19, and each time the line sat held
