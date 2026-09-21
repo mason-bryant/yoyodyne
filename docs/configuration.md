@@ -5092,7 +5092,10 @@ web-security conventions made configuration:
   can read it. `keychain` and `file` are the two stores the Slack tokens already
   use, under names that carry the product: the keychain item
   `yoyo-dashboard.<product id>` under the account `yoyo`, or the file
-  `<state root>/products/<product id>/dashboard.token`.
+  `<state root>/products/<product id>/dashboard.token`. `yoyo dashboard`
+  reads the one named and serves under it, printing where it was read from
+  and never the value, so a stored token outlives a restart; a store that does
+  not hold it refuses to start with the command that stores it.
 
 **A bind outside loopback with a generated token is refused when the file
 loads**, with the reason. The opt-in exists so a browser on another device can
@@ -5119,7 +5122,10 @@ its own watch lease. Two parts are declared here ahead of the supervisor
 knowing how to start them, and `yoyo start` says so for each: the dashboard's
 adoption as a child is `yoyodyne-ifd.414`, and until it lands `yoyo dashboard`
 is started by hand and still binds loopback on its `--port` rather than reading
-this entry; the maintenance pass is the resident item, `yoyodyne-ifd.413`, and
+this entry's `port`, `bind`, or `allowed_hosts` — `token` it does read, whether
+or not the entry is enabled, so that
+[a stored token outlives a restart](operations.md#watching-from-a-browser-the-dashboard);
+the maintenance pass is the resident item, `yoyodyne-ifd.413`, and
 until it lands `yoyo reconcile` is scheduled by hand. Declaring the whole
 section now is what lets that command and the resident that starts with the
 machine read one statement rather than two.
