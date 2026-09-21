@@ -411,6 +411,10 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		IntakeHolds:   intake,
 		Sessions:      watch,
 		Reports:       reports,
+		// The recurring passes, for what an owning role recommended on the
+		// proposed changes put to it: the lines say the batch the operator has
+		// to decide, exactly as the terminal does.
+		Sweeps: runs.Sweeps(),
 		// The refusal log and the agents' configuration, read together for whether
 		// the provider is holding every role at once. The feed says that hold again
 		// while it stands, through these same sources, and the lines carry it as

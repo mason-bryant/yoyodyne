@@ -203,6 +203,12 @@ type Sources struct {
 	// reported anything" and "nothing was wired to read what anybody reported" are
 	// opposite answers, and only one of them means there is nothing to do.
 	Reports Reports
+	// Sweeps is the recurring tasks' reports, read for the recommendations an
+	// owning role recorded on the proposed changes put to it. It is optional,
+	// and a reading without one names the undecided proposals and says nothing
+	// about what their owners argued — which is what every surface showed
+	// before the queue had a cadence.
+	Sweeps Sweeps
 	// UsageLimits is the provider's refusals outside a run, read with the runs
 	// above — for the ones parked on a limit — and the agents below for the one
 	// thing the three say together: whether the provider is holding every role
@@ -460,6 +466,18 @@ type Standing struct {
 	// own failure: a reader told nothing concludes there is nothing.
 	ReportsProblem string `json:"reports_problem,omitempty"`
 
+	// Amendments is how the queue of proposed changes stands, the pile's
+	// sibling and carried for the same reason: whether the queue is draining is
+	// a question about a week of readings, answerable only if each says how deep
+	// it is and how old the oldest undecided proposal was. RecommendedAmendments
+	// is the batch the owning roles have argued and the operator has still to
+	// decide, read off the recurring passes, which is what a surface that puts
+	// the batch to him reads. AmendmentsProblem is a queue that could not be
+	// read, stated rather than reported as empty.
+	Amendments            amendment.Queue        `json:"amendments"`
+	RecommendedAmendments []RecommendedAmendment `json:"recommended_amendments"`
+	AmendmentsProblem     string                 `json:"amendments_problem,omitempty"`
+
 	// Services is the product's parts as its supervisor last recorded them, and
 	// whether a supervisor is running now. It is not a fifth line: it is carried
 	// for the surfaces that read the model, and the one thing in it that waits
@@ -560,8 +578,19 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.CapacityBlocked = CapacityBlockedOf(sources, now)
 
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
+	// The proposed changes are read once and used twice, as the switches are:
+	// they are the queue's count and age, and each undecided one is a thing
+	// waiting on a person. The recommendations the owners argued on a recurring
+	// pass are read beside them, off the passes' own reports.
+	amendments := readAmendments(sources, now)
+	standing.Amendments = amendments.queue
+	standing.RecommendedAmendments = amendments.recommended
+	if standing.RecommendedAmendments == nil {
+		standing.RecommendedAmendments = []RecommendedAmendment{}
+	}
+	standing.AmendmentsProblem = joinProblems(amendments.problem, amendments.sweepProblem)
 
-	needs, needsProblem := readNeedsHuman(sources, switches)
+	needs, needsProblem := readNeedsHuman(sources, switches, amendments)
 	// The provider answering nobody is on the attention line whatever the queue
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.
@@ -585,6 +614,13 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 			What:  standing.Reports.Describe(),
 			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the cadence that works it is not keeping up",
 		})
+	}
+	// The pile's sibling: a queue of proposed changes whose oldest undecided one
+	// has waited longer than any working cadence would leave it. The undecided
+	// proposals are each named on the line already; what this adds is the age,
+	// which a list of them is not.
+	if aged, waiting := amendments.ageAttention(); waiting {
+		needs = append(needs, aged)
 	}
 	// A stall that is holding admitted work back and is nobody else's line to
 	// carry is attention in its own right. Nothing else reports it: a live session
@@ -1169,7 +1205,7 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 // Held work is the one entry here whose mover can be the harness rather than a
 // person, and it is on this line for exactly that reason: an operator scanning
 // for what is waiting on him has to be able to see which of it is not.
-func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
+func readNeedsHuman(sources Sources, held switches, amendments amendmentReading) ([]Attention, string) {
 	attention := make([]Attention, 0, 4)
 	if held.operatorHeld {
 		attention = append(attention, Attention{
@@ -1203,19 +1239,13 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	}
 	problem := strings.Join(held.problems, "; ")
 
-	if sources.Amendments == nil {
-		problem = joinProblems(problem, "nothing was wired to read the proposed changes")
-	} else if records, err := sources.Amendments.List(); err != nil {
-		problem = joinProblems(problem, fmt.Sprintf("the proposed changes could not be read: %v", err))
-	} else {
-		for _, proposal := range amendment.Pending(records) {
-			attention = append(attention, Attention{
-				What: fmt.Sprintf("a change to %s is proposed and undecided (%s)", proposal.Artifact, proposal.ID),
-				Whose: fmt.Sprintf("the %s's — nothing reaches the document until they or the operator decide it",
-					proposal.Owner),
-			})
-		}
-	}
+	// The proposed changes, read once above for both lines: the batch their
+	// owners have argued and the operator has to decide, then each undecided one.
+	// A queue that could not be read is said here as well as in its own field,
+	// for the reason the pile's failure is: the field is what a script reads and
+	// the line is what a person reads.
+	problem = joinProblems(problem, joinProblems(amendments.problem, amendments.sweepProblem))
+	attention = append(attention, amendments.attention()...)
 
 	if sources.Runs == nil {
 		problem = joinProblems(problem, "nothing was wired to read the runs that owe a step")

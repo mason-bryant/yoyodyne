@@ -542,6 +542,9 @@ func standingSources(configPath string) readmodel.Sources {
 		// there, so this surface holds the same items the scheduler holds and for
 		// the same reason rather than reading the run's flags where it looks.
 		sources.Remains = standingRemains(resolved)
+		// The recurring passes, from the same state root, for what an owning
+		// role recommended on the proposed changes put to it.
+		sources.Sweeps = store.Sweeps()
 	}
 	if store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Conversations = store

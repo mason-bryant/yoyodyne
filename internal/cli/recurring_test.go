@@ -147,6 +147,31 @@ func TestSweepListingNamesASilentRepair(t *testing.T) {
 	}
 }
 
+// What an owning role recommended on the changes proposed to its documents is
+// shown after the findings, verdict first, so an operator deciding the batch
+// reads the argument beside the proposal it is about.
+func TestSweepListingShowsTheRecommendations(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	rendered := renderSweepsAtDefault([]runstate.Sweep{recordedSweep("architect-amendments", at, &sweep.Result{
+		Status:  sweep.StatusComplete,
+		Summary: "two argued",
+		Recommendations: []sweep.Recommendation{
+			{Proposal: "amendment-0123456789abcdef0123456789abcdef", Verdict: sweep.RecommendApprove, Reason: "the design never said which holds"},
+			{Proposal: "amendment-fedcba9876543210fedcba9876543210", Verdict: sweep.RecommendMerge, Reason: "the same clarification", Into: "amendment-0123456789abcdef0123456789abcdef"},
+		},
+	}, "")})
+	for _, want := range []string{
+		"  > recommends approve for amendment-0123456789abcdef0123456789abcdef\n      the design never said which holds\n",
+		"  > recommends merge into amendment-0123456789abcdef0123456789abcdef for amendment-fedcba9876543210fedcba9876543210\n",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered = %q, want %q", rendered, want)
+		}
+	}
+}
+
 // A firing that produced no account is not a quiet pass, and the listing must not
 // let the two look alike.
 func TestSweepListingTellsAFailedPassFromAQuietOne(t *testing.T) {

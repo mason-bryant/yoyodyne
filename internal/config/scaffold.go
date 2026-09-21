@@ -586,19 +586,23 @@ func renderScaffoldList(values []string) string {
 // given no sign of the shape is one whose operator has to be told the schema by
 // somebody, and uncommenting is the whole gesture asked for.
 //
-// The examples are the two standing loops this harness actually needs rather
+// The examples are the three standing loops this harness actually needs rather
 // than made-up ones: the development manager's sweep over work that has stopped
-// moving, and the product manager's pass over the collected reports. The second
-// is here because the pile has no other standing reader — every role files into
+// moving, the product manager's pass over the collected reports, and the
+// architect's pass over the changes proposed to her documents. The second is
+// here because the pile has no other standing reader — every role files into
 // it, only the product manager can record what became of a report, and a project
 // that schedules nothing works the pile only when somebody opens a conversation.
 // That is not a hypothetical: this project reached 564 unhandled reports with
-// the oldest three weeks old before the pass existed to be configured.
+// the oldest three weeks old before the pass existed to be configured. The third
+// is here for the same shape of reason: proposals against the designs reach the
+// architect only when somebody opens her conversation, and this project stood
+// at forty-four undecided with the oldest weeks old before the pass existed.
 //
 // They are still commented out and still off, because what is woken and how
 // often is the project's decision and not this file's. Every line is written so
 // that deleting its leading "# " leaves a valid entry, and a test in this package
-// uncomments the block and loads both tasks to keep that true.
+// uncomments the block and loads all three tasks to keep that true.
 //
 // What is deliberately absent from the schema is said in the comment rather than
 // left to be discovered: there is no key here for a capability, a tool, or an
@@ -658,6 +662,23 @@ func renderScaffoldRecurring(builder *strings.Builder) {
 #       them, and keep the findings for what was worth more than a handling.
 #       A pass with more of the pile than one turn holds says so and takes
 #       another. When nothing is unhandled, that is the report.
+#   architect-amendments:
+#     role: architect
+#     every: 6h
+#     enabled: true
+#     max_turns: 4
+#     prompt: |
+#       Work the changes other roles have proposed to your documents. The
+#       undecided ones are carried into this turn already, oldest first and at
+#       most ten a pass, and nothing else wakes you to argue them, so a queue
+#       nobody wakes you for is a queue nothing drains.
+#       Argue every one you are shown: read the document it names, and
+#       recommend approve, decline, or merge with another, with the reason, in
+#       the "recommendations" of your block. You decide nothing and edit
+#       nothing here -- the operator records each decision under your
+#       authority, and an approved change is then yours to make as a revision.
+#       Say in your summary how many you argued and how many wait behind them.
+#       When nothing is undecided, that is the report.
 `)
 }
 
