@@ -155,10 +155,11 @@ dist-verify: dist
 # Cutting one release, gate included. `dist` is what a release consists of;
 # this is the one invocation around it that makes a daily cadence cheap enough
 # to keep and safe enough to trust: the adoption walkthrough and `check` green
-# first, then the archives and checksums for the tag, then the tag itself. A
-# red gate refuses the cut, names what was red, and writes nothing. Publishing
-# stays the operator's own `git push origin <tag>`, which the release workflow
-# acts on.
+# first, then the archives and checksums for the tag, then the tag itself, on
+# the commit origin's default branch already holds -- the cut writes nothing to
+# that branch. A red gate refuses the cut, names what was red, and writes
+# nothing. Publishing stays the operator's own `git push origin <tag>`, which
+# the release workflow acts on.
 #
 # VERSION carries a git-describe default so `build` and `dist` work from a
 # checkout, and that default is not a release tag. Pass it on only where

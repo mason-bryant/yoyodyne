@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,13 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 				(standing.AdmittedItems != nil && len(standing.AdmittedItems) != standing.Admitted) || (standing.StartableItems != nil && len(standing.StartableItems) != standing.Startable) {
 				t.Fatalf("fixture %s names items the counts do not count: admitted %d over %d, startable %d over %d", name, standing.Admitted, len(standing.AdmittedItems), standing.Startable, len(standing.StartableItems))
 			}
+			// Every entry waiting on a person carries its mover from the model's
+			// vocabulary, as the server sends it, since the tile counts by it.
+			for _, attention := range standing.NeedsHuman {
+				if !slices.Contains(readmodel.Movers(), attention.Mover) {
+					t.Fatalf("fixture %s carries %q waiting on %q, which the model's vocabulary does not name", name, attention.What, attention.Mover)
+				}
+			}
 			standings++
 		case strings.HasPrefix(name, "throughput-"):
 			var throughput readmodel.Throughput
@@ -227,9 +235,41 @@ func TestServesTheThroughputToTheTokenAlone(t *testing.T) {
 var (
 	_ backlog.HoldKind = readmodel.Refused{}.Kind
 	_ readmodel.Stage  = readmodel.RunningRun{}.Stage
+	_ readmodel.Mover  = readmodel.Attention{}.Mover
 	_ readmodel.Ledger = (*runstate.StreamStore)(nil)
 	_ readmodel.Runs   = (*runstate.Store)(nil)
 )
+
+// The movers the page names are the model's vocabulary, every one of them and
+// in the model's order, so the tile that counts what waits on a person counts
+// by the value each entry carries rather than by a reading of the words beside
+// it, and says the operator's count first because the model puts it first.
+func TestTheNeedsAHumanTileCountsByTheModelsMovers(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title")})
+	_, script := w.get("/assets/dashboard.js", nil)
+	var named []string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, `{ mover: "`) {
+			named = append(named, strings.SplitN(line, `"`, 3)[1])
+		}
+	}
+	movers := readmodel.Movers()
+	if len(named) != len(movers) {
+		t.Fatalf("the script names %d movers, and the model's vocabulary holds %d: %v against %v", len(named), len(movers), named, movers)
+	}
+	for i, mover := range movers {
+		if named[i] != string(mover) {
+			t.Fatalf("the script's mover %d is %q, and the model's is %q", i, named[i], mover)
+		}
+	}
+	if !strings.Contains(script, "entry.mover") {
+		t.Fatalf("the script does not read each entry's mover from the model:\n%s", script)
+	}
+	if strings.Contains(script, "entry.whose") || strings.Contains(script, ".whose.") {
+		t.Fatalf("the script reads the mover off the words beside it rather than the value the model carries:\n%s", script)
+	}
+}
 
 // The pipeline reads the model's own figures: the startable count and each
 // run's stage arrive on the standing, and the script keeps no list of phases
@@ -350,6 +390,14 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"approved, resuming integration",
 			"claude-code · claude-opus-5 · account pool-b",
 			"held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)",
+			// What waits on a person, counted per mover: the operator's is the
+			// figure, and the roles' and the harness's are beside it, out of the
+			// whole the terminal prints.
+			`<dt>Needs a human</dt>`,
+			`<span class="figure">2</span>`,
+			`<span class="unit">things waiting on the operator</span>`,
+			`<span class="detail">of 7 things waiting in all; the architect's: 2, the development manager's: 1, the product manager's: 1, the harness's: 1</span>`,
+			"Needs a human: 7 things waiting on a person — the operator's: 2, the architect's: 2, the development manager's: 1, the product manager's: 1, the harness's: 1.",
 			"22 runs reached the target branch",
 			"at least $1,232.58 from 452 invocations",
 			"1 exchange record could not be read, so the cost is a floor",
@@ -357,10 +405,15 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"What to do: nothing needs doing",
 			"no reset named, and nothing probes: the run stopped",
 		},
-		"quiet":            {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
-		"degraded":         {`<span class="figure">—</span>`, `<li class="stage stage-unreadable">`, "Could not be read: the admitted work could not be read", `<button class="grouping-open pile-label" type="button" data-grouping="stage:developing">developing</button>`},
-		"unreadable":       {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read", "yoyo doctor says whether bd answers in this checkout"},
-		"held":             {`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z"},
+		"quiet":      {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
+		"degraded":   {`<span class="figure">—</span>`, `<li class="stage stage-unreadable">`, "Could not be read: the admitted work could not be read", `<button class="grouping-open pile-label" type="button" data-grouping="stage:developing">developing</button>`},
+		"unreadable": {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read", "yoyo doctor says whether bd answers in this checkout"},
+		"held": {
+			`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z",
+			// One thing waiting, and it is the operator's: the figure says so and
+			// there is no breakdown to give.
+			`<span class="figure">1</span>`, `<span class="unit">thing waiting on the operator</span>`, "Needs a human: 1 thing waiting on a person — the operator's: 1.",
+		},
 		"stale":            {`class="freshness freshness-stale">stale<`, "so this is the reading from 14:05:09"},
 		"throughput-stale": {`class="freshness freshness-stale">stale<`, "The last reading failed for the throughput", `<p id="throughput-stale" class="stale" role="status">The last reading failed`},
 		"refused":          {"permission denied", "yoyo doctor says what cannot be read"},

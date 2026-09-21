@@ -255,13 +255,13 @@ func (s Stall) Waiting() (Attention, bool) {
 		if !s.Since.IsZero() {
 			what += ", since " + s.Since.UTC().Format(time.RFC3339)
 		}
-		return Attention{What: what, Whose: s.Reason.Whose()}, true
+		return Attention{What: what, Whose: s.Reason.Whose(), Mover: MoverOperator}, true
 	case ReasonProviderAway:
 		// The provider answering nobody is waiting on a person in the one way a
 		// window is not, and it is the wait the attention line exists for: the
 		// only thing that fired on it in September was a brake naming the wrong
 		// remedy. Its sentence already says since when.
-		return Attention{What: s.Says, Whose: s.Reason.Whose()}, true
+		return Attention{What: s.Says, Whose: s.Reason.Whose(), Mover: MoverOperator}, true
 	default:
 		return Attention{}, false
 	}
