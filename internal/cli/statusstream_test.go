@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -338,6 +341,108 @@ func TestStatusSpendPricesExchangesBesideTheStreams(t *testing.T) {
 	stdout, _, code = runCLI(t, "status", "--spend", "--kind", "exchanges", "--config", configPath)
 	if code != 0 || !strings.Contains(stdout, "1 exchange record(s) could not be read") || strings.Contains(stdout, "no completed provider invocations") {
 		t.Fatalf("code = %d, stdout = %q", code, stdout)
+	}
+}
+
+// fixedLedger is a spend report handed to the dashboard's read model as it
+// stands, so the read model and the terminal can be asked about one fixture.
+type fixedLedger struct{ report runstate.SpendReport }
+
+func (f fixedLedger) Spend(runstate.SpendQuery) (runstate.SpendReport, error) {
+	return f.report, nil
+}
+
+// The total and its split by kind are added up once, by the report, and
+// `yoyo status --spend` and the dashboard's read model both read that sum: the
+// terminal prints no figure the dashboard would show differently. This holds
+// the two against one report carrying a row of every kind the report prices,
+// so a kind either surface summed for itself would show up as a figure the
+// other does not have.
+func TestStatusSpendPrintsTheFiguresTheReadModelReads(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.Local)
+	report := runstate.SpendReport{Days: 7, Oldest: runstate.LocalDay(now.AddDate(0, 0, -6))}
+	for index, kind := range runstate.EveryPricedKind {
+		row := runstate.SpendRow{
+			Day:      runstate.LocalDay(now),
+			StreamID: fmt.Sprintf("%s-%d", kind, index),
+			Kind:     kind,
+			Calls:    index + 1,
+			CostUSD:  float64(index+1) * 1.25,
+		}
+		// An exchange's row records what the provider charged and not what it
+		// used, so it is the one row with no usage to add.
+		if kind != runstate.StreamExchange {
+			row.Usage = &runstate.TokenUsage{InputTokens: int64(100 * (index + 1)), OutputTokens: int64(10 * (index + 1))}
+		}
+		report.Rows = append(report.Rows, row)
+	}
+
+	reading := readmodel.ReadThroughput(context.Background(), readmodel.ThroughputSources{
+		Ledger: fixedLedger{report: report},
+		Now:    func() time.Time { return now },
+	})
+	if reading.SpendProblem != "" {
+		t.Fatalf("the read model could not read the spend: %s", reading.SpendProblem)
+	}
+	var today readmodel.Window
+	for _, window := range reading.Windows {
+		if window.Label == "today" {
+			today = window
+		}
+	}
+	if len(today.Kinds) != len(runstate.EveryPricedKind) {
+		t.Fatalf("today's split %+v, want one share per kind the report prices", today.Kinds)
+	}
+
+	var terminal bytes.Buffer
+	printSpendTotals(&terminal, report)
+	printed := terminal.String()
+
+	// The one total: the read model's invocation count and cost are the figures
+	// on the terminal's TOTAL line and its cost line.
+	total, split := "", ""
+	for _, line := range strings.Split(printed, "\n") {
+		switch {
+		case strings.HasPrefix(line, "TOTAL (last 7 days)"):
+			total = line
+		case strings.Contains(line, " from "):
+			split = line
+		}
+	}
+	// TOTAL, the three words of the window, calls, the four token columns, USD.
+	fields := strings.Fields(total)
+	if len(fields) != 10 || fields[4] != strconv.Itoa(today.Invocations) || fields[9] != fmt.Sprintf("%.2f", today.CostUSD) {
+		t.Fatalf("terminal's total line = %q, the read model's window is %+v", total, today)
+	}
+	if want := fmt.Sprintf("cost: $%.2f", today.CostUSD); !strings.Contains(printed, want) {
+		t.Fatalf("terminal = %q, want it to contain %q", printed, want)
+	}
+	// The one split: each kind's share as the read model read it is the share
+	// the terminal prints for that kind, in the same order.
+	if split == "" {
+		t.Fatalf("terminal = %q, want a line splitting the total by kind", printed)
+	}
+	parts := strings.Split(split, "   ")
+	if len(parts) != len(today.Kinds) {
+		t.Fatalf("terminal splits %q into %d kinds, the read model into %d: %+v", split, len(parts), len(today.Kinds), today.Kinds)
+	}
+	for index, share := range today.Kinds {
+		want := fmt.Sprintf(": $%.2f from %d ", share.CostUSD, share.Invocations)
+		if !strings.Contains(parts[index], want) {
+			t.Fatalf("terminal's share %d is %q, the read model's is %+v", index, parts[index], share)
+		}
+	}
+	// And both are the report's own sum rather than two sums that happen to
+	// agree: the figures are the ones the report's method produces.
+	totals := report.Totals()
+	if today.CostUSD != totals.CostUSD || today.Invocations != totals.Calls || len(today.Kinds) != len(totals.ByKind) {
+		t.Fatalf("the read model's window %+v is not the report's totals %+v", today, totals)
+	}
+	for index, share := range totals.ByKind {
+		if today.Kinds[index] != (readmodel.KindSpend{Kind: share.Kind, Invocations: share.Calls, CostUSD: share.CostUSD}) {
+			t.Fatalf("the read model's share %d is %+v, the report's is %+v", index, today.Kinds[index], share)
+		}
 	}
 }
 
