@@ -416,18 +416,32 @@ func TestASecondSupervisorIsRefusedWhileOneRuns(t *testing.T) {
 	store := newStore(t)
 	clock := &clock{now: time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)}
 	first := newSupervisor(t, store, clock, &fakeChild{name: config.ServiceSlack})
-	first.Poll = time.Millisecond
+	// The first supervisor is waited for at its first sleep, which Run reaches
+	// only once it holds the lease and has finished its first look, and never by
+	// store.Running(): that probe answers by taking the lease and letting it go,
+	// so a probe landing before Run reaches Lease() takes the lease from the
+	// supervisor under test, which then returns ErrAlreadyRunning itself. Nor is
+	// it waited for on a clock: the first look ends in a record written through
+	// two fsyncs, which a loaded suite stretches past any interval a test would
+	// pick, and 432.5's run saw a five-second one run out. The sleep holds until
+	// the context ends, so the lease is held for as long as the test asserts on
+	// it, and Run returning first is reported with its error rather than as a
+	// wait that ran out.
+	leased := make(chan struct{})
+	first.Sleep = func(ctx context.Context, _ time.Duration) bool {
+		close(leased)
+		<-ctx.Done()
+		return false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- first.Run(ctx) }()
-	// The first supervisor is waited for by the record it writes once it holds
-	// the lease, never by store.Running(): that probe answers by taking the lease
-	// and letting it go, so a probe landing before Run reaches Lease() takes the
-	// lease from the supervisor under test, which then returns ErrAlreadyRunning
-	// itself and the wait runs out. The window is one scheduling gap, which a
-	// loaded race run is wide enough to hit.
-	waitFor(t, func() bool { _, found, err := store.Load(); return err == nil && found })
+	select {
+	case <-leased:
+	case err := <-done:
+		t.Fatalf("first Run() returned %v before it held the lease", err)
+	}
 	if running, err := store.Running(); err != nil || !running {
 		t.Fatalf("Running() = %t, %v; want the first supervisor holding the lease", running, err)
 	}
