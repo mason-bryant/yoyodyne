@@ -12,9 +12,9 @@ package cli
 //
 // The third holds the verb's list of the tracker's derived exports to the list
 // a run declares, in the one direction the two actually imply. They answer
-// different questions — what a release cut may commit on the operator's behalf,
-// and what a run may tolerate the primary checkout acquiring — and it is the
-// first that has to sit inside the second.
+// different questions — what a release cut may excuse from its clean-tree check
+// and leave uncommitted under the tag, and what a run may tolerate the primary
+// checkout acquiring — and it is the first that has to sit inside the second.
 
 import (
 	"os"
@@ -92,14 +92,16 @@ func TestAReleasesNotesSayWhatLanded(t *testing.T) {
 	}
 }
 
-// TestTheReleaseVerbHousekeepsOnlyExportsARunAllows holds the cut's list inside
-// the run's. A path the cut commits on the operator's behalf, after every gate
-// has passed and with no chance for anybody to look at it, has to be one this
-// repository already treats as churn a run may find under it — otherwise the
-// cut is committing something nothing else considers derived. The containment
-// is deliberately one-way: a run may come to tolerate a path the cut has no
-// business committing, and that is a widening rather than a disagreement.
-func TestTheReleaseVerbHousekeepsOnlyExportsARunAllows(t *testing.T) {
+// TestTheReleaseVerbExcusesOnlyExportsARunAllows holds the cut's list inside
+// the run's. A path the cut passes over in its clean-tree check — dirty under
+// the tag it places, with nobody asked to look at it — has to be one this
+// repository already treats as churn a run may find under it; otherwise the
+// cut is excusing something nothing else considers derived, and the archives
+// could differ from the commit the tag names in a file somebody wrote. The
+// containment is deliberately one-way: a run may come to tolerate a path the
+// cut has no business excusing, and that is a widening rather than a
+// disagreement.
+func TestTheReleaseVerbExcusesOnlyExportsARunAllows(t *testing.T) {
 	t.Parallel()
 
 	verb := releaseQuotedPaths(t, derivedExportsPattern,
@@ -112,7 +114,7 @@ func TestTheReleaseVerbHousekeepsOnlyExportsARunAllows(t *testing.T) {
 	}
 	for _, path := range verb {
 		if !slices.Contains(declared, path) {
-			t.Errorf("%s housekeeps %q, which %s does not declare among %v; the cut may only commit paths a run already treats as churn",
+			t.Errorf("%s excuses %q from its clean-tree check, which %s does not declare among %v; the cut may only pass over paths a run already treats as churn",
 				cutReleaseScriptPath, path, runSourcePath, declared)
 		}
 	}

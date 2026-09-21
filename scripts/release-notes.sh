@@ -56,6 +56,14 @@
 # product manager, who edits this file before it is committed. Generating it is
 # what makes that judgement cheap enough to make daily.
 #
+# A draft carries no release-readiness section. That one is the cut's to
+# write, not this script's or the product manager's: scripts/cut-release.sh
+# stamps the result of its own reading into the committed notes on a branch of
+# its own and opens a pull request for it, ahead of the tag, because a cut
+# writes nothing to the default branch. So the notes reach that branch twice --
+# once as this draft, placed and committed, and once with the result in them --
+# and the tag names the commit that carries both.
+#
 # Requires git and python3, and a checkout carrying the tracker's export.
 # Nothing outside the repository is written, and nothing is pushed.
 
