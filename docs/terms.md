@@ -38,6 +38,7 @@ the prose the check reads, every one of them a term with a row below.
 | `in force`    | active, or still applies                                                                                                                   | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes                                                                                                                       |
 | `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
 | `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
+| `seat`        | an instance of a specific persona type — a developer seat, the product manager seat — often with persistent memory but not always. A *developer slot* is the harness's word for the capacity one developer seat fills: the seat is what does the work, and the slot is what it takes up while it does | the operator's own conversations, which is where the word came from; [a developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label), the yoyodyne-ifd.388 mechanism, and the reliability seat yoyodyne-ifd.415 configured under it |
 | `sink`        | the process that posts to Slack                                                                                                            | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                                 |
 | `steer`       | direct the work, or change what is being worked on                                                                                         | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                          |
 
@@ -50,6 +51,16 @@ how an invariant is amended. That wording is the architect's alone — the sweep
 says so outright — so the entry is what keeps the word readable until the
 architect decides otherwise, and each is retired when it does. The operator has
 objected to `in force` by name, so these three are the entries most worth losing.
+
+One entry is the operator's word rather than the project's. He introduced
+`seat` on 2026-09-19 and wants to keep using it, so its row is what makes it
+read the way he means it wherever it is met. The distinction the row draws is
+instance against capacity: a seat is the running persona that does the work,
+and a developer slot is one unit of `max_concurrent_developers`, the capacity
+that seat fills. So the configuration guide, the status line, and the scheduler
+say *slot* when they count, fill, free, or configure capacity, and *seat* when
+they mean the developer that sits in one — the reliability seat is the developer
+that works in the slot configured to prefer the `reliability` label.
 
 ## Replaced rather than registered
 

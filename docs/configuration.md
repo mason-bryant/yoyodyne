@@ -2113,12 +2113,15 @@ slot can instead prefer a **label** — the tracker's own labels, which the
 product manager and the development manager put on work items — and then it
 pulls the ready work carrying that label first, wherever that sits in the
 order, and the rest of the backlog only when none of its label's work is ready.
-On 2026-09-19 the operator directed that one of Yoyodyne's own developer slots
-be dedicated to the `reliability` label, and this is the block that does it —
-the operator's to paste into the project's configuration by hand, because
-`.yoyodyne/` is a [protected path](#protected-paths-in-a-developers-change) no
-run may write, so a project whose file does not yet carry it has a seat that
-is directed and not yet configured:
+On 2026-09-19 the operator directed that one of Yoyodyne's own developer
+[seats](terms.md#the-register) — one running developer, as against the slot,
+which is the capacity it fills — be dedicated to the `reliability` label, and
+this is the block that does it, by giving the slot that seat fills a preference
+for the label. The block is the operator's to paste into the project's
+configuration by hand, because `.yoyodyne/` is a
+[protected path](#protected-paths-in-a-developers-change) no run may write, so
+a project whose file does not yet carry it has a reliability seat that is
+directed and not yet configured:
 
 ```yaml
 execution:
@@ -2167,8 +2170,8 @@ Three things follow from a preference, in the order a pull applies them:
 - **A slot with no preference leaves labelled work to a preferring slot that is
   free to take it.** With slots 1 and 2 both free, the reliability item goes to
   slot 1 and slot 2 takes the next unlabelled item down the order. Where no
-  preferring slot is free — slot 1 is working on one reliability item and
-  another is ready — the label is only a preference, and slot 2 takes the
+  preferring slot is free — the seat in slot 1 is working on one reliability
+  item and another is ready — the label is only a preference, and slot 2 takes the
   reliability item in the order like any other. A label dedicates capacity to
   its work; it never withholds the rest of the machine from it.
 - **A preferring slot never idles on an empty label.** Once none of its label's
