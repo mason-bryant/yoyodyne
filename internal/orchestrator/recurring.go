@@ -566,6 +566,13 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 // conversation's own delivery holds a turn's proposals to, and for the same
 // reason: a queue of undecided proposals is a real thing to be told about, and
 // it must not become the whole of the turn.
+//
+// No single proposal can reach it: the amendment record bounds the change and
+// the reasoning at amendment.MaxTextBytes each, and the rest of a rendering is
+// identifiers and a date, so the largest proposal renders well under a third
+// of this. That is what makes the bound safe to apply per proposal without
+// naming what it skipped — the oldest entry in the queue is never one this
+// leaves out on every pass — and a test keeps the arithmetic true.
 const maxWakeAmendmentBytes = 32 << 10
 
 // amendmentBatch is what one firing puts to an owning role: the undecided
@@ -614,7 +621,7 @@ func (t Trigger) amendmentBatch(task config.RecurringTask) amendmentBatch {
 	for _, proposal := range pending {
 		batch.pending[proposal.ID] = true
 	}
-	argued, err := t.arguedProposals()
+	argued, err := t.arguedProposals(task.Role)
 	if err != nil {
 		// Without the earlier passes there is no saying which proposals the role
 		// already argued, so the oldest are put to it again. Arguing a proposal
@@ -640,25 +647,28 @@ func (t Trigger) amendmentBatch(task config.RecurringTask) amendmentBatch {
 	return batch
 }
 
-// arguedProposals reads which proposals an earlier pass already recommended on,
-// by id, from the durable reports themselves — the same reading, for the same
-// reason, as the pull requests the passes reported: the reports are the record
-// of what was said, so they decide what has been. It reads every recorded
-// pass, whichever task made it, because a recommendation is the role's whatever
-// woke it.
+// arguedProposals reads which proposals an earlier pass of this role already
+// recommended on, by id, from the durable reports themselves — the same
+// reading, for the same reason, as the pull requests the passes reported: the
+// reports are the record of what was said, so they decide what has been. It
+// reads every recorded pass of the role, whichever task made it, because a
+// recommendation is the role's whatever woke it; and no pass of any other
+// role, because a recommendation on a document the role does not own is not
+// the owner's argument, and counting it would hide the proposal from the one
+// role entitled to argue it.
 //
 // What it assumes is what the forge reading assumes: the log is never pruned. A
 // log cut back forgets the proposals its lost records argued, and each one still
 // undecided is put to the role once more on the next pass — once more and not
 // every pass, because the pass that re-argues it records it again.
-func (t Trigger) arguedProposals() (map[string]bool, error) {
+func (t Trigger) arguedProposals(role domain.AgentRole) (map[string]bool, error) {
 	recorded, _, err := t.Reports.List()
 	if err != nil {
 		return nil, err
 	}
 	argued := map[string]bool{}
 	for _, entry := range recorded {
-		if entry.Result == nil {
+		if entry.Result == nil || entry.Role != role {
 			continue
 		}
 		for _, recommendation := range entry.Result.Recommendations {

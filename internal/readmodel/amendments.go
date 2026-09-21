@@ -70,7 +70,11 @@ type RecommendedAmendment struct {
 // oldest proposal first, each carrying the latest recommendation recorded on
 // it. A recommendation on a proposal that is decided, or that nothing raised,
 // names nothing waiting and is left out: the batch is what the operator still
-// has to decide, not what the role once said.
+// has to decide, not what the role once said. And a recommendation recorded on
+// a pass of any role but the proposal's owner is left out too, whatever it
+// says: the batch is the owner's argument, and a line that said "the architect
+// recommends" over something another role wrote would be putting words in the
+// one mouth the record says decides.
 func RecommendedAmendments(sweeps []runstate.Sweep, records []amendment.Record) []RecommendedAmendment {
 	pending := amendment.Pending(records)
 	byID := make(map[string]amendment.Proposal, len(pending))
@@ -84,7 +88,7 @@ func RecommendedAmendments(sweeps []runstate.Sweep, records []amendment.Record) 
 		}
 		for _, recommendation := range recorded.Result.Recommendations {
 			proposal, waiting := byID[recommendation.Proposal]
-			if !waiting {
+			if !waiting || recorded.Role != proposal.Owner {
 				continue
 			}
 			// A later pass's recommendation on the same proposal stands over an

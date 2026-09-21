@@ -284,3 +284,54 @@ func TestOnlyAnOwnerIsPutProposalsAndAnUnreadableLogSaysSo(t *testing.T) {
 		t.Errorf("an unreadable log put a section to her:\n%s", woken.messages[0])
 	}
 }
+
+// A recommendation recorded on a pass of a role that does not own the document
+// is not the owner's argument. It is flagged as stray on that pass, and it must
+// not hide the proposal from the owner: the architect is still put a proposal
+// the development manager's pass happened to recommend on.
+func TestANonOwnersRecommendationDoesNotHideTheProposalFromTheOwner(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	pending := proposedToTheArchitect(1, 5*24*time.Hour)
+	amendments := recurringAmendments{records: []amendment.Record{{Proposal: &pending}}}
+	// The development manager's pass recommends on the architect's proposal.
+	manager := &wokenRole{answers: []scriptedTurn{{result: &sweep.Result{Status: sweep.StatusComplete, Summary: "overreached",
+		Recommendations: []sweep.Recommendation{recommendation(pending, sweep.RecommendDecline, "not mine to say")}}}}}
+	stray := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: manager, Clock: recurringClock{}, Amendments: amendments}
+	fired, err := stray.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if !strings.Contains(fired.Fired[0].Problem, "not undecided against the development-manager's documents") {
+		t.Errorf("problem = %q, want the stray recommendation named", fired.Fired[0].Problem)
+	}
+
+	// The architect's own task, over the same sweep log, still puts it to her.
+	architect := &wokenRole{answers: []scriptedTurn{{result: complete("looked")}}}
+	owner := Trigger{Tasks: architectTask(), Claims: store, Reports: store, Roles: architect, Clock: recurringClock{}, Amendments: amendments}
+	if _, err := owner.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if !strings.Contains(architect.messages[0], pending.ID) || strings.Contains(architect.messages[0], "already carry your recommendation") {
+		t.Errorf("the architect was not put a proposal only another role had recommended on:\n%s", architect.messages[0])
+	}
+}
+
+// The wake's byte bound is applied per proposal without naming what it skips,
+// which is only safe because no proposal can reach it: a change and a reason at
+// the amendment record's own text bound, with the identifiers and the date a
+// rendering adds, stay well inside it.
+func TestNoSingleProposalCanReachTheWakeBound(t *testing.T) {
+	t.Parallel()
+
+	largest := proposedToTheArchitect(1, time.Hour)
+	largest.Change = strings.Repeat("c", amendment.MaxTextBytes)
+	largest.Why = strings.Repeat("w", amendment.MaxTextBytes)
+	if err := largest.Validate(); err != nil {
+		t.Fatalf("a proposal at the text bound does not validate: %v", err)
+	}
+	if rendered := len(largest.Render()); rendered*3 > maxWakeAmendmentBytes {
+		t.Errorf("the largest proposal renders to %d bytes, and the wake bound of %d must hold at least three of them", rendered, maxWakeAmendmentBytes)
+	}
+}

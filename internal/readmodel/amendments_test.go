@@ -188,3 +188,28 @@ func TestAnUnreadableQueueOrPassLogSaysSo(t *testing.T) {
 		t.Fatalf("problem = %q, rendered:\n%s", standing.AmendmentsProblem, standing.Render())
 	}
 }
+
+// A recommendation on a pass of a role that does not own the proposal's
+// document is not the owner's argument and is never shown as one: the
+// proposal stays on the line as undecided, and no batch is said.
+func TestANonOwnersRecommendationIsNotShownAsTheOwners(t *testing.T) {
+	t.Parallel()
+
+	sources := quietSources()
+	pending := proposedChange(1, 3*24*time.Hour)
+	sources.Amendments = fakeAmendments{records: []amendment.Record{{Proposal: &pending}}}
+	managerPass := architectPass(moment.Add(-time.Hour), sweep.Recommendation{Proposal: pending.ID, Verdict: sweep.RecommendDecline, Reason: "not mine to say"})
+	managerPass.Task, managerPass.Role = "development-manager-sweep", domain.RoleDevelopmentManager
+	sources.Sweeps = fakeSweeps{recorded: []runstate.Sweep{managerPass}}
+	standing := ReadStanding(context.Background(), sources)
+	if len(standing.RecommendedAmendments) != 0 {
+		t.Fatalf("RecommendedAmendments = %+v, want none from a non-owner's pass", standing.RecommendedAmendments)
+	}
+	rendered := standing.Render()
+	if strings.Contains(rendered, "recommends") || strings.Contains(rendered, "has recommended") {
+		t.Fatalf("a non-owner's recommendation is shown as the owner's:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "a change to v1-design is proposed and undecided ("+pending.ID+") — the architect's") {
+		t.Fatalf("the proposal is not still named as undecided:\n%s", rendered)
+	}
+}
