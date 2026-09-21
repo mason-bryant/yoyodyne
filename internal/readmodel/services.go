@@ -63,7 +63,8 @@ func readServices(sources Sources) (*Services, string) {
 }
 
 // Attention is each child the supervisor has left down, as something waiting
-// on a person: the reason it was left down, and what brings it back.
+// on a person: the supervisor's own record of it, carried whole, from which
+// the line says the reason it was left down and what brings it back.
 func (s *Services) Attention() []Attention {
 	if s == nil || !s.Recorded {
 		return nil
@@ -71,10 +72,7 @@ func (s *Services) Attention() []Attention {
 	degraded := s.Record.Degraded()
 	attention := make([]Attention, 0, len(degraded))
 	for _, child := range degraded {
-		attention = append(attention, Attention{
-			What:  fmt.Sprintf("the %s service is degraded: %s", child.Service, singleLine(child.Reason, maxRefusalBytes)),
-			Whose: "the operator's — the supervisor has stopped restarting it; fix the cause, then `yoyo stop` and `yoyo start` bring it back, or start the part by hand and the supervisor takes it back",
-		})
+		attention = append(attention, degradedServiceAttention(child))
 	}
 	return attention
 }

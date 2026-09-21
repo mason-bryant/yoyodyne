@@ -150,14 +150,42 @@
   "awaiting_carry_out": 1,
   "needs_human": [
     {
-      "what": "directive-4f2c is unresolved: which branch does this land on?",
+      "kind": "directive",
+      "id": "directive-4f2c",
+      "mover": "operator",
+      "directive": {
+        "schema_version": 1,
+        "id": "directive-4f2c",
+        "product_id": "yoyodyne",
+        "kind": "ambiguous",
+        "received_by": "product-manager",
+        "received_at": "2026-09-19T13:40:00Z",
+        "text": "which branch does this land on?",
+        "unresolved": "which branch does this land on?",
+        "scope": [
+          "yoyodyne-ifd.219"
+        ]
+      },
+      "what": "directive directive-4f2c is unresolved: which branch does this land on?",
       "whose": "the operator's — the work it affects waits until `yoyo directive resolve` settles it"
     },
     {
+      "kind": "held-work",
+      "mover": "development-manager",
+      "held_work": {
+        "awaiting": "decision",
+        "count": 1
+      },
       "what": "1 admitted item awaits the development manager's decision",
       "whose": "the development manager's — nothing pulls a stopped item until she decides what happens to it"
     },
     {
+      "kind": "held-work",
+      "mover": "harness",
+      "held_work": {
+        "awaiting": "carry-out",
+        "count": 1
+      },
       "what": "1 admitted item awaits carry-out of a decision already recorded",
       "whose": "the harness's — the decision is made, and what is outstanding is the harness acting on it"
     }

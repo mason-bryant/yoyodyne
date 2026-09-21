@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 )
 
@@ -129,7 +130,10 @@ func standingWith(text string) readmodel.Standing {
 		Running:      []readmodel.RunningRun{},
 		Working:      []readmodel.WorkingTurn{},
 		NotStartable: []readmodel.Refused{{WorkItemID: "yoyodyne-ifd.1", Title: text, Reason: text}},
-		NeedsHuman:   []readmodel.Attention{{What: text, Whose: "the operator's"}},
+		NeedsHuman: []readmodel.Attention{{
+			Kind: readmodel.AttentionDirective, ID: "directive-1", Mover: readmodel.MoverOperator,
+			Directive: &directive.Directive{ID: "directive-1", Text: text, Unresolved: text},
+		}},
 	}
 }
 
