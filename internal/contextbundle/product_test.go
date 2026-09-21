@@ -237,6 +237,58 @@ func TestADirectoryIndexIsNotHeldToTheSpecificationShape(t *testing.T) {
 	}
 }
 
+// A non-goals document states what the product will not do under a `Non-goals`
+// heading and states no goals, and the artifact contract says it is not
+// malformed for that. Held to the specification's shape it was reported in
+// every product-manager conversation for stating no goals, and the only way to
+// clear the report was to rewrite it to say something it does not mean. It is
+// held to its own shape instead, so one that states no non-goals is still
+// reported; and a document that should state goals and does not is reported
+// exactly as before.
+func TestANonGoalsDocumentIsHeldToTheNonGoalsShape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/good.md", wellFormed)
+	// The two documents this repository was reported for, in the shape they are
+	// actually written: an index, and non-goals under their own heading.
+	writeProductFile(t, root, "docs/product/goals/README.md", "# docs/product/goals\n\n**Purpose.** The goals and the non-goals that bound them.\n")
+	writeProductFile(t, root, "docs/product/goals/v1-non-goals.md", "---\nid: v1-non-goals\nkind: non-goals\n---\n\n# V1 non-goals\n\nWhat the first version deliberately does not do.\n\n## Non-goals\n\n- A hosted control plane.\n")
+	// Named non-goals with no frontmatter: read from the name, as the goals are.
+	writeProductFile(t, root, "docs/product/goals/v2-nongoals.md", "# V2 non-goals\n\nWhat the second version does not do.\n\n## Non-goals\n\n- Remote execution.\n")
+	// Non-goals that state none, and goals that state none: both still reported.
+	writeProductFile(t, root, "docs/product/goals/empty-non-goals.md", "---\nid: empty-non-goals\nkind: non-goals\n---\n\n# Empty non-goals\n\nAn introduction and nothing bounded.\n")
+	writeProductFile(t, root, "docs/product/goals/v3-goals.md", "---\nid: v3-goals\nkind: goals\n---\n\n# V3 goals\n\nAn introduction and no goals.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	reported := map[string]string{}
+	for _, problem := range bundle.SpecificationProblems {
+		reported[problem.Path] = problem.Reason
+	}
+	for _, correct := range []string{"docs/product/goals/README.md", "docs/product/goals/v1-non-goals.md", "docs/product/goals/v2-nongoals.md", "docs/product/good.md"} {
+		if reason, ok := reported[correct]; ok {
+			t.Fatalf("%s is written correctly and was reported: %s", correct, reason)
+		}
+	}
+	if reason := reported["docs/product/goals/empty-non-goals.md"]; !strings.Contains(reason, "it states no non-goals") {
+		t.Fatalf("a non-goals document stating none is reported as %q, want it states no non-goals", reason)
+	}
+	if reason := reported["docs/product/goals/v3-goals.md"]; !strings.Contains(reason, "it states no goals") {
+		t.Fatalf("a goals document stating none is reported as %q, want it states no goals", reason)
+	}
+	if len(reported) != 2 {
+		t.Fatalf("reported problems = %v, want exactly the two documents stating nothing", reported)
+	}
+	// Still carried as a specification, and still not counted as the goals: the
+	// shape it is held to changes nothing about what it is read as.
+	if !strings.Contains(bundle.Text, "## Specification: docs/product/goals/v1-non-goals.md") {
+		t.Fatalf("the non-goals document was not carried as a specification:\n%s", bundle.Text)
+	}
+}
+
 // The ordinary starting case, after `yoyo init`. It writes an index into the
 // specifications directory and another into the goals directory beneath it, so
 // the directory a repository with no intent has is no longer empty. What must
@@ -359,6 +411,79 @@ func TestSpecificationStructureProblem(t *testing.T) {
 			}
 			if !testCase.problem && reason != "" {
 				t.Fatalf("specificationStructureProblem() = %q, want no problem", reason)
+			}
+		})
+	}
+}
+
+func TestNonGoalsStructureProblem(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		content string
+		problem string
+	}{
+		{name: "introduction then non-goals", content: "# V1 non-goals\n\nWhat v1 does not do.\n\n## Non-goals\n\n- A hosted control plane.\n"},
+		{name: "non-goals heading in either spelling", content: "# What v1 leaves out\n\nWhat v1 does not do.\n\n## Nongoals\n\n- A hosted control plane.\n"},
+		{name: "non-goals heading with a space", content: "# What v1 leaves out\n\nWhat v1 does not do.\n\n### Non Goals\n\n- A hosted control plane.\n"},
+		{name: "non-goals with subsections", content: "# V1 non-goals\n\nWhat v1 does not do.\n\n## Non-goals\n\n### Hosting\n\nNot hosted.\n"},
+		{name: "identity frontmatter then the document", content: "---\nid: v1-non-goals\nkind: non-goals\n---\n\n# V1 non-goals\n\nWhat v1 does not do.\n\n## Non-goals\n\n- A hosted control plane.\n"},
+		{name: "empty file", content: "", problem: "the file is empty"},
+		// A `Goals` heading is not where a non-goals document states its content,
+		// so this document has stated none.
+		{name: "goals heading only", content: "# V1 non-goals\n\nWhat v1 does not do.\n\n## Goals\n\n- Nothing here.\n", problem: "it states no non-goals; a non-goals document names its non-goals under a `Non-goals` heading"},
+		{name: "no non-goals at all", content: "# V1 non-goals\n\nWhat v1 does not do.\n", problem: "it states no non-goals"},
+		{name: "non-goals before any introduction", content: "# Non-goals\n\n- A hosted control plane.\n", problem: "it opens with its non-goals; a non-goals document opens with an introduction saying what the thing is and why it exists"},
+		{name: "empty non-goals section", content: "# V1 non-goals\n\nWhat v1 does not do.\n\n## Non-goals\n\n## Something else\n\nProse.\n", problem: "its `Non-goals` section is empty; the non-goals that bound the goals are missing"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			reason := nonGoalsStructureProblem(testCase.content)
+			if testCase.problem == "" && reason != "" {
+				t.Fatalf("nonGoalsStructureProblem() = %q, want no problem", reason)
+			}
+			if !strings.HasPrefix(reason, testCase.problem) {
+				t.Fatalf("nonGoalsStructureProblem() = %q, want %q", reason, testCase.problem)
+			}
+		})
+	}
+}
+
+// Which shape a document is held to is decided the way its intent kind is:
+// by the kind it records, and failing that by its name. A document recording
+// some other kind is a specification whatever it is called.
+func TestDocumentStructureProblemChoosesTheShapeByKindThenName(t *testing.T) {
+	t.Parallel()
+
+	nonGoals := "# Bounds\n\nWhat this does not do.\n\n## Non-goals\n\n- Hosting.\n"
+	goals := "# Brief\n\nWhat this is.\n\n## Goals\n\n- An outcome.\n"
+	cases := []struct {
+		name    string
+		path    string
+		content string
+		problem bool
+	}{
+		{name: "frontmatter non-goals under any name", path: "docs/product/bounds.md", content: "---\nid: bounds\nkind: non-goals\n---\n\n" + nonGoals},
+		{name: "named non-goals without frontmatter", path: "docs/product/goals/v1-non-goals.md", content: nonGoals},
+		{name: "named nongoals without frontmatter", path: "docs/product/goals/v1-nongoals.md", content: nonGoals},
+		{name: "frontmatter goals named non-goals", path: "docs/product/goals/v1-non-goals.md", content: "---\nid: v1-non-goals\nkind: goals\n---\n\n" + goals},
+		{name: "a specification stating non-goals only", path: "docs/product/brief.md", content: nonGoals, problem: true},
+		{name: "frontmatter goals stating non-goals only", path: "docs/product/goals/v1-non-goals.md", content: "---\nid: v1-non-goals\nkind: goals\n---\n\n" + nonGoals, problem: true},
+		{name: "a non-goals document stating goals only", path: "docs/product/goals/v1-non-goals.md", content: goals, problem: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			reason := documentStructureProblem(testCase.path, testCase.content)
+			if testCase.problem && reason == "" {
+				t.Fatalf("documentStructureProblem() = %q, want a problem", reason)
+			}
+			if !testCase.problem && reason != "" {
+				t.Fatalf("documentStructureProblem() = %q, want no problem", reason)
 			}
 		})
 	}

@@ -56,7 +56,10 @@ is the contract, and the harness checks it: one that has no goals, no
 introduction before them, or an empty goals section is named on stderr when the
 conversation opens and listed for the product manager alongside the
 specifications themselves — and still read, because refusing to load it would
-silently lose intent somebody wrote down. A directory with nothing in it is
+silently lose intent somebody wrote down. A directory index and a non-goals
+document are not held to that shape, because neither states goals: the index is
+held to none, and the non-goals document to its own, an introduction and then a
+`Non-goals` heading with something under it. A directory with nothing in it is
 reported the same way rather than treated as a product with no intent.
 
 The context also says outright what those specifications record of the two
