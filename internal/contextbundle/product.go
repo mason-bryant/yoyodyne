@@ -230,12 +230,13 @@ const maxCommandHelpBytes = 32 << 10
 const stubProseWords = 40
 
 // The artifact kinds this section is about. They are the two documents product
-// intent is written in, and they are named here rather than imported from the
-// artifact package because this reads what a document says it is, not the
-// identity that package validates.
+// intent is written in, and the one that bounds them, and they are named here
+// rather than imported from the artifact package because this reads what a
+// document says it is, not the identity that package validates.
 const (
-	kindBrief = "brief"
-	kindGoals = "goals"
+	kindBrief    = "brief"
+	kindGoals    = "goals"
+	kindNonGoals = "non-goals"
 )
 
 // ProductRequest is the read-only evidence a product conversation is built
@@ -466,7 +467,13 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 			continue
 		}
 		stated++
-		if reason := specificationStructureProblem(reference.Content); reason != "" {
+		// A non-goals document is held to its own shape rather than to the
+		// specification's, for the same contract's reason: it states what the
+		// product will not do under a `Non-goals` heading and states no goals, so
+		// reporting it for lacking a `Goals` heading is a report that is always
+		// true of a correct document and fixable only by rewriting it to say
+		// something it does not mean.
+		if reason := documentStructureProblem(reference.Path, reference.Content); reason != "" {
 			bundle.SpecificationProblems = append(bundle.SpecificationProblems, SpecificationProblem{Path: reference.Path, Reason: reason})
 		}
 	}
@@ -602,6 +609,59 @@ var headingPattern = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 // goalsHeadingPattern matches the heading that opens a specification's goals.
 var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?\b`)
 
+// nonGoalsHeadingPattern matches the heading a non-goals document states what
+// the product will not do under. It is the heading the goals parser reads as
+// ending a goals section, in the same spelling, so the two readers agree on
+// which heading is the non-goals.
+var nonGoalsHeadingPattern = regexp.MustCompile(`(?i)^non-?\s*goals?\b`)
+
+// documentShape is the structure one kind of product document is held to: an
+// introduction, then its statements under one heading. The specification's
+// shape and the non-goals document's shape differ only in which heading that
+// is and what the report calls what is filed under it, so they are one check
+// and two of these.
+type documentShape struct {
+	// document is what the report calls a document of this shape.
+	document string
+	// heading matches the heading the statements are filed under.
+	heading *regexp.Regexp
+	// headingName is that heading as the report names it.
+	headingName string
+	// states is what the document states there, as the report names it.
+	states string
+	// missing says what an empty section has left out.
+	missing string
+}
+
+var (
+	specificationShape = documentShape{
+		document:    "a specification",
+		heading:     goalsHeadingPattern,
+		headingName: "`Goals`",
+		states:      "goals",
+		missing:     "the goals that serve the introduction",
+	}
+	nonGoalsShape = documentShape{
+		document:    "a non-goals document",
+		heading:     nonGoalsHeadingPattern,
+		headingName: "`Non-goals`",
+		states:      "non-goals",
+		missing:     "the non-goals that bound the goals",
+	}
+)
+
+// documentStructureProblem reports why a product document does not follow the
+// shape its kind is held to, or "" when it does. A non-goals document is held
+// to the non-goals shape; everything else is a specification and held to that.
+// The distinction is drawn the way intentKind draws it: by the kind the
+// document records in its frontmatter, and failing that by what it is called.
+func documentStructureProblem(documentPath, content string) string {
+	if nonGoalsDocument(documentPath, content) {
+		return nonGoalsStructureProblem(content)
+	}
+	return specificationStructureProblem(content)
+}
+
 // specificationStructureProblem reports why a specification does not follow the
 // required structure, or "" when it does. The structure is the contract: a
 // specification opens with an introduction saying what the thing is and why it
@@ -609,11 +669,27 @@ var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?\b`)
 // it here rather than only in prose is what makes a specification that ignores
 // it surface instead of quietly becoming evidence of a shape nobody agreed to.
 func specificationStructureProblem(content string) string {
+	return structureProblem(content, specificationShape)
+}
+
+// nonGoalsStructureProblem reports why a non-goals document does not follow
+// its structure, or "" when it does. It is the specification's structure with
+// the non-goals where the goals would be: an introduction saying what the
+// document bounds and why, then what the product will not do under a
+// `Non-goals` heading. The artifact contract says a non-goals document is not
+// malformed for lacking goals, and it is not; one that states no non-goals is
+// still reported, because that is the document not doing what it is for.
+func nonGoalsStructureProblem(content string) string {
+	return structureProblem(content, nonGoalsShape)
+}
+
+// structureProblem checks one document against one shape.
+func structureProblem(content string, shape documentShape) string {
 	lines := strings.Split(withoutFrontmatter(content), "\n")
 	introduction := false
 	inFence := false
-	goalsLine := -1
-	goalsLevel := 0
+	sectionLine := -1
+	sectionLevel := 0
 	anyContent := false
 
 	for index, raw := range lines {
@@ -632,32 +708,49 @@ func specificationStructureProblem(content string) string {
 		}
 		heading := headingPattern.FindStringSubmatch(line)
 		if heading == nil {
-			// Ordinary prose. Before the goals heading it is the introduction;
-			// after it, it is the goals themselves.
-			if goalsLine < 0 {
+			// Ordinary prose. Before the section heading it is the introduction;
+			// after it, it is the statements themselves.
+			if sectionLine < 0 {
 				introduction = true
 			}
 			continue
 		}
-		if goalsLine < 0 && goalsHeadingPattern.MatchString(strings.TrimSpace(heading[2])) {
-			goalsLine = index
-			goalsLevel = len(heading[1])
+		if sectionLine < 0 && shape.heading.MatchString(strings.TrimSpace(heading[2])) {
+			sectionLine = index
+			sectionLevel = len(heading[1])
 		}
 	}
 
 	if !anyContent {
 		return "the file is empty"
 	}
-	if goalsLine < 0 {
-		return "it states no goals; a specification names its goals under a `Goals` heading"
+	if sectionLine < 0 {
+		return fmt.Sprintf("it states no %s; %s names its %s under a %s heading", shape.states, shape.document, shape.states, shape.headingName)
 	}
 	if !introduction {
-		return "it opens with its goals; a specification opens with an introduction saying what the thing is and why it exists"
+		return fmt.Sprintf("it opens with its %s; %s opens with an introduction saying what the thing is and why it exists", shape.states, shape.document)
 	}
-	if !goalsSectionHasContent(lines, goalsLine, goalsLevel) {
-		return "its `Goals` section is empty; the goals that serve the introduction are missing"
+	if !sectionHasContent(lines, sectionLine, sectionLevel) {
+		return fmt.Sprintf("its %s section is empty; %s are missing", shape.headingName, shape.missing)
 	}
 	return ""
+}
+
+// nonGoalsDocument reports whether a document states what the product will not
+// do rather than what it is for. The kind it records in its frontmatter decides,
+// for the same reason it decides intentKind; a document recording none is read
+// from its name, which is the same name namedIntentKind refuses to count as the
+// goals. The two agree by construction: a document this reads as non-goals is
+// one that reader files as neither the brief nor the goals.
+func nonGoalsDocument(documentPath, content string) bool {
+	switch frontmatterKind(content) {
+	case kindNonGoals:
+		return true
+	case "":
+		return namedNonGoals(documentPath)
+	default:
+		return false
+	}
 }
 
 // withoutFrontmatter drops the artifact identity metadata a specification
@@ -683,15 +776,15 @@ func withoutFrontmatter(content string) string {
 	return trimmed
 }
 
-// goalsSectionHasContent reports whether anything follows the goals heading
+// sectionHasContent reports whether anything follows the section heading
 // before the section ends, which is the next heading at the same level or above.
-func goalsSectionHasContent(lines []string, goalsLine, goalsLevel int) bool {
-	for _, raw := range lines[goalsLine+1:] {
+func sectionHasContent(lines []string, sectionLine, sectionLevel int) bool {
+	for _, raw := range lines[sectionLine+1:] {
 		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
-		if heading := headingPattern.FindStringSubmatch(line); heading != nil && len(heading[1]) <= goalsLevel {
+		if heading := headingPattern.FindStringSubmatch(line); heading != nil && len(heading[1]) <= sectionLevel {
 			return false
 		}
 		return true
@@ -789,7 +882,7 @@ func namedIntentKind(documentPath string) string {
 		// A directory index describes what is filed beside it and states no intent
 		// of its own, which is how artifact identity treats one too.
 		return ""
-	case strings.Contains(base, "non-goals"), strings.Contains(base, "nongoals"):
+	case namedNonGoals(documentPath):
 		// What the product will not do is a document of its own, and it is not the
 		// goals: a repository holding only this one has not stated its goals.
 		return ""
@@ -800,6 +893,13 @@ func namedIntentKind(documentPath string) string {
 	default:
 		return ""
 	}
+}
+
+// namedNonGoals reports whether a document's own name says it is the
+// non-goals, in either spelling a person lands on.
+func namedNonGoals(documentPath string) bool {
+	base := strings.ToLower(strings.TrimSuffix(path.Base(documentPath), path.Ext(documentPath)))
+	return strings.Contains(base, "non-goals") || strings.Contains(base, "nongoals")
 }
 
 // frontmatterKind returns the kind a document records at the top of its

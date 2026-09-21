@@ -509,9 +509,15 @@ a document stating anything, so neither the shape above nor
 counted as a specification. It is still read into the context, under a heading of
 its own, because what is filed in a directory is worth knowing to whoever is about
 to write the first document into it.
-Everything else has its prose checked for the introduction-then-goals shape
-above, and its identity — the frontmatter naming its id, kind, status, and what it
-supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
+A non-goals document — one whose frontmatter records `kind: non-goals`, or
+failing that one named `non-goals` — is held to its own shape rather than to
+the specification's: an introduction saying what it bounds and why, then what
+the product will not do under a `Non-goals` heading. It states no goals, and it
+is not reported for that; one that states no non-goals, opens with them, or
+leaves the section empty is reported exactly as a specification is. Everything
+else has its prose checked for the introduction-then-goals shape above, and its
+identity — the frontmatter naming its id, kind, status, and what it supports — is
+checked separately, by [artifact identity](#artifact-identity-and-metadata).
 The two are read by different things and reported differently, so a
 specification with a malformed id is still read as intent, and one with no goals
 still has an id everything downstream can refer to it by.
