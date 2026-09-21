@@ -453,17 +453,17 @@
   // piles is the queue's own vocabulary for why an admitted item is not pulled,
   // in the order a reader wants them: the ones waiting on a person first, then
   // the ones waiting on the harness or on other work, then the ones nothing
-  // here can explain. Each says whose move it is, because a pile with no mover
-  // is a pile nobody empties.
+  // here can explain. Each says who it is waiting on, because a pile with no
+  // mover is a pile nobody empties.
   var piles = [
-    { kind: "held", label: "held for a person", whose: "the development manager's, or the harness carrying her decision out" },
-    { kind: "directive", label: "paused by a directive", whose: "the operator's, through yoyo directive resolve" },
+    { kind: "held", label: "held for a person", whose: "the development manager, or the harness carrying her decision out" },
+    { kind: "directive", label: "paused by a directive", whose: "the operator, through yoyo directive resolve" },
     { kind: "stalled", label: "pullable, and nothing is choosing", whose: "whoever the refusal names" },
     { kind: "parked", label: "parked", whose: "whoever parked it" },
-    { kind: "waiting", label: "waiting on other work", whose: "nobody's; it clears as that work lands" },
-    { kind: "covered", label: "covered by its children", whose: "nobody's; the children are the work, and it clears as they land" },
+    { kind: "waiting", label: "waiting on other work", whose: "nobody; it clears as that work lands" },
+    { kind: "covered", label: "covered by its children", whose: "nobody; the children are the work, and it clears as they land" },
     { kind: "conversation", label: "carried by a conversation, not a run", whose: "the role the item names" },
-    { kind: "unread", label: "not offered, and nothing here can say why", whose: "run yoyo status for the refusal in full" }
+    { kind: "unread", label: "not offered, and nothing here can say why", whose: "nobody this page can name; run yoyo status for the refusal in full" }
   ];
 
   // stageOrder is the order the read model's three stages are shown in: the
@@ -579,7 +579,7 @@
         return;
       }
       var entry = pile("pile:" + named.kind, String(number), pileLabel(named, standing) + (number === largest ? " (most)" : ""), number === largest ? "pile-largest" : null);
-      entry.appendChild(el("span", "pile-whose", "whose move: " + named.whose));
+      entry.appendChild(el("span", "pile-whose", "waiting on: " + named.whose));
       breakdown.appendChild(entry);
     });
     if (breakdown.firstChild) {
@@ -602,7 +602,7 @@
     }
   }
 
-  // pileLabel is a pile's name, with the held pile split by whose move it is.
+  // pileLabel is a pile's name, with the held pile split by who it waits on.
   function pileLabel(named, standing) {
     var label = named.label;
     if (named.kind === "held" && (standing.awaiting_decision || standing.awaiting_carry_out)) {
@@ -892,7 +892,7 @@
         return listing("Held back", "admitted items nothing will pull, each with the refusal that stops it", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is held back.", refused.map(withReason));
       case "pile":
         var found = pileNamed(which);
-        return listing("Held back: " + (found ? found.label : which), found ? "whose move: " + found.whose : "", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is in this pile.",
+        return listing("Held back: " + (found ? found.label : which), found ? "waiting on: " + found.whose : "", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is in this pile.",
           refused.filter(function (item) { return item.kind === which; }).map(withReason));
       case "startable":
         var stalled = refused.filter(function (item) { return item.kind === "stalled"; });

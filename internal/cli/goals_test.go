@@ -172,7 +172,7 @@ func TestTheGoalsListingIsDressedWithoutTheDressingCarryingAnything(t *testing.T
   stated by: v1-goals (docs/product/goals/v1-goals.md)
   supports: Every change traces to intent somebody approved
 
-Ship the first version by hand. [no longer in force]
+Ship the first version by hand. [no longer active]
   identity: none, so work naming it matches on its wording
   stated by: v0-goals (docs/product/goals/v0-goals.md)
 
@@ -218,7 +218,7 @@ func TestAGoalsDocumentStatingNoGoalsIsNamedRatherThanReadAsFewerGoals(t *testin
 	if !strings.Contains(stderr, "goals not read: docs/product/goals/v1-goals.md") {
 		t.Fatalf("list stderr = %q", stderr)
 	}
-	if !strings.Contains(stdout, "no goal is in force") {
+	if !strings.Contains(stdout, "no goal is active") {
 		t.Fatalf("list stdout = %q", stdout)
 	}
 }

@@ -21,7 +21,7 @@ func TestDirectiveLifecycleFromTheCommandLine(t *testing.T) {
 	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
 	configPath := writeConfig(t, validConfig)
 
-	if empty := runDirectiveOK(t, configPath, "list"); !strings.Contains(empty, "no directives are in force") {
+	if empty := runDirectiveOK(t, configPath, "list"); !strings.Contains(empty, "no directives are active") {
 		t.Fatalf("listing = %q, want a product nobody has directed to say so", empty)
 	}
 
@@ -54,7 +54,7 @@ func TestDirectiveLifecycleFromTheCommandLine(t *testing.T) {
 	// The pause is lifted, so it is no longer what the operator is shown when
 	// they ask what still applies.
 	after := runDirectiveOK(t, configPath, "list")
-	if strings.Contains(after, id) || !strings.Contains(after, "no directives are in force") {
+	if strings.Contains(after, id) || !strings.Contains(after, "no directives are active") {
 		t.Fatalf("listing = %q, want a lifted pause out of what is in force", after)
 	}
 	// And the record of it is still there in full, which is what --all is for.
@@ -296,7 +296,7 @@ func TestWithdrawingADirectiveFromTheCommandLineEndsItWithoutDeletingIt(t *testi
 		miscategorized[:len("directive-")+6])
 	for _, wanted := range []string{
 		"withdrawn",
-		"no longer in force",
+		"no longer applies",
 		"Mason, at a terminal",
 		"recorded in error: this was a question about a run, not an instruction",
 		"nothing was deleted",
@@ -309,7 +309,7 @@ func TestWithdrawingADirectiveFromTheCommandLineEndsItWithoutDeletingIt(t *testi
 	// Out of what still applies, which is the listing the operator reads to find
 	// out what the harness is holding itself to.
 	after := runDirectiveOK(t, configPath, "list")
-	if strings.Contains(after, miscategorized) || !strings.Contains(after, "no directives are in force") {
+	if strings.Contains(after, miscategorized) || !strings.Contains(after, "no directives are active") {
 		t.Fatalf("listing = %q, want a withdrawn directive out of what is in force", after)
 	}
 	// And still there in full, reading as withdrawn rather than as a record
@@ -401,7 +401,7 @@ func TestWithdrawRefusesWhatWouldLeaveTheRecordUnanswerable(t *testing.T) {
 			name: "withdrawing a directive that has already ended",
 			args: []string{"withdraw", "--by", "Mason, at a terminal", "--reason", "never mind", pausing},
 			code: 1,
-			want: "no longer in force",
+			want: "no longer applies",
 		},
 	}
 	for _, test := range tests {

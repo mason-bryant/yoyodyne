@@ -110,7 +110,7 @@ func TestAGoalStatedOnlyByADocumentNoLongerInForceIsRefusedWithTheReasonNamed(t 
 	if attribution.State != StateUnresolved {
 		t.Fatalf("attribution = %#v", attribution)
 	}
-	if !strings.Contains(attribution.Reason, "v0-goals") || !strings.Contains(attribution.Reason, "no longer in force") {
+	if !strings.Contains(attribution.Reason, "v0-goals") || !strings.Contains(attribution.Reason, "no longer applies") {
 		t.Fatalf("reason = %q", attribution.Reason)
 	}
 }
@@ -384,7 +384,7 @@ func TestAnIdentityTwoGoalsInForceCarryIsReportedAndNamesNoGoal(t *testing.T) {
 		}
 	}
 	attribution := set.Attribute("[cost] The operator can see what the harness spends.")
-	if attribution.State != StateUnresolved || !strings.Contains(attribution.Reason, "more than one goal") {
+	if attribution.State != StateUnresolved || !strings.Contains(attribution.Reason, "more than one active goal") {
 		t.Fatalf("attribution = %#v", attribution)
 	}
 	// A goal stated twice by documents that have not both got the identity is not
@@ -420,7 +420,7 @@ func TestAnIdentityOnlyAReplacedDocumentCarriesIsRefusedWithTheReasonNamed(t *te
 	if attribution.State != StateUnresolved {
 		t.Fatalf("attribution = %#v", attribution)
 	}
-	if !strings.Contains(attribution.Reason, "v0-goals") || !strings.Contains(attribution.Reason, "no longer in force") {
+	if !strings.Contains(attribution.Reason, "v0-goals") || !strings.Contains(attribution.Reason, "no longer applies") {
 		t.Fatalf("reason = %q", attribution.Reason)
 	}
 }
@@ -1137,7 +1137,7 @@ An introduction.
 	}
 	// What is reported has to say which of the three things to do about it, so it
 	// names the brief that ended rather than reading as a brief that states none.
-	if !strings.Contains(set.LinkProblems[0].Reason, "no longer in force") {
+	if !strings.Contains(set.LinkProblems[0].Reason, "no longer applies") {
 		t.Fatalf("reason = %q", set.LinkProblems[0].Reason)
 	}
 }

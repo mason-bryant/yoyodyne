@@ -1240,8 +1240,8 @@ Naming no item prints four lines first, and prints all four every time: what is
 Running, with each run's item, phase, elapsed time and spend; what is Working,
 which is the persona conversations with a turn in flight; what is Not startable,
 which is each admitted item nothing will pull with the refusal that stops it; and
-what Needs a human, which is either "nothing" or the list with whose move each
-one is. A line with nothing in it says so in words, and a line whose records
+what Needs a human, which is either "nothing" or the list with who each one is
+waiting on. A line with nothing in it says so in words, and a line whose records
 could not be read says that instead of saying nothing. Naming an item leaves them
 out: they are about the product, and a question about one item is a different
 question.

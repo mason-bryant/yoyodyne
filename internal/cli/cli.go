@@ -627,7 +627,7 @@ Commands:
   directive         record, resolve, and read durable user directives
   exchange          read what the roles have asked each other, and what it cost
   reports           read what agents reported without it stopping their work
-  sweeps            read what the recurring tasks found on their own cadence
+  sweeps            read what the recurring tasks found on their own schedule
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
   start             start the product: its supervisor, and every enabled part through it

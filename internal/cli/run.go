@@ -955,7 +955,7 @@ func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, 
 	if err != nil {
 		// The pause itself is not in doubt — it is a flag this command just read —
 		// so what failed is named beside it rather than in place of it.
-		fmt.Fprintf(stderr, "the pause is in force; this could not be fully reported: %v\n", err)
+		fmt.Fprintf(stderr, "the pause is active; this could not be fully reported: %v\n", err)
 	}
 }
 

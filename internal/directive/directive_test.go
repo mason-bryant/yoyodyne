@@ -353,7 +353,7 @@ func TestAWithdrawnDirectiveKeepsWhatItSaidAndSaysWhoEndedIt(t *testing.T) {
 		"carried out",
 		"yoyodyne-ifd.170",
 		"withdrawn",
-		"no longer in force",
+		"no longer applies",
 		"the operator, at a command line",
 		"we open small documentation pull requests again",
 	} {

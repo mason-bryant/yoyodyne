@@ -689,7 +689,7 @@ func identityProblems(goals []Goal) []IdentityProblem {
 		problems = append(problems, IdentityProblem{
 			Identity: identity,
 			Stated:   statedIn(stating),
-			Reason: fmt.Sprintf("%d goals in force carry it — %s — and an identity is assigned once and never reused, so work naming it names no one goal and is refused until one of them is corrected",
+			Reason: fmt.Sprintf("%d active goals carry it — %s — and an identity is assigned once and never reused, so work naming it names no one goal and is refused until one of them is corrected",
 				len(stating), strings.Join(statedIn(stating), " and ")),
 		})
 	}
@@ -738,7 +738,7 @@ func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInFor
 		case brief == "":
 			reason = `no artifact of kind "brief" is recorded, so there is no brief goal for a goal to name`
 		case !briefInForce:
-			reason = fmt.Sprintf("%s is no longer in force, so the goals it states are not intent a goal can name", brief)
+			reason = fmt.Sprintf("%s no longer applies, so the goals it states are not intent a goal can name", brief)
 		// An unreadable brief is a fourth case, not the third: telling the
 		// operator to add a `Goals` heading to a document that could not be
 		// read would send them to fix the wrong thing. The read failure
@@ -871,7 +871,7 @@ func (s Set) attributeByIdentity(identity, statement string) Attribution {
 			State:    StateUnresolved,
 			Identity: identity,
 			Named:    named,
-			Reason: fmt.Sprintf("more than one goal in force carries the identity %q — %s — so it does not name one goal; the identity is assigned once and never reused, and the documents stating it twice have to be corrected",
+			Reason: fmt.Sprintf("more than one active goal carries the identity %q — %s — so it does not name one goal; the identity is assigned once and never reused, and the documents stating it twice have to be corrected",
 				identity, strings.Join(statedIn(inForce), " and ")),
 		}
 	case replaced != nil:
@@ -879,7 +879,7 @@ func (s Set) attributeByIdentity(identity, statement string) Attribution {
 			State:    StateUnresolved,
 			Identity: identity,
 			Named:    named,
-			Reason: fmt.Sprintf("the only goal carrying the identity %q is in %s, which is no longer in force, so it is not a goal the product currently intends",
+			Reason: fmt.Sprintf("the only goal carrying the identity %q is in %s, which no longer applies, so it is not a goal the product currently intends",
 				identity, replaced.ArtifactID),
 		}
 	default:
@@ -925,7 +925,7 @@ func (s Set) attributeByWording(statement string) Attribution {
 		return Attribution{
 			State: StateUnresolved,
 			Named: statement,
-			Reason: fmt.Sprintf("the only goal stated in those words is in %s, which is no longer in force, so it is not a goal the product currently intends",
+			Reason: fmt.Sprintf("the only goal stated in those words is in %s, which no longer applies, so it is not a goal the product currently intends",
 				replaced.ArtifactID),
 		}
 	}
@@ -987,7 +987,7 @@ func (s Set) uncheckableReason() string {
 	case len(s.Sources) == 0:
 		return "the repository records no goals artifact, so there is nothing to check it against"
 	default:
-		return fmt.Sprintf("%s records no goal that is in force, so there is nothing to check it against", strings.Join(s.Sources, ", "))
+		return fmt.Sprintf("%s records no goal that still applies, so there is nothing to check it against", strings.Join(s.Sources, ", "))
 	}
 }
 

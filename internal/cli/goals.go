@@ -177,7 +177,7 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 // be dressed. `--json` carries none of it.
 func printGoals(stdout io.Writer, theme console.Theme, goals goal.Set) {
 	if reason, uncheckable := goals.Uncheckable(); uncheckable {
-		fmt.Fprintf(stdout, "no goal is in force: %s\n", reason)
+		fmt.Fprintf(stdout, "no goal is active: %s\n", reason)
 	}
 	for index, recorded := range goals.Goals {
 		if index > 0 {
@@ -188,7 +188,7 @@ func printGoals(stdout io.Writer, theme console.Theme, goals goal.Set) {
 			// A goal in a document no longer in force is listed and marked, because
 			// it is what an old attribution resolves to and reading it as a goal
 			// somebody could still name would be wrong.
-			state = " [no longer in force]"
+			state = " [no longer active]"
 		}
 		fmt.Fprint(stdout, theme.Entry(fmt.Sprintf("%s%s\n", recorded.Statement, state)))
 		// The identity is printed under the words rather than in front of them,

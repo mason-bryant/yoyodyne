@@ -412,7 +412,7 @@ another and goes on recording it after that other item closes. And an attributio
 stops resolving: an item that recorded its goal in the document's words rather
 than by [the goal's identity](artifacts.md#goals-and-what-work-serves-them) names
 words nobody states once the document is reworded, an item whose goal was retired
-or removed names a goal that is not in force whichever way it named it, and an
+or removed names a goal that is no longer active whichever way it named it, and an
 item whose notes were replaced carries nothing where the tracker witnesses that
 it once did. Re-wording a goal an item named by its identity is deliberately not
 among them — leaving that item attributed is what the identity is for — so what
@@ -442,7 +442,7 @@ before.
 
 Work somebody still has to release is never repaired, however stale its state
 looks — an escalation waiting on a decision, a change that exists only on a
-preserved branch, a publication that never finished, a directive in force that
+preserved branch, a publication that never finished, an active directive that
 pauses the work it affects. The escalation is the one that most needs saying:
 triage blocks an item in order to escalate it and leaves no dependency behind, so
 an escalated item reads as a blocked status with nothing at all standing behind
@@ -656,7 +656,7 @@ everything else is said to the product manager:
 /intake                  whether the harness may start work on its own, and why not
 /stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
-/directives              what you have directed, and what is still in force
+/directives              what you have directed, and what still applies
 /directive <what you have decided>
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
@@ -790,7 +790,7 @@ summons the development manager to decide it and probes the line itself if she
 does not, and only a hold she escalated
 [waits on you](operations.md#pausing-everything-and-resuming-it). A held intake
 leads `/status` with its own banner saying when it was placed, who placed it,
-and why, beneath the PAUSED banner if both are in force. Who placed it is on the
+and why, beneath the PAUSED banner if both are active. Who placed it is on the
 record rather than assumed: the harness's own failure-storm brake
 ([`blocked_runs_before_intake_hold`](configuration.md#watching-instead-of-draining))
 places the same hold, and a banner that called that one yours would send you
@@ -868,11 +868,11 @@ unresolved.
 `/resolve <id> <how it was settled>` lifts the pause. The release is the record
 changing rather than anything done to a run: the next time the item is started,
 in whichever process, the same run continues from the gate it stopped at.
-`/directives` lists what is recorded, in force first and no longer in force
-after it. An identifier may be shortened to any prefix that names exactly one
-directive.
+`/directives` lists what is recorded, the active ones first and the ones that
+no longer apply after them. An identifier may be shortened to any prefix that
+names exactly one directive.
 
-An operational directive has nothing to resolve — it was in force from the
+An operational directive has nothing to resolve — it applied from the
 moment it was recorded and held nothing up — so what settles one is somebody
 carrying it out. Where that means admitting work, the product manager names the
 directive as it admits the item: the item's notes record which directive it
@@ -886,7 +886,7 @@ tells you which one.
 
 Carrying one out does not withdraw it. A standing instruction like "prefer
 smaller pull requests" is still the instruction after the work it prompted is
-admitted, so it stays in force and stays in the listing, now with an account of
+admitted, so it still applies and stays in the listing, now with an account of
 what it produced under it.
 
 What ends a directive is you withdrawing it. `/withdraw <id> <why you no longer
@@ -900,7 +900,7 @@ otherwise be listed as live direction and met by every run forever.
 Withdrawing is not deleting and not settling. The record keeps your words and
 whatever it had already collected, and gains who withdrew it, when, and why, so
 a run that was held or judged while it stood is still explicable; `/directives`
-shows it under what is no longer in force, reading as withdrawn. Withdrawing one
+shows it under what no longer applies, reading as withdrawn. Withdrawing one
 that pauses work lifts that pause without answering what it was waiting for,
 which is what taking a question back means.
 

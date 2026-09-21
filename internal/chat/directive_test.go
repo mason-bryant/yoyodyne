@@ -382,7 +382,7 @@ func TestAnOperatorWithdrawsADirectiveFromTheConversation(t *testing.T) {
 	}
 	transcript := withdrawn.String()
 	for _, want := range []string{
-		"no longer in force",
+		"no longer applies",
 		"nothing was deleted",
 		"recorded in error: that was a question, not an instruction",
 		"Is this still running?",
@@ -413,11 +413,11 @@ func TestAnOperatorWithdrawsADirectiveFromTheConversation(t *testing.T) {
 	}
 	// And the listing has nothing left in force, with the record itself under
 	// what is over rather than gone from the page.
-	listing := transcript[strings.LastIndex(transcript, "in force: none"):]
-	if !strings.Contains(listing, "in force: none") {
+	listing := transcript[strings.LastIndex(transcript, "active: none"):]
+	if !strings.Contains(listing, "active: none") {
 		t.Fatalf("transcript = %q, want the listing to show nothing still in force", transcript)
 	}
-	_, over, found := strings.Cut(listing, "no longer in force (1)")
+	_, over, found := strings.Cut(listing, "no longer active (1)")
 	if !found || !strings.Contains(over, recorded.ID) {
 		t.Fatalf("listing = %q, want the withdrawn directive listed as no longer in force", listing)
 	}
@@ -507,7 +507,7 @@ func TestTheDirectiveListingKeepsACarriedOutInstructionInForce(t *testing.T) {
 	}
 
 	rendered := renderDirectives([]directive.Directive{carried, resolved})
-	inForce, over, found := strings.Cut(rendered, "no longer in force")
+	inForce, over, found := strings.Cut(rendered, "no longer active")
 	if !found {
 		t.Fatalf("listing = %q, want it to separate what applies from what is over", rendered)
 	}
