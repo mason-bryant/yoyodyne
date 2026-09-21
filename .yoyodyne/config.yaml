@@ -260,9 +260,10 @@ agents:
     role: developer
     backend: claude-code
     model: opus
-    # Three instances so max_concurrent_developers: 3 is coherent; the
-    # capacity rule refuses a limit the instances cannot supply.
-    instances: 3
+    # One instance per developer slot, because the capacity rule refuses a
+    # limit the instances cannot supply. Four on 2026-09-21 alongside the
+    # temporary max_concurrent_developers: 4 above, and back to 3 with it.
+    instances: 4
     persona:
       version: v1
       path: personas/developer.md
