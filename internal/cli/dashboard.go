@@ -10,12 +10,17 @@ package cli
 // harness — so it is started and stopped freely, and a later supervisor can
 // own its lifecycle without a redesign.
 //
-// What it prints when it starts is the whole of what an operator needs and the
-// one thing that is printed once: the URL, and beside it the token every request
-// for the read model has to carry. The token is never put in the URL, where it
-// would reach a browser history and every log a proxy keeps, and never in a
-// cookie, which on 127.0.0.1 is sent to every port of 127.0.0.1; the page asks
-// for it and keeps it in the tab's session storage, scoped to this port.
+// What it prints when it starts is the whole of what an operator needs: the
+// URL, and beside it where the token every request for the read model has to
+// carry comes from. Where the configuration's services.dashboard.token is
+// `generated`, that is the token itself, printed once; where it names the
+// keychain or the file, the token is read from there and is never printed —
+// what is printed is where it was read from, so the same token serves across a
+// restart and nobody pastes a fresh one. The token is never put in the URL,
+// where it would reach a browser history and every log a proxy keeps, and
+// never in a cookie, which on 127.0.0.1 is sent to every port of 127.0.0.1;
+// the page asks for it and keeps it in the tab's session storage, scoped to
+// this port.
 
 import (
 	"context"
@@ -23,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -31,6 +37,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
 func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -62,7 +69,15 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	server, err := dashboard.New(string(resolved.Config.Product.ID), reader)
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// The token is read before anything is bound, so a store that does not hold
+	// it refuses at the terminal with the command that stores it rather than
+	// serving under a token nobody has.
+	server, announcement, err := dashboardServer(ctx, resolved.Config.Services.Dashboard.Token, resolved.Config.Product.ID, dashboardTokenStores(stateRoot), reader)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -74,9 +89,9 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 
 	fmt.Fprintf(stdout, "dashboard for %s serving at %s\n", resolved.Config.Product.ID, url)
-	fmt.Fprintf(stdout, "token: %s\n", server.Token())
-	fmt.Fprintln(stdout, "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>")
-	fmt.Fprintln(stdout, "it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c")
+	for _, line := range announcement {
+		fmt.Fprintln(stdout, line)
+	}
 
 	if err := server.Serve(ctx); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -84,6 +99,57 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 	}
 	fmt.Fprintln(stdout, "dashboard stopped")
 	return 0
+}
+
+// dashboardTokenStores is where a supplied token is read from on this machine:
+// the keychain on macOS, which is the one place the harness reads a keychain
+// from, and the file under the state root everywhere.
+func dashboardTokenStores(stateRoot string) dashboard.TokenStores {
+	stores := dashboard.TokenStores{Platform: runtime.GOOS, StateRoot: stateRoot}
+	if runtime.GOOS == "darwin" {
+		stores.Keychain = slack.Keychain{Runner: execution.OSProcessRunner{}}
+	}
+	return stores
+}
+
+// dashboardHeaderLine is said whichever way the token came, because it is
+// about how the token is presented rather than where it came from.
+const dashboardHeaderLine = "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>"
+
+// dashboardServer makes the server under the token the entry names, and says
+// what the command prints about it. Under `generated` the server makes its own
+// and the lines carry it, once, because the terminal is the one place it is
+// readable; under `keychain` or `file` the token is read from that store and
+// the lines say where it was read from and never what it is, so that a
+// terminal's scrollback holds nothing that outlives the process. A store that
+// does not hold the token is a refusal carrying the command that stores it —
+// the command `yoyo doctor` prints under service:dashboard, from the same
+// function — rather than a dashboard serving under a token it invented.
+func dashboardServer(ctx context.Context, source config.DashboardTokenSource, productID domain.ProductID, stores dashboard.TokenStores, reader dashboard.Reader) (*dashboard.Server, []string, error) {
+	if source == config.DashboardTokenGenerated {
+		server, err := dashboard.New(string(productID), reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		return server, []string{
+			"token: " + server.Token(),
+			dashboardHeaderLine,
+			"it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c",
+		}, nil
+	}
+	supplied, err := stores.Read(ctx, source, productID)
+	if err != nil {
+		return nil, nil, err
+	}
+	server, err := dashboard.NewWithToken(string(productID), reader, supplied.Value)
+	if err != nil {
+		return nil, nil, err
+	}
+	return server, []string{
+		fmt.Sprintf("the token was read from %s, as services.dashboard.token names, and is not printed", supplied.Origin),
+		dashboardHeaderLine,
+		"it outlives a restart: a restarted dashboard reads the same one; stop with ctrl-c",
+	}, nil
 }
 
 // dashboardReader is the read model as the dashboard is handed it, over the
@@ -236,10 +302,17 @@ Serves the read model -- the same four lines and capacity state `+"`yoyo status`
 reads, and what landed and what it cost -- to a browser on this machine, at a
 loopback port, until stopped, as a page of five sections: the status band, the
 runs and conversations in flight, where admitted work stands in the pipeline,
-throughput and cost, and provider capacity. It prints the URL and, once, the
-token every request for the read model has to carry as
-`+"`Authorization: Bearer <token>`"+`: the page asks for it and keeps it in the tab's
-session storage, scoped to this port, and never in a URL or a cookie. It serves
+throughput and cost, and provider capacity. It prints the URL and, beside it,
+where the token every request for the read model has to carry as
+`+"`Authorization: Bearer <token>`"+` comes from: with services.dashboard.token at its
+`+"`generated`"+` default, the token itself, once, and a restart makes a new one; with
+it set to `+"`keychain`"+` or `+"`file`"+`, the token is read from the keychain item
+yoyo-dashboard.<product id> under the account yoyo or the file
+<state root>/products/<product id>/dashboard.token, is never printed, and the
+same one serves after a restart. A store that does not hold the token refuses to
+start with the command that stores it, the one `+"`yoyo doctor`"+` prints. The page
+asks for the token and keeps it in the tab's session storage, scoped to this
+port, and never in a URL or a cookie. It serves
 the read model as JSON behind the token -- the four lines and the capacity state
 at /api/standing, what landed and what it cost over today and the last seven
 days at /api/throughput, and one work item whole -- its tracker fields and the

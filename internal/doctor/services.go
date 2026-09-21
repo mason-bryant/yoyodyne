@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -126,13 +125,16 @@ func (d *diagnosis) checkDashboardKeychainToken(ctx context.Context, resolved co
 			Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(resolved.Path)),
 		}
 	}
+	// The remedy is the dashboard package's own, so what this prints and what
+	// `yoyo dashboard` prints when it refuses to start for want of the item are
+	// one command rather than two that have to be kept the same.
 	if missing := d.missingKeychainSecrets(ctx, secret); len(missing) > 0 {
 		return Finding{
 			Check:   check,
 			Status:  StatusWarning,
 			Summary: fmt.Sprintf("the dashboard service is on and its token is not in the keychain as %s, so starting the product would start a dashboard with no token to require", secret),
 			Detail:  fmt.Sprintf("the dashboard at %s reads its token from an item that carries the product, so a sibling project's cannot stand in for it", address),
-			Remedy:  keychainAddCommand(missing),
+			Remedy:  dashboard.KeychainStoreCommand(productID),
 		}
 	}
 	return Finding{
@@ -163,7 +165,7 @@ func (d *diagnosis) checkDashboardFileToken(productID domain.ProductID, address 
 			Status:  StatusWarning,
 			Summary: "the dashboard service is on and its token file is not there, so starting the product would start a dashboard with no token to require",
 			Detail:  fmt.Sprintf("the dashboard at %s reads its token from %s", address, file),
-			Remedy:  fmt.Sprintf("mkdir -p %s && (umask 077 && openssl rand -hex 32 > %s)", shellQuote(filepath.Dir(file)), shellQuote(file)),
+			Remedy:  dashboard.FileStoreCommand(file),
 		}
 	case info.Size() == 0:
 		return Finding{
@@ -171,7 +173,7 @@ func (d *diagnosis) checkDashboardFileToken(productID domain.ProductID, address 
 			Status:  StatusWarning,
 			Summary: "the dashboard service is on and its token file is empty",
 			Detail:  file,
-			Remedy:  fmt.Sprintf("(umask 077 && openssl rand -hex 32 > %s)", shellQuote(file)),
+			Remedy:  dashboard.FileRewriteCommand(file),
 		}
 	case info.Mode().Perm()&0o077 != 0:
 		return Finding{

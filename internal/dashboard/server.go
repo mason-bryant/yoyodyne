@@ -6,8 +6,9 @@
 // surface starts from them rather than rediscovering each one:
 //
 //   - It binds loopback only, and loopback alone is not trusted: every request
-//     for the read model carries a bearer token the process generated at start
-//     and printed once, in the Authorization header and never in a URL, where
+//     for the read model carries a bearer token — one the process generated at
+//     start and printed once, or one read from the store the configuration
+//     names and never printed — in the Authorization header and never in a URL, where
 //     it would reach a browser history, a referrer, and every log a proxy
 //     keeps. It is never in a cookie either: a cookie on 127.0.0.1 is sent to
 //     every other service on every other port of 127.0.0.1, so a cookie would
@@ -112,8 +113,8 @@ type Reader interface {
 	WorkItem(ctx context.Context, id string) (readmodel.WorkItem, error)
 }
 
-// Server is one dashboard process: the token it generated, the address it bound,
-// and the read model it projects.
+// Server is one dashboard process: the token it generated or was handed, the
+// address it bound, and the read model it projects.
 type Server struct {
 	// Product is the product id, for the page's title. It is repository-supplied
 	// text and is escaped like everything else.
@@ -142,9 +143,24 @@ func New(product string, reader Reader) (*Server, error) {
 	return &Server{Product: product, reader: reader, token: hex.EncodeToString(raw)}, nil
 }
 
+// NewWithToken makes a server holding the token it is handed — one read from
+// the store the configuration names, which is what lets the token outlive a
+// restart. The server holds it exactly as it holds a generated one: in memory,
+// accepted from the bearer header alone. An empty token is refused, because a
+// server that required nothing would be a server with no credential at all.
+func NewWithToken(product string, reader Reader, token string) (*Server, error) {
+	if reader == nil {
+		return nil, errors.New("dashboard: no read model to serve")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("dashboard: the supplied token is empty")
+	}
+	return &Server{Product: product, reader: reader, token: strings.TrimSpace(token)}, nil
+}
+
 // Token is the credential every request for the read model has to present. It
-// is for the process that started the server to print once; nothing here
-// writes it anywhere.
+// is for the process that started the server to print once where the token was
+// generated, and never where it was supplied; nothing here writes it anywhere.
 func (s *Server) Token() string { return s.token }
 
 // Listen binds loopback on the port asked for, or on one the operating system
