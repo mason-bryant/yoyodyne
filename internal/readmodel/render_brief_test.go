@@ -3,6 +3,8 @@ package readmodel
 import (
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The brief rendering is what a message nobody asked for carries: the same four
@@ -21,7 +23,7 @@ func TestTheBriefRenderingCountsTheQueuesAndListsNone(t *testing.T) {
 		Working:      []WorkingTurn{{Agent: "product-manager", Role: "product-manager", Turns: 270}},
 		Admitted:     3,
 		NotStartable: []Refused{{WorkItemID: "yoyodyne-ifd.200", Reason: "waiting on yoyodyne-ifd.199"}},
-		NeedsHuman:   []Attention{{What: "intake is held", Whose: "the operator's"}},
+		NeedsHuman:   []Attention{operatorHoldAttention(runstate.OperatorHold{HeldAt: moment})},
 	}
 	brief := standing.RenderBrief()
 	for _, want := range []string{

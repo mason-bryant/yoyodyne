@@ -228,7 +228,7 @@ func (s Standing) renderNeedsHuman() string {
 		fmt.Fprintf(&rendered, "Needs a human (%d):\n", len(s.NeedsHuman))
 		listed, further := bound(len(s.NeedsHuman))
 		for _, waiting := range s.NeedsHuman[:listed] {
-			fmt.Fprintf(&rendered, "  %s — %s\n", waiting.What, waiting.Whose)
+			fmt.Fprintf(&rendered, "  %s — %s\n", waiting.What(), waiting.Whose())
 		}
 		rendered.WriteString(remainder(further, "thing waiting on somebody"))
 	}

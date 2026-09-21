@@ -1662,6 +1662,23 @@ the page's pop-up on a grouping lists what the figure counted rather than a
 list assembled from the other lines — and both are absent, like the refusals,
 where the queue could not be read.
 
+Each entry under `standing.needs_human` is the thing waiting rather than a
+sentence about it: its `kind`, from a closed set — `amendment`,
+`conversation-carried-item`, `report`, `owed-step`, `publication`,
+`degraded-service`, `hold`, `directive`, `outage`, `stall`, `held-work` — the
+`id` of the record it is about (an amendment's, a directive's, a run's, a work
+item's, a service's name, or which switch a hold is: `operator`, `intake`, or
+`capacity`), the `mover` whose move it is, in the same closed vocabulary the
+page counts by (`operator`, a role such as `architect` or
+`development-manager`, `harness`, `forge`, `nobody`, or `unnamed-role`), and
+the record itself, whole, under a field named for the kind — an `amendment`
+carries the target document, the proposer's role, agent, run, and work item,
+the proposed change, and why, none of it cut to a line. The `what` and `whose`
+the terminal prints are there beside them, and they are derived from those
+fields at the moment the answer is written rather than stored, so a record and
+the line about it cannot disagree; a document whose `what` says something its
+fields do not is refused when the model reads it back.
+
 One thing is carried there that the four lines do not print: what is parked or
 held on provider capacity, one run and one conversation at a time, under
 `standing.capacity_blocked`. The hold above is every role refused at once; this

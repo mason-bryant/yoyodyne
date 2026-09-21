@@ -250,18 +250,16 @@ func (s Stall) Refusal() string {
 // problem they chose.
 func (s Stall) Waiting() (Attention, bool) {
 	switch s.Reason {
-	case ReasonSessionIdle, ReasonNoWatchSession:
-		what := s.Says
-		if !s.Since.IsZero() {
-			what += ", since " + s.Since.UTC().Format(time.RFC3339)
-		}
-		return Attention{What: what, Whose: s.Reason.Whose()}, true
-	case ReasonProviderAway:
-		// The provider answering nobody is waiting on a person in the one way a
-		// window is not, and it is the wait the attention line exists for: the
-		// only thing that fired on it in September was a brake naming the wrong
-		// remedy. Its sentence already says since when.
-		return Attention{What: s.Says, Whose: s.Reason.Whose()}, true
+	case ReasonSessionIdle, ReasonNoWatchSession, ReasonProviderAway:
+		// All three are the operator's: the two session states because a queue
+		// with ready work and nothing pulling it is a stall rather than a rest,
+		// and the provider answering nobody because it is waiting on a person in
+		// the one way a window is not — it is the wait the attention line exists
+		// for, and the only thing that fired on it in September was a brake
+		// naming the wrong remedy. Reason.Whose words the same three the same
+		// way, and a test holds the two together.
+		stall := s
+		return Attention{Kind: AttentionStall, ID: string(s.Reason), Mover: MoverOperator, Stall: &stall}, true
 	default:
 		return Attention{}, false
 	}
