@@ -1564,18 +1564,26 @@ Needs a human (3):
   is the development manager's or the harness's rather than yours until she
   escalates it, and names the probe run while one is in flight — an unresolved
   directive, a
-  proposed change nobody has decided, a run that ended still owing a step, a
+  proposed change nobody has decided — with the owning role's recommendation
+  beside it where a [recurring pass](configuration.md#working-the-amendment-queue-on-a-cadence)
+  has argued it, and the batch of such recommendations said once ahead of them
+  as one decision list that is yours — a run that ended still owing a step, a
   promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), a
   part of the product [its supervisor has left down](#starting-the-product-and-stopping-it)
-  as degraded, with the reason, and a
+  as degraded, with the reason, a
   [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose
-  oldest undecided entry has been waiting more than a week. A stall over an empty
+  oldest undecided entry has been waiting more than a week, and its sibling: a
+  queue of proposed changes whose oldest undecided one has been waiting more
+  than a week, said as a count and an age — `44 of 51 proposed change(s) are
+  undecided, the oldest raised 23d ago, against the architect's documents` —
+  because the proposals are each named on the line already and a list is not
+  an age. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
-  on you, and neither is a report pile that is being worked through — what is
-  listed is one that is not. The unpublished promotions are the same set the
+  on you, and neither is a report pile or an amendment queue that is being
+  worked through — what is listed is one that is not. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
   derivation, and each says whose move it is: the forge's while it holds the
   merge queued, the development manager's once it has dropped one, the
@@ -2561,6 +2569,22 @@ that finds it, rather than once an hour. The `--json` form carries them a second
 time as `pull_requests` on the record, by number, which is what the next pass
 reads to know what was already said. [Recurring
 tasks](configuration.md#recurring-tasks) says when the reading is taken.
+
+**A pass of a role that owns documents carries what it recommended on the
+changes proposed to them.** The harness puts the undecided proposals against
+the role's documents in front of it on every firing — oldest first, at most ten
+a pass, and never one the role already argued on an earlier pass while the
+operator has not decided it — and the account carries a recommendation for each:
+`approve`, `decline`, or `merge` with another, with the reason. The listing
+shows them after the findings, as `> recommends approve for <id>` with the
+reason under it. They are recommendations and never decisions: nothing on a
+sweep record changes a document or settles a proposal, `yoyo amendment approve`
+and `yoyo amendment decline` record each decision under the owner's authority,
+and [`yoyo status`](#where-the-harness-stands-the-four-lines) names the batch still waiting
+on you — which is derived from these records and drops any proposal you have
+decided since. [Working the amendment queue on a
+cadence](configuration.md#working-the-amendment-queue-on-a-cadence) says how
+the pass is configured.
 
 Three outcomes look similar in a listing and are not the same thing:
 

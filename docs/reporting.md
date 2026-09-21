@@ -519,7 +519,10 @@ disagree about them. A pile that is draining says nothing anywhere else; one
 whose oldest undecided report has been waiting more than a week is named on
 `yoyo status`'s "needs a human" line as the product manager's. That line is what
 catches both failures a single reading cannot tell apart: a cadence that has
-stopped keeping up, and no cadence configured at all.
+stopped keeping up, and no cadence configured at all. The queue of proposed
+amendments has the same line as a sibling, on the same threshold and for the
+same reason — see [working the amendment queue on a
+cadence](configuration.md#working-the-amendment-queue-on-a-cadence).
 
 ## What agents propose changing, and who decides
 

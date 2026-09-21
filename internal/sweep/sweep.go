@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/fenced"
@@ -52,6 +53,22 @@ const (
 	MaxSummaryBytes = 4 << 10
 	MaxTextBytes    = 2 << 10
 	MaxBlockBytes   = 32 << 10
+)
+
+// MaxRecommendations bounds how many proposed changes one turn may recommend on,
+// and it is also how many the harness puts to an owning role on one firing: the
+// two are one number because a batch larger than the account could carry back
+// would be a batch the role cannot finish, and a bound on the account alone
+// would be discovered as recommendations silently missing from the record.
+//
+// Ten is a pass's worth of reading. Every proposal is an argument against one of
+// the role's own documents, and arguing each one back with a reason means
+// reading the document it names; a firing that put forty in front of her would
+// get forty one-line verdicts rather than ten considered ones.
+const (
+	MaxRecommendations     = 10
+	MaxPassRecommendations = MaxRecommendations * MaxMergedTurns
+	maxRecommendationsText = "10"
 )
 
 // The bounds a whole firing's merged account is held to, which are deliberately
@@ -189,6 +206,88 @@ func (f Finding) Validate() error {
 	return nil
 }
 
+// Recommended is what an owning role recommends be done with a change somebody
+// proposed to one of its documents. It is a recommendation and never a
+// decision: no role records a decision on a proposal, `yoyo amendment` is the
+// only thing that does, and what a pass produces is the owner's argument for
+// the operator to act on.
+type Recommended string
+
+const (
+	// RecommendApprove is the owner arguing for the change.
+	RecommendApprove Recommended = "approve"
+	// RecommendDecline is the owner arguing against it, with the reason a
+	// decline has to carry.
+	RecommendDecline Recommended = "decline"
+	// RecommendMerge is the owner saying this proposal and another ask for one
+	// change, naming the other in Into: the operator carries it out as one
+	// approval and one decline, since the record has no merge of its own.
+	RecommendMerge Recommended = "merge"
+)
+
+func (r Recommended) Valid() bool {
+	switch r {
+	case RecommendApprove, RecommendDecline, RecommendMerge:
+		return true
+	default:
+		return false
+	}
+}
+
+// proposalIDPattern is the shape of a proposed amendment's id as the amendment
+// package mints it. It is restated here rather than imported because this
+// package is the channel and pulls in nothing but the fence; a test keeps the
+// two in step.
+var proposalIDPattern = regexp.MustCompile(`^amendment-[a-f0-9]{32}$`)
+
+// Recommendation is one proposed change argued back by the role that owns the
+// document it names: which proposal, what the owner recommends, and why.
+type Recommendation struct {
+	// Proposal is the id of the proposed amendment, as the harness put it to the
+	// role. A recommendation on a proposal the role was never shown, or one the
+	// operator has decided since, names nothing that is waiting and is dropped
+	// from the batch wherever the batch is read.
+	Proposal string      `json:"proposal"`
+	Verdict  Recommended `json:"verdict"`
+	// Reason is why, and it is required whichever way the verdict goes: a
+	// recommendation is an argument for the operator to act on, and one with no
+	// reasoning asks them to decide on an assertion.
+	Reason string `json:"reason"`
+	// Into is the other proposal a merge folds this one into, and is required on
+	// a merge and refused on anything else.
+	Into string `json:"into,omitempty"`
+}
+
+// Validate reports every contract violation in the recommendation at once.
+func (r Recommendation) Validate() error {
+	var problems []error
+	if !proposalIDPattern.MatchString(strings.TrimSpace(r.Proposal)) {
+		problems = append(problems, fmt.Errorf("proposal %q is not a proposed amendment's id", r.Proposal))
+	}
+	if !r.Verdict.Valid() {
+		problems = append(problems, fmt.Errorf("verdict %q must be %q, %q, or %q", r.Verdict, RecommendApprove, RecommendDecline, RecommendMerge))
+	}
+	switch reason := strings.TrimSpace(r.Reason); {
+	case reason == "":
+		problems = append(problems, errors.New("reason is required"))
+	case len(reason) > MaxTextBytes:
+		problems = append(problems, fmt.Errorf("reason is %d bytes, limit is %d", len(reason), MaxTextBytes))
+	}
+	into := strings.TrimSpace(r.Into)
+	switch {
+	case r.Verdict == RecommendMerge && !proposalIDPattern.MatchString(into):
+		problems = append(problems, errors.New("a merge names the proposal it folds this one into, in \"into\""))
+	case r.Verdict == RecommendMerge && into == strings.TrimSpace(r.Proposal):
+		problems = append(problems, errors.New("a merge names a different proposal from the one it merges"))
+	case r.Verdict != RecommendMerge && into != "":
+		problems = append(problems, fmt.Errorf("\"into\" belongs to a merge, and this recommends %s", r.Verdict))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid recommendation: %w", err)
+	}
+	return nil
+}
+
 // Result is one turn's account of a recurring pass.
 type Result struct {
 	Status  Status `json:"status"`
@@ -202,6 +301,11 @@ type Result struct {
 	// anything: a report with no questions needs no attention, which is what
 	// makes reading these at leisure possible at all.
 	Questions []string `json:"questions,omitempty"`
+	// Recommendations are what an owning role recommends on the changes
+	// proposed to its documents that the harness put to it on this pass. They
+	// are the batch the operator decides from, and they are empty on every pass
+	// of a role that owns no documents or was put none.
+	Recommendations []Recommendation `json:"recommendations,omitempty"`
 }
 
 // Validate reports every contract violation in the result at once.
@@ -240,6 +344,14 @@ func (r Result) Validate() error {
 			problems = append(problems, fmt.Errorf("questions[%d] is %d bytes, limit is %d", i, len(trimmed), MaxTextBytes))
 		}
 	}
+	if len(r.Recommendations) > MaxPassRecommendations {
+		problems = append(problems, fmt.Errorf("%d recommendations in one pass, limit is %d", len(r.Recommendations), MaxPassRecommendations))
+	}
+	for i, recommendation := range r.Recommendations {
+		if err := recommendation.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("recommendations[%d]: %w", i, err))
+		}
+	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid sweep result: %w", err)
 	}
@@ -257,6 +369,9 @@ func (r Result) validateTurn() error {
 	}
 	if len(r.Questions) > MaxQuestions {
 		problems = append(problems, fmt.Errorf("%d questions in one turn, limit is %d", len(r.Questions), MaxQuestions))
+	}
+	if len(r.Recommendations) > MaxRecommendations {
+		problems = append(problems, fmt.Errorf("%d recommendations in one turn, limit is %d", len(r.Recommendations), MaxRecommendations))
 	}
 	if err := errors.Join(problems...); err != nil {
 		return fmt.Errorf("invalid sweep result: %w", err)
@@ -296,30 +411,49 @@ func (r Result) Merge(next Result) Result {
 	}
 	findings := append(append([]Finding(nil), r.Findings...), next.Findings...)
 	questions := append(append([]string(nil), r.Questions...), next.Questions...)
-	droppedFindings, droppedQuestions := 0, 0
+	recommendations := append(append([]Recommendation(nil), r.Recommendations...), next.Recommendations...)
+	dropped := droppedCounts{}
 	if len(findings) > MaxPassFindings {
-		droppedFindings = len(findings) - MaxPassFindings
+		dropped.findings = len(findings) - MaxPassFindings
 		findings = findings[:MaxPassFindings]
 	}
 	if len(questions) > MaxPassQuestions {
-		droppedQuestions = len(questions) - MaxPassQuestions
+		dropped.questions = len(questions) - MaxPassQuestions
 		questions = questions[:MaxPassQuestions]
+	}
+	if len(recommendations) > MaxPassRecommendations {
+		dropped.recommendations = len(recommendations) - MaxPassRecommendations
+		recommendations = recommendations[:MaxPassRecommendations]
 	}
 	merged.Findings = findings
 	merged.Questions = questions
-	merged.Summary = noteDropped(merged.Summary, droppedFindings, droppedQuestions)
+	merged.Recommendations = recommendations
+	merged.Summary = noteDropped(merged.Summary, dropped)
 	return merged
+}
+
+// droppedCounts is what the pass bounds cut from a merged account.
+type droppedCounts struct {
+	findings, questions, recommendations int
+}
+
+func (d droppedCounts) any() bool {
+	return d.findings > 0 || d.questions > 0 || d.recommendations > 0
 }
 
 // noteDropped says in the summary what the pass bounds cut, and keeps the summary
 // inside its own bound while doing it. A note that pushed the summary past what
 // the record accepts would lose the report it exists to preserve.
-func noteDropped(summary string, findings, questions int) string {
-	if findings == 0 && questions == 0 {
+func noteDropped(summary string, dropped droppedCounts) string {
+	if !dropped.any() {
 		return summary
 	}
 	note := fmt.Sprintf("(This pass reached its bound of %d findings and %d questions; %d finding(s) and %d question(s) from its later turns are not listed.)",
-		MaxPassFindings, MaxPassQuestions, findings, questions)
+		MaxPassFindings, MaxPassQuestions, dropped.findings, dropped.questions)
+	if dropped.recommendations > 0 {
+		note = fmt.Sprintf("(This pass reached its bound of %d findings, %d questions, and %d recommendations; %d finding(s), %d question(s), and %d recommendation(s) from its later turns are not listed.)",
+			MaxPassFindings, MaxPassQuestions, MaxPassRecommendations, dropped.findings, dropped.questions, dropped.recommendations)
+	}
 	joined := strings.TrimSpace(summary)
 	if joined != "" {
 		joined += " "
@@ -418,5 +552,27 @@ func Contract() string {
 		`A pass that found nothing carries no findings and says so in the summary; that is the ordinary result and it is worth stating plainly.`,
 		`Every fix carries the work you filed for its root cause in "filed". A fix that files nothing is a silent repair, and the report says so.`,
 		"At most " + maxFindingsText + " findings and " + maxQuestionsText + " questions in one turn: a pass that found more than that has found something systemic, and the summary is where that is said.",
+	}, "\n")
+}
+
+// RecommendationContract is what an owning role is told, beside the contract
+// above, when the harness has put proposed changes to its documents in front of
+// it. It is a separate paragraph rather than part of Contract because most
+// recurring passes are put no proposals, and a role told about a field it has
+// nothing to put in it is a role that fills it with something.
+//
+// The wording holds the line the amendment record holds: the role recommends
+// and the operator decides. A block that said "approved" would be read by
+// somebody as a decision, and the whole reason the decision is recorded from
+// the command line and by nobody else is that a role must not be able to
+// settle an argument about its own document by having the last word in it.
+func RecommendationContract() string {
+	return strings.Join([]string{
+		`Your block also carries "recommendations": one entry for every proposed change put to you on this pass, and none for a proposal you were not shown:`,
+		"",
+		`"recommendations":[{"proposal":"amendment-id","verdict":"approve|decline|merge","reason":"why, in a sentence or two","into":"amendment-id (a merge only: the proposal this one folds into)"}]`,
+		"",
+		`These are recommendations and not decisions. Nothing you say here changes a document or settles a proposal: the operator reads the batch and records each decision with "yoyo amendment approve" or "yoyo amendment decline", under your authority. "approve" argues for the change, "decline" argues against it, and "merge" says two proposals ask for one change and names the other; every one carries the reason, because the operator acts on the argument rather than the verdict.`,
+		"At most " + maxRecommendationsText + " recommendations in one turn, which is the most the harness puts to you on one pass.",
 	}, "\n")
 }

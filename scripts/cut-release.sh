@@ -3,7 +3,7 @@
 # cut-release.sh - cut one release: gate on its notes, on the system matching
 # what it records about itself, on the adoption walkthrough and on the checks,
 # build the archives and their checksums for the tag, then tag the commit they
-# were built from.
+# were built from -- which is the commit origin's default branch already holds.
 #
 #   make release VERSION=v0.3.0      what an operator runs
 #   scripts/cut-release.sh v0.3.0    the same thing, without make
@@ -19,35 +19,42 @@
 # operator takes deliberately; this prints the one command. Everything before
 # that point is what this makes certain.
 #
-# The order is deliberate: every gate runs before anything is written, and the
-# tag is created last, so a refusal at any point leaves the repository exactly
-# as it was. There is no half-cut release to clean up. Two things are written
-# before the tag, and both are held to that claim rather than excepted from it.
-# The housekeeping commit is written after the last gate has passed, for the
-# reason given there: it is made or it is not, and a failure partway through puts
-# the index back rather than leaving anything staged. It carries the tracker's
-# derived exports and the release-readiness result stamped into this tag's notes,
-# so the notes the tag names carry the conformance result of the tree it names
-# rather than one taken on whichever day the notes were drafted. And a release
-# whose notes are missing has them drafted, which is the single exception -- a cut
-# with no story to tell writes docs/releases/<tag>.md from the work items that
-# landed and refuses, so the tag lands on a commit that carries its own notes
-# rather than on one they are added after. That refusal says outright what it
-# wrote.
+# A cut writes nothing to the default branch. On 2026-09-20 the v0.5.0 cut
+# passed every gate, committed its own housekeeping on main -- the readiness
+# result stamped into the notes, and the tracker's derived exports -- and
+# tagged that commit; the push it printed was refused, because main requires a
+# pull request, and a pull request produces a different commit, so the tag
+# named a tree main would never hold, and a second cut had fresh housekeeping
+# it could not push either. So the tag names the commit origin's default branch
+# holds when the gates pass, which is what the gates ran on; the tracker's
+# derived exports are excluded from the tree check and left where they lie,
+# since nothing a release ships is built from them; and the readiness result
+# reaches the notes the way every other change reaches the default branch,
+# through a pull request ahead of the tag. Whether the branch is protected is
+# asked before anything is built, and answered with which step it changes.
 #
-# Requires git 2.9 or newer. Two things here have a floor: the `:(exclude)`
-# pathspec the cleanliness check uses needs 1.9, and `core.hooksPath`, which is
-# how the housekeeping commit keeps the tracker's export hook from rewriting the
-# very files that commit exists to clean, is only honoured from 2.9. Older git
-# does not refuse `core.hooksPath` -- it ignores it, the hook runs, and the tag
-# names a tree that was dirty again a millisecond after it was cleaned, with
-# nothing saying so. The `git push --atomic` this prints on a day it housekept
-# needs 2.4 of whoever runs it, which the same floor covers. Also make, go,
-# python3 -- which stamps the readiness result into the notes here as well as
-# rendering the draft in scripts/release-notes.sh -- and bd, which the
-# release-readiness gate reads the work items through; the notes read them from
-# the tracker's export instead. Nothing outside the repository is written, and
-# nothing is pushed.
+# The order is deliberate: every gate runs before anything is written, and the
+# tag is created last, so a refusal at any point leaves the checkout exactly
+# as it was. Two refusals leave something behind, each of them ahead of the
+# walkthrough and the cross-compile, and each says outright what it wrote. A
+# release whose notes are missing has them drafted -- a cut with no story to
+# tell writes docs/releases/<tag>.md from the work items that landed and
+# refuses, so the tag lands on a commit that carries its own notes. And a
+# release whose notes do not carry a current readiness result has it committed
+# on a branch, `release/<tag>-readiness-<commit>`, pushed, and a pull request
+# opened for it where the forge's command line is installed; the cut after
+# that merge finds the result on the default branch and goes through.
+#
+# Requires git 1.9 or newer, for the `:(exclude)` pathspec the cleanliness
+# check uses. Also make, go, python3 -- which compares and stamps the readiness
+# result here as well as rendering the draft in scripts/release-notes.sh --
+# and bd, which the release-readiness gate reads the work items through; the
+# notes read them from the tracker's export instead. gh, the forge's command
+# line, is optional: with it the cut asks whether the default branch is
+# protected and opens the readiness pull request itself; without it, both are
+# named as unchecked and the branch is named to open one from. Nothing outside
+# the repository is written except that branch and its pull request, and the
+# tag is never pushed.
 
 set -euo pipefail
 
@@ -59,6 +66,11 @@ notes_writer="$repository/scripts/release-notes.sh"
 notes_home="$repository/docs/releases"
 # When this was reached through `make release`, use the same make.
 make_program="${MAKE:-make}"
+# The forge's command line, which asks whether the default branch is protected
+# and opens the readiness pull request. Optional: without it both are named as
+# unchecked. Overridable the way make is, so the verb's own suite can hand it
+# a stub and a machine with none.
+gh_program="${GH:-gh}"
 # Where `dist` writes, spelled the way the Makefile spells it: DIST ?= dist,
 # and a caller who overrode it on the make command line has it in the
 # environment here too.
@@ -72,11 +84,15 @@ dist_directory="$repository/${DIST:-dist}"
 tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # The tracker's derived exports. Beads keeps the issues in a local database and
 # writes these out as a passive dump, so they change whenever anything touches
-# the tracker -- including the adoption walkthrough this gate runs itself, which
-# is why they cannot simply be committed beforehand. The archives a release
-# ships are not built from them; the notes are drafted from the issues export,
-# and are committed before the cut. Each one is also a change a run declares the
-# primary checkout may acquire while it works, in internal/cli/run.go.
+# the tracker -- including the adoption walkthrough this gate runs itself, and
+# a harness running beside the cut, which rewrites them continuously. The
+# archives a release ships are not built from them, and the notes are drafted
+# from the issues export and committed before the cut, so they are excluded
+# from the tree check and never committed: a cut that committed them would be a
+# commit the default branch cannot take. Each one is also a change a run
+# declares the primary checkout may acquire while it works, in
+# internal/cli/run.go, and internal/cli/release_repository_test.go holds this
+# list inside that one.
 derived_exports=(".beads/interactions.jsonl" ".beads/issues.jsonl")
 # Where the release-readiness section lives inside a release's notes, spelled
 # the way internal/cli/conformance.go renders it. The cut replaces what is
@@ -87,14 +103,19 @@ readiness_end="<!-- /yoyodyne:release-readiness -->"
 
 step()   { printf '\n=== %s\n' "$*"; }
 # Every refusal names the tag it did not cut, because the operator's next
-# question is always whether anything was left behind. Nothing was.
+# question is always whether anything was left behind. Nothing was, unless the
+# refusal says so.
 refuse() { printf '\ncut-release: %s\n' "$*" >&2; exit 1; }
 
 walk_log=""
 readiness=""
+stamped=""
+index=""
 cleanup() {
   [ -z "$walk_log" ] || rm -f "$walk_log"
   [ -z "$readiness" ] || rm -f "$readiness"
+  [ -z "$stamped" ] || rm -f "$stamped"
+  [ -z "$index" ] || rm -f "$index"
 }
 trap cleanup EXIT
 
@@ -123,9 +144,9 @@ step "the commit $tag would name"
 #
 # The tracker's derived exports are not that: nothing is built from them, and
 # under a daily cadence they are dirty nearly every day, so refusing on them
-# stalls the cut on a day nobody is standing there to stash. They are committed
-# rather than excepted -- see the housekeeping step -- so what this asks is that
-# the tree is clean of everything else, and it still names what it found.
+# stalls the cut on a day nobody is standing there to stash. They are left
+# where they lie -- see the header -- so what this asks is that the tree is
+# clean of everything else, and it still names what it found.
 exclude_exports=()
 for export_path in "${derived_exports[@]}"; do
   exclude_exports+=(":(exclude)$export_path")
@@ -136,7 +157,7 @@ if [ -n "$dirty" ]; then
   refuse "the working tree has uncommitted changes, so the archives would not be the commit $tag names. Commit or stash them first"
 fi
 if [ -n "$(git -C "$repository" status --porcelain -- "${derived_exports[@]}")" ]; then
-  printf "the tracker's derived exports have changed; they are committed as housekeeping once every gate is green\n"
+  printf "the tracker's derived exports have changed; nothing a release ships is built from them, and they are left where they lie\n"
 fi
 
 # Releases come off the branch integration lands on. A tag on a feature branch
@@ -157,15 +178,72 @@ printf 'HEAD: %s (%s)\n' "$head" "$default_branch"
 # reachable this is settled; where it is not, it is named as unchecked rather
 # than passed over, the same way the walkthrough treats a claim it cannot
 # exercise. A silent skip here reads as "today's work" and can be yesterday's.
+origin_reachable=0
 if git -C "$repository" fetch --quiet origin "$default_branch" 2>/dev/null; then
   remote="$(git -C "$repository" rev-parse FETCH_HEAD)"
   if [ "$head" != "$remote" ]; then
     refuse "HEAD is not where origin/$default_branch is ($remote), so $tag would name a commit the product does not have. Pull or push first"
   fi
   printf 'origin/%s agrees\n' "$default_branch"
+  origin_reachable=1
 else
   printf 'SKIPPED: origin is unreachable, so whether HEAD is current was not checked\n'
 fi
+
+step "whether $default_branch is protected"
+# Asked here, before anything is built, because the v0.5.0 cut found out at the
+# very end: every gate green, the archives built, the tag placed, and the push
+# refused. The cut writes nothing to the default branch whichever way this
+# answers, so protection cannot refuse it any more; what it changes is what
+# stands between a cut and its tag, and that is said here rather than found
+# out. The forge is asked through its command line, both ways it can protect a
+# branch -- the older per-branch protection, and a ruleset -- and a question it
+# cannot answer is named as unchecked rather than guessed at.
+probe_protection() {
+  if [ "$origin_reachable" != "1" ]; then
+    printf 'unchecked: origin is unreachable'
+    return
+  fi
+  if ! command -v "$gh_program" >/dev/null 2>&1; then
+    printf 'unchecked: %s is not installed' "$gh_program"
+    return
+  fi
+  local answer
+  if answer="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/branches/$default_branch/protection" 2>&1 >/dev/null)"; then
+    printf 'protected'
+    return
+  fi
+  case "$answer" in
+    *"HTTP 404"*) ;;
+    *) printf 'unchecked: %s could not ask the forge: %s' "$gh_program" "$(printf '%s' "$answer" | head -1)"; return ;;
+  esac
+  local rules
+  if ! rules="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/rules/branches/$default_branch" \
+      --jq '[.[] | select(.type == "pull_request" or .type == "required_status_checks" or .type == "update")] | length' 2>&1)"; then
+    printf 'unchecked: %s could not ask the forge: %s' "$gh_program" "$(printf '%s' "$rules" | head -1)"
+    return
+  fi
+  if [ "$rules" != "0" ]; then printf 'protected'; else printf 'open'; fi
+}
+protection="$(probe_protection)"
+case "$protection" in
+  protected)
+    printf 'origin/%s is protected: a change reaches it only through a pull request. The cut\n' "$default_branch"
+    printf 'writes nothing to it either way, so what changes is what stands between a cut and\n'
+    printf 'its tag: a readiness result not yet in docs/releases/%s.md reaches it only through\n' "$tag"
+    printf 'the pull request this cut opens and stops at, and publishing is the tag alone.\n'
+    ;;
+  open)
+    printf 'origin/%s is not protected, and the cut writes nothing to it all the same. A readiness\n' "$default_branch"
+    printf 'result not yet in docs/releases/%s.md is committed on a branch, which may be merged\n' "$tag"
+    printf 'through its pull request or pushed to %s directly, and publishing is the tag alone.\n' "$default_branch"
+    ;;
+  *)
+    printf 'SKIPPED: whether origin/%s is protected was not checked (%s). The cut writes\n' "$default_branch" "${protection#unchecked: }"
+    printf 'nothing to it either way: a readiness result not yet in docs/releases/%s.md goes\n' "$tag"
+    printf 'through a pull request, and publishing is the tag alone.\n'
+    ;;
+esac
 
 step "gate: this release's notes"
 # A release nobody can read is a release nobody adopts, so the notes are a gate
@@ -204,7 +282,7 @@ step "gate: release readiness"
 # one way and a notes section written from a second run would be two results,
 # and only one of them would be the one that refused or did not.
 printf 'The tag is refused unless the system still matches what it records about\n'
-printf 'itself. The section below is what this tag will carry in its notes.\n\n'
+printf 'itself. The section below is what this tag carries in its notes.\n\n'
 if ! "$make_program" -C "$repository" build >/dev/null; then
   refuse "the harness could not be built, so release readiness was never checked and $tag was not cut"
 fi
@@ -219,6 +297,139 @@ else
   cat "$readiness" >&2
   refuse "release readiness is red, so $tag was not cut and nothing was written"
 fi
+
+step "gate: the readiness result is in this tag's notes on $default_branch"
+# The result is stamped into docs/releases/<tag>.md so the notes the tag names
+# say what was true of the tree they describe -- and the tag names a commit on
+# the default branch, so the stamp has to be on the default branch before the
+# tag exists. It gets there the way every other change does, through a pull
+# request, which means a cut that finds it missing stops here and the cut after
+# the merge goes through. That is gated before the walkthrough and the
+# cross-compile for the same reason the notes are: stopping costs seconds here
+# and minutes there.
+#
+# "Current" is the verdict and the pinned definition, not the whole text. The
+# counts in a reading move with the tracker every day, and a harness running
+# beside the cut moves them between the merge and the next cut; a stamp held to
+# the whole text would never be current and the loop would never close. What
+# the notes record is the reading the first cut took; what the tag certifies is
+# that a second reading, on the tree it names, ended the same way.
+#
+# The stamp is committed with plumbing, on top of the commit origin holds, so
+# the checkout is not touched: no branch is checked out, no hook fires, and the
+# working tree is exactly as it was. The branch is named for the tag and the
+# commit it was stamped against, so two cuts at the same commit find the same
+# branch and the second says so rather than pushing over the first.
+[ ! -L "$notes_file" ] ||
+  refuse "$notes_file is a symbolic link, so stamping $tag's readiness result would write outside the repository"
+stamped="$(mktemp "${TMPDIR:-/tmp}/cut-release-stamped.XXXXXX")"
+if YOYODYNE_READINESS_BEGIN="$readiness_begin" YOYODYNE_READINESS_END="$readiness_end" \
+     python3 - "$notes_file" "$readiness" "$stamped" <<'PY'
+import os
+import re
+import sys
+
+begin, end = os.environ["YOYODYNE_READINESS_BEGIN"], os.environ["YOYODYNE_READINESS_END"]
+notes_path, section_path, stamped_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(notes_path, encoding="utf-8") as handle:
+    notes = handle.read()
+with open(section_path, encoding="utf-8") as handle:
+    section = handle.read().strip("\n")
+
+
+def recorded(text):
+    """What a readiness section records: the verdict the workflow ended in, and
+    the definition it was pinned to. Both are lines internal/cli/conformance.go
+    renders; a section carrying neither is somebody's hand edit, and is replaced."""
+    ended = re.search(r"ended in \*\*([^*]+)\*\*", text)
+    pinned = re.search(r"Pinned to `([^`]+)`", text)
+    return (ended.group(1) if ended else None, pinned.group(1) if pinned else None)
+
+
+reading = recorded(section)
+if reading[0] is None:
+    sys.exit("the readiness section carries no verdict line this can compare, so whether the notes are current cannot be judged")
+
+start = notes.find(begin)
+if start == -1:
+    reason = "the notes carry no readiness result"
+    updated = notes.rstrip("\n") + "\n\n" + section + "\n"
+else:
+    stop = notes.find(end, start)
+    if stop == -1:
+        sys.exit("the notes open a release-readiness section and never close it; repair it by hand and cut again")
+    stamp = recorded(notes[start:stop + len(end)])
+    if stamp == reading:
+        print("current: the notes record that the workflow ended in **%s**%s, which is what this reading found"
+              % (reading[0], "" if reading[1] is None else " pinned to `%s`" % reading[1]))
+        sys.exit(0)
+    if stamp[0] is None:
+        reason = "the notes carry a readiness section with no verdict in it"
+    elif stamp[0] != reading[0]:
+        reason = "the notes record that the workflow ended in **%s** and this reading ended in **%s**" % (stamp[0], reading[0])
+    else:
+        def pinned(pin):
+            return "pinned to nothing" if pin is None else "pinned to `%s`" % pin
+        reason = "the notes record a reading %s and this one is %s" % (pinned(stamp[1]), pinned(reading[1]))
+    updated = notes[:start] + section + notes[stop + len(end):]
+
+with open(stamped_path, "w", encoding="utf-8") as handle:
+    handle.write(updated)
+print("stale: %s" % reason)
+sys.exit(3)
+PY
+then
+  stamp_current=1
+else
+  case $? in
+    3) stamp_current=0 ;;
+    *) refuse "$tag's readiness result could not be compared with $notes_file, so $tag was not cut" ;;
+  esac
+fi
+
+if [ "$stamp_current" != "1" ]; then
+  # The branch carries the tag and the commit the stamp was taken against, so a
+  # second cut at the same commit -- the operator running it again before the
+  # merge -- finds the branch rather than pushing over it, and a cut at a later
+  # commit, after a merged stamp went stale, names a branch of its own.
+  stamp_branch="release/$tag-readiness-$(git -C "$repository" rev-parse --short "$head")"
+  if git -C "$repository" rev-parse -q --verify "refs/heads/$stamp_branch" >/dev/null ||
+     { [ "$origin_reachable" = "1" ] &&
+       [ -n "$(git -C "$repository" ls-remote --heads origin "refs/heads/$stamp_branch")" ]; }; then
+    refuse "$tag's readiness result is already on the branch $stamp_branch, waiting to reach $default_branch. Merge its pull request, then cut $tag again; nothing was written"
+  fi
+  # A tree that is HEAD's with the stamped notes in place of the committed
+  # ones, made in an index of its own so the checkout's is untouched.
+  index="$(mktemp "${TMPDIR:-/tmp}/cut-release-index.XXXXXX")"
+  blob="$(git -C "$repository" hash-object -w --path "docs/releases/$tag.md" "$stamped")"
+  GIT_INDEX_FILE="$index" git -C "$repository" read-tree "$head"
+  GIT_INDEX_FILE="$index" git -C "$repository" update-index --add --cacheinfo "100644,$blob,docs/releases/$tag.md"
+  tree="$(GIT_INDEX_FILE="$index" git -C "$repository" write-tree)"
+  stamp_commit="$(git -C "$repository" commit-tree "$tree" -p "$head" -m "$tag: record the release-readiness result in its notes")"
+  git -C "$repository" update-ref "refs/heads/$stamp_branch" "$stamp_commit" ""
+  printf 'committed docs/releases/%s.md on %s (%s), on top of the commit origin/%s holds\n' \
+    "$tag" "$stamp_branch" "$stamp_commit" "$default_branch"
+  if [ "$origin_reachable" != "1" ]; then
+    refuse "$tag's readiness result is not in its notes on origin/$default_branch, and origin is unreachable, so it was committed on the local branch $stamp_branch and the cut stopped there. Push that branch, open a pull request for it, merge it, then cut $tag again -- that branch is the only thing this left behind"
+  fi
+  if ! git -C "$repository" push -q origin "refs/heads/$stamp_branch:refs/heads/$stamp_branch"; then
+    refuse "$tag's readiness result was committed on the local branch $stamp_branch and could not be pushed, so the cut stopped there. Push that branch, open a pull request for it, merge it, then cut $tag again -- that branch is the only thing this left behind"
+  fi
+  printf 'pushed %s to origin\n' "$stamp_branch"
+  if command -v "$gh_program" >/dev/null 2>&1; then
+    if pull_request="$(cd "$repository" && "$gh_program" pr create --base "$default_branch" --head "$stamp_branch" \
+        --title "$tag: record the release-readiness result in its notes" \
+        --body "$(printf 'The release-readiness result for %s, stamped into docs/releases/%s.md by the cut, ahead of the tag. Once this is on %s the next cut of %s goes through.' "$tag" "$tag" "$default_branch" "$tag")" 2>&1)"; then
+      printf 'opened %s\n' "$(printf '%s' "$pull_request" | tail -1)"
+      refuse "$tag's readiness result is not in its notes on origin/$default_branch yet, so it was committed on $stamp_branch and a pull request opened for it, and the cut stopped there. Merge it, then cut $tag again -- that branch and its pull request are the only things this left behind"
+    fi
+    printf '%s\n' "$pull_request" >&2
+    refuse "$tag's readiness result was committed on $stamp_branch and pushed, and the pull request for it could not be opened, so the cut stopped there. Open one for $stamp_branch against $default_branch, merge it, then cut $tag again -- that branch is the only thing this left behind"
+  fi
+  refuse "$tag's readiness result is not in its notes on origin/$default_branch yet, so it was committed on $stamp_branch and pushed, and the cut stopped there. $gh_program is not installed, so open the pull request for $stamp_branch against $default_branch yourself, merge it, then cut $tag again -- that branch is the only thing this left behind"
+fi
+printf 'docs/releases/%s.md carries this reading, so %s names a commit whose notes say what was true of it\n' "$tag" "$tag"
 
 step "gate: the adoption walkthrough"
 printf 'A release is what the install path consumes, so the documented first hour\n'
@@ -246,87 +457,34 @@ if ! "$make_program" -C "$repository" dist-verify VERSION="$tag"; then
   refuse "the release build for $tag failed, so no tag was written"
 fi
 
-step "housekeeping: this tag's readiness result and the tracker's derived exports"
-# Here rather than at the top, for two reasons. The walkthrough and the checks
-# above touch the tracker themselves, so an earlier commit would be dirty again
-# behind them; and every gate has now passed, so this is the first thing written
-# and every refusal above it left the repository exactly as it found it.
-# Committing rather than excepting these paths is what keeps the
-# tag naming a tree with nothing uncommitted in it, so "the archives are the
-# commit the tag names" stays a property rather than a property with a footnote.
-#
-# The readiness section is stamped into the notes here for the same reason it is
-# committed rather than excepted: the notes the tag names then carry the
-# conformance result of the tree the tag names. Writing it earlier would put it
-# in front of gates that had not run; writing it into a file the operator wrote
-# is why it is a delimited section rather than an append -- everything around the
-# markers is theirs and is left exactly as it is.
-[ ! -L "$notes_file" ] ||
-  refuse "$notes_file is a symbolic link, so stamping $tag's readiness result would write outside the repository"
-if ! YOYODYNE_READINESS_BEGIN="$readiness_begin" YOYODYNE_READINESS_END="$readiness_end" \
-     python3 - "$notes_file" "$readiness" <<'PY'
-import os
-import sys
-
-begin, end = os.environ["YOYODYNE_READINESS_BEGIN"], os.environ["YOYODYNE_READINESS_END"]
-notes_path, section_path = sys.argv[1], sys.argv[2]
-
-with open(notes_path, encoding="utf-8") as handle:
-    notes = handle.read()
-with open(section_path, encoding="utf-8") as handle:
-    section = handle.read().strip("\n")
-
-start = notes.find(begin)
-if start == -1:
-    updated = notes.rstrip("\n") + "\n\n" + section + "\n"
-else:
-    stop = notes.find(end, start)
-    if stop == -1:
-        sys.exit("the notes open a release-readiness section and never close it; repair it by hand and cut again")
-    updated = notes[:start] + section + notes[stop + len(end):]
-
-# Written only when it differs, so a cut that changes nothing about the notes
-# leaves their modification time alone and nothing to commit.
-if updated != notes:
-    with open(notes_path, "w", encoding="utf-8") as handle:
-        handle.write(updated)
-PY
-then
-  refuse "$tag's readiness result could not be stamped into $notes_file, so $tag was not cut"
-fi
-
-housekept=()
-for housekeeping_path in "${derived_exports[@]}" "docs/releases/$tag.md"; do
-  if [ -n "$(git -C "$repository" status --porcelain -- "$housekeeping_path")" ]; then
-    housekept+=("$housekeeping_path")
-  fi
-done
-if [ "${#housekept[@]}" -gt 0 ]; then
-  # Hooks are off for this one commit: the tracker installs commit hooks that
-  # export, which would dirty the tree this commit exists to clean. This is the
-  # git 2.9 in the prerequisites above -- older git ignores the option rather
-  # than refusing it, and the hook runs.
-  if ! git -C "$repository" add -- "${housekept[@]}" ||
-     ! git -C "$repository" -c core.hooksPath=/dev/null \
-         commit -q -m "record $tag's readiness result and the tracker's derived exports"; then
-    # Put the index back, so nothing is left staged. Its own stderr stands if it
-    # cannot, which is louder than the refusal that follows. This is the one
-    # refusal that does leave something behind -- the readiness section is in the
-    # notes on disk, because it was written before this commit was attempted --
-    # and it says so rather than repeating the claim the others can make.
-    git -C "$repository" reset -q -- "${housekept[@]}" || true
-    refuse "$tag's housekeeping could not be committed, so $tag was not cut and the index was put back. $notes_file still carries the readiness result stamped into it; check it out again before cutting"
-  fi
-  head="$(git -C "$repository" rev-parse HEAD)"
-  printf 'committed %s\n' "${housekept[*]}"
-  printf 'HEAD: %s\n' "$head"
-else
-  printf 'nothing to commit\n'
-fi
-
 step "tag"
+# The gates ran on HEAD, and HEAD is where origin's default branch was when
+# they started; the tag names that commit and nothing newer. Integration lands
+# on the branch continuously, so by now origin may hold more -- that is fine,
+# the commit the gates ran on is still in its history, and it is said rather
+# than raced after. What is not fine is the branch having been rewritten
+# underneath the cut, which would leave the tag naming a commit the product no
+# longer has; that is refused. Where origin is unreachable the tag is placed on
+# what the gates ran on and the check is named as unchecked, as above.
+if [ "$origin_reachable" = "1" ]; then
+  if git -C "$repository" fetch --quiet origin "$default_branch" 2>/dev/null; then
+    remote="$(git -C "$repository" rev-parse FETCH_HEAD)"
+    if [ "$head" != "$remote" ]; then
+      if git -C "$repository" merge-base --is-ancestor "$head" "$remote"; then
+        printf 'origin/%s has moved on to %s since the gates started; %s names the commit\n' "$default_branch" "$remote" "$tag"
+        printf 'they ran on, which %s still holds\n' "$default_branch"
+      else
+        refuse "origin/$default_branch has been rewritten since the gates started ($remote no longer holds $head), so $tag would name a commit the product does not have. Cut again from the current branch"
+      fi
+    fi
+  else
+    printf 'SKIPPED: origin became unreachable, so whether %s still holds %s was not checked\n' "$default_branch" "$head"
+  fi
+fi
 # Last, and only now: everything above passed, so this tag never needs undoing.
-git -C "$repository" tag -a "$tag" -m "$tag"
+# On the commit the gates ran on, by hash, so a tree the walkthrough left dirty
+# in the tracker's exports changes nothing about what the tag names.
+git -C "$repository" tag -a "$tag" -m "$tag" "$head"
 printf '%s tagged at %s\n' "$tag" "$head"
 
 printf '\n=== cut\n'
@@ -336,12 +494,8 @@ printf '\n=== cut\n'
 # real, `make release` says it failed, and the push it needs never appears.
 cat "$dist_directory/checksums.txt" 2>/dev/null ||
   printf 'the cut succeeded, but %s/checksums.txt is not where it was expected\n' "$dist_directory"
+# The tag alone. It names a commit origin already holds, so there is no branch
+# to carry with it, and a branch push is what a protected default branch
+# refuses.
 printf '\nPublishing is the tag push, which the release workflow acts on:\n'
-if [ "${#housekept[@]}" -gt 0 ]; then
-  # The tag names the housekeeping commit, which origin does not have, so the
-  # branch goes with it -- atomically, because a tag published without its
-  # commit on the branch is the divergence the gate above refuses.
-  printf '  git push --atomic origin %s %s\n' "$default_branch" "$tag"
-else
-  printf '  git push origin %s\n' "$tag"
-fi
+printf '  git push origin %s\n' "$tag"
