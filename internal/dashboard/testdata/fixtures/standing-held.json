@@ -109,7 +109,8 @@
   "needs_human": [
     {
       "what": "every role is held by the provider's usage window, since 2026-09-19T12:02:00Z, until 2026-09-19T18:50:00Z",
-      "whose": "the operator's — the window lifts on the provider's clock, and enabling failover on the agents is what would move the work onto another model before it does"
+      "whose": "the operator's — the window lifts on the provider's clock, and enabling failover on the agents is what would move the work onto another model before it does",
+      "mover": "operator"
     }
   ],
   "reports": {

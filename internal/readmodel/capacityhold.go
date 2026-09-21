@@ -409,7 +409,7 @@ func (h CapacityHold) Attention() (Attention, bool) {
 	if !h.ResetsAt.IsZero() {
 		what += ", until " + h.ResetsAt.UTC().Format(time.RFC3339)
 	}
-	return Attention{What: what, Whose: h.Whose()}, true
+	return Attention{What: what, Whose: h.Whose(), Mover: MoverOperator}, true
 }
 
 // CapacityHoldOf reads the hold from a set of sources, and says why it could

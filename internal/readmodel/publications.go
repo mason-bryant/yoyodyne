@@ -60,6 +60,7 @@ func awaitingForgeAttention(state runstate.State) Attention {
 			What: fmt.Sprintf("run %s promoted %s into %s and its record holds no pull request for branch %s, so nothing has asked the forge to merge it",
 				state.RunID, state.WorkItemID, target, state.Branch),
 			Whose: "the harness's — `yoyo reconcile` looks the request up on the forge by that branch, records it, and arms its merge; a forge that holds none is said on every sweep",
+			Mover: MoverHarness,
 		}
 	}
 	published := *state.PullRequest
@@ -70,16 +71,19 @@ func awaitingForgeAttention(state runstate.State) Attention {
 		return Attention{
 			What:  what,
 			Whose: "the forge's — it merges once the base branch's requirements are met, and `yoyo reconcile` settles the run when it does",
+			Mover: MoverForge,
 		}
 	case state.MergeDrop != nil:
 		return Attention{
 			What:  what,
 			Whose: "the development manager's — the forge dropped the merge; `yoyo triage rearm` repeats it once, or a person merges the request by hand, and `yoyo reconcile` settles it once the forge records the merge",
+			Mover: MoverDevelopmentManager,
 		}
 	default:
 		return Attention{
 			What:  what,
 			Whose: "the operator's — the request is on the forge unmerged; merge it, or leave it, and `yoyo reconcile` settles it once the forge records the merge",
+			Mover: MoverOperator,
 		}
 	}
 }

@@ -354,6 +354,90 @@ type WorkItemRef struct {
 type Attention struct {
 	What  string `json:"what"`
 	Whose string `json:"whose"`
+	// Mover is whose move it is as a value: the same answer Whose opens with,
+	// in the closed vocabulary below. It is carried for the surface that counts
+	// what waits on the operator apart from what waits on each role, so that
+	// surface counts from the reading that worded the entries rather than from
+	// a second parse of them. On 2026-09-20 the dashboard said sixty-four things
+	// needed a human, and three of them were the human's.
+	Mover Mover `json:"mover"`
+}
+
+// Mover is who has to move for one thing on the attention line, as the read
+// model's own vocabulary rather than a surface's reading of the prose beside
+// it. The operator, the three deciding roles, and the harness are the movers
+// the line names for nearly everything on it; the forge is a merge it has
+// queued and will make on its own clock; and a conversation whose work item
+// named no role, or a role that has no conversation of its own, is said as
+// exactly that rather than guessed.
+type Mover string
+
+const (
+	MoverOperator           Mover = "operator"
+	MoverArchitect          Mover = "architect"
+	MoverDevelopmentManager Mover = "development-manager"
+	MoverProductManager     Mover = "product-manager"
+	MoverHarness            Mover = "harness"
+	MoverForge              Mover = "forge"
+	// MoverUnnamed is a conversation the work item marked without naming which
+	// role's, or naming one that carries no conversation. The prose says "the
+	// role it names" or the role's own title, and this says nothing more
+	// definite, because a guess here would count a wait against somebody nobody
+	// asked.
+	MoverUnnamed Mover = "unnamed"
+)
+
+// Movers is the whole vocabulary, in the order a surface counting by it says
+// them: the operator first, because an operator reading what needs a human
+// wants what is his before what is a role's; then the roles in the order the
+// hierarchy runs; then the harness; then the movers that are neither.
+func Movers() []Mover {
+	return []Mover{
+		MoverOperator,
+		MoverArchitect,
+		MoverDevelopmentManager,
+		MoverProductManager,
+		MoverHarness,
+		MoverForge,
+		MoverUnnamed,
+	}
+}
+
+// MoverOfRole is the mover a role's conversation is, for the entries whose
+// mover the work item or the proposal names as a role. Only the three roles
+// that hold conversations map to a mover of their own; the two that work
+// inside a run, and an empty role, are unnamed.
+func MoverOfRole(role domain.AgentRole) Mover {
+	switch role {
+	case domain.RoleArchitect:
+		return MoverArchitect
+	case domain.RoleDevelopmentManager:
+		return MoverDevelopmentManager
+	case domain.RoleProductManager:
+		return MoverProductManager
+	default:
+		return MoverUnnamed
+	}
+}
+
+// intakeMover is whose move a held intake is, as the hold's own record says
+// it: the operator's for a hold they placed or one the development manager
+// escalated to them, the harness's while it carries her decision out or runs a
+// probe, and hers while she decides. It reads the same record IntakeHold.Whose
+// words, and a test holds the two to agreeing.
+func intakeMover(hold runstate.IntakeHold) Mover {
+	if !hold.Braked() {
+		return MoverOperator
+	}
+	brake := hold.Brake
+	switch {
+	case brake.Escalated():
+		return MoverOperator
+	case brake.Decision == runstate.BrakeDecisionRelease, brake.Decision == runstate.BrakeDecisionProbe, brake.Probing():
+		return MoverHarness
+	default:
+		return MoverDevelopmentManager
+	}
 }
 
 // Standing is where the harness stands, in the four lines and nothing else.
@@ -566,7 +650,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.
 	if switches.providerAway && stall.Reason != ReasonProviderAway {
-		needs = append(needs, Attention{What: switches.providerOutage.Says(), Whose: ReasonProviderAway.Whose()})
+		needs = append(needs, Attention{What: switches.providerOutage.Says(), Whose: ReasonProviderAway.Whose(), Mover: MoverOperator})
 	}
 	// The hold is waiting on a person in the one way a window is not: the window
 	// lifts on the provider's clock, and the configuration that let it hold every
@@ -584,6 +668,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 		needs = append(needs, Attention{
 			What:  standing.Reports.Describe(),
 			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the cadence that works it is not keeping up",
+			Mover: MoverProductManager,
 		})
 	}
 	// A stall that is holding admitted work back and is nobody else's line to
@@ -1176,6 +1261,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 			What: fmt.Sprintf("all harness activity is held, since %s",
 				held.operator.HeldAt.UTC().Format(time.RFC3339)),
 			Whose: "the operator's — nothing runs until `yoyo resume` lifts it",
+			Mover: MoverOperator,
 		})
 	}
 	if held.intakeHeld {
@@ -1192,6 +1278,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 			What: fmt.Sprintf("intake is held, since %s: %s",
 				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(intakeClause(held.intake), maxRefusalBytes)),
 			Whose: held.intake.Whose(),
+			Mover: intakeMover(held.intake),
 		})
 	}
 	for _, paused := range held.pausing {
@@ -1199,6 +1286,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 			What: fmt.Sprintf("directive %s is unresolved: %s",
 				paused.ID, singleLine(paused.Unresolved, maxRefusalBytes)),
 			Whose: "the operator's — the work it affects waits until `yoyo directive resolve` settles it",
+			Mover: MoverOperator,
 		})
 	}
 	problem := strings.Join(held.problems, "; ")
@@ -1213,6 +1301,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 				What: fmt.Sprintf("a change to %s is proposed and undecided (%s)", proposal.Artifact, proposal.ID),
 				Whose: fmt.Sprintf("the %s's — nothing reaches the document until they or the operator decide it",
 					proposal.Owner),
+				Mover: MoverOfRole(proposal.Owner),
 			})
 		}
 	}
@@ -1232,6 +1321,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 			attention = append(attention, Attention{
 				What:  fmt.Sprintf("run %s of %s ended still owing a step", state.RunID, state.WorkItemID),
 				Whose: "the operator's — `yoyo reconcile` reports which and settles it",
+				Mover: MoverOperator,
 			})
 		}
 	}
@@ -1271,12 +1361,14 @@ func Held(awaitingDecision, awaitingCarryOut int) []Attention {
 		attention = append(attention, Attention{
 			What:  fmt.Sprintf("%s %s the development manager's decision", count(awaiting, "admitted item"), awaits(awaiting)),
 			Whose: "the development manager's — nothing pulls a stopped item until she decides what happens to it",
+			Mover: MoverDevelopmentManager,
 		})
 	}
 	if awaiting := awaitingCarryOut; awaiting > 0 {
 		attention = append(attention, Attention{
 			What:  fmt.Sprintf("%s %s carry-out of a decision already recorded", count(awaiting, "admitted item"), awaits(awaiting)),
 			Whose: "the harness's — the decision is made, and what is outstanding is the harness acting on it",
+			Mover: MoverHarness,
 		})
 	}
 	return attention
@@ -1306,12 +1398,14 @@ func HandedOff(queue backlog.Queue) []Attention {
 			continue
 		}
 		whose := "the role it names — in conversation; no run will ever be started for it"
-		if role := entry.Executor.Role(); role != "" {
+		role := entry.Executor.Role()
+		if role != "" {
 			whose = "the " + role.Title() + "'s — in conversation; no run will ever be started for it"
 		}
 		attention = append(attention, Attention{
 			What:  fmt.Sprintf("%s is admitted for %q rather than a developer run", entry.ID, entry.Executor),
 			Whose: whose,
+			Mover: MoverOfRole(role),
 		})
 	}
 	return attention

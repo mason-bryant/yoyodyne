@@ -74,6 +74,7 @@ func (s *Services) Attention() []Attention {
 		attention = append(attention, Attention{
 			What:  fmt.Sprintf("the %s service is degraded: %s", child.Service, singleLine(child.Reason, maxRefusalBytes)),
 			Whose: "the operator's — the supervisor has stopped restarting it; fix the cause, then `yoyo stop` and `yoyo start` bring it back, or start the part by hand and the supervisor takes it back",
+			Mover: MoverOperator,
 		})
 	}
 	return attention
