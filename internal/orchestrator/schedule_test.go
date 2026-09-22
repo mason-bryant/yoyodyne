@@ -44,6 +44,13 @@ func TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn(t *testing
 	t.Parallel()
 
 	harness := newRealScheduleHarness(t, 2, "yoyodyne-alpha", "yoyodyne-beta", "yoyodyne-gamma")
+	// Worktrees are registered and unregistered underneath these runs for the
+	// whole test, by Git run outside the worktree manager and so outside its
+	// registry lease. This test was one of the two seen failing intermittently
+	// on a rebase that crossed another run's half-written registration, so the
+	// condition is part of what it judges rather than something that has to be
+	// turned on: see startCreationLoop.
+	startCreationLoop(t, harness.repository)
 	// Two developers must be inside at once before either is let out. With a
 	// capacity of one this deadlocks until the rendezvous times out, which is
 	// exactly the failure the criterion is about.

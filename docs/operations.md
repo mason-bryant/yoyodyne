@@ -1489,8 +1489,13 @@ hold the registry lease the harness's own creations take, so under it an
 unfinished entry cannot be a creation of the harness's own still writing; and
 both leave alone an entry younger than a minute, because an add somebody else
 started — a person's, or one an agent ran inside a checkout — takes no lease and
-is told from a dead one only by having stopped writing. A creation waits that
-minute out rather than failing over the entry. What is cleared is the
+is told from a dead one only by having stopped writing. A creation waits such an
+entry out rather than failing over it, and the minute is the bound on that wait
+rather than its length: what it is really waiting for is the other add getting
+past the one file a walk dies on, which takes milliseconds, so a creation that
+meets a live neighbour is held up for about as long as that neighbour takes to
+register. Only an add that has genuinely stopped costs the whole
+minute, once, and is then cleared. What is cleared is the
 registration alone: the branch the add made first is a branch like any other,
 and a directory it left on disk is left where it is, named in the line so you
 know it is not a worktree any more.

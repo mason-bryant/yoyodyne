@@ -1209,6 +1209,12 @@ func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testin
 
 	for walker := 0; walker < 4; walker++ {
 		manager := newManager()
+		// Made here rather than by the first `--force` below, because Git reads
+		// the registrations to check a branch is not checked out elsewhere and a
+		// branch that does not exist yet cannot be, so moving one that is
+		// already there is what makes every iteration a walk.
+		branch := fmt.Sprintf("walker-%d", walker)
+		runGit(t, repository, "branch", branch, "HEAD")
 		running.Add(1)
 		go func() {
 			defer running.Done()
@@ -1224,7 +1230,6 @@ func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testin
 				// twice — the re-run, and then the bookkeeping answering what Git
 				// refused — while a branch has only the lease and the re-run, so
 				// a crossing it met would come back as a refusal nothing softens.
-				branch := fmt.Sprintf("walker-%d", walker)
 				result, err := manager.run(context.Background(), "-C", repository, "branch", "--force", branch, "HEAD")
 				if err != nil {
 					failures <- fmt.Errorf("branch beside a creation: %w", err)
@@ -2715,6 +2720,106 @@ func TestManagerBoundsGitCommandsByAFlatDeadlineOnly(t *testing.T) {
 		}
 		if command.IdleTimeout != 0 {
 			t.Fatalf("git %v carries an idle bound of %s", command.Args, command.IdleTimeout)
+		}
+	}
+}
+
+// What the re-run covers is decided by one regular expression over Git's own
+// wording, and narrowing it to a single file would be a quiet regression if Git
+// refused a walk over any of the others. So which shapes Git actually refuses is
+// asked of Git rather than assumed: every file a registration carries is emptied
+// and then removed in turn, and a walk is run over each shape.
+//
+// On git 2.50.1 exactly one of the twelve refuses anything — an empty commondir,
+// which fails both the listing and a branch with the message the pattern is
+// built from. A missing commondir does not, and neither does gitdir, HEAD, index
+// or locked in either state: Git walks over them in silence. That is what makes
+// the pattern's single file the whole of what there is to cover, and this test
+// is what says so when a future Git changes its mind.
+func TestOnlyAnEmptyCommondirMakesGitRefuseARegistrationWalk(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runGit(t, repository, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "crossed"), "HEAD")
+	registration := filepath.Join(repository, ".git", "worktrees", "crossed")
+	saved := filepath.Join(t.TempDir(), "saved")
+	// The branch is made before the walks so that moving it is a walk at all:
+	// `git branch --force` reads the registrations to check the branch is not
+	// checked out somewhere else, and a branch that does not exist yet cannot be
+	// checked out anywhere, so Git skips the reading and the shape under test is
+	// never reached.
+	runGit(t, repository, "branch", "crossing-probe", "HEAD")
+
+	for _, file := range []string{"commondir", "gitdir", "HEAD", "index", "locked"} {
+		for _, shape := range []string{"empty", "missing"} {
+			name := file + " " + shape
+			// Every shape is made from the same finished entry, so one shape's
+			// damage is never read as the next one's.
+			copyTree(t, registration, saved)
+			switch shape {
+			case "empty":
+				writeFile(t, registration, file, "")
+			case "missing":
+				if err := os.Remove(filepath.Join(registration, file)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("Remove(%s) error = %v", name, err)
+				}
+			}
+
+			refusals := 0
+			for _, walk := range [][]string{
+				{"worktree", "list", "--porcelain"},
+				{"branch", "--force", "crossing-probe", "HEAD"},
+			} {
+				output, err := attemptGit(repository, walk...)
+				if err == nil {
+					continue
+				}
+				refusals++
+				if !crossedRegistration.MatchString(output) {
+					t.Errorf("git %v over %q refused with something the re-run does not cover: %s", walk, name, strings.TrimSpace(output))
+				}
+			}
+			if file == "commondir" && shape == "empty" {
+				if refusals != 2 {
+					t.Errorf("%q refused %d of 2 walks, want both — the shape the whole re-run is for", name, refusals)
+				}
+			} else if refusals != 0 {
+				t.Errorf("%q refused %d walk(s); Git refuses a shape this change believed it walked over in silence", name, refusals)
+			}
+
+			if err := os.RemoveAll(registration); err != nil {
+				t.Fatalf("RemoveAll() error = %v", err)
+			}
+			copyTree(t, saved, registration)
+			if err := os.RemoveAll(saved); err != nil {
+				t.Fatalf("RemoveAll(saved) error = %v", err)
+			}
+		}
+	}
+}
+
+// copyTree copies one flat directory of small files, which is what a worktree
+// registration is.
+func copyTree(t *testing.T, from, to string) {
+	t.Helper()
+	if err := os.MkdirAll(to, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", to, err)
+	}
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", from, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			copyTree(t, filepath.Join(from, entry.Name()), filepath.Join(to, entry.Name()))
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(from, entry.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", entry.Name(), err)
+		}
+		if err := os.WriteFile(filepath.Join(to, entry.Name()), content, 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", entry.Name(), err)
 		}
 	}
 }

@@ -44,9 +44,16 @@ const (
 	// lease and so cannot be told from a dead one by the lease alone. What tells
 	// them apart is that a live add keeps writing — it puts the index down
 	// through a lock file in the same directory — and a dead one stopped. A
-	// creation waits the grace out rather than failing over an entry inside it,
-	// because the grace is short and a run lost at creation is not.
+	// creation waits such an entry out rather than failing over it, because a
+	// run lost at creation costs more than the wait.
 	unfinishedRegistrationGrace = time.Minute
+	// unfinishedRegistrationPoll is how often that wait looks again. It is a
+	// poll rather than one sleep to the end of the grace because what the wait
+	// is actually for is the neighbouring add getting past the two files a walk
+	// dies on, which takes milliseconds: sleeping the whole grace would make
+	// every creation that met a live add beside it a minute slower, and the
+	// grace is the bound on the wait rather than its length.
+	unfinishedRegistrationPoll = 20 * time.Millisecond
 	// initializingLock is what `git worktree add` writes into an entry's locked
 	// file before it fills the entry in, and removes once it has. It is Git's
 	// own marker for an add in flight, so an entry still carrying it with no
@@ -129,15 +136,8 @@ func (m *Manager) settleRegistrations(ctx context.Context, wait bool) ([]Unfinis
 		return nil, err
 	}
 	if wait {
-		if remaining := longestRemainingGrace(unfinished); remaining > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(remaining):
-			}
-			if unfinished, err = readUnfinishedRegistrations(root); err != nil {
-				return nil, err
-			}
+		if unfinished, err = waitOutLiveRegistrations(ctx, root, unfinished); err != nil {
+			return nil, err
 		}
 	}
 	settled := make([]UnfinishedRegistration, 0, len(unfinished))
@@ -152,6 +152,34 @@ func (m *Manager) settleRegistrations(ctx context.Context, wait bool) ([]Unfinis
 		settled = append(settled, entry.UnfinishedRegistration)
 	}
 	return settled, nil
+}
+
+// waitOutLiveRegistrations waits while an entry that would stop a registration
+// walk is young enough to be an add somebody else is still running, reading the
+// bookkeeping again until either no such entry is left or the ones that are have
+// aged past the grace.
+//
+// It ends on the first of those far more often than the second, and that is the
+// point of looking again rather than sleeping to the end of the grace. An add in
+// flight stops blocking the moment it writes the file a walk dies on, which is
+// within milliseconds of registering; what is left after the grace is an add
+// that stopped, and clearing that is what the caller is here for. One sleep to
+// the end of the grace would charge every creation that happened to meet a live
+// neighbour a full minute for a wait that was over almost at once.
+func waitOutLiveRegistrations(ctx context.Context, root repowrite.Root, unfinished []unfinishedRegistration) ([]unfinishedRegistration, error) {
+	for longestRemainingGrace(unfinished) > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(unfinishedRegistrationPoll):
+		}
+		read, err := readUnfinishedRegistrations(root)
+		if err != nil {
+			return nil, err
+		}
+		unfinished = read
+	}
+	return unfinished, nil
 }
 
 // longestRemainingGrace is how long the youngest blocking entry has left inside

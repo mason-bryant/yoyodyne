@@ -77,6 +77,18 @@ const (
 // It is Git's own wording, from the one place Git reads a registration's
 // commondir, and it names the entry, which is what lets a listing that keeps
 // failing be checked against the bookkeeping rather than believed.
+//
+// Matching one file rather than any of the entry's is not a narrowing: an empty
+// commondir is the only half-written shape Git refuses a walk over at all.
+// Every other file of a registration — gitdir, HEAD, index, locked — is walked
+// over in silence whether it is empty or absent, and so is a commondir that is
+// missing rather than empty, which is why the walk survives an add killed a
+// moment earlier and dies on one killed a moment later. That is a claim about
+// the Git on this machine rather than about Git in general, so it is asked of
+// Git rather than asserted here — see
+// TestOnlyAnEmptyCommondirMakesGitRefuseARegistrationWalk, which fails if a
+// future Git starts refusing over some other file and this pattern therefore
+// stops covering it.
 var crossedRegistration = regexp.MustCompile(`failed to read (?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\]commondir`)
 
 // maintenanceOptions stop a Git command from handing this repository to Git's

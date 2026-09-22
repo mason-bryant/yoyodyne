@@ -3769,33 +3769,44 @@ func pipelineRepository(t *testing.T) string {
 	t.Cleanup(func() { removeLinkedPipelineWorktrees(t, repository) })
 	runPipelineGit(t, repository, "add", ".")
 	runPipelineGit(t, repository, "commit", "-m", "initial")
-	startCreationLoop(t, repository)
+	creationLoopIfAsked(t, repository)
 	return repository
 }
 
-// creationLoopVariable turns on a worktree-creation loop against every
-// repository a pipeline test builds. It is off by default and nothing in
-// `make check` sets it.
+// creationLoopVariable turns the loop below on for every repository a pipeline
+// test builds, rather than only for the two tests that always run under it.
 const creationLoopVariable = "YOYODYNE_TEST_CREATION_LOOP"
 
-// startCreationLoop runs `git worktree add` and `git worktree remove` against
-// this test's own repository for as long as the test lasts, when
-// YOYODYNE_TEST_CREATION_LOOP is set.
-//
-// It exists for a question a single pass of the suite cannot answer. The runs a
-// concurrent-runs test hosts write one repository's worktree bookkeeping, and a
-// command that walks that bookkeeping while another run is registering used to
-// fail outright — a rebase was seen doing it with `failed to read
-// .git/worktrees/<other>/commondir`. Whether that still reproduces is a
-// question about a window measured in milliseconds, so the honest way to ask it
-// is to widen the window: create and remove registrations continuously
-// underneath the runs and see whether anything fails. That is a stress
-// condition rather than an assertion, which is why it is a switch rather than
-// something every run of the suite pays for:
+// creationLoopIfAsked starts the loop for every pipeline test when
+// YOYODYNE_TEST_CREATION_LOOP is set. Most pipeline tests are about something
+// else and would only pay for it, so they get it on request:
 //
 //	YOYODYNE_TEST_CREATION_LOOP=1 go test ./internal/orchestrator \
 //	  -run 'TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn|TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand' \
 //	  -count=20 -race
+func creationLoopIfAsked(t *testing.T, repository string) {
+	t.Helper()
+	if os.Getenv(creationLoopVariable) == "" {
+		return
+	}
+	startCreationLoop(t, repository)
+}
+
+// startCreationLoop runs `git worktree add` and `git worktree remove` against
+// this test's own repository for as long as the test lasts.
+//
+// It exists for a question a single pass of a test cannot answer. The runs a
+// concurrent-runs test hosts write one repository's worktree bookkeeping, and a
+// command that walks that bookkeeping while another run is registering used to
+// fail outright — a rebase was seen doing it with `failed to read
+// .git/worktrees/<other>/commondir`. Whether that still happens is a question
+// about a window measured in milliseconds, so the way to ask it is to widen the
+// window: register and unregister worktrees continuously underneath the runs
+// and see whether anything fails.
+//
+// The two tests that were seen failing that way call this directly, so the
+// condition they have to survive is judged by `make test` and `make race` like
+// any other, rather than being something somebody has to remember to turn on.
 //
 // The loop is Git run directly rather than through the worktree manager, so it
 // takes no registry lease — which is the point. A run's own Git is leased and
@@ -3808,9 +3819,6 @@ const creationLoopVariable = "YOYODYNE_TEST_CREATION_LOOP"
 // about to delete.
 func startCreationLoop(t *testing.T, repository string) {
 	t.Helper()
-	if os.Getenv(creationLoopVariable) == "" {
-		return
-	}
 	// One entry is held for the whole loop, because Git deletes worktrees/
 	// itself when its last entry goes and a walk crossing that dies on the
 	// directory rather than on an entry — a different race from the one this is
