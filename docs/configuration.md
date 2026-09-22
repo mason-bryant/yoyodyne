@@ -1338,7 +1338,32 @@ repair attempt, and the second and later copies within one run are dropped: one
 disagreement is one proposal, rather than one per attempt for whoever decides to
 answer several times over. Two proposals count as the same argument when they
 ask for the same change to the same document; restating the reasoning does not
-make a new one.
+make a new one, and **neither does rewording what is asked for**. A developer
+handed a repair writes its block again rather than copying the one before it, so
+one argument arrives spelled two ways, and a comparison that read the wording
+literally put both of them in front of whoever decides.
+
+What is compared is the share of content words the two changes have in common,
+with the function words dropped — those are what any two English sentences share
+whatever they say, so leaving them in narrows the very gap this is reading.
+Different documents are never one argument however alike the two read, because
+they are decided by different owners. The boundary is measured rather than
+picked: on the five proposals one run made about one design, the two pairs the
+architect decided as one argument each score 0.47 and 0.97, and the closest pair
+the architect decided as two — the same fact asked for in two different sections
+— scores 0.28. It sits at 0.4, nearer the duplicates than the midpoint, because
+the two errors do not cost the same: a restatement that gets through costs its
+owner a second copy of an argument they are already reading, and two arguments
+folded into one cost the second of them its decision, silently. Those five
+proposals are quoted in the test beside the comparison, so moving the boundary
+fails there rather than in an owner's queue.
+
+What it reaches is one process of one run. Nothing compares a proposal against
+one an earlier run raised, and nothing carries the comparison across a process
+either — so a run continued in a second process, by a usage-limit pause that
+exited on its in-process bound or by a repair triage re-entering it, begins with
+an empty memory and records a restatement made there as a second proposal. That
+was as true of the literal comparison as it is of this one.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The

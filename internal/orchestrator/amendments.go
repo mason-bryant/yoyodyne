@@ -14,6 +14,7 @@ package orchestrator
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
@@ -68,8 +69,8 @@ func (a *activeRun) collectAmendments(role domain.AgentRole, entries []amendment
 		// several times to clear the queue. The second and later copies within a run
 		// are dropped rather than noted, because nothing was lost — the first one is
 		// recorded and is the one waiting.
-		key := amendmentKey(proposal)
-		if a.proposedAmendments[key] {
+		argument := amendmentArgumentOf(proposal)
+		if a.hasProposedArgument(argument) {
 			continue
 		}
 		if err := a.pipeline.Amendments.Append(proposal); err != nil {
@@ -79,24 +80,132 @@ func (a *activeRun) collectAmendments(role domain.AgentRole, entries []amendment
 		// Remembered only once it is actually recorded, so a proposal the log
 		// refused is not treated as already made: if the developer argues it again
 		// on the next attempt and the log has recovered, that attempt keeps it.
-		a.rememberAmendment(key)
+		a.rememberAmendment(argument)
 		a.outcome.Amendments = append(a.outcome.Amendments, proposal)
 	}
 }
 
-// amendmentKey is what makes two proposals the same argument: the same change to
-// the same document. The reasoning is deliberately not part of it — a developer
-// that restates its case differently on the next attempt is making the same
-// request, and treating that as new would defeat the whole of this.
-func amendmentKey(proposal amendment.Proposal) string {
-	return proposal.Artifact + "\x00" + proposal.Change
+// amendmentArgument is a recorded proposal reduced to what decides whether the
+// next one is the same argument: the document it is about, and the content words
+// of what it asks for. The reasoning is deliberately no part of it — a developer
+// that restates its case differently is making the same request, and treating
+// that as new would defeat the whole of this.
+//
+// What the reduction adds is that the *change* may be reworded too, which the
+// literal comparison this replaces could not see. A developer asked for a repair
+// writes its block again from scratch rather than copying the one before it, so
+// the same request arrives spelled differently: run-62e78d87 proposed five
+// changes to one design and two pairs of them were one argument each, one pair
+// differing by three words and the other rewritten end to end.
+type amendmentArgument struct {
+	artifact string
+	// words is the change with its function words removed, which is what carries
+	// the request. Those words are what any two pieces of English prose share
+	// whatever they say, so leaving them in raises every pair's likeness toward
+	// every other's and narrows exactly the gap this is being asked to read: on
+	// the five proposals above it halves the margin between the pairs that are
+	// one argument and the closest pair that is not.
+	words map[string]bool
+	// folded is the change itself, for the proposal whose wording is function
+	// words and nothing else. There is no request left to compare there, so the
+	// only safe reading of it is the literal one.
+	folded string
 }
 
-func (a *activeRun) rememberAmendment(key string) {
-	if a.proposedAmendments == nil {
-		a.proposedAmendments = map[string]bool{}
+// amendmentRestatementLikeness is how alike two changes to one document must be
+// to be one argument: the share of content words they have in common, counted
+// over the words in either of them.
+//
+// It is measured rather than guessed. On run-62e78d87's five proposals the two
+// pairs the architect decided as one argument each score 0.47 and 0.97, and the
+// closest pair decided as two — both asking for the same fact to be recorded,
+// in different sections of the design — scores 0.28. This sits nearer the
+// duplicates than the midpoint deliberately, because the two errors do not cost
+// the same: letting a restatement through costs the owner a second copy of an
+// argument they are already reading, and folding two arguments into one costs
+// the second of them its decision, silently. So it leaves 0.12 between itself
+// and the closest pair that is not one argument, against 0.07 between itself
+// and the closest pair that is.
+//
+// The evidence is one run's five proposals, which is all there is: those are
+// the only amendments anybody has decided. A second run's worth is worth
+// re-measuring against.
+const amendmentRestatementLikeness = 0.4
+
+func amendmentArgumentOf(proposal amendment.Proposal) amendmentArgument {
+	return amendmentArgument{
+		artifact: proposal.Artifact,
+		words:    amendmentContentWords(proposal.Change),
+		folded:   strings.Join(strings.Fields(strings.ToLower(proposal.Change)), " "),
 	}
-	a.proposedAmendments[key] = true
+}
+
+// sameAmendmentArgument reports whether a proposal asks for something this run
+// has already recorded. Two changes to different documents are never one
+// argument however alike they read: the owner decides them one document at a
+// time, and a document is the one thing about a proposal the agent does not get
+// to assert loosely.
+func sameAmendmentArgument(recorded, proposed amendmentArgument) bool {
+	if recorded.artifact != proposed.artifact {
+		return false
+	}
+	if len(recorded.words) == 0 || len(proposed.words) == 0 {
+		return recorded.folded == proposed.folded
+	}
+	shared := 0
+	for word := range proposed.words {
+		if recorded.words[word] {
+			shared++
+		}
+	}
+	union := len(recorded.words) + len(proposed.words) - shared
+	return float64(shared)/float64(union) >= amendmentRestatementLikeness
+}
+
+// amendmentContentWords is the change reduced to the words that carry the
+// request: lower-cased, split on everything that is not a letter or a digit, and
+// with the function words below dropped.
+func amendmentContentWords(change string) map[string]bool {
+	words := map[string]bool{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(change), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if !amendmentFunctionWords[word] {
+			words[word] = true
+		}
+	}
+	return words
+}
+
+// amendmentFunctionWords are the English words a proposal shares with every other
+// proposal because it is a sentence, rather than because it asks for the same
+// thing. It is articles, conjunctions, prepositions, pronouns, and auxiliaries,
+// and deliberately nothing from this product's own vocabulary: a list that
+// dropped "design" or "grant" would be tuning the comparison on the arguments it
+// has already seen.
+var amendmentFunctionWords = func() map[string]bool {
+	words := map[string]bool{}
+	for _, word := range strings.Fields(`a about an and any are as at be been being between both but by
+can could did do does each every for from had has have if in into is it its may
+might must no nor not of on onto or other over own s same should so some such
+than that the their them then there these they this those to under until up was
+were what when where which while who whom whose will with within would`) {
+		words[word] = true
+	}
+	return words
+}()
+
+func (a *activeRun) hasProposedArgument(argument amendmentArgument) bool {
+	for _, recorded := range a.proposedAmendments {
+		if sameAmendmentArgument(recorded, argument) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *activeRun) rememberAmendment(argument amendmentArgument) {
+	a.proposedAmendments = append(a.proposedAmendments, argument)
 }
 
 // artifacts is the recorded artifact set a proposal's document is resolved
