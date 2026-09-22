@@ -2206,9 +2206,11 @@ for the supervisor that will start it with the rest. The supervisor is here
 not yet its child: with the entry enabled, `yoyo start` says so and names the
 work that adopts it, `yoyodyne-ifd.414`. Until that lands, this command is
 started by hand and still binds loopback and serves on `--port`, exactly as
-below.
+below; the one thing it reads from the entry is `token`, and it reads that
+whether or not the entry is enabled.
 
-It prints two things when it starts, and the second of them once:
+With `services.dashboard.token` at its `generated` default it prints two things
+when it starts, and the second of them once:
 
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
@@ -2216,6 +2218,31 @@ token: 9f2c41ab7e05…
 the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
+
+**A configured token outlives a restart.** Set `services.dashboard.token` to
+`keychain` or `file` and the command reads the token from the store the
+setting names — the keychain item `yoyo-dashboard.<product id>` under the
+account `yoyo`, or the file `<state root>/products/<product id>/dashboard.token`
+— and serves under it, so a restart serves under the same token and nobody is
+handed a fresh one to paste. It prints where the token was read from and never
+the value:
+
+```text
+dashboard for yoyodyne serving at http://127.0.0.1:8765/
+the token was read from the keychain item yoyo-dashboard.yoyodyne under the account yoyo, as services.dashboard.token names, and is not printed
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>
+it outlives a restart: a restarted dashboard reads the same one; stop with ctrl-c
+```
+
+A store that does not hold the token refuses to start, before anything is
+bound, with the command that stores it — the same one
+[`yoyo doctor`](#checking-the-installation) prints under `service:dashboard`:
+`security add-generic-password -s yoyo-dashboard.<product id> -a yoyo -w` for
+the keychain, which prompts for the token so it never reaches a shell history,
+and `mkdir -p … && (umask 077 && openssl rand -hex 32 > …/dashboard.token)` for
+the file. A stored token is accepted from the bearer header alone, exactly as a
+generated one is. The keychain is macOS's; on another platform the `keychain`
+source refuses by name and says the file is the store that platform has.
 
 Open the URL, paste the token into the page, and the page shows where the
 harness stands and asks again every ten seconds. The same answers are served as
@@ -2433,8 +2460,10 @@ plane, and work is still directed from the conversation and the commands above.
   keeps the token in the tab's session storage, which is scoped to the origin
   with its port, and sends it as `Authorization: Bearer` on each fetch; the
   server accepts it from that header and from nowhere else. Session storage
-  ends with the tab, so a new tab asks again. A restarted dashboard generates
-  a new token, so a bookmark outlives the token and the page simply asks again.
+  ends with the tab, so a new tab asks again. A restarted dashboard under the
+  `generated` source generates a new token, so a bookmark outlives the token
+  and the page simply asks again; under `keychain` or `file` it reads the same
+  one, and what the page asks for after a restart is the token it already had.
 - **It refuses anything that did not come from its own address.** A request
   whose `Host` is not the address it bound — a name somebody pointed at
   loopback — and a request whose `Origin` is some other page scripting calls

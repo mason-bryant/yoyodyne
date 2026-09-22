@@ -1287,7 +1287,7 @@
         }
       })
       .catch(function (error) {
-        onFailure("the dashboard could not be reached (" + error.message + "); the yoyo dashboard process may have stopped, and starting it again prints a new token");
+        onFailure("the dashboard could not be reached (" + error.message + "); the yoyo dashboard process may have stopped, and starting it again prints a new token unless services.dashboard.token names a stored one");
       });
   }
 
