@@ -385,6 +385,11 @@ type Client struct {
 	Binary  string
 	Dir     string
 	Timeout time.Duration
+	// readBack is how a claim confirms the clear of a stale blocked status. The
+	// zero value is the default bound; it is set only by this package's tests,
+	// which drive a clear that lands late and one that never lands without
+	// waiting the seconds the real bound spans.
+	readBack staleBlockClearReadBack
 }
 
 var (
@@ -816,6 +821,18 @@ var staleBlockedRefusal = regexp.MustCompile(`(?i)not claimable: status blocked`
 // does wait on unfinished work is refused with that work named, so the record
 // says which of the two it was.
 //
+// The correction is confirmed before it is relied on. The status is read back
+// after the write and the claim is made only once a read returns open, retrying
+// within a bounded wait; the account of that read-back is returned beside the
+// item, and beside the error where no read confirmed it, so the run's record
+// can say which of its three endings the clear had. On 2026-09-20 the claim on
+// yoyodyne-ifd.415 recorded the clear as made and bd refused the claim that
+// followed on the same status, so the re-run tripped on its own correction —
+// the stall in the class 415 was admitted to dedicate a slot to.
+//
+// The account is nil on a claim that met no stale status, which is nearly all
+// of them.
+//
 // What this deliberately does not ask is the other half of the backlog's answer:
 // a governance hold — a stoppage whose change is still on a branch, an escalation
 // nobody has decided. A hold is the harness's own durable record rather than
@@ -824,15 +841,77 @@ var staleBlockedRefusal = regexp.MustCompile(`(?i)not claimable: status blocked`
 // already answered it. The scheduler consults the holds before it chooses; a
 // re-run is a decision the development manager recorded about that exact
 // stoppage; and an operator naming an item is the operator deciding.
-func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
+func (c Client) Claim(ctx context.Context, id string) (WorkItem, *StaleBlockClear, error) {
 	if err := validateIssueID(id); err != nil {
-		return WorkItem{}, err
+		return WorkItem{}, nil, err
 	}
 	item, err := c.claim(ctx, id)
 	if err == nil || !staleBlockedRefusal.MatchString(err.Error()) {
-		return item, err
+		return item, nil, err
 	}
 	return c.claimPastStaleBlock(ctx, id, err)
+}
+
+// StaleBlockClear is the account of a stale blocked status a claim cleared on
+// its way to the item: what the tracker said when the status was read back
+// after the write, and how many reads it took to say it.
+type StaleBlockClear struct {
+	Outcome domain.StaleBlockClearOutcome
+	// Reads is how many times the status was read back after the write, the
+	// read that confirmed it included. On an unconfirmed clear it is every read
+	// the bounded wait allowed.
+	Reads int
+	// Status is what the last read returned: open where a read confirmed the
+	// clear, and whatever the tracker still held where none did.
+	Status string
+}
+
+// staleBlockClearReadBack bounds how the clear of a stale blocked status is
+// confirmed: how many times the status is read back after the write, and how
+// long the reads are spaced. Five reads a second apart is a wait a tracker that
+// commits late can land inside and a claim that will not land can fail inside,
+// and it is a bound rather than a retry until: a clear no read confirms within
+// it is reported as unconfirmed, with what the tracker returned, and never as
+// cleared.
+type staleBlockClearReadBack struct {
+	reads    int
+	interval time.Duration
+	// sleep waits between reads. Nil is time.Sleep bounded by the context; a
+	// test that drives a clear landing late replaces it so the wait is a count
+	// rather than a clock.
+	sleep func(context.Context, time.Duration) error
+}
+
+const (
+	defaultStaleBlockClearReads    = 5
+	defaultStaleBlockClearInterval = time.Second
+)
+
+func (r staleBlockClearReadBack) settled() staleBlockClearReadBack {
+	if r.reads < 1 {
+		r.reads = defaultStaleBlockClearReads
+	}
+	if r.interval <= 0 {
+		r.interval = defaultStaleBlockClearInterval
+	}
+	if r.sleep == nil {
+		r.sleep = sleepWithin
+	}
+	return r
+}
+
+// sleepWithin waits for the interval or until the context ends, whichever is
+// first, and reports the context's ending as the reason where that is what
+// ended the wait.
+func sleepWithin(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c Client) claim(ctx context.Context, id string) (WorkItem, error) {
@@ -857,40 +936,108 @@ func (c Client) claim(ctx context.Context, id string) (WorkItem, error) {
 // item would read as blocked to everything that opens it; and the harness owns
 // tracker writes, so recording what it corrected — in the notes, appended — is the
 // account of a change nobody else made.
-func (c Client) claimPastStaleBlock(ctx context.Context, id string, refusal error) (WorkItem, error) {
+//
+// The write is not the correction; the read that returns open is. The note the
+// write carries says the harness is clearing the status and that the claim
+// follows once the tracker reads it back as open, and the claim is made on that
+// read and on nothing else. Where no read within the bound returns open, the
+// clear is reported as unconfirmed with the status the tracker returned, a note
+// saying so is appended, and the item is left for the next pull rather than
+// claimed — a claim made on a status the tracker still holds as blocked is the
+// refusal this was entered on, met a second time.
+func (c Client) claimPastStaleBlock(ctx context.Context, id string, refusal error) (WorkItem, *StaleBlockClear, error) {
 	item, err := c.Show(ctx, id)
 	if err != nil {
-		return WorkItem{}, errors.Join(refusal, fmt.Errorf("re-read %s to judge whether its blocked status is stale: %w", id, err))
+		return WorkItem{}, nil, errors.Join(refusal, fmt.Errorf("re-read %s to judge whether its blocked status is stale: %w", id, err))
 	}
 	// Only the status bd refused on is corrected. A re-read that finds the item
 	// somewhere else is the race rather than the disagreement — most sharply where
 	// it now reads as claimed, which would be another run holding it — and
 	// reopening that item is taking work off whoever has it.
 	if item.Status != statusBlocked {
-		return WorkItem{}, fmt.Errorf(
+		return WorkItem{}, nil, fmt.Errorf(
 			"%s is at status %q when re-read under the claim, not blocked as bd refused it, so nothing here is a stale status to correct: %w",
 			id, item.Status, refusal)
 	}
 	unfinished, err := c.unfinished(ctx)
 	if err != nil {
-		return WorkItem{}, errors.Join(refusal, err)
+		return WorkItem{}, nil, errors.Join(refusal, err)
 	}
 	if waiting := item.WaitingOn(unfinished); len(waiting) > 0 {
-		return WorkItem{}, fmt.Errorf(
+		return WorkItem{}, nil, fmt.Errorf(
 			"%s is blocked and waits on unfinished work (%s), so its status is not stale and the claim stands refused: %w",
 			id, strings.Join(waiting, ", "), refusal)
 	}
 	corrected := fmt.Sprintf(
-		"The harness cleared this item's blocked status as it claimed it: nothing unfinished blocks it, and the status was left over from whatever did. %s",
+		"The harness is clearing this item's blocked status to claim it: nothing unfinished blocks it, and the status was left over from whatever did. The claim follows once the tracker reads the status back as open. %s",
 		singleLineNote(refusal.Error()))
 	if _, err := c.run(ctx, "update", id, "--status=open", "--append-notes="+corrected, "--json"); err != nil {
-		return WorkItem{}, errors.Join(refusal, fmt.Errorf("clear the stale blocked status on %s: %w", id, err))
+		return WorkItem{}, nil, errors.Join(refusal, fmt.Errorf("clear the stale blocked status on %s: %w", id, err))
+	}
+	account, err := c.confirmStaleBlockClear(ctx, id)
+	if err != nil {
+		return WorkItem{}, account, errors.Join(refusal, err)
+	}
+	if account.Outcome == domain.StaleBlockClearUnconfirmed {
+		returned := fmt.Sprintf("%d read(s) over %s returned status %q rather than open",
+			account.Reads, c.readBack.settled().span(account.Reads), account.Status)
+		unconfirmed := fmt.Errorf(
+			"the clear of the stale blocked status on %s was never confirmed: %s, so the item is left for the next pull rather than claimed",
+			id, returned)
+		// The note the write carried promised a claim on a read that never came,
+		// so what came instead is written beside it: the next reader of the item
+		// finds the account rather than a promise, and a status the tracker still
+		// holds as blocked with nothing saying why the claim never followed.
+		note := fmt.Sprintf("The harness could not confirm the clear above: %s. The item is left for the next pull rather than claimed.", returned)
+		if _, err := c.run(ctx, "update", id, "--append-notes="+note, "--json"); err != nil {
+			return WorkItem{}, account, errors.Join(refusal, unconfirmed, fmt.Errorf("record the unconfirmed clear on %s: %w", id, err))
+		}
+		return WorkItem{}, account, errors.Join(refusal, unconfirmed)
 	}
 	claimed, err := c.claim(ctx, id)
 	if err != nil {
-		return WorkItem{}, errors.Join(refusal, fmt.Errorf("claim %s after clearing its stale blocked status: %w", id, err))
+		return WorkItem{}, account, errors.Join(refusal, fmt.Errorf("claim %s after its stale blocked status was read back as open: %w", id, err))
 	}
-	return claimed, nil
+	return claimed, account, nil
+}
+
+// confirmStaleBlockClear reads the status back after the clear was written,
+// within the bound, and says what it found. The account is returned however
+// the reads ended: a read that could not be made is an error beside the reads
+// that were, so the record still says how far the confirmation got.
+func (c Client) confirmStaleBlockClear(ctx context.Context, id string) (*StaleBlockClear, error) {
+	readBack := c.readBack.settled()
+	account := &StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed}
+	for attempt := 1; attempt <= readBack.reads; attempt++ {
+		if attempt > 1 {
+			if err := readBack.sleep(ctx, readBack.interval); err != nil {
+				return account, fmt.Errorf("wait to read %s's status back after clearing its stale blocked status: %w", id, err)
+			}
+		}
+		item, err := c.Show(ctx, id)
+		if err != nil {
+			return account, fmt.Errorf("read %s's status back after clearing its stale blocked status: %w", id, err)
+		}
+		account.Reads = attempt
+		account.Status = item.Status
+		if item.Status == statusOpen {
+			account.Outcome = domain.StaleBlockClearConfirmed
+			if attempt > 1 {
+				account.Outcome = domain.StaleBlockClearConfirmedLate
+			}
+			return account, nil
+		}
+	}
+	return account, nil
+}
+
+// span is how long the given number of reads took to space out: the intervals
+// between them, which is what a report of an unconfirmed clear says it waited.
+func (r staleBlockClearReadBack) span(reads int) time.Duration {
+	if reads < 1 {
+		return 0
+	}
+	return time.Duration(reads-1) * r.interval
 }
 
 // unfinished is the admitted work that is not finished, which is what says

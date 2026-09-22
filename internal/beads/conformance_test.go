@@ -731,7 +731,7 @@ func TestBlockerStatusConformance(t *testing.T) {
 
 	// The case the readings part on, and the one the stale-status release made
 	// reachable: the blocker is being worked right now.
-	claimed, err := client.Claim(ctx, blocker.ID)
+	claimed, _, err := client.Claim(ctx, blocker.ID)
 	if err != nil {
 		t.Fatalf("Claim() the blocker error = %v", err)
 	}
@@ -865,7 +865,7 @@ func TestBlockedClaimConformance(t *testing.T) {
 
 	// And the recovery, against bd rather than against a replayed answer: nothing
 	// unfinished blocks this item, so the status is stale and the claim takes it.
-	claimed, err := client.Claim(ctx, created.ID)
+	claimed, _, err := client.Claim(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Claim() a blocked item waiting on nothing error = %v; the released items all arrive in this shape, so a "+
 			"claim that cannot take one releases nothing", err)
@@ -902,7 +902,7 @@ func TestBlockedClaimConformance(t *testing.T) {
 	// The blocker above is the item this test just claimed, so it is in flight
 	// rather than open: it has left the backlog, and the status bd carries on the
 	// edge is the only thing that says it is unfinished.
-	if _, err := client.Claim(ctx, waiting.ID); err == nil {
+	if _, _, err := client.Claim(ctx, waiting.ID); err == nil {
 		t.Fatalf("Claim() took %s while %s was in flight, want the refusal to stand; a correction that cannot tell a stale "+
 			"status from a live dependency starts a second run over one piece of work", waiting.ID, created.ID)
 	} else if !strings.Contains(err.Error(), created.ID) {
@@ -1002,7 +1002,7 @@ func TestTrackerExportConformance(t *testing.T) {
 	}
 	// Claimed rather than only created, because the item a run most needs to find
 	// in the dump is its own, and the claim is the last write before it looks.
-	claimed, err := client.Claim(ctx, created.ID)
+	claimed, _, err := client.Claim(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}

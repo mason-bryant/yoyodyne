@@ -439,6 +439,55 @@ func (c ContextTruncation) Validate() error {
 	return errors.Join(problems...)
 }
 
+// StaleBlockClear is what became of the stale blocked status the claim cleared
+// on its way to this run's item: whether the tracker read the status back as
+// open, how many reads that took, and what the last read returned. It is
+// recorded because the claim is the one place the harness has the tracker's
+// answer in hand, and because the ending that matters most is the one nothing
+// else records — a clear no read confirmed leaves the item for the next pull
+// and the run dead at the claim, which until yoyodyne-ifd.428.3 read as a run
+// that died for nothing anybody could see. On 2026-09-20 the claim on
+// yoyodyne-ifd.415 recorded its clear as made and the claim that followed was
+// refused on the same status.
+type StaleBlockClear struct {
+	// Outcome is which of the read-back's three endings this was.
+	Outcome domain.StaleBlockClearOutcome `json:"outcome"`
+	// Reads is how many times the status was read back, the read that confirmed
+	// it included; on an unconfirmed clear, every read the bound allowed.
+	Reads int `json:"reads"`
+	// Status is what the last read returned.
+	Status string `json:"status,omitempty"`
+}
+
+// Describe says which ending the clear had in the words a surface prints, so
+// every surface that names it names it the same way.
+func (c StaleBlockClear) Describe() string {
+	switch c.Outcome {
+	case domain.StaleBlockClearConfirmed:
+		return "the tracker read the cleared status back as open on the first read, and the item was claimed"
+	case domain.StaleBlockClearConfirmedLate:
+		return fmt.Sprintf("the tracker read the cleared status back as open on read %d, and the item was claimed", c.Reads)
+	case domain.StaleBlockClearUnconfirmed:
+		return fmt.Sprintf("no read confirmed the clear: %d read(s) returned status %q rather than open, and the item was left for the next pull", c.Reads, c.Status)
+	}
+	return fmt.Sprintf("the clear ended in a way the record does not name (%q)", c.Outcome)
+}
+
+// Validate reports every contract violation in the recorded clear at once.
+func (c StaleBlockClear) Validate() error {
+	var problems []error
+	if !c.Outcome.Valid() {
+		problems = append(problems, fmt.Errorf("outcome %q is not one the harness names", c.Outcome))
+	}
+	if c.Reads < 0 {
+		problems = append(problems, errors.New("reads cannot be negative"))
+	}
+	if c.Outcome != domain.StaleBlockClearUnconfirmed && c.Reads < 1 {
+		problems = append(problems, errors.New("a confirmed clear was read back at least once"))
+	}
+	return errors.Join(problems...)
+}
+
 // Finding is one durable reviewer finding. Findings are recorded rather than
 // only counted because they are the developer's input for the next repair
 // attempt: a run interrupted between attempts has to hand back exactly what the
@@ -1397,6 +1446,12 @@ type State struct {
 	// on an item saying slightly less than the tracker holds. Absent is every run
 	// whose item fitted whole, which is nearly all of them.
 	ContextTruncation *ContextTruncation `json:"context_truncation,omitempty"`
+	// StaleBlockClear is what became of the stale blocked status the claim
+	// cleared on its way to this run's item. Absent is every claim that met no
+	// stale status, which is nearly all of them; present on a run that died at
+	// the claim, it is what says the clear was never confirmed and the item was
+	// left for the next pull.
+	StaleBlockClear *StaleBlockClear `json:"stale_block_clear,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
 	// developer, whichever kind of failure triggered them: one budget covers
 	// both, so it bounds the developer invocations a run can make rather than
@@ -1896,6 +1951,11 @@ func (s State) Validate() error {
 	if s.ContextTruncation != nil {
 		if err := s.ContextTruncation.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("context_truncation: %w", err))
+		}
+	}
+	if s.StaleBlockClear != nil {
+		if err := s.StaleBlockClear.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("stale_block_clear: %w", err))
 		}
 	}
 	if s.Changes != nil {

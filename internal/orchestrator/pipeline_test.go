@@ -3110,7 +3110,11 @@ type fakeTracker struct {
 	blockReason string
 	calls       []string
 	onClaim     func() error
-	completeErr error
+	// staleBlockClear is what the claim reports about a stale blocked status it
+	// cleared, returned beside the item and beside onClaim's error alike, as the
+	// real client returns it. Nil is a claim that met none.
+	staleBlockClear *beads.StaleBlockClear
+	completeErr     error
 	// completeFailures and transientCompleteErr are how many closures are refused
 	// before one goes through, and what they are refused with. They are apart
 	// from completeErr because that one is a tracker that keeps answering the
@@ -3239,16 +3243,16 @@ func (f *fakeTracker) holdsItem(item beads.WorkItem) *fakeTracker {
 	return f
 }
 
-func (f *fakeTracker) Claim(context.Context, string) (beads.WorkItem, error) {
+func (f *fakeTracker) Claim(context.Context, string) (beads.WorkItem, *beads.StaleBlockClear, error) {
 	if f.onClaim != nil {
 		if err := f.onClaim(); err != nil {
-			return beads.WorkItem{}, err
+			return beads.WorkItem{}, f.staleBlockClear, err
 		}
 	}
 	f.claimed = true
 	f.calls = append(f.calls, "claim")
 	f.item.Status = "in_progress"
-	return f.item, nil
+	return f.item, f.staleBlockClear, nil
 }
 
 func (f *fakeTracker) RecordOutcome(_ context.Context, _ string, notes string) (beads.WorkItem, error) {

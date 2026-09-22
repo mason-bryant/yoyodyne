@@ -628,7 +628,7 @@ func continueOnGrant(t *testing.T, store *runstate.Store, tracker *fakeTracker, 
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
+	if _, _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 }

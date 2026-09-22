@@ -271,6 +271,12 @@ type RunSummary struct {
 	// handed: an item's notes only ever grow, so the loss arrives without anybody
 	// deciding it and stays until somebody sees it.
 	ContextTruncation *ContextTruncation `json:"context_truncation,omitempty"`
+	// StaleBlockClear is what became of the stale blocked status the claim
+	// cleared on its way to the item, where it met one. It is here because the
+	// ending that matters is the one the run's failure is otherwise the only
+	// word on: a clear no read confirmed is a run dead at the claim with the
+	// item left for the next pull, and this says so where the run is read.
+	StaleBlockClear *StaleBlockClear `json:"stale_block_clear,omitempty"`
 	// ReportProblem and AmendmentProblem are what the run's agents reported or
 	// proposed that the harness could not read or could not keep. Neither says
 	// anything about the work — the run delivered exactly as it would have — and
@@ -475,6 +481,10 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.ContextTruncation != nil {
 		truncated := *state.ContextTruncation
 		summary.ContextTruncation = &truncated
+	}
+	if state.StaleBlockClear != nil {
+		cleared := *state.StaleBlockClear
+		summary.StaleBlockClear = &cleared
 	}
 	if state.Selection != nil {
 		selection := *state.Selection

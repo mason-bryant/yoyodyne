@@ -173,6 +173,46 @@ func (c ProviderChannel) Valid() bool {
 	return false
 }
 
+// StaleBlockClearOutcome is what became of a stale blocked status the harness
+// cleared as it claimed an item: whether the tracker read the status back as
+// open, and how long that took. It is the vocabulary the tracker client reports
+// the clear by and the durable run record says it by, and it lives here so that
+// neither redeclares it.
+//
+// It is closed at three because the read-back has exactly three endings. The
+// first read after the write returns open; a later read within the bounded wait
+// does; or none does, in which case the item was not claimed. The middle one is
+// kept apart from the first because a clear that lands late is a tracker that is
+// slower than the claim, which is worth knowing before the day it is slower than
+// the wait.
+type StaleBlockClearOutcome string
+
+const (
+	// StaleBlockClearConfirmed is the first read after the write returning open.
+	StaleBlockClearConfirmed StaleBlockClearOutcome = "confirmed"
+	// StaleBlockClearConfirmedLate is a read after the first, within the bounded
+	// wait, returning open.
+	StaleBlockClearConfirmedLate StaleBlockClearOutcome = "confirmed_late"
+	// StaleBlockClearUnconfirmed is no read within the bounded wait returning
+	// open. The item was not claimed and is left for the next pull.
+	StaleBlockClearUnconfirmed StaleBlockClearOutcome = "unconfirmed"
+)
+
+// StaleBlockClearOutcomes is every outcome, in the order they are documented.
+func StaleBlockClearOutcomes() []StaleBlockClearOutcome {
+	return []StaleBlockClearOutcome{StaleBlockClearConfirmed, StaleBlockClearConfirmedLate, StaleBlockClearUnconfirmed}
+}
+
+// Valid reports an outcome this harness names.
+func (o StaleBlockClearOutcome) Valid() bool {
+	for _, known := range StaleBlockClearOutcomes() {
+		if o == known {
+			return true
+		}
+	}
+	return false
+}
+
 // WorkItemClass names a kind of work a project may treat differently at
 // admission. It exists because "ask about every work item" turned out to be
 // coarser than the operators who set it actually meant: work that only reads and

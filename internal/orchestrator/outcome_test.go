@@ -20,11 +20,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -292,6 +294,83 @@ func TestARunThatBrokeBeforeItsWorktreeRecordsNoPhaseAndNoArtifacts(t *testing.T
 	// the bare word.
 	if reported.Outcome != runstate.OutcomeFailed {
 		t.Fatalf("outcome = %q, want %q", reported.Outcome, runstate.OutcomeFailed)
+	}
+}
+
+// The run's record says which ending the clear of a stale blocked status had.
+// The one that matters most is the one that fails: a clear no read confirmed
+// leaves the item for the next pull and the run dead at the claim, which on
+// 2026-09-20 is how yoyodyne-ifd.415's re-run tripped on its own correction
+// with nothing in the record saying so beyond bd's refusal. Both halves are
+// pinned: the account is on the record beside the failure, and the read model
+// every surface projects carries it through.
+func TestARunWhoseStaleBlockClearWasNeverConfirmedRecordsSo(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := newOutcomeTracker()
+	tracker.item.Status = "blocked"
+	tracker.staleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed, Reads: 5, Status: "blocked"}
+	tracker.onClaim = func() error {
+		return errors.New("the clear of the stale blocked status on yoyodyne-task was never confirmed: 5 read(s) over 4s returned status \"blocked\" rather than open, so the item is left for the next pull rather than claimed")
+	}
+	provider := roleBackend(writeFeature, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("Run() error = nil, want the unconfirmed clear to end the run")
+	}
+	recorded, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.WorkItemClaimedAt != nil {
+		t.Fatalf("run = %#v, want a run that took nothing", recorded)
+	}
+	want := &runstate.StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed, Reads: 5, Status: "blocked"}
+	if !reflect.DeepEqual(recorded.StaleBlockClear, want) {
+		t.Fatalf("recorded clear = %#v, want %#v", recorded.StaleBlockClear, want)
+	}
+	if !strings.Contains(recorded.Failure, "was never confirmed") || strings.Contains(recorded.Failure, "cleared") {
+		t.Fatalf("failure = %q, want the unconfirmed clear reported and never as cleared", recorded.Failure)
+	}
+	reported := onlyRecordedRun(t, store)
+	if !reflect.DeepEqual(reported.StaleBlockClear, want) {
+		t.Fatalf("summary clear = %#v, want %#v", reported.StaleBlockClear, want)
+	}
+	if !strings.Contains(reported.StaleBlockClear.Describe(), "left for the next pull") {
+		t.Fatalf("Describe() = %q, want it to say the item was left for the next pull", reported.StaleBlockClear.Describe())
+	}
+}
+
+// A clear that landed, late or at once, is on the record of the run that went
+// on to claim the item, for the same reason: a tracker slower than the claim is
+// worth seeing before the day it is slower than the wait.
+func TestARunWhoseStaleBlockClearLandedLateRecordsSo(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := newOutcomeTracker()
+	tracker.staleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearConfirmedLate, Reads: 3, Status: "open"}
+	provider := roleBackend(writeFeature, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	recorded, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.WorkItemClaimedAt == nil {
+		t.Fatalf("run = %#v, want a run that claimed its item", recorded)
+	}
+	want := &runstate.StaleBlockClear{Outcome: domain.StaleBlockClearConfirmedLate, Reads: 3, Status: "open"}
+	if !reflect.DeepEqual(recorded.StaleBlockClear, want) {
+		t.Fatalf("recorded clear = %#v, want %#v", recorded.StaleBlockClear, want)
+	}
+	if reported := onlyRecordedRun(t, store); !reflect.DeepEqual(reported.StaleBlockClear, want) {
+		t.Fatalf("summary clear = %#v, want %#v", reported.StaleBlockClear, want)
 	}
 }
 

@@ -439,7 +439,7 @@ func (r IntegrationResumer) supersedeOnItem(ctx context.Context, workItemID, rea
 	if _, err := r.Items.RecordOutcome(ctx, workItemID, reason); err != nil {
 		return fmt.Errorf("record the resumption on %s: %w", workItemID, err)
 	}
-	item, err := r.Items.Claim(ctx, workItemID)
+	item, _, err := r.Items.Claim(ctx, workItemID)
 	if err != nil {
 		return fmt.Errorf("put %s back to work for the promotion it was approved for: %w", workItemID, err)
 	}

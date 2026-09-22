@@ -42,7 +42,11 @@ const maxCommitSubjectBytes = 72
 
 type WorkTracker interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
-	Claim(ctx context.Context, id string) (beads.WorkItem, error)
+	// Claim takes the item, and reports beside it the stale blocked status it
+	// cleared on the way where it met one — beside the error too, where no read
+	// confirmed the clear — so the run's record can say which ending the clear
+	// had. Nil is a claim that met no stale status, which is nearly all of them.
+	Claim(ctx context.Context, id string) (beads.WorkItem, *beads.StaleBlockClear, error)
 	RecordOutcome(ctx context.Context, id, notes string) (beads.WorkItem, error)
 	// Block records a durable blocker. The harness uses it when a run stops on
 	// something no further attempt of its own can resolve.
@@ -1117,7 +1121,12 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 // here, because what a caller does about a run that could not be started is the
 // caller's — Run fails it, and the failure says which of the three it was.
 func (a *activeRun) claim(ctx context.Context) error {
-	item, err := a.pipeline.Tracker.Claim(ctx, a.state.WorkItemID)
+	item, cleared, err := a.pipeline.Tracker.Claim(ctx, a.state.WorkItemID)
+	// Recorded before the error is judged, because the ending it matters most
+	// on is the one that fails: a clear no read confirmed leaves the item for the
+	// next pull, and the record is what says that is what happened rather than
+	// the run dying at the claim for nothing anybody can read.
+	a.state.StaleBlockClear = recordedStaleBlockClear(cleared)
 	if err != nil {
 		return fmt.Errorf("claim work item: %w", err)
 	}
@@ -1154,6 +1163,22 @@ func recordedContextTruncation(bundle contextbundle.Bundle) *runstate.ContextTru
 		DroppedNotes: bundle.NotesTruncation.DroppedNotes,
 		DroppedBytes: bundle.NotesTruncation.DroppedBytes,
 		KeptBytes:    bundle.NotesTruncation.KeptBytes,
+	}
+}
+
+// recordedStaleBlockClear carries what the claim found when it read a cleared
+// stale blocked status back onto the run record, and nothing where the claim
+// met no stale status. The claim is where the harness has the tracker's answer
+// in hand; the record is what says afterwards which of the clear's three
+// endings this run had.
+func recordedStaleBlockClear(cleared *beads.StaleBlockClear) *runstate.StaleBlockClear {
+	if cleared == nil {
+		return nil
+	}
+	return &runstate.StaleBlockClear{
+		Outcome: cleared.Outcome,
+		Reads:   cleared.Reads,
+		Status:  cleared.Status,
 	}
 }
 

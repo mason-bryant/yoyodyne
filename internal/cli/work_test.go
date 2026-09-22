@@ -309,7 +309,7 @@ func TestDirectionRecordedInAConversationIsReadByTheNextAttempt(t *testing.T) {
 	}
 
 	// What the next attempt does: claim the item and assemble its context.
-	item, err := chatTracker(runner, "/repo").Claim(context.Background(), "yoyodyne-9")
+	item, _, err := chatTracker(runner, "/repo").Claim(context.Background(), "yoyodyne-9")
 	if err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}

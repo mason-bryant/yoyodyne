@@ -1012,6 +1012,14 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 			run.ContextTruncation.DroppedNotes, run.ContextTruncation.DroppedBytes)
 		printed = true
 	}
+	// A stale blocked status the claim cleared is said whichever way the clear
+	// ended, because the ending that matters is the one the reason line alone
+	// reads as a run that died at the claim: no read confirmed the clear, and the
+	// item was left for the next pull rather than claimed.
+	if run.StaleBlockClear != nil {
+		fmt.Fprintf(writer, "  stale blocked status cleared at the claim: %s\n", singleLine(run.StaleBlockClear.Describe()))
+		printed = true
+	}
 	// Nor is a report or a proposal the harness could not keep: the run delivered
 	// exactly as it would have, and what was lost is beside it. They are printed
 	// because this record is the only place they survive the run — a refused
