@@ -154,9 +154,10 @@ func (m *Manager) BranchChanges(ctx context.Context, request BranchRequest, limi
 		return BranchChange{}, err
 	}
 	// A history the caller cannot see is as incomplete as a patch it cannot see:
-	// the reviewer is told the change is truncated either way, and the rule that
-	// an incomplete change cannot be approved holds without knowing which half
-	// went missing.
+	// the reviewer is told the change is truncated either way. This is the one
+	// truncation that names no file, and it still refuses an approval for the
+	// original reason — a reviewer shown part of a sequence cannot say what the
+	// whole of it did — where a patch clipped of listed fixtures no longer does.
 	if change.CommitsOmitted > 0 {
 		changes.Truncated = true
 	}

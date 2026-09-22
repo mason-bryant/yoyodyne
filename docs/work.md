@@ -1339,9 +1339,19 @@ promoted by a run that has since settled, so there is no gate left to hold and
 the harness does not revert or reopen a promotion on a second opinion — the
 branch review is wired with no run store and no integration, so it could not if
 it were asked to. What it does instead is answer one question, and enforce the
-answer: the branch is approved only if an independent reviewer approved the whole
-accumulated change, and `yoyo review` exits non-zero on anything else — a repair
-verdict, a review that never answered, a change too large to be seen in full. The
+answer: the branch is approved only if an independent reviewer approved it, and
+`yoyo review` exits non-zero on anything else — a repair verdict, or a review
+that never answered. The exit code follows the verdict and nothing else, so a
+range the bound clipped is not refused for the clipping: a truncation that kept
+out only listed fixtures is one the reviewer may approve, by the rule above, and
+the command exits zero on that approval as it does on any other. Where the
+omissions are ones no approval may be given over — a source or test file kept
+out, a fixture nobody could open, a history the bound clipped — the harness
+refuses the approval itself, so the review comes back carrying no verdict and
+the command exits non-zero on that, exactly as it does on a review that never
+answered. The command says on stderr what the bound kept out either way,
+because what was not shown was not reviewed whatever the verdict decided about
+it. The
 findings are then work, and admitting work to the backlog is the product
 manager's.
 

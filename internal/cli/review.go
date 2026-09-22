@@ -206,7 +206,11 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 			fmt.Fprintf(stdout, "- %s%s: %s\n", finding.Severity, location, finding.Message)
 		}
 		// A change the bounds cut is one the reviewer could not see the whole of,
-		// which is why it could not approve it either.
+		// so what it kept out is said here whatever the verdict was. It is not a
+		// refusal and never has been: the exit code below follows the verdict
+		// alone, and a range whose test data alone outgrew the bound is one the
+		// reviewer may approve — which is the whole of yoyodyne-ifd.425 at this
+		// scope, and an approval of one exits zero as any other does.
 		if outcome.Truncated {
 			fmt.Fprintln(stderr, "the accumulated change was too large to describe in full; what was not shown is unreviewed")
 			if outcome.CommitsOmitted > 0 {
