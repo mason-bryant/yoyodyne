@@ -39,6 +39,23 @@ jobs:
       - name: Check
         run: make check
 
+      # The archives are built from whatever the checkout holds, and a binary
+      # records the commit it was built from beside the tag it is stamped with
+      # (internal/buildinfo reads it back as vcs.revision). v0.5.0's local cut
+      # built its archives before its own housekeeping commit, so they named a
+      # commit the tag did not and had to be rebuilt by hand. Here the checkout
+      # is the tag's own commit, and this says so before anything is built
+      # rather than trusting the checkout step to have done it.
+      - name: Confirm the checkout is the tagged commit
+        run: |
+          tagged="$(git rev-parse "$TAG^{commit}")"
+          head="$(git rev-parse HEAD)"
+          if [ "$tagged" != "$head" ]; then
+            echo "release: HEAD is $head but $TAG names $tagged, so the archives would name the wrong commit" >&2
+            exit 1
+          fi
+          echo "building at $head, which is what $TAG names"
+
       # `dist-verify` builds every platform's archive and then asserts the
       # runner's own binary reports the tag. It is the same target CI runs on
       # every change, so a tag push is a rerun of a path already exercised
@@ -57,6 +74,14 @@ jobs:
           bash scripts/release-body.sh "$TAG" "$RUNNER_TEMP/release-body.md"
           echo "NOTES_FILE=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
+      # The body is the composed notes file and nothing else. The forge is never
+      # asked for its own generated notes: those are a changelog of every commit
+      # since the previous tag, which is not what the notes are (a commit says
+      # what one change did; the work item behind it says what somebody
+      # wanted), and on v0.5.0 they were some six hundred commits appended under
+      # 84,765 characters of curated notes, which the forge then refused as a
+      # body longer than the 125,000 characters it accepts. Adding the flag
+      # back fails internal/cli's release test by name.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,5 +89,4 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file "$NOTES_FILE" \
-            --generate-notes \
             dist/*.tar.gz dist/checksums.txt

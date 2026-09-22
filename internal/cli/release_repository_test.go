@@ -15,6 +15,12 @@ package cli
 // different questions — what a release cut may commit on the operator's behalf,
 // and what a run may tolerate the primary checkout acquiring — and it is the
 // first that has to sit inside the second.
+//
+// The fourth holds the release workflow to publishing the composed notes as
+// the whole of the release page's body, built at the tagged commit. The
+// workflow is YAML on a tag trigger, so the composition check can say it is
+// shaped like a workflow and nothing more; what its publish step hands the
+// forge is a claim only a test that reads the step can hold.
 
 import (
 	"os"
@@ -22,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +50,10 @@ const cutReleaseScriptPath = "../../scripts/cut-release.sh"
 // runSourcePath is where a run declares what the primary checkout may acquire
 // while it works, which is the wider of the two lists.
 const runSourcePath = "run.go"
+
+// releaseWorkflowPath is the workflow a tag push fires, which builds the
+// archives and publishes the release page.
+const releaseWorkflowPath = "../../.github/workflows/release.yml"
 
 var derivedExportsPattern = regexp.MustCompile(`(?m)^derived_exports=\(([^)]*)\)`)
 
@@ -135,6 +146,46 @@ func TestTheReleaseVerbHousekeepsOnlyExportsARunAllows(t *testing.T) {
 			t.Errorf("%s housekeeps %q, which %s does not declare among %v; the cut may only commit paths a run already treats as churn",
 				cutReleaseScriptPath, path, runSourcePath, declared)
 		}
+	}
+}
+
+// TestTheReleaseWorkflowPublishesTheCuratedNotesAlone holds the workflow's
+// publish step to handing the forge the composed notes file and nothing else,
+// and its build to the tagged commit. On v0.5.0 the step passed
+// `--generate-notes` beside `--notes-file`, the forge appended a changelog of
+// some six hundred commits under 84,765 characters of curated notes, and
+// refused the whole body as longer than the 125,000 characters it accepts; the
+// notes grow with the backlog, so that would have refused every release from
+// there. The archives' half is the same lesson from the same night: a binary
+// records the commit it was built from, and the archives the local cut built
+// before its housekeeping commit named one the tag did not.
+func TestTheReleaseWorkflowPublishesTheCuratedNotesAlone(t *testing.T) {
+	t.Parallel()
+
+	// Comments are dropped before looking, so the workflow may say in words why
+	// the flag is absent without this reading that as the flag.
+	var commands []string
+	for _, line := range strings.Split(releaseFileText(t, releaseWorkflowPath), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			commands = append(commands, line)
+		}
+	}
+	workflow := strings.Join(commands, "\n")
+
+	if !strings.Contains(workflow, "gh release create") {
+		t.Fatalf("%s no longer publishes with `gh release create`, so what it hands the forge cannot be held here", releaseWorkflowPath)
+	}
+	if !strings.Contains(workflow, "--notes-file") {
+		t.Errorf("%s publishes without --notes-file, so the release page's body is not the composed notes", releaseWorkflowPath)
+	}
+	if strings.Contains(workflow, "--generate-notes") {
+		t.Errorf("%s passes --generate-notes, which appends the forge's commit-derived changelog under the notes; that is not what the notes are, and it is what refused v0.5.0's page for length", releaseWorkflowPath)
+	}
+	if !strings.Contains(workflow, `git rev-parse "$TAG^{commit}"`) {
+		t.Errorf("%s no longer confirms the checkout is the tagged commit before building, so the archives it publishes may name a commit the tag does not", releaseWorkflowPath)
+	}
+	if !strings.Contains(workflow, `make dist-verify VERSION="$TAG"`) {
+		t.Errorf("%s no longer builds the archives with `make dist-verify VERSION=\"$TAG\"`, which is the target that asserts the binary names the tag", releaseWorkflowPath)
 	}
 }
 

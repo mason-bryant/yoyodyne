@@ -26,7 +26,10 @@
 #
 # scripts/release-body.sh is covered here too, against the notes these cases
 # just wrote. It is what the release workflow runs on a tag push, so the only
-# other place it would ever execute is a real publication.
+# other place it would ever execute is a real publication. The body it composes
+# is held to being the notes and the preamble and nothing else, and its bound
+# on the body's length -- a warning at a fraction of what the forge accepts, a
+# refusal over it -- is driven with the bounds set small enough to reach.
 #
 # Everything lives under one temporary root that is removed on exit. The real
 # tracker is never read and nothing outside that root is written.
@@ -309,6 +312,54 @@ contains "$body" "Watch mode" "the tag's own notes are the body"
 contains "$body" "## Key functionality" "with their sections intact"
 contains "$body" "## Install" "and the install preamble under them"
 missing "$body" "# v0.2.0" "the file's title is dropped, because the page already carries it"
+# Byte for byte: the notes under their title, one blank line, the preamble, and
+# nothing else. The forge's generated changelog is what v0.5.0's page carried
+# besides these and what the forge refused it for, and that is the workflow's
+# flag rather than this script's -- internal/cli's release test holds the
+# workflow to passing the notes file alone -- but "nothing else" is a claim
+# about this composition, so it is compared whole rather than probed for parts.
+{ tail -n +2 "$notes"; printf '\n'; cat "$project/.github/release-notes-preamble.md"; } \
+  > "$scratch/expected-body.md"
+if cmp -s "$composed" "$scratch/expected-body.md"; then
+  pass "the body is the curated notes with the preamble under them and nothing else"
+else
+  fail "the body differs from the notes and the preamble -- got: $body"
+fi
+missing "$output" "warning" "and a body this size is nothing to warn about"
+
+step "the body is warned about at a configured fraction of the forge's limit, and refused over it"
+# The forge refuses a body over a fixed length, and the notes grow with the
+# backlog, so the composition measures what it composed. The bounds are read
+# from the environment for exactly this: the fabricated notes are a few hundred
+# bytes, and the claim is about the fraction and the limit rather than about
+# 125,000 characters.
+length="$(wc -c < "$composed" | tr -d ' ')"
+if output="$( ( cd "$project" && RELEASE_BODY_LIMIT=$((length + 10)) bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )"; then
+  pass "a body past the fraction but under the limit still composes"
+else
+  fail "release-body.sh refused a body under the limit -- got: $output"
+fi
+contains "$output" "release-body: warning: the body for v0.2.0 is $length bytes, at or past 75% of the $((length + 10)) characters the forge accepts" \
+  "and is warned about, naming the length, the fraction, and the limit"
+if cmp -s "$composed" "$scratch/expected-body.md"; then
+  pass "with the body written whole all the same"
+else
+  fail "the warned-about body differs from the notes and the preamble"
+fi
+output="$( ( cd "$project" && RELEASE_BODY_LIMIT=$((length * 2)) bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )" || true
+missing "$output" "warning" "a body under the fraction of a larger limit is not warned about"
+output="$( ( cd "$project" && RELEASE_BODY_LIMIT=$((length * 2)) RELEASE_BODY_WARN_PERCENT=40 bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )" || true
+contains "$output" "at or past 40% of the $((length * 2)) characters" "until the fraction is configured lower"
+if output="$( ( cd "$project" && RELEASE_BODY_LIMIT=$((length - 1)) bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )"; then
+  fail "release-body.sh composed a body over the limit -- got: $output"
+else
+  pass "a body over the limit is refused rather than handed to the forge to refuse"
+fi
+contains "$output" "release-body: the body for v0.2.0 is $length bytes, and the forge refuses a release body over $((length - 1)) characters" \
+  "naming the length and the limit"
+contains "$output" "shorten $notes" "and the file to shorten"
+output="$( ( cd "$project" && RELEASE_BODY_LIMIT=many bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )" || true
+contains "$output" "RELEASE_BODY_LIMIT is 'many', which is not a number" "a limit that is not a number is refused before anything is measured"
 
 step "a tag with no notes publishes the preamble rather than failing the workflow"
 if output="$( ( cd "$project" && bash scripts/release-body.sh v9.9.9 "$composed" ) 2>&1 )"; then
@@ -320,6 +371,11 @@ contains "$output" "publishes the preamble alone" "and says so rather than doing
 body="$(cat "$composed" 2>/dev/null || true)"
 contains "$body" "## Install" "the preamble is the whole body"
 missing "$body" "Watch mode" "and no other release's notes leaked into it"
+if cmp -s "$composed" "$project/.github/release-notes-preamble.md"; then
+  pass "byte for byte"
+else
+  fail "the body for a tag with no notes is not exactly the preamble -- got: $body"
+fi
 
 step "notes are written once, and then edited"
 output="$(draft v0.2.0)"

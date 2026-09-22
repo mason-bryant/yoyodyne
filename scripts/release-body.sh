@@ -8,7 +8,8 @@
 # This is the release workflow's own step, extracted so it is a thing that can
 # be run and tested rather than eight lines of YAML whose first execution is a
 # tag push against a real published release. .github/workflows/release.yml calls
-# it and passes the result to `gh release create --notes-file`.
+# it and passes the result to `gh release create --notes-file`, as the whole of
+# the body: the forge's own generated changelog is never appended to it.
 #
 # The composition is deliberate in two places. The tag's notes go first and the
 # preamble under them, because what changed is what a returning reader came for
@@ -22,6 +23,19 @@
 # it, and the tags cut before the notes home existed are exactly the ones that
 # would otherwise turn a rerun of this workflow into a red build.
 #
+# The body is the whole of what the release page carries as text, and the forge
+# refuses a body over a fixed length: 125,000 characters at GitHub, which
+# v0.5.0's tag push met as `HTTP 422: Validation Failed: body is too long`. That
+# body was these notes with the forge's own generated changelog under them,
+# which the workflow no longer asks for; what is left is the curated notes, and
+# they grow with the backlog. So the composed body is measured. At a fraction
+# of the limit it is warned about on stderr, where the workflow's log shows it,
+# so the notes are shortened before the release they would refuse; over the
+# limit it is refused here, naming the length, rather than handed to the forge
+# to refuse with less said. Both figures are read from the environment --
+# RELEASE_BODY_LIMIT and RELEASE_BODY_WARN_PERCENT -- so the suite can exercise
+# them against notes a few hundred bytes long.
+#
 # Requires bash. Nothing in the repository is written: the only thing written is
 # the destination the caller named.
 
@@ -30,6 +44,8 @@ set -euo pipefail
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 preamble="$repository/.github/release-notes-preamble.md"
 notes_home="$repository/docs/releases"
+limit="${RELEASE_BODY_LIMIT:-125000}"
+warn_percent="${RELEASE_BODY_WARN_PERCENT:-75}"
 
 refuse() { printf '\nrelease-body: %s\n' "$*" >&2; exit 1; }
 
@@ -39,6 +55,12 @@ destination="${2:-}"
   refuse "no tag given. Usage: bash scripts/release-body.sh <tag> <destination>"
 [ -n "$destination" ] ||
   refuse "no destination given. Usage: bash scripts/release-body.sh <tag> <destination>"
+case "$limit" in
+  (''|*[!0-9]*) refuse "RELEASE_BODY_LIMIT is '$limit', which is not a number of characters" ;;
+esac
+case "$warn_percent" in
+  (''|*[!0-9]*) refuse "RELEASE_BODY_WARN_PERCENT is '$warn_percent', which is not a percentage" ;;
+esac
 # The preamble is how a reader installs what they just downloaded, so a release
 # published without it is worse than one this refused to compose.
 [ -f "$preamble" ] || refuse "$preamble is missing, so there is no install section to publish"
@@ -63,3 +85,18 @@ else
 fi
 
 cat "$preamble" >> "$destination"
+
+# Measured in bytes rather than characters. The forge counts characters, a byte
+# count is never smaller than a character count, so this errs toward warning
+# early on a body with anything outside ASCII in it -- and `wc -c` reads the
+# same on every runner, where `wc -m` reads whatever the locale says. Compared
+# at the hundredth so the percentage stays an integer, which is all the shell
+# arithmetic there is.
+length="$(wc -c < "$destination" | tr -d ' ')"
+if [ "$length" -gt "$limit" ]; then
+  refuse "the body for $tag is $length bytes, and the forge refuses a release body over $limit characters; shorten $notes before publishing, because the forge will not accept this one"
+fi
+if [ $((length * 100)) -ge $((limit * warn_percent)) ]; then
+  printf 'release-body: warning: the body for %s is %s bytes, at or past %s%% of the %s characters the forge accepts; shorten the notes before a release is refused for length\n' \
+    "$tag" "$length" "$warn_percent" "$limit" >&2
+fi
