@@ -1892,7 +1892,11 @@ project's own commands. What a check sees is:
 - what the toolchains read: everything beginning `GO`, `XDG_*`, and Git's
   environment configuration (`GIT_CONFIG_*`), which is also where the
   maintenance fence every harness-launched process carries lives
-- the harness's own `YOYODYNE_*`
+- the harness's own `YOYODYNE_*`, which is also where a declaration about the
+  machine the checks run on is carried: `YOYODYNE_NODE_UNAVAILABLE`, set in a
+  sandbox that deliberately has no Node, is what lets
+  [the dashboard's render test](developing-yoyo.md#node-is-a-development-dependency-of-the-dashboard)
+  skip there instead of failing
 - `GOCACHE`, pointed at `.git/yoyodyne/go-build` inside the repository being
   checked, replacing whatever the harness's own environment said. Every run the
   harness makes is given the same redirect, so a developer's own execution of

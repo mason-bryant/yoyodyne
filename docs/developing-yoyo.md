@@ -10,6 +10,7 @@ the conversation:
 ```sh
 claude auth status --json
 bd where
+node --version
 make check
 make build
 ./bin/yoyo config validate
@@ -21,6 +22,47 @@ runs. Those same four are what this project declares as its
 [checks](configuration.md), and a run applies them one at a time before it will
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
+
+## Node is a development dependency of the dashboard
+
+`make test` needs Node on the `PATH`, a tool the checks need beyond the Go
+toolchain — as they need Git for the orchestrator's and worktree manager's
+tests, and a shell for the release suites. The dashboard's page is drawn by its own
+script, which a Go test cannot run, so `TestThePageRendersEverySectionInEveryState`
+in `internal/dashboard` runs it under `node` against the fixtures and holds
+what it draws to the golden renders under `internal/dashboard/testdata/renders`
+— which are the page's only behavioural evidence. Node is a dependency of
+developing the dashboard and not of running it: a product that serves the
+dashboard runs the script in the operator's browser, and the binary carries it
+compiled in.
+
+On a machine without Node the render test **fails**, naming the tool, rather
+than skipping. It used to skip, and three reviewers found the same thing on the
+same day: a green `make test` on a machine without Node had never run the
+script or compared a render, and said nothing about it. The failure is the
+honest answer, because a run whose checks passed without the renders is a run
+whose page was never verified. The one machine allowed to skip is one that
+says so on purpose, with `YOYODYNE_NODE_UNAVAILABLE` set to anything but the
+empty string in the environment the checks run in; the skip quotes the
+declaration, so a green run that skipped says which machine decided it. The
+variable is under the harness's own prefix, which
+[the check environment](configuration.md#the-environment-a-check-runs-in)
+carries through to every check and every provider invocation, so a sandbox
+that deliberately has no Node declares it once where the harness reads its
+environment and both the developer's own execution of the checks and the
+harness's afterwards read the same declaration. Nothing sets it on the
+operator's machine, where the check runner has Node and the renders are
+compared on every run — and `make test` says so rather than leaving it to be
+inferred: after the suite it runs the render test once more under `-v` and
+prints its run line, `--- PASS: TestThePageRendersEverySectionInEveryState`,
+or `--- SKIP` with the declaration quoted, because `ok internal/dashboard`
+reads the same either way. That line in a check runner's log is what confirms
+the machine has Node.
+
+`yoyo doctor` asks about Node under a `node` finding in a checkout that carries
+the render script — this one — and in no other: a missing Node is a problem
+there, since every run's checks would fail on it, and a Node declared
+unavailable is a warning saying the renders go unverified.
 
 `make adoption` is the fifth thing and deliberately not one of them. It runs
 [`scripts/walk-adoption.sh`](../scripts/walk-adoption.sh), which executes the
@@ -352,7 +394,7 @@ Go check has ever run a line of bash.
 | A shell file a shell will not parse — every `.sh` here, the tools in `bin`, and the hooks the tracker installs | `internal/composition` | Fix the syntax. Parsing is `bash -n`, which reads a script and runs none of it, so it is safe to point at the release verb and the adoption walkthrough. It is the floor rather than the gate: shell with a suite gets executed as well. |
 | A YAML or JSON file that does not decode | `internal/composition` | Fix the file. What each one means belongs to whatever reads it — Claude Code, Codex, the tracker, the harness — but one that nothing can parse is this repository's defect whoever owns the schema, and it is not a defect a reviewer reading a diff reliably sees. |
 | A workflow that is not shaped like one — no trigger, no jobs, or a job with no runner or no steps | `internal/composition` | Fix the workflow. Decoding is not enough for these: the release workflow is triggered by a tag push, so what is wrong with it would otherwise first misbehave during a real publication. |
-| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and skips without, saying so: a machine without Node holds the fixtures' shape and the routes and not the renders. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
+| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and fails without, naming it: [Node is a development dependency of the dashboard](#node-is-a-development-dependency-of-the-dashboard), and a machine that deliberately has none says so with `YOYODYNE_NODE_UNAVAILABLE`, which is the one thing that makes this skip — quoting the declaration, so the fixtures' shape and the routes hold there and the renders are known not to. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
 | A file no content class recognizes, a class that recognizes nothing, or a class crediting its coverage to a check the project no longer declares | `internal/composition` | Write the class, retire it, or say what covers it now. This is the audit rather than a gate: it holds what this repository is made of against what its declared checks actually exercise, so a new kind of content cannot arrive covered by nothing and unnoticed — which is how shell got here. |
 
 Fixtures written to be malformed on purpose are not walked: anything under a

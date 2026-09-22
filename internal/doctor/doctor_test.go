@@ -105,6 +105,19 @@ func brokenInstallations() map[string]func(*world) {
 		"a configured check names a program this machine does not have": func(w *world) {
 			w.configuration = strings.Replace(healthyConfig, "go test ./...", "cargo test --all", 1)
 		},
+		"the product ships the dashboard and node is not installed": func(w *world) {
+			w.shipsTheDashboard()
+			w.absent("node")
+		},
+		"the product ships the dashboard and node would not run": func(w *world) {
+			w.shipsTheDashboard()
+			w.runner.reply("node --version", failed("dyld: Library not loaded"))
+		},
+		"the product ships the dashboard and node is declared deliberately unavailable": func(w *world) {
+			w.shipsTheDashboard()
+			w.absent("node")
+			w.env[dashboard.NodeUnavailableVariable] = "1"
+		},
 		"an artifact home has no index at its door": func(w *world) {
 			w.undocument("docs/designs")
 		},
@@ -1063,6 +1076,83 @@ func TestAnUnresolvableCheckIsFoundBeforeARunSpendsAnything(t *testing.T) {
 	}
 }
 
+// TestNodeIsAskedAboutOnlyWhereTheChecksRenderTheDashboard is the other tool
+// a check needs that no check line names: the dashboard's render test runs
+// the page's script under node, and a product whose repository carries that
+// script fails every run without it. A product that does not carry it — one
+// that serves the dashboard the binary ships, or has nothing to do with it —
+// is asked nothing, and a machine that declared node deliberately unavailable
+// is told the renders go unverified rather than that work cannot run.
+func TestNodeIsAskedAboutOnlyWhereTheChecksRenderTheDashboard(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a product without the dashboard's source gets no finding", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.absent("node")
+		report := world.diagnose()
+		if finding, found := findingFor(report, "node"); found {
+			t.Fatalf("node = %#v, want no finding for a product whose checks never run it", finding)
+		}
+		if report.Status != StatusOK {
+			t.Fatalf("Diagnose() = %s over a product that needs no node: %s", report.Status, render(report))
+		}
+	})
+
+	t.Run("a product shipping the dashboard is told node runs its render test", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsTheDashboard()
+		report := world.diagnose()
+		finding, found := findingFor(report, "node")
+		if !found || finding.Status != StatusOK {
+			t.Fatalf("node = %#v, want it healthy: %s", finding, render(report))
+		}
+		for _, want := range []string{"v22.13.1", dashboard.RenderTest} {
+			if !strings.Contains(finding.Summary+finding.Detail, want) {
+				t.Fatalf("node finding does not name %q: %#v", want, finding)
+			}
+		}
+	})
+
+	t.Run("without node the render test fails every run, which is a problem", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsTheDashboard()
+		world.absent("node")
+		report := world.diagnose()
+		finding, found := findingFor(report, "node")
+		if !found || finding.Status != StatusProblem {
+			t.Fatalf("node = %#v, want a problem: %s", finding, render(report))
+		}
+		if finding.Remedy != "brew install node" {
+			t.Fatalf("remedy = %q, want the install command", finding.Remedy)
+		}
+		if !strings.Contains(finding.Detail, dashboard.RenderTest) {
+			t.Fatalf("detail = %q, want the test that fails named", finding.Detail)
+		}
+	})
+
+	t.Run("node declared deliberately unavailable is a warning naming the declaration", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsTheDashboard()
+		world.absent("node")
+		world.env[dashboard.NodeUnavailableVariable] = "1"
+		report := world.diagnose()
+		finding, found := findingFor(report, "node")
+		if !found || finding.Status != StatusWarning {
+			t.Fatalf("node = %#v, want a warning: %s", finding, render(report))
+		}
+		if !strings.Contains(finding.Summary, dashboard.NodeUnavailableVariable) || !strings.Contains(finding.Detail, dashboard.NodeUnavailableVariable+"=1") {
+			t.Fatalf("finding does not quote the declaration: %#v", finding)
+		}
+		if report.Status != StatusWarning {
+			t.Fatalf("Diagnose() = %s, want the declared skip to stop no run: %s", report.Status, render(report))
+		}
+	})
+}
+
 // TestAShellPrefixOnACheckIsNotMistakenForAMissingProgram keeps the
 // resolvability probe from inventing failures. A check line is a shell command,
 // and the first word of one is not always a program.
@@ -1155,6 +1245,9 @@ type world struct {
 	// released install, where the version is the whole of the comparison.
 	build  string
 	leases []*leaseHold
+	// env is what the operator's shell exported beyond the state root, which is
+	// where a declaration that a tool is deliberately unavailable is read from.
+	env map[string]string
 }
 
 const currentVersion = "v1.2.3"
@@ -1179,6 +1272,7 @@ func newWorld(t *testing.T) *world {
 		stateRoot:     t.TempDir(),
 		project:       t.TempDir(),
 		goos:          "darwin",
+		env:           map[string]string{},
 	}
 	// A machine where everything answers. Each broken installation is this with
 	// exactly one thing changed, so what a test arranges is what it is about.
@@ -1189,6 +1283,7 @@ func newWorld(t *testing.T) *world {
 	w.runner.reply("stats", succeeded("open: 3"))
 	w.runner.reply("claude --version", succeeded("2.0.0 (Claude Code)"))
 	w.runner.reply("auth status --json", succeeded(`{"loggedIn":true,"authMethod":"subscription"}`))
+	w.runner.reply("node --version", succeeded("v22.13.1"))
 	w.runner.reply("gh --version", succeeded("gh version 2.60.0"))
 	w.runner.reply("gh auth status", succeeded("Logged in to github.com"))
 	w.runner.reply("remote get-url", succeeded("git@github.com:example/thing.git"))
@@ -1337,7 +1432,7 @@ func (w *world) diagnose() Report {
 // the ordinary way a checks list goes wrong -- is a state a test can arrange by
 // writing the configuration alone.
 func (w *world) lookPath(program string) (string, error) {
-	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "gh": true, "go": true, "security": true}
+	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "gh": true, "go": true, "node": true, "security": true}
 	if !installed[program] || w.missing[program] {
 		return "", errors.New("exec: \"" + program + "\": executable file not found in $PATH")
 	}
@@ -1349,7 +1444,21 @@ func (w *world) getenv(name string) string {
 	case "YOYODYNE_STATE_HOME":
 		return w.stateRoot
 	default:
-		return ""
+		return w.env[name]
+	}
+}
+
+// shipsTheDashboard puts the dashboard's render script in the world's
+// repository, which is what makes it a product whose checks render the page
+// and the one kind of product Node is asked about.
+func (w *world) shipsTheDashboard() {
+	w.t.Helper()
+	script := filepath.Join(w.project, filepath.FromSlash(dashboard.RenderScript))
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		w.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env node\n"), 0o644); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
 	}
 }
 

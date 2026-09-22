@@ -9,8 +9,10 @@ package dashboard
 // testdata/render.js, and what it leaves in the document is held to the renders
 // under testdata/renders — one page per scenario, which a reviewer opens in a
 // browser beside the stylesheet or reads as text. Where Node is not installed
-// the render test skips and says so; the fixture-shape and route tests below
-// hold without it.
+// the render test fails naming it, since a skip is silent in a green run and
+// the renders are the page's only behavioural evidence; it skips only where
+// NodeUnavailableVariable says the machine deliberately has none. The
+// fixture-shape and route tests below hold without it either way.
 
 import (
 	"bytes"
@@ -18,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -347,6 +350,72 @@ func TestThePipelineReadsTheModelsCountAndFold(t *testing.T) {
 	}
 }
 
+// renderer resolves the Node the render test runs the script under. Where
+// there is none it answers one of two ways, and which is the whole of what the
+// test decides from: an error, which fails the test naming the missing tool,
+// unless NodeUnavailableVariable is set, in which case a reason to skip that
+// quotes the declaration. A skip is what the test used to do on its own, and a
+// green run said nothing about it — so a machine without Node now has to say
+// it meant that, and any other machine without Node is a machine the renders
+// were never verified on.
+func renderer(lookPath func(string) (string, error), getenv func(string) string) (node, skip string, err error) {
+	node, err = lookPath("node")
+	if err == nil {
+		return node, "", nil
+	}
+	if declared := strings.TrimSpace(getenv(NodeUnavailableVariable)); declared != "" {
+		return "", fmt.Sprintf("node is not installed and %s=%s says that is deliberate, so the page's script is not run here; the renders under testdata/renders are the last run's evidence", NodeUnavailableVariable, declared), nil
+	}
+	return "", "", fmt.Errorf("node is not installed, so the page's script cannot be run and the renders under testdata/renders go unverified here: %w; Node is a development dependency of the dashboard (docs/developing-yoyo.md), so install it, or set %s=1 where it is deliberately unavailable and this test is to skip", err, NodeUnavailableVariable)
+}
+
+// A machine without Node fails the render test rather than skipping it, and
+// the failure names the tool and the variable that would make the skip a
+// deliberate one; only that variable makes it skip, and the skip quotes it.
+func TestARenderWithoutNodeFailsUnlessDeclaredUnavailable(t *testing.T) {
+	t.Parallel()
+	absent := func(string) (string, error) {
+		return "", errors.New(`exec: "node": executable file not found in $PATH`)
+	}
+	nothing := func(string) string { return "" }
+
+	node, skip, err := renderer(func(string) (string, error) { return "/usr/local/bin/node", nil }, nothing)
+	if err != nil || skip != "" || node != "/usr/local/bin/node" {
+		t.Fatalf("with node installed: node=%q skip=%q err=%v", node, skip, err)
+	}
+
+	_, skip, err = renderer(absent, nothing)
+	if err == nil || skip != "" {
+		t.Fatalf("with node absent and nothing declared: skip=%q err=%v, want a failure", skip, err)
+	}
+	for _, named := range []string{"node is not installed", NodeUnavailableVariable, "docs/developing-yoyo.md"} {
+		if !strings.Contains(err.Error(), named) {
+			t.Fatalf("the failure does not name %q: %v", named, err)
+		}
+	}
+
+	declared := func(name string) string {
+		if name == NodeUnavailableVariable {
+			return "1"
+		}
+		return ""
+	}
+	_, skip, err = renderer(absent, declared)
+	if err != nil || skip == "" {
+		t.Fatalf("with node absent and declared unavailable: skip=%q err=%v, want a skip", skip, err)
+	}
+	if !strings.Contains(skip, NodeUnavailableVariable+"=1") {
+		t.Fatalf("the skip does not quote the declaration: %q", skip)
+	}
+
+	// The declaration is read only where Node is actually absent: a machine that
+	// has Node and carries the variable renders anyway.
+	node, skip, err = renderer(func(string) (string, error) { return "/usr/local/bin/node", nil }, declared)
+	if err != nil || skip != "" || node == "" {
+		t.Fatalf("with node installed and the variable set: node=%q skip=%q err=%v", node, skip, err)
+	}
+}
+
 // The page's script draws every section in every state from the fixtures, and
 // what it draws is what the renders under testdata/renders hold. Each of the
 // five sections reaches each of its four states in at least one scenario, each
@@ -354,9 +423,12 @@ func TestThePipelineReadsTheModelsCountAndFold(t *testing.T) {
 // page reaches its own four, and no scenario sets a style or sends the token
 // anywhere but as a bearer to this origin — render.js refuses both.
 func TestThePageRendersEverySectionInEveryState(t *testing.T) {
-	node, err := exec.LookPath("node")
+	node, declared, err := renderer(exec.LookPath, os.Getenv)
 	if err != nil {
-		t.Skip("node is not installed, so the page's script cannot be run here; the renders under testdata/renders are the last run's evidence")
+		t.Fatal(err)
+	}
+	if declared != "" {
+		t.Skip(declared)
 	}
 	out := t.TempDir()
 	if *updateRenders {
