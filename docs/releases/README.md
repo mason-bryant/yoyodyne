@@ -7,7 +7,13 @@
 exists and committed with the commit the tag names, so the release page and the
 repository tell one story rather than two: the
 [release workflow](../../.github/workflows/release.yml) publishes this file as
-the release's body, with the install preamble under it.
+the release's body, with the install preamble under it and nothing else — the
+forge's own commit-derived changelog is never appended, because a commit says
+what one change did and these notes say what somebody wanted. The forge
+accepts a body of 125,000 characters, and
+[what a release page carries](../developing-yoyo.md#what-a-release-page-carries)
+says where a file approaching that is warned about and where one over it is
+refused.
 
 [`v0.3.0.md`](v0.3.0.md) is the exception and says so here rather than in
 itself: it was written after `v0.3.0` was tagged and pushed, so the repository

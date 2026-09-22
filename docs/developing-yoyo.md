@@ -587,9 +587,10 @@ titles and goals only; the next draft is the first written this way.
 Redrafting one of them is `bash scripts/release-notes.sh <tag> --force`, and
 it is a person's commit rather than a run's: with every description in it,
 v0.5.0 redrafts to some 300 KB, which is more than the review gate's patch
-bound will show a reviewer, and the draft writes over the intro and the
-placement the product manager made by hand, so both have to be carried back
-into it.
+bound will show a reviewer and more than [the forge accepts as a release
+page's body](#what-a-release-page-carries), and the draft writes over the
+intro and the placement the product manager made by hand, so both have to be
+carried back into it.
 
 Only what the tracker calls **closed** reaches the notes. An id in a commit
 message says work touched that item, not that the item is done — a parent epic
@@ -610,9 +611,36 @@ side by side, one the operator asked for, one from a reviewer's report, one the
 development manager decomposed — and the refusals against a fabricated
 repository and a fabricated export, and `make test` runs it.
 
+## What a release page carries
+
 The release workflow publishes that same file as the release page's body, with
 the install preamble under it, so the release page and the repository tell one
-story rather than two. [`scripts/release-body.sh`](../scripts/release-body.sh)
-is the composition, kept as a script rather than inline in the workflow because
-workflow YAML on a tag trigger first executes during a real publication; the
-test above covers it, including what a tag with no notes file publishes.
+story rather than two. That is the whole of the page: the tag's notes, the
+preamble, the three platforms' archives, and their checksums. The forge is
+never asked for its own generated notes. Those are a changelog — every commit
+since the previous tag, each saying what one change did — and the distinction
+above is not a nicety: on v0.5.0 the publish step passed `--generate-notes`
+beside `--notes-file`, the forge appended some six hundred commits under 84,765
+characters of curated notes, and refused the whole body as longer than the
+125,000 characters it accepts. The notes grow with the backlog, so that would
+have refused every release from there. `internal/cli`'s release test reads the
+workflow's publish step and fails on the flag by name.
+
+The archives are built at the commit the tag names. A binary records the commit
+it was built from beside the version it is stamped with, and v0.5.0's local cut
+built its archives before its own housekeeping commit, so they named a commit
+the tag did not and were rebuilt by hand. The workflow's checkout is the tag's
+own commit, and a step ahead of the build asserts `HEAD` is what the tag
+resolves to rather than trusting that it is.
+
+[`scripts/release-body.sh`](../scripts/release-body.sh) is the composition,
+kept as a script rather than inline in the workflow because workflow YAML on a
+tag trigger first executes during a real publication. It measures what it
+composed: at 75 percent of the forge's limit it warns on stderr, where the
+workflow's log shows it, and over the limit it refuses, naming the length and
+the file to shorten, so a body too long is refused here with a reason rather
+than by the forge with a status code. Both figures are read from the
+environment, `RELEASE_BODY_LIMIT` and `RELEASE_BODY_WARN_PERCENT`, which is how
+the test above drives them against notes a few hundred bytes long. That test
+holds the body to being the notes and the preamble and nothing else, byte for
+byte, and covers what a tag with no notes file publishes.
