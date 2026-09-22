@@ -90,20 +90,25 @@ One section is not the product manager's and is written by the cut itself: the
 `<!-- yoyodyne:release-readiness -->` and `<!-- /yoyodyne:release-readiness -->`
 at the end of the file. It is what
 [`yoyo conformance`](../artifacts.md#asking-all-of-this-at-once-before-a-tag)
-found when the tag was cut — the artifacts, the references, the links, the
-invariants, the goal every admitted item serves, and what a change upstream left
-unanswered downstream — so a published release says what was true of the tree it
-names rather than only that its tests passed.
+found when the cut ran ahead of the tag — the artifacts, the references, the
+links, the invariants, the goal every admitted item serves, and what a change
+upstream left unanswered downstream — so a published release says what was
+true of the tree it names rather than only that its tests passed.
 
-The cut replaces what is between those two markers and leaves everything around
-them alone, so a second stamp does not leave two results that disagree. Editing
-inside them is editing a record of what a check found, which the next cut
-overwrites; everything you want to say about the release goes in the sections
-above.
+The cut does not write it to `main` itself: it commits the stamped notes on a
+branch and opens a pull request, which is how the result reaches this file,
+and the cut after the merge tags. It replaces what is between those two
+markers and leaves everything around them alone, so a second stamp does not
+leave two results that disagree, and a result already here with the same
+verdict from the same definition is left alone rather than rewritten for its
+counts. Editing inside them is editing a record of what a check found, which
+the next stamp overwrites; everything you want to say about the release goes
+in the sections above.
 
 [Cutting a release](../developing-yoyo.md#cutting-a-release) gates on this file
 being present: `make release VERSION=<tag>` with no notes for `<tag>` drafts
 them and refuses, so the judgement happens before the tag rather than after the
 release page is published. The notes commit has to reach `origin/main` before
 the cut will go through, because the cut refuses a `HEAD` the remote does not
-have.
+have; and then the readiness result has to reach it too, through the pull
+request the cut opens, before the cut tags.
