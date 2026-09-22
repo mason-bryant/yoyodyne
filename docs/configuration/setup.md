@@ -1,3 +1,33 @@
+<!--
+Landed by yoyodyne-ifd.117.1, tranche 1 of the configuration.md split, with
+docs/configuration.md left intact. The links below into ../configuration.md
+resolve today and point at sections a later tranche moves; the tranche that
+moves a section retargets the link:
+
+  #what-init-proposes-for-checks      -> configuration/runs.md (117.3)
+  #what-reaches-the-queue             -> configuration/goals.md (117.2)
+  #triage-thresholds                  -> configuration/recovery.md (117.3)
+  #waiting-out-a-provider-that-refuses -> configuration/recovery.md (117.3)
+  #provider-accounts                  -> configuration/agents.md (117.4; the
+                                         map's row, left in configuration.md
+                                         this tranche on the DM's direction)
+  #what-fails-closed, #merge-and-removal-semantics
+                                      -> this guide (117.4; docs/docs-map.md
+                                         moved the row here from publishing.md
+                                         after tranche 1 was scoped, so the
+                                         section is not lifted yet)
+  #keeping-the-configuration-outside-the-repository (three uses), #services
+                                      -> no row in docs/docs-map.md; they stay
+                                         in configuration.md until the map
+                                         gives them a home
+
+"The configuration index ... lists the other guides" below is a forward claim:
+configuration.md becomes the index in 117.4.
+
+Size: 545 lines against the map's 524-line budget for this guide, covering
+exactly the sections the map assigns it minus the merge-semantics row above;
+the sections themselves grew after the map's counts were taken.
+-->
 # Writing a project configuration
 
 What `yoyo init` writes, where the harness looks for it, how the layers combine,
@@ -100,8 +130,9 @@ A synced tracker is one operator's backlog surviving their machine, and not yet 
 team sharing one: two people each running their own harness against one
 repository is
 [not supported](../team-mode-scope.md#what-v1-supports-meanwhile), because the
-coordination around the backlog — claims, reports, directives, and the budgets
-below — stays on the machine that made it.
+coordination around the backlog — claims, reports, directives, and the
+[triage budgets](../configuration.md#triage-thresholds) — stays on the machine
+that made it.
 
 Two consequences of the tracker riding your repository are worth knowing before
 you adopt the default. Its history counts against the repository's size like any
@@ -249,7 +280,8 @@ compiled adapter launches it, which executable that adapter runs, which roles it
 serves, which tool postures it can hold them to, and how to read what it says
 about rate limits, retries, and reset times. A declared provider describes and
 decides nothing: whether to wait, how long, and against which budget stay the
-harness's, because those are what the `execution.usage_limit_*` settings below
+harness's, because those are what the
+[`execution.usage_limit_*` settings](../configuration.md#waiting-out-a-provider-that-refuses)
 mean. [Provider plugins](../provider-plugins.md) is the format and its limits — in
 particular that a provider speaking a protocol no compiled adapter speaks needs
 an adapter rather than a declaration.
@@ -322,8 +354,9 @@ for a different reason, because the harness lists what a home holds without
 following links and reports one that is a link as not being a directory. The same
 holds of the `.yoyodyne` directory `yoyo init` writes: a project
 whose `.yoyodyne` leads out of the project is refused with the project untouched
-rather than scaffolded somewhere nothing commits. And of the configurations home
-below, which is a declared root like any other: a write that resolves out of it
+rather than scaffolded somewhere nothing commits. And of the
+[configurations home](../configuration.md#keeping-the-configuration-outside-the-repository),
+which is a declared root like any other: a write that resolves out of it
 is refused rather than landing where nothing looks for it.
 
 ## Precedence
@@ -432,7 +465,8 @@ agents:
 ```
 
 That file inherits the five agents and their personas from the bundle, overlays
-the one field it names, and is subject to the precedence and merge rules above.
+the one field it names, and is subject to the [precedence](#precedence) and
+[merge rules](../configuration.md#merge-and-removal-semantics).
 
 **What it buys, and what it costs.** Upgrading the executable upgrades the
 defaults and the personas the project did not override — which is exactly what

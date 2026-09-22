@@ -1,3 +1,27 @@
+<!--
+Landed by yoyodyne-ifd.117.1, tranche 1 of the configuration.md split, with
+docs/configuration.md left intact. The links below into ../configuration.md
+resolve today and point at sections a later tranche moves; the tranche that
+moves a section retargets the link:
+
+  #protected-paths-in-a-developers-change -> configuration/artifacts.md (117.2)
+  #what-reaches-the-queue                 -> configuration/goals.md (117.2)
+  #keeping-the-configuration-outside-the-repository
+                                          -> no row in docs/docs-map.md; stays
+                                             in configuration.md until the map
+                                             gives it a home
+
+"The configuration index ... lists the other guides" below is a forward claim:
+configuration.md becomes the index in 117.4.
+
+Scope against docs/docs-map.md: the map's disposition table assigns this guide
+six sections — Operators, Reporting to Slack (+ Avatars), Personas, and also
+Provider accounts (+ Pooling), Research sources, and How long one role may ask
+another. This tranche lifts the first three on the development manager's
+re-run direction, which was written before the map's reconciliation; the other
+three stay in configuration.md for 117.4. Size: 289 lines against the map's
+370-line budget, which counts all six.
+-->
 # Configuring operators, personas, and reporting
 
 The humans this project recognizes and what each may do, the personas that
