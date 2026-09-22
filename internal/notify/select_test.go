@@ -284,6 +284,130 @@ func TestAFailingCheckIsSaidAsAWarningInTheChecksOwnWords(t *testing.T) {
 	}
 }
 
+// A change the protected-path gate refused used to be silent in the thread: the
+// blocker note and `yoyo status` said why a round was spent, and a reader of the
+// thread saw a repair round happen with no stated reason. It is said now, in the
+// developer's voice, naming the refused path and the grant that would admit it.
+func TestARefusedPathIsSaidByTheDeveloperWithThePathAndTheGrantThatWouldAdmitIt(t *testing.T) {
+	before := running()
+	after := before
+	after.RepairAttempts = 1
+	after.PathRefusal = &runstate.PathRefusal{
+		Paths:  []string{"docs/designs/v1-harness-design.md"},
+		Grants: []string{"docs/product/brief.md"},
+	}
+	kinds, notifications := crossed(t, before, after)
+	if len(kinds) != 1 || kinds[0] != KindPathRefused {
+		t.Fatalf("a refused path crossed %v", kinds)
+	}
+	said := only(t, notifications, KindPathRefused)
+	if said.Speaker.Role != domain.RoleDeveloper {
+		t.Fatalf("a refused path is spoken by %q, want the developer", said.Speaker.Key())
+	}
+	if said.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a refused path is a %s; a repair round spent is a warning as a failing check is", said.Event.Severity)
+	}
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"docs/designs/v1-harness-design.md",
+		"docs/product/brief.md",
+		"`protected-path grant: docs/designs/v1-harness-design.md`",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("body %q does not say %q", message.Body, want)
+		}
+	}
+	if message.Reach != ReachThread {
+		t.Fatalf("a refused path reaches %q, want the item's thread: it is the developer's next attempt", message.Reach)
+	}
+}
+
+// Once per refusal, as the round it bought: the same refusal read twice on one
+// round is one refusal; the same paths refused again on the next round are a
+// second round spent for the same stated cause; a refusal that cleared says
+// nothing of its own, because what follows it is the checks, and they say what
+// they find; and a refusal that found the budget already gone spent no round
+// and is the blocker line's to say, not the developer's, whose line would
+// promise an attempt the run is not going to make.
+func TestARefusedPathIsSaidOncePerRefusal(t *testing.T) {
+	before := running()
+	first := before
+	first.RepairAttempts = 1
+	first.PathRefusal = &runstate.PathRefusal{Paths: []string{"docs/designs/v1-harness-design.md"}}
+	if kinds, _ := crossed(t, before, first); len(kinds) != 1 || kinds[0] != KindPathRefused {
+		t.Fatalf("the first refusal crossed %v", kinds)
+	}
+	if again, _ := crossed(t, first, first); len(again) != 0 {
+		t.Fatalf("the same refusal on the same round was said twice: %v", again)
+	}
+	// The developer reaches for the same path again: a second round spent.
+	second := first
+	second.RepairAttempts = 2
+	if kinds, _ := crossed(t, first, second); len(kinds) != 1 || kinds[0] != KindPathRefused {
+		t.Fatalf("the same paths refused on a later round crossed %v", kinds)
+	}
+	// The paths taken back out: the refusal clears and nothing is said for it.
+	cleared := second
+	cleared.PathRefusal = nil
+	if kinds, _ := crossed(t, second, cleared); len(kinds) != 0 {
+		t.Fatalf("a cleared refusal crossed %v", kinds)
+	}
+	// The budget spent, the gate refuses once more and the run blocks: the
+	// record carries the refusal with the count unmoved and the blocker beside
+	// it, and the blocker line is the one that names the paths.
+	blocked := endedRun(second, runstate.StatusFailed)
+	blocked.PathRefusal = &runstate.PathRefusal{Paths: []string{"docs/product/brief.md"}}
+	blocked.Failure = "protected paths refused after 2 of 2 permitted attempt(s): docs/product/brief.md"
+	blocked.Blocker = runstate.RecordBlocker(blocked.Failure)
+	kinds, _ := crossed(t, second, blocked)
+	if slices.Contains(kinds, KindPathRefused) || !slices.Contains(kinds, KindBlockerRecorded) {
+		t.Fatalf("a refusal that spent no round crossed %v; it is the blocker line's to say", kinds)
+	}
+	// A sink that starts late says the refusal along with everything else the
+	// record already holds — and, on a run that blocked on its refusal, says the
+	// blocker and not a developer promising an attempt.
+	kinds, _ = crossed(t, runstate.State{}, first)
+	if !slices.Contains(kinds, KindPathRefused) || !slices.Contains(kinds, KindRunStarted) {
+		t.Fatalf("a late sink said %v", kinds)
+	}
+	kinds, _ = crossed(t, runstate.State{}, blocked)
+	if slices.Contains(kinds, KindPathRefused) || !slices.Contains(kinds, KindBlockerRecorded) {
+		t.Fatalf("a late sink on a run blocked on its refusal said %v", kinds)
+	}
+}
+
+// The bound on what a refusal records is said rather than dropped: a developer
+// has every one of the paths to take back out, and a list that stopped without
+// saying so would read as the whole of what the gate caught. An item that grants
+// nothing is said to grant nothing, which is what tells a reader whether the
+// change reached outside its item or the item is missing a grant.
+func TestARefusedPathSaysWhatWasLeftOffTheListAndWhatTheItemGrants(t *testing.T) {
+	before := running()
+	after := before
+	after.RepairAttempts = 1
+	after.PathRefusal = &runstate.PathRefusal{
+		Paths:   []string{"docs/designs/a.md", "docs/designs/b.md"},
+		Omitted: 3,
+	}
+	_, notifications := crossed(t, before, after)
+	said := only(t, notifications, KindPathRefused)
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"docs/designs/a.md, docs/designs/b.md and 3 further paths not listed here",
+		"the item grants nothing",
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("body %q does not say %q", message.Body, want)
+		}
+	}
+}
+
 func TestTheVerdictIsTheReviewersOwnAccount(t *testing.T) {
 	before := running()
 	before.Phase = runstate.PhaseReviewing

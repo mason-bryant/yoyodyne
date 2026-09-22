@@ -101,6 +101,31 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 			ExitCode: after.CheckFailure.ExitCode,
 		})
 	}
+	// A refusal by the gate in front of the checks is said once per refusal, as
+	// the round it bought. The record writes the refusal and the round in one
+	// save, so the repair count moving under a refusal is what says a round was
+	// spent on it: two readings carrying the same refusal on the same count are
+	// one refusal read twice, and the same paths refused again on a later count
+	// are a second round spent for the same stated cause, which under the
+	// communication rule is a second thread line rather than silence. A refusal
+	// that found the budget already gone spends no round and moves no count —
+	// the run blocks on it, and the blocker line names the paths — so it is not
+	// said here, where the developer's line would promise an attempt the run is
+	// not going to make.
+	//
+	// The developer speaks it, and that is deliberate where the harness speaks
+	// the failing check beside it. The gate is a string comparison rather than a
+	// judgement, and what the line is about is the developer's own change reaching
+	// outside its item and the developer taking it back out — an account the
+	// developer can give of its own act, where a persona narrating a check's
+	// verdict would be claiming one it never reached.
+	if refusalBoughtARound(before, after) {
+		say(KindPathRefused, report.SeverityWarning, Persona(domain.RoleDeveloper, ""), Detail{
+			RefusedPaths: after.PathRefusal.Paths,
+			OmittedPaths: after.PathRefusal.Omitted,
+			Grants:       after.PathRefusal.Grants,
+		})
+	}
 	// A verdict is keyed on the invocation that gave it rather than on the words
 	// it used, because a repair loop produces several and most of them say the
 	// same word. The decision alone would report the first request for repairs
@@ -1032,6 +1057,27 @@ func checksBehind(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// refusalBoughtARound reports a later reading carrying the protected-path
+// gate's refusal — the change in the worktree touches a path the item did not
+// grant — that the record wrote beside the repair round it bought. The count
+// moving is the whole of the test: the record clears a refusal at the next
+// gate that passes and writes the next one with the round it hands back, so a
+// refusal under a moved count is one the developer is taking back out, whether
+// it is the earlier reading's paths again or different ones. A refusal read
+// with the count unmoved is either the same save read twice or one the budget
+// was already gone for, and neither is this line's to say.
+//
+// A run that stopped is not said either, whatever the count did. That is the
+// reading a sink starting late takes of a run that blocked on its refusal: the
+// count moved on the rounds before it, the refusal on the record is the one
+// that spent none, and the blocker line beside it is what names the paths.
+func refusalBoughtARound(before, after runstate.State) bool {
+	if after.PathRefusal == nil || after.RepairAttempts <= before.RepairAttempts {
+		return false
+	}
+	return !handedToAPerson(after)
 }
 
 // verdictGiven reports a record that holds a reviewer's verdict at all. The
