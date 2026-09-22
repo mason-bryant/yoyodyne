@@ -46,10 +46,19 @@ build: cachecheck
 # gate's size line and its warning are printed here, after the suite that
 # judges the set, where a person running the checks can read them. The grep
 # keeps the one or two lines that matter; the suite above is still the verdict.
+#
+# The dashboard's render test is the other line worth reading: it runs the
+# page's script under Node, and where Node is deliberately declared absent it
+# skips rather than fails -- which `ok internal/dashboard` does not distinguish
+# from a pass. So its own run line is printed here, `--- PASS` or `--- SKIP`
+# with the declaration quoted, and a check runner's log says on every run
+# whether the renders were compared on that machine (docs/developing-yoyo.md).
 test: cachecheck
 	$(GO) test ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
+	@$(GO) test -v -run '^TestThePageRendersEverySectionInEveryState$$' ./internal/dashboard \
+		| grep -E '^--- (PASS|SKIP|FAIL): TestThePageRendersEverySectionInEveryState|node is not installed'
 
 race: cachecheck
 	$(GO) test -race ./...

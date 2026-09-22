@@ -25,8 +25,9 @@ to reach one of the four, and for content that is not Go that means `make test`.
 
 ## Node is a development dependency of the dashboard
 
-`make test` needs Node on the `PATH`, and it is the one tool the four checks
-need that is not the Go toolchain. The dashboard's page is drawn by its own
+`make test` needs Node on the `PATH`, a tool the checks need beyond the Go
+toolchain — as they need Git for the orchestrator's and worktree manager's
+tests, and a shell for the release suites. The dashboard's page is drawn by its own
 script, which a Go test cannot run, so `TestThePageRendersEverySectionInEveryState`
 in `internal/dashboard` runs it under `node` against the fixtures and holds
 what it draws to the golden renders under `internal/dashboard/testdata/renders`
@@ -51,7 +52,12 @@ that deliberately has no Node declares it once where the harness reads its
 environment and both the developer's own execution of the checks and the
 harness's afterwards read the same declaration. Nothing sets it on the
 operator's machine, where the check runner has Node and the renders are
-compared on every run.
+compared on every run — and `make test` says so rather than leaving it to be
+inferred: after the suite it runs the render test once more under `-v` and
+prints its run line, `--- PASS: TestThePageRendersEverySectionInEveryState`,
+or `--- SKIP` with the declaration quoted, because `ok internal/dashboard`
+reads the same either way. That line in a check runner's log is what confirms
+the machine has Node.
 
 `yoyo doctor` asks about Node under a `node` finding in a checkout that carries
 the render script — this one — and in no other: a missing Node is a problem
