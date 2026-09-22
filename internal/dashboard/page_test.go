@@ -8,9 +8,16 @@ package dashboard
 // script is run under Node, against the fixtures under testdata/fixtures, by
 // testdata/render.js, and what it leaves in the document is held to the renders
 // under testdata/renders — one page per scenario, which a reviewer opens in a
-// browser beside the stylesheet or reads as text. Where Node is not installed
-// the render test skips and says so; the fixture-shape and route tests below
-// hold without it.
+// browser beside the stylesheet or reads as text.
+//
+// A machine without Node therefore fails the render test rather than skipping
+// it: the page's only behavioural evidence is the comparison against those
+// renders, and a run that quietly passes without making it reports a green
+// suite for a page nothing drew. The one environment that skips is one that
+// declares its own absence of Node in YOYODYNE_NODE_UNAVAILABLE, which nothing
+// here sets and which is therefore a statement somebody made about the
+// environment they built. The fixture-shape and route tests below hold either
+// way.
 
 import (
 	"bytes"
@@ -18,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -347,6 +355,138 @@ func TestThePipelineReadsTheModelsCountAndFold(t *testing.T) {
 	}
 }
 
+// nodeDecision is what to do about Node on the machine a render was asked for:
+// run the script under the Node at Path, skip saying Skip, or fail saying Fail.
+// Exactly one of the three is ever set. It is a value rather than three calls on
+// a *testing.T so that every path is reachable from a test — the failing one
+// most of all, which cannot be exercised by letting it fail for real.
+type nodeDecision struct {
+	Path string
+	Skip string
+	Fail string
+}
+
+// decideNode reads the machine the way the render test needs it read.
+//
+// Node being installed settles it, whatever anything declares: a declaration is
+// a statement that an environment has no Node, and one that has it can draw the
+// page. Node being absent is a failure unless that environment declared the
+// absence itself, which is the whole of what stands between a missing tool and a
+// suite that passes without ever running the page's script.
+func decideNode(lookPath func(string) (string, error), getenv func(string) string) nodeDecision {
+	if node, err := lookPath(NodeProgram); err == nil {
+		return nodeDecision{Path: node}
+	}
+	if declared := strings.TrimSpace(getenv(NodeUnavailableVariable)); declared != "" {
+		return nodeDecision{Skip: fmt.Sprintf(
+			"%s is not on the PATH and %s says this environment deliberately has none (%q), so the page's script was not run here; the renders under testdata/renders are the last run's evidence",
+			NodeProgram, NodeUnavailableVariable, declared)}
+	}
+	return nodeDecision{Fail: fmt.Sprintf(
+		"%s is not on the PATH, so the page's script was never run and the renders under testdata/renders were never compared — this suite passing would say nothing about the page. Install %s, which %s names as a development dependency for the dashboard, or, if this environment is meant to have none, set %s to say which environment that is",
+		NodeProgram, NodeProgram, NodeDocumentation, NodeUnavailableVariable)}
+}
+
+// renderer is the Node the render test runs the page's script under, or the end
+// of that test one way or the other.
+func renderer(t *testing.T) string {
+	t.Helper()
+	switch decision := decideNode(exec.LookPath, os.Getenv); {
+	case decision.Path != "":
+		return decision.Path
+	case decision.Skip != "":
+		t.Skip(decision.Skip)
+	default:
+		t.Fatal(decision.Fail)
+	}
+	return ""
+}
+
+// How the render test decides whether it can run is itself evidence, because the
+// decision is what a green suite means: a machine without Node fails and says
+// what to do about it, and only an environment that declares its own absence
+// skips.
+func TestARenderWithoutNodeFailsUnlessDeclaredUnavailable(t *testing.T) {
+	t.Parallel()
+
+	installed := func(string) (string, error) { return "/usr/local/bin/node", nil }
+	absent := func(program string) (string, error) {
+		return "", fmt.Errorf("exec: %q: executable file not found in $PATH", program)
+	}
+	nothingDeclared := func(string) string { return "" }
+	declaring := func(value string) func(string) string {
+		return func(name string) string {
+			if name == NodeUnavailableVariable {
+				return value
+			}
+			return ""
+		}
+	}
+
+	t.Run("a machine with Node renders", func(t *testing.T) {
+		t.Parallel()
+		decision := decideNode(installed, nothingDeclared)
+		if decision.Path != "/usr/local/bin/node" {
+			t.Fatalf("decideNode() = %+v, want the Node it found", decision)
+		}
+	})
+
+	// A declaration is about an environment that has no Node. One that has Node
+	// anyway draws the page rather than taking the declaration's word for it,
+	// which is what keeps a variable exported in a shell profile from silently
+	// standing the evidence down on the machine the checks run on.
+	t.Run("a machine with Node renders although it declares otherwise", func(t *testing.T) {
+		t.Parallel()
+		decision := decideNode(installed, declaring("an old export nobody cleared"))
+		if decision.Path == "" || decision.Skip != "" {
+			t.Fatalf("decideNode() = %+v, want the Node it found and no skip", decision)
+		}
+	})
+
+	t.Run("a declared absence skips and quotes the declaration", func(t *testing.T) {
+		t.Parallel()
+		decision := decideNode(absent, declaring("this container is built without Node"))
+		if decision.Skip == "" || decision.Path != "" || decision.Fail != "" {
+			t.Fatalf("decideNode() = %+v, want a skip alone", decision)
+		}
+		for _, named := range []string{NodeUnavailableVariable, "this container is built without Node"} {
+			if !strings.Contains(decision.Skip, named) {
+				t.Errorf("skip = %q, want it to name %q", decision.Skip, named)
+			}
+		}
+	})
+
+	// An empty declaration declares nothing. A variable exported with no value
+	// is the shape a half-written sandbox leaves behind, and reading it as a
+	// declaration would be the silence this arrangement exists to end, reachable
+	// by accident.
+	t.Run("an empty declaration is no declaration", func(t *testing.T) {
+		t.Parallel()
+		for _, value := range []string{"", "   "} {
+			decision := decideNode(absent, declaring(value))
+			if decision.Fail == "" || decision.Skip != "" {
+				t.Fatalf("decideNode() with %q declared = %+v, want a failure", value, decision)
+			}
+		}
+	})
+
+	t.Run("an undeclared absence fails and names the way out", func(t *testing.T) {
+		t.Parallel()
+		decision := decideNode(absent, nothingDeclared)
+		if decision.Fail == "" || decision.Path != "" || decision.Skip != "" {
+			t.Fatalf("decideNode() = %+v, want a failure alone", decision)
+		}
+		// The failure has to name the tool that is missing, the document that
+		// says to install it, and the declaration that is the other way out.
+		// Anything less is a red run somebody has to go and diagnose.
+		for _, named := range []string{NodeProgram, NodeDocumentation, NodeUnavailableVariable} {
+			if !strings.Contains(decision.Fail, named) {
+				t.Errorf("failure = %q, want it to name %q", decision.Fail, named)
+			}
+		}
+	})
+}
+
 // The page's script draws every section in every state from the fixtures, and
 // what it draws is what the renders under testdata/renders hold. Each of the
 // five sections reaches each of its four states in at least one scenario, each
@@ -354,10 +494,7 @@ func TestThePipelineReadsTheModelsCountAndFold(t *testing.T) {
 // page reaches its own four, and no scenario sets a style or sends the token
 // anywhere but as a bearer to this origin — render.js refuses both.
 func TestThePageRendersEverySectionInEveryState(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed, so the page's script cannot be run here; the renders under testdata/renders are the last run's evidence")
-	}
+	node := renderer(t)
 	out := t.TempDir()
 	if *updateRenders {
 		out = filepath.Join("testdata", "renders")

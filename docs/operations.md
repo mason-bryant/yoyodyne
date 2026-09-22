@@ -107,7 +107,9 @@ yoyo doctor --json     # the same findings, for something automating the repair
 It looks at the `yoyo` on your `PATH` and whether it is the build you think it
 is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
-checks and whether this machine can run the programs they name, each provider
+checks and whether this machine can run the programs they name, Node where the
+product ships the dashboard — whose page only Node can draw, so a machine
+without it fails the page's render check rather than passing quietly — each provider
 your agents name — installed always, and authenticated where the harness has an
 adapter that can ask, which today is Claude Code — whether every agent runs on
 one model with nothing to fail over to, forge access when the project publishes,
