@@ -2290,14 +2290,17 @@ runs that blocked and the reason each blocked in the message that wakes her.
 Any run that lands clears the count, and `0` turns the brake off, leaving you as
 the only thing that holds intake. Only verdicts and check failures on a change
 that was present count: a stop the environment made — a dirty checkout, a
-tracker or a forge that did not answer, a sandbox that would not spawn — is a
-verdict on nothing and counts toward nothing, and neither does a dispatch or a
-run the provider turned away because nobody is logged into it or nobody can
-reach it. That is
+tracker or a forge that did not answer, a sandbox that would not spawn, a
+target branch that has
+[diverged from the forge](operations.md#unwedging-a-target-branch-that-diverged-from-the-forge)
+so the harness will not catch it up — is a verdict on nothing and counts
+toward nothing, and neither does a dispatch or a run the provider turned away
+because nobody is logged into it or nobody can reach it. That is
 [a wait](operations.md#waiting-out-a-provider-nobody-can-reach) no run can end,
 and a brake tripped on it prescribes a decision about a change nobody judged —
-which is what happened on 2026-09-17 over an expired login, and again on
-2026-09-19 when two of the three stops that tripped it were environmental.
+which is what happened on 2026-09-17 over an expired login, again on
+2026-09-19 when two of the three stops that tripped it were environmental, and
+again on 2026-09-21 when all three were one diverged target.
 
 **The brake's hold does not wait on you.** She decides what happens to it — to
 release it, to keep it and probe the line, or to escalate it to you — and the

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -329,6 +330,90 @@ func TestEnvironmentalStopsDoNotCountTowardTheBrake(t *testing.T) {
 	// three: the environmental stop neither counts nor clears.
 	if schedule.BlockedInARow != 2 {
 		t.Fatalf("blocked in a row = %d, want the two verdicts counted and the environmental stops passed over", schedule.BlockedInARow)
+	}
+}
+
+// A promotion refused because the target branch diverged from the remote's is a
+// catch-up the harness will not make, which is a stop the environment made and
+// a verdict on nothing. On 2026-09-21 three identical ones tripped the brake
+// over a divergence each run's own blocker had already put in front of a
+// person; replayed here, the same three leave the brake standing open and the
+// line choosing, while every one of them still stops on the item as it did.
+func TestDivergedTargetRefusalsDoNotCountTowardTheBrake(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four")...)
+	harness.blockedRuns = 3
+	// The one refusal, in the words the catch-up gives for it, met by every run
+	// that reaches integration until somebody unwedges the branch.
+	held := gitworktree.Catchup{
+		TargetBranch: "main",
+		LocalCommit:  "4d7e805",
+		RemoteCommit: "9f1c2ab",
+		Held:         "main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right",
+	}
+	var blocked []Outcome
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.retire(id)
+		if id == "yoyodyne-four" {
+			return h.complete(id), nil
+		}
+		catchup := held
+		outcome := Outcome{
+			RunID:          "run-" + id,
+			WorkItemID:     id,
+			Status:         runstate.StatusFailed,
+			Blocked:        true,
+			Failure:        "main cannot be brought onto origin before promoting: " + held.Held,
+			DivergedTarget: &catchup,
+		}
+		h.mu.Lock()
+		blocked = append(blocked, outcome)
+		h.mu.Unlock()
+		return outcome, errors.New(outcome.Failure)
+	}
+	harness.summon = func(*scheduleHarness, BrakeSummons, int) (Fired, error) {
+		return Fired{}, errors.New("nobody should be summoned over a diverged target")
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	// Three refusals in a row, exactly the configured trip, and no hold.
+	if schedule.Braked != nil {
+		t.Fatalf("schedule braked on %#v, want a diverged target counted toward nothing", schedule.Braked)
+	}
+	if _, held, _ := harness.Held(); held {
+		t.Fatal("intake is held, want the brake standing open over diverged-target refusals")
+	}
+	if len(harness.summonses) != 0 {
+		t.Fatalf("summoned %d time(s), want nobody summoned over a brake that did not trip", len(harness.summonses))
+	}
+	if schedule.BlockedInARow != 0 {
+		t.Fatalf("blocked in a row = %d, want none of the three refusals counted", schedule.BlockedInARow)
+	}
+	// The line kept choosing: the fourth item was pulled behind the three.
+	if order := harness.pullOrder(); len(order) != 4 || order[3] != "yoyodyne-four" {
+		t.Fatalf("pulled %v, want every item pulled with the brake standing open", order)
+	}
+	// And the refusals reached the person the same way they always did — each
+	// run stopped on its item, with the divergence as its blocker — because the
+	// brake standing open is not the escalation going quiet.
+	if len(blocked) != 3 {
+		t.Fatalf("%d run(s) stopped on the divergence, want three", len(blocked))
+	}
+	for _, outcome := range blocked {
+		if !outcome.Blocked || !strings.Contains(outcome.Failure, "only a person can say which history is right") {
+			t.Fatalf("outcome %#v, want the run still stopped on the item with the divergence as its blocker", outcome)
+		}
+	}
+	for _, started := range schedule.Started {
+		if started.WorkItemID != "yoyodyne-four" && !strings.Contains(started.Failure, "cannot be brought onto origin") {
+			t.Fatalf("started %#v, want the refusal reported on the schedule as the run's own failure", started)
+		}
 	}
 }
 

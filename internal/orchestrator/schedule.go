@@ -801,9 +801,10 @@ type Started struct {
 	awayCause domain.ProviderOutageCause
 	// environmental is set when the run stopped for a cause the environment
 	// answers for rather than a verdict on the change — a dirty checkout, a
-	// transport that did not answer, a sandbox that would not spawn — which the
-	// settle reads to count the stop toward nothing. It is not on the record
-	// because the outcome already carries the classification.
+	// transport that did not answer, a sandbox that would not spawn, a target
+	// branch that diverged from the remote's — which the settle reads to count
+	// the stop toward nothing. It is not on the record because the outcome
+	// already carries the classification.
 	environmental bool
 }
 
@@ -1253,11 +1254,13 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			// what tripped the brake over a login.
 		case started.environmental:
 			// The environment stopped the run — a dirty checkout, a transport that
-			// did not answer, a sandbox that would not spawn — which is a verdict
-			// on nothing. It neither counts nor clears, for the reason the provider
+			// did not answer, a sandbox that would not spawn, a target branch the
+			// harness will not catch up onto the remote's — which is a verdict on
+			// nothing. It neither counts nor clears, for the reason the provider
 			// turning a dispatch away does not: two of the three stops that tripped
-			// the brake on 2026-09-19 were of this class, and a brake tripped on
-			// them summons a decision about a change nobody judged.
+			// the brake on 2026-09-19 were of this class, all three on 2026-09-21
+			// were the one diverged target, and a brake tripped on them summons a
+			// decision about a change nobody judged.
 		case started.blockedRun():
 			blockedInARow++
 			if blockedInARow > schedule.BlockedInARow {
@@ -3626,12 +3629,21 @@ func (s *Started) record(done completed) {
 
 // environmentalStop reports a run that stopped for a cause the environment
 // answers for rather than a verdict on its change: a round the settle refused
-// as environmental, a round nothing of ran, or an approved change the
-// environment stopped short of its promotion. It is the class the brake does
-// not count, because a brake tripped on it summons a decision about a change
+// as environmental, a round nothing of ran, an approved change the environment
+// stopped short of its promotion, or a promotion refused because the target
+// branch and the remote's have diverged. It is the class the brake does not
+// count, because a brake tripped on it summons a decision about a change
 // nobody judged and prescribes a release that fixes nothing.
+//
+// The diverged target is in the class though nothing resumes it. A catch-up the
+// harness will not make is a stop the harness made, and every run reaching
+// integration meets the same one until a person settles the branches — which
+// the item's own blocker already asks of them, in the words docs/operations.md
+// gives for unwedging it. Three identical refusals tripped the brake on
+// 2026-09-21, and what that bought was a second hold on the line over one
+// cause a person had already been told about once.
 func environmentalStop(outcome Outcome) bool {
-	if outcome.IntegrationStop != nil {
+	if outcome.IntegrationStop != nil || outcome.DivergedTarget != nil {
 		return true
 	}
 	refusal := outcome.Environmental
