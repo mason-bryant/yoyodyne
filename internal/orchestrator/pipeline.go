@@ -1102,6 +1102,15 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if worktree.Path != "" {
 			run.recordWorktree(worktree)
 		}
+		// A creation the harness's own budget ended is refused here rather than
+		// from the failure alone, because here is the one place that knows nothing
+		// of this round ran: the developer is invoked below, so a creation that did
+		// not return has invoked nobody and left nothing anywhere to be measured
+		// against. Every other creation failure is classified from the error like
+		// any other, in fail.
+		if errors.Is(err, gitworktree.ErrCheckoutKilled) {
+			run.recordEnvironmentalRefusal(runstate.CauseWorktreeCheckoutKilled, err.Error(), nothingRan)
+		}
 		return run.fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
 	}
 	run.recordWorktree(worktree)
@@ -2676,6 +2685,8 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	switch {
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
+	case errors.Is(failure, gitworktree.ErrCheckoutKilled):
+		return runstate.CauseWorktreeCheckoutKilled, true
 	case errors.Is(failure, execution.ErrProcessNotStarted):
 		return runstate.CauseSandboxSpawnFailure, true
 	default:

@@ -33,6 +33,30 @@ const (
 	// five-minute local budget, and a Git command that has hung is still ended
 	// rather than holding a run open for as long as the load lasts.
 	maxLoadFactor = 10
+	// checkoutFileBudget is what one file of a new worktree's checkout adds to
+	// the budget its `git worktree add` gets.
+	//
+	// The local figure above is for a command that reads a ref or writes a
+	// handful of small files, and an add does neither: it writes the whole tree,
+	// so a budget that does not grow with the tree bounds it by something it has
+	// nothing to do with. That is what killed three creations of yoyodyne-ifd.441
+	// in three hours on 2026-09-22, each with no Git error at all — the runner's
+	// own exit code, and a stderr holding nothing but the checkout's progress,
+	// one of them stopped at 87% of 1099 files — while the claim audit gave the
+	// item back half an hour later and the next pull started over.
+	//
+	// Fifty milliseconds a file is far above what a checkout costs on an idle
+	// machine, deliberately: the bound is here for an add that has hung, and an
+	// add merely crawling under three concurrent race suites is the case that has
+	// to survive it. The load scaling the local figure gets applies to the whole
+	// of it, so an oversubscribed machine grows this as well.
+	//
+	// The liveness bound a provider invocation gets is not the alternative, and
+	// not for want of output: `git worktree add` does report its checkout to a
+	// pipe, but it writes the whole progress stream as one carriage-return line
+	// and terminates it only at the end, so a runner that watches for the next
+	// line of output sees nothing at all until the add is over.
+	checkoutFileBudget = 50 * time.Millisecond
 	// defaultRemote is the remote publishing pushes to when nothing names
 	// another.
 	defaultRemote = "origin"
@@ -327,6 +351,13 @@ var (
 	// round turned away by this delivered nothing because the environment was
 	// wrong, which is a different fact about the work than a change that failed.
 	ErrPrimaryNotReady = errors.New("the primary checkout is not as the harness left it")
+	// ErrCheckoutKilled reports a `git worktree add` this harness ended while it
+	// was still writing the tree out, rather than Git answering. It is a sentinel
+	// for the reason the one above is: nothing of the work was reached — no
+	// worktree exists and no agent was ever invoked — so a round turned away by
+	// it delivered nothing because the machine was too busy, which is a different
+	// fact about the work than a creation Git refused.
+	ErrCheckoutKilled = errors.New("the worktree checkout was ended by the budget the harness gave it")
 )
 
 type ChangeSummary struct {
@@ -993,6 +1024,14 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if branchResult.ExitCode != 1 {
 		return Worktree{}, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, branchResult.ExitCode, strings.TrimSpace(branchResult.Stderr))
 	}
+	// How much tree the add below has to write, which is what its budget is sized
+	// by. It is asked here rather than under the lease because it reads history
+	// and touches no bookkeeping, and the lease is held for the creation rather
+	// than for everything a creation happens to need.
+	files, err := m.checkoutFiles(ctx, baseCommit)
+	if err != nil {
+		return Worktree{}, err
+	}
 
 	// Development is parallel, and every run on this repository writes the same
 	// worktree bookkeeping. Creation queues from here so a run is never lost to
@@ -1032,7 +1071,8 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if created.Status != execution.ProcessSucceeded {
 		return Worktree{}, fmt.Errorf("create branch %s failed with exit code %d: %s", branch, created.ExitCode, strings.TrimSpace(created.Stderr))
 	}
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", path, branch)
+	budget := m.checkoutTimeout(files)
+	result, err := m.runBounded(ctx, nil, budget, "-C", m.repositoryRoot, "worktree", "add", path, branch)
 	if err != nil {
 		// Splitting the two is what leaves a branch to take back: `worktree add
 		// -b` made the branch and the checkout as one thing, and an add that
@@ -1042,6 +1082,17 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		// whatever came of that is said without displacing what actually failed.
 		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
 		return Worktree{}, err
+	}
+	// An add the harness ended is said as the one thing a reader can act on, and
+	// deliberately without the process output: what Git leaves on a killed
+	// checkout is its own progress meter, which says how far it got and nothing
+	// about why it stopped, and a failure carrying that is a failure nobody can
+	// read. The budget and the size of the tree are what a reader needs, because
+	// together they say whether the machine was too busy or the add was stuck.
+	if killedCheckout(result) {
+		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
+		return Worktree{}, fmt.Errorf("%w: the checkout of %d file(s) was still running after %s, so no worktree was made and no agent of this run was invoked",
+			ErrCheckoutKilled, files, budget)
 	}
 	if result.Status != execution.ProcessSucceeded {
 		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
@@ -3060,6 +3111,56 @@ func (m *Manager) localTimeout() time.Duration {
 		return defaultTimeout
 	}
 	return scaledTimeout(defaultTimeout, load, runtime.NumCPU())
+}
+
+// checkoutTimeout is the budget one creation's `git worktree add` gets: the
+// idle local figure for the command itself, plus an allowance for every file it
+// has to write, and the whole of that scaled by the load exactly as
+// localTimeout scales its own. A caller that named a Timeout gets it as named,
+// for the reason localTimeout honours one — a named budget is a caller saying
+// what it means, and a test that names a short one is saying the add is to be
+// killed.
+func (m *Manager) checkoutTimeout(files int) time.Duration {
+	if m.timeout > 0 {
+		return m.timeout
+	}
+	if files < 0 {
+		files = 0
+	}
+	base := defaultTimeout + time.Duration(files)*checkoutFileBudget
+	load, ok := loadAverage()
+	if !ok {
+		return base
+	}
+	return scaledTimeout(base, load, runtime.NumCPU())
+}
+
+// checkoutFiles counts what a worktree cut from this commit has to check out.
+//
+// It reads the commit rather than any working tree, because the tree the add
+// writes is the commit's, and it is the same figure Git counts down as it goes —
+// so the budget and the progress a killed add left are about one thing. Output
+// the runner cut at its own bound leaves a count that is low rather than wrong,
+// which costs a creation some of its allowance and never gives it one the tree
+// did not earn.
+func (m *Manager) checkoutFiles(ctx context.Context, commit string) (int, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "ls-tree", "-r", "--name-only", commit)
+	if err != nil {
+		return 0, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return 0, fmt.Errorf("count the files under %s failed with exit code %d: %s", commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return strings.Count(result.Stdout, "\n"), nil
+}
+
+// killedCheckout reports an add this harness ended rather than Git answering:
+// a total budget that ran out, or a process that produced nothing for longer
+// than a liveness bound allowed. Neither leaves a Git exit code or a Git error,
+// which is what made the field cases read as a creation that failed for reasons
+// nobody could find in their own message.
+func killedCheckout(result execution.ProcessResult) bool {
+	return result.Status == execution.ProcessTimedOut || result.Status == execution.ProcessStalled
 }
 
 // scaledTimeout is base multiplied by how oversubscribed the machine is: a load

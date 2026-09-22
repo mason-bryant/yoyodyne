@@ -1637,3 +1637,87 @@ func TestARerunOfADeathThatLeftNothingBehindIsRefused(t *testing.T) {
 		t.Fatal("a refused re-run spent the stoppage's claim")
 	}
 }
+
+// The accounting failure yoyodyne-ifd.441 found: a re-run whose fresh run died
+// creating its worktree spent the item's one re-run on a run no developer ever
+// saw, and the next stoppage of it was an escalation rather than a decision.
+// The run existed, so this is a claim given back past the reservation — the only
+// one there is — and the run's own record is what earns it.
+func TestAFreshRunTheEnvironmentRefusedBeforeAnythingRanGivesTheClaimBack(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	freshRunID := "run-fedcba9876543210fedcba9876543210"
+	harness.failure = fmt.Errorf("create isolated worktree: %w: the checkout of 1099 file(s) was still running after 5m0s, so no worktree was made and no agent of this run was invoked", gitworktree.ErrCheckoutKilled)
+	harness.outcome = Outcome{
+		RunID:      freshRunID,
+		WorkItemID: docketedItem,
+		Status:     runstate.StatusFailed,
+		Environmental: &runstate.EnvironmentalRefusal{
+			Cause:      runstate.CauseWorktreeCheckoutKilled,
+			Detail:     "the checkout of 1099 file(s) was still running after 5m0s",
+			RecordedAt: docketedNow,
+			NothingRan: true,
+			Settled:    true,
+			Refused:    true,
+		},
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "1099 file(s)") {
+		t.Fatalf("Rerun() error = %v, want the failure reported as it was", err)
+	}
+	if !result.ClaimGivenBack {
+		t.Fatalf("result = %#v, want the claim reported as given back", result)
+	}
+	if result.RecordProblem != "" {
+		t.Fatalf("record problem = %q, want the claim given back cleanly", result.RecordProblem)
+	}
+	if !strings.Contains(result.Render(), "keeps its one re-run") {
+		t.Fatalf("Render() = %q, want the accounting said rather than left to be inferred", result.Render())
+	}
+	if _, claimed, err := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+
+	// And the decision survives it: asking again once the machine is not what
+	// stops it carries out the same one rather than meeting the once-only guard.
+	harness.failure = nil
+	harness.outcome = Outcome{RunID: freshRunID, WorkItemID: docketedItem, Status: runstate.StatusSucceeded}
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() after the refusal error = %v, want the same decision carried out", err)
+	}
+	if len(harness.started) != 2 {
+		t.Fatalf("starts = %d, want the refused attempt and the one that ran", len(harness.started))
+	}
+}
+
+// A round the environment refused after an agent had already been asked
+// something keeps its claim: the claim bought a developer's work, whatever
+// became of it, and giving it back would let one decision start two runs.
+func TestAFreshRunRefusedAfterAnAgentRanKeepsItsClaim(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = errors.New("the sandbox the agent runs in could not be entered")
+	harness.outcome = Outcome{
+		RunID:      "run-fedcba9876543210fedcba9876543210",
+		WorkItemID: docketedItem,
+		Status:     runstate.StatusFailed,
+		Environmental: &runstate.EnvironmentalRefusal{
+			Cause:      runstate.CauseSandboxSpawnFailure,
+			RecordedAt: docketedNow,
+			Settled:    true,
+			Refused:    true,
+		},
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil {
+		t.Fatalf("Rerun() error = %v, want the failure reported", err)
+	}
+	if result.ClaimGivenBack {
+		t.Fatalf("result = %#v, want a round that reached an agent to keep its claim", result)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); !claimed {
+		t.Fatal("a re-run whose fresh run reached an agent gave its claim back")
+	}
+}

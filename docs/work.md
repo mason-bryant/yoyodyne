@@ -223,7 +223,8 @@ never said they were repairs at all.
 Not every round an item is charged for is one it cost. A round whose diff is
 empty **and** whose run recorded an environmental cause — the worktree it was
 handed held none of the change, the primary checkout carried state the harness
-does not own, the sandbox could not be entered, the build that dispatched it
+does not own, the checkout of its worktree was ended by the budget the harness
+gave it, the sandbox could not be entered, the build that dispatched it
 predated the decision it was carrying out — is an **environmental refusal**: the
 environment handed the round nothing, so as the run settles the harness gives
 back the review round it was charged against the item's cap and the granted

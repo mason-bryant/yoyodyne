@@ -2849,3 +2849,135 @@ func copyTree(t *testing.T, from, to string) {
 		}
 	}
 }
+
+// A checkout is work, and a budget that does not grow with it bounds the add by
+// something it has nothing to do with. That is what killed three creations of
+// yoyodyne-ifd.441 in three hours, one of them stopped at 87% of 1099 files, so
+// this is what says the add's budget is about the tree rather than about Git
+// commands in general.
+func TestCreatingAWorktreeBudgetsTheCheckoutToTheTreeItWrites(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	// Enough files that the allowance for them is unmistakable beside the figure
+	// for the command itself.
+	for index := 0; index < 200; index++ {
+		writeFile(t, repository, fmt.Sprintf("checked-out/file-%03d.txt", index), "content\n")
+	}
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "a tree worth checking out")
+
+	runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-budget", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	files, err := manager.checkoutFiles(context.Background(), worktree.BaseCommit)
+	if err != nil {
+		t.Fatalf("checkoutFiles() error = %v", err)
+	}
+	if want := 201; files != want {
+		t.Fatalf("checkout files = %d, want %d: the 200 written here and the repository's own README", files, want)
+	}
+	var add, reading time.Duration
+	for _, command := range runner.bounds {
+		switch {
+		case containsArguments(command.Args, "worktree", "add"):
+			add = command.Timeout
+		case containsArguments(command.Args, "rev-parse", "--verify"):
+			reading = command.Timeout
+		}
+	}
+	if add == 0 || reading == 0 {
+		t.Fatalf("add bound = %s, reading bound = %s; want both recorded", add, reading)
+	}
+	// The load scaling multiplies every budget by the same factor and is never
+	// below one, so the unscaled figure is the floor whatever the machine running
+	// this test is doing.
+	if want := defaultTimeout + time.Duration(files)*checkoutFileBudget; add < want {
+		t.Fatalf("checkout bound = %s, want at least %s for %d file(s)", add, want, files)
+	}
+	// And a command that writes no tree is still held to the figure it always
+	// was, so the allowance is the checkout's rather than every Git command's.
+	if add <= reading {
+		t.Fatalf("checkout bound = %s, reading bound = %s; want the checkout budgeted above a command that writes no tree", add, reading)
+	}
+}
+
+// What a creation the harness's own budget ended leaves: no worktree, no branch,
+// and a failure a reader can act on. Git says nothing about why a killed
+// checkout stopped — its stderr is the progress meter and nothing else — so the
+// failure is the harness's own sentence about the tree and the budget, and the
+// sentinel is what the class it belongs to is read from rather than the words.
+func TestAWorktreeCheckoutKilledByItsBudgetIsSaidInOneSentence(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	for index := 0; index < 200; index++ {
+		writeFile(t, repository, fmt.Sprintf("checked-out/file-%03d.txt", index), "content\n")
+	}
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "a tree worth checking out")
+
+	// A real deadline on the real add, rather than a killed process described to
+	// the manager: what this is about is the manager reading its own runner's
+	// answer, so the answer has to be one the runner actually produced.
+	runner := shortCheckoutBudget{delegate: execution.OSProcessRunner{}, budget: time.Nanosecond}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	request := CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-killed", BaseRef: "HEAD"}
+	worktree, err := manager.Create(context.Background(), request)
+	if !errors.Is(err, ErrCheckoutKilled) {
+		t.Fatalf("Create() error = %v, want the checkout reported as ended by its budget", err)
+	}
+	if worktree.Path != "" {
+		t.Fatalf("worktree = %#v, want nothing recorded for a creation that made none", worktree)
+	}
+	if !strings.Contains(err.Error(), "201 file(s)") || !strings.Contains(err.Error(), "no agent of this run was invoked") {
+		t.Fatalf("Create() error = %q, want the tree and what did not happen named", err)
+	}
+	if strings.Contains(err.Error(), "Updating files") {
+		t.Fatalf("Create() error = %q, want the cause rather than the checkout's progress", err)
+	}
+	// The branch the creation made first is taken back, exactly as it is when
+	// the add fails for a reason of Git's own: nothing will ever check it out.
+	branch := branchName(request.WorkItemID, request.RunID)
+	result, err := manager.run(context.Background(), "-C", repository, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil {
+		t.Fatalf("show-ref error = %v", err)
+	}
+	if result.Status == execution.ProcessSucceeded {
+		t.Fatalf("branch %s survived a creation that made no worktree", branch)
+	}
+}
+
+// shortCheckoutBudget holds the creation's `git worktree add` to a budget it
+// cannot possibly finish inside, and leaves every other command the manager
+// runs on the budget the manager gave it — including the ones that take the
+// abandoned branch back afterwards.
+type shortCheckoutBudget struct {
+	delegate execution.ProcessRunner
+	budget   time.Duration
+}
+
+func (r shortCheckoutBudget) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if containsArguments(command.Args, "worktree", "add") {
+		command.Timeout = r.budget
+	}
+	return r.delegate.Run(ctx, command, observer)
+}

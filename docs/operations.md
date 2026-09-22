@@ -911,6 +911,21 @@ seconds was killing `git worktree list` under two race suites and the provider
 processes beside them, and the run that asked failed on the machine rather than
 on its work.
 
+One local Git command is budgeted to the work rather than to the command, and it
+is the one that does work: `git worktree add` writes the whole tree out, so its
+budget is the figure above plus fifty milliseconds for every file in the commit
+being checked out, load-scaled like the rest. A checkout bounded by the
+command's own figure is what killed three runs of yoyodyne-ifd.441 in three
+hours on 2026-09-22, each of them with no Git error at all — the runner's exit
+code, and a stderr holding nothing but the checkout's progress meter, one
+stopped at 87% of 1099 files — each leaving a half-written registration, holding
+a developer slot until the claim audit gave the item back half an hour later,
+and one of them spending a recorded re-run on a run no developer ever saw. A
+creation that is ended anyway is [an environmental refusal](work.md): the run's
+record says so in one sentence naming the tree and the budget rather than
+reprinting the progress, the item is charged neither a round nor the re-run that
+started it, and the stoppage is docketed like any other.
+
 **The run is left in flight for half an hour, and then it is settled.** Nothing
 in the harness continues a stopped run on its own — the scheduler chooses from
 what the tracker calls ready, and a claimed item is not — so a stop nobody typed
