@@ -77,7 +77,7 @@ product:
   decisions: docs/decisions
 
 execution:
-  max_concurrent_developers: 3  # back to 3 on 2026-09-19 on the operator's instruction: three seats filled and running. Was 2 from 2026-09-18 evening (load 39 on 16 cores with three concurrent test suites; tracker reads timed out inside runs). The check-stage bound (401) is not landed yet, so watch the load. History: 3 on 09-04, 2 on 09-15, 3 on 09-18 morning, 2 on 09-18 evening.
+  max_concurrent_developers: 4  # 4 on 2026-09-21, temporarily, while two slots are held by runs that ended on 09-20 and cannot be settled: they carry provider_stop: stalled with no live process, and no verb continues or settles one (yoyodyne-ifd.428.4). Two of the four are phantoms, so this is two live runs, fewer than the three of 09-20. PUT IT BACK TO 3 once 428.4 lands and the phantoms are settled. History: 3 on 09-04, 2 on 09-15, 3 on 09-18 morning, 2 on 09-18 evening, 3 on 09-19.
                                 # lease serializes integrations underneath
   # One developer slot prefers the reliability label, per the operator's
   # direction of 2026-09-19: bugs, anything that keeps the system from
@@ -260,9 +260,10 @@ agents:
     role: developer
     backend: claude-code
     model: opus
-    # Three instances so max_concurrent_developers: 3 is coherent; the
-    # capacity rule refuses a limit the instances cannot supply.
-    instances: 3
+    # One instance per developer slot, because the capacity rule refuses a
+    # limit the instances cannot supply. Four on 2026-09-21 alongside the
+    # temporary max_concurrent_developers: 4 above, and back to 3 with it.
+    instances: 4
     persona:
       version: v1
       path: personas/developer.md
