@@ -242,12 +242,15 @@ func TestAContinuationThePipelineRefusesIsReportedAsAFailure(t *testing.T) {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
 
+	clock := &pausingClock{now: resetsAt.Add(time.Minute)}
+	refusals := 0
 	reconciler := Reconciler{
 		Tracker:   tracker,
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     store,
-		Clock:     &pausingClock{now: resetsAt.Add(time.Minute)},
+		Clock:     clock,
 		Continue: func(context.Context, string, string) (Outcome, error) {
+			refusals++
 			return Outcome{}, errors.New("the provider is not installed")
 		},
 	}
@@ -264,5 +267,38 @@ func TestAContinuationThePipelineRefusesIsReportedAsAFailure(t *testing.T) {
 	}
 	if len(recorded.SweepContinuations) != 1 || recorded.UsageLimitResetsAt == nil || recorded.Status != runstate.StatusRunning {
 		t.Fatalf("recorded run = %#v, want the continuation recorded and the run still in flight and waiting", recorded)
+	}
+
+	// A sweep running beside the first reads the continuation just recorded for
+	// this deadline and leaves the run to it, rather than recording a second
+	// continuation and reporting the pipeline's refusal of it as a failure — so
+	// repeating the sweep is as safe for this step as for every other.
+	beside, err := reconciler.ContinueWaits(context.Background())
+	if err != nil {
+		t.Fatalf("ContinueWaits() beside the first error = %v", err)
+	}
+	if len(beside) != 1 || beside[0].Continued || beside[0].Failure != "" || !strings.Contains(beside[0].Detail, "its continuation is being entered") {
+		t.Fatalf("ContinueWaits() beside the first = %#v, want the run left to the sweep that took it up", beside)
+	}
+	if refusals != 1 {
+		t.Fatalf("Continue was called %d times, want once", refusals)
+	}
+	// Once that window has passed with the record still standing on the same
+	// deadline, the continuation was refused rather than entered, and a later
+	// sweep takes the run up again.
+	clock.now = clock.now.Add(sweepContinuationEntry)
+	later, err := reconciler.ContinueWaits(context.Background())
+	if err != nil {
+		t.Fatalf("later ContinueWaits() error = %v", err)
+	}
+	if len(later) != 1 || !later[0].Continued || refusals != 2 {
+		t.Fatalf("later ContinueWaits() = %#v with %d refusal(s), want the run taken up again", later, refusals)
+	}
+	recorded, err = store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(recorded.SweepContinuations) != 2 {
+		t.Fatalf("sweep continuations = %#v, want the second attempt recorded beside the first", recorded.SweepContinuations)
 	}
 }

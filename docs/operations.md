@@ -1303,7 +1303,8 @@ The one thing the sweep costs is `/continue` on a stoppage past the tail, which
 needs the checkout it was going to hand back. The branch is still there and so is
 the preserved work, so replanning or re-running the item is not affected.
 
-The last thing the sweep does is read whether anything is happening at all. When
+The last reading the sweep takes — after every settlement above and before the
+one thing it continues, below — is whether anything is happening at all. When
 nothing has started for `--stall-after` — ten minutes by default — the tracker
 reports work ready, and no hold, no still-moving run and no provider usage window
 accounts for it, that is recorded against the product as a stall and said here:
@@ -1858,8 +1859,10 @@ reading as it polls, at most once per `--stall-after`: that is the harness's own
 loop, and it catches the session that is alive and has stopped starting anything —
 a queue whose ready items are all claimed by runs that died, say. A session that
 died itself writes nothing at all, so [`yoyo reconcile`](#recovering-interrupted-runs)
-takes the same reading as the last step of the sweep that settles what a dead
-process left behind. That ordering is why it is that sweep and not another: a
+takes the same reading as the last reading of the sweep that settles what a dead
+process left behind — after every settlement, and before the one step that
+follows it, [continuing a usage-limit wait](#waiting-out-a-provider-usage-limit)
+whose deadline has passed. That ordering is why it is that sweep and not another: a
 killed run goes on saying it is in flight until the settling, and a phantom run
 counted as activity would silence this for exactly the crash it exists to catch.
 

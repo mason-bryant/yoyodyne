@@ -780,7 +780,7 @@ thread that has spent every round it was given is closed as unresolved and the
 operator told. Nothing is put in front of a role here — recovering from a lost
 process is never a reason to ask a question nobody asked for.
 
-Last, it reads whether anything is happening at all. When nothing has started for
+Its last reading is whether anything is happening at all. When nothing has started for
 --stall-after, the tracker reports work ready, and no hold, no still-moving run
 and no provider usage window accounts for it, that is recorded against the
 product as a stall — which `+"`yoyo status`"+` reads back afterwards and the Slack sink,

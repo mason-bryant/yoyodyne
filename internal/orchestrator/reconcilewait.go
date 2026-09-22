@@ -51,6 +51,14 @@ type WaitContinuation struct {
 	Failure string `json:"failure,omitempty"`
 }
 
+// sweepContinuationEntry is how long after a sweep records a continuation the
+// run is read as being entered by that sweep's pipeline rather than as a wait
+// nothing is serving. It covers the gap between the sweep releasing the run's
+// lease and the pipeline adopting it, which is a tracker read and a directive
+// read and is over in seconds; past it, a record still standing on the same
+// deadline is a continuation that was refused, and is taken up again.
+const sweepContinuationEntry = time.Minute
+
 // exitedWait reports a run asleep on a recorded usage-limit deadline that has
 // already passed. Whether a process is serving the wait is not readable from
 // the record — a process exited on the in-process bound leaves the record
@@ -93,7 +101,11 @@ func pausedForProviderOutage(state runstate.State) bool {
 // pipeline adopting it, which the sweep holding the lease would refuse. The
 // continuation is written onto the record before the lease is released, so a
 // run whose continuation then fails still says the sweep took it up, and the
-// failure is reported beside it rather than the record saying nothing.
+// failure is reported beside it rather than the record saying nothing. That
+// record is also what a second sweep running beside this one reads in the gap
+// between the release and the adoption: it finds the continuation just
+// recorded and leaves the run to the sweep that recorded it, rather than
+// recording another and reporting the pipeline's refusal of it as a failure.
 //
 // Every continuation found is hosted at once rather than one after another: a
 // continued run is a developer attempt, which takes as long as it takes, and a
@@ -179,6 +191,20 @@ func (r Reconciler) takeUpWait(ctx context.Context, recorded runstate.State) (Wa
 	}
 	result.Deadline = state.UsageLimitResetsAt.UTC()
 	result.Waited = runstate.DescribePause(state.PauseCause, state.UsageLimitKind)
+	// A continuation already recorded for this same deadline a moment ago is a
+	// sweep beside this one that has released the lease and not yet had the
+	// pipeline adopt the run. The lease still keeps two developers off it — the
+	// second Continue would refuse on the run being held — but recording a second
+	// continuation and reporting that refusal as a failure would make repeating
+	// the sweep unsafe for this one step. The window is short on purpose: a
+	// continuation the pipeline refused outright leaves the record exactly as
+	// this reads it, and a later sweep has to take the run up again rather than
+	// reading the refusal as a continuation in progress for good.
+	if last, ok := state.LastSweepContinuation(); ok && last.Deadline.Equal(result.Deadline) && now.Sub(last.ContinuedAt) < sweepContinuationEntry {
+		result.Detail = fmt.Sprintf("a sweep took this run up at %s and its continuation is being entered, so it is left to that sweep",
+			last.ContinuedAt.UTC().Format(time.RFC3339))
+		return result, false
+	}
 	if len(state.SweepContinuations) >= runstate.MaxSweepContinuations {
 		// The record refuses one more, and a run the provider has refused on this
 		// many deadlines is one the pause budget should have stopped; it is left
