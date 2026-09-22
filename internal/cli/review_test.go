@@ -34,8 +34,9 @@ func TestReviewRequiresTheBaseItIsMeasuredAgainst(t *testing.T) {
 
 // The outcome of a branch-scope repair verdict is that the branch is not
 // approved. Nothing already integrated is touched by it, and the exit code is
-// what stops anything downstream reading a repair, a failed review, or an
-// approval of a change nobody could see in full as an approval of the branch.
+// what stops anything downstream reading a repair or a failed review as an
+// approval of the branch. It follows the verdict and nothing else: a truncation
+// is reported and never refused here, which is the case below.
 func TestReviewFailsUnlessTheAccumulatedChangeWasApproved(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +103,27 @@ func TestReviewFailsUnlessTheAccumulatedChangeWasApproved(t *testing.T) {
 	}
 	if decoded.Review == nil || decoded.Review.Decision != review.DecisionRepair || len(decoded.Review.Findings) != 1 {
 		t.Fatalf("decoded review = %#v", decoded.Review)
+	}
+
+	// A range whose test data alone outgrew the bound is one the reviewer may
+	// approve, and the command exits zero on that approval as it does on any
+	// other: the exit code answers whether the branch was approved, and the
+	// truncation is reported beside it rather than refusing it. Reviewer.Review
+	// is where the approval is decided, so this is the half of yoyodyne-ifd.425's
+	// rule a reviewer test cannot reach — a refusal here would reject an approved
+	// fixture-clipped range with nothing about the verdict in question.
+	clipped := approved
+	clipped.Truncated = true
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportBranchReview(&stdout, &stderr, false, clipped, nil); code != 0 {
+		t.Fatalf("reportBranchReview() of an approved truncated range code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "what was not shown is unreviewed") {
+		t.Fatalf("stderr = %q, want the bound's omission reported beside the approval", stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "stays integrated") {
+		t.Fatalf("an approved range was told what the branch now needs: %q", stdout.String()+stderr.String())
 	}
 }
 
