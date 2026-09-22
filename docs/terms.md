@@ -53,11 +53,14 @@ until yoyodyne-ifd.418 retired it: the operator objected to it by name, so it is
 now listed below as replaced, with the governed documents that still carry it
 named on its row until the architect amends them.
 
-One entry is a command's own name. `re-arm` was replaced in the prose of the
-governed documents, and stays replaced there, but `yoyo triage rearm` is a verb
-an operator types and `yoyo status` counts, and a word a command is called
-cannot be swept out of the command's help without renaming the command. Its row
-is what defines it wherever the command's output says it.
+One entry is a command's own name. The sweep replaced `re-arm` in the prose of
+the governed documents, but `yoyo triage rearm` is a verb an operator types and
+`yoyo status` counts, and a word a command is called cannot be swept out of the
+command's help without renaming the command. So it is registered, and a row
+permits its term everywhere the check reads — the governed documents included,
+in every spelling — not only in the command's output. What keeps it out of a
+sentence that could have said *repeat the merge request* is the reviewer, not
+the check.
 
 One entry is the operator's word rather than the project's. He introduced
 `seat` on 2026-09-19 and wants to keep using it, so its row is what makes it
