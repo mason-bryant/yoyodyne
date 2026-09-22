@@ -2881,9 +2881,12 @@ func TestCreatingAWorktreeBudgetsTheCheckoutToTheTreeItWrites(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	files, err := manager.checkoutFiles(context.Background(), worktree.BaseCommit)
+	files, counted, err := manager.checkoutFiles(context.Background(), worktree.BaseCommit)
 	if err != nil {
 		t.Fatalf("checkoutFiles() error = %v", err)
+	}
+	if !counted {
+		t.Fatal("checkoutFiles() could not count a tree it had just checked out")
 	}
 	if want := 201; files != want {
 		t.Fatalf("checkout files = %d, want %d: the 200 written here and the repository's own README", files, want)
@@ -2978,6 +2981,159 @@ type shortCheckoutBudget struct {
 func (r shortCheckoutBudget) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
 	if containsArguments(command.Args, "worktree", "add") {
 		command.Timeout = r.budget
+	}
+	return r.delegate.Run(ctx, command, observer)
+}
+
+// Sizing the budget costs a Git command the creation did not used to run, so
+// that command is a new way for a creation to die — and the one it must never
+// die of is the deadline this item exists to remove. A count the harness ended
+// is refused as the same environmental death the add's own budget produces,
+// because the load that killed it a command earlier says exactly as little
+// about the change.
+func TestACountKilledByItsBudgetRefusesTheCreationAsAKilledCheckout(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := shortCountBudget{delegate: execution.OSProcessRunner{}, budget: time.Nanosecond}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	request := CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-uncountable", BaseRef: "HEAD"}
+	if _, err := manager.Create(context.Background(), request); !errors.Is(err, ErrCheckoutKilled) {
+		t.Fatalf("Create() error = %v, want the killed count refused as a killed checkout", err)
+	} else if !strings.Contains(err.Error(), "the checkout never started") {
+		t.Fatalf("Create() error = %q, want the count named as what was ended", err)
+	}
+	// The count runs before anything is made, so there is nothing to take back —
+	// and a branch left behind here would be a branch every later creation of
+	// this item refuses over.
+	branch := branchName(request.WorkItemID, request.RunID)
+	result, err := manager.run(context.Background(), "-C", repository, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil {
+		t.Fatalf("show-ref error = %v", err)
+	}
+	if result.Status == execution.ProcessSucceeded {
+		t.Fatalf("branch %s exists after a creation that never reached the branch", branch)
+	}
+}
+
+// A count that failed for its own reasons is not a creation that fails. The
+// count only sizes a bound, so a repository that would have checked out fine
+// checks out, budgeted as an uncounted tree and saying so — refusing here would
+// be this budget costing somebody a creation it was added to save.
+func TestACountThatFailedLeavesTheCreationBudgetedAsAnUncountedTree(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &refusingCount{delegate: execution.OSProcessRunner{}}
+	var notes []string
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-uncounted", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want a creation that runs on a count it could not read", err)
+	}
+	if worktree.Path == "" {
+		t.Fatalf("worktree = %#v, want the creation to have made one", worktree)
+	}
+	if !runner.refused {
+		t.Fatal("the count was never refused, so this proves nothing")
+	}
+	// What it was budgeted for is said rather than left to be inferred: an
+	// operator reading a creation that later dies has to know the bound was a
+	// stand-in rather than the tree's own size.
+	var said bool
+	for _, note := range notes {
+		if strings.Contains(note, "bounded as an uncounted tree") {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatalf("notes = %q, want the fallback said out loud", notes)
+	}
+	// And the stand-in is what the add was actually given.
+	if want := uncountedCheckoutFiles; checkoutAllowanceFiles(0, false) != want {
+		t.Fatalf("uncounted allowance = %d file(s), want %d", checkoutAllowanceFiles(0, false), want)
+	}
+	if got := manager.checkoutTimeout(0, false); got < defaultTimeout+uncountedCheckoutFiles*checkoutFileBudget {
+		t.Fatalf("uncounted budget = %s, want at least the stand-in tree's allowance", got)
+	}
+}
+
+// A caller that names a Timeout is saying what a Git command is worth, and it
+// cannot have meant the same figure for the one command that writes the tree
+// out. A named budget that replaced the allowance would make this fix inert for
+// every manager built with one, which is the same silent regression as never
+// having made it.
+func TestANamedBudgetStillGetsTheCheckoutsAllowance(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        7 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	// Every other command is held to exactly what the caller named.
+	if got := manager.localTimeout(); got != 7*time.Second {
+		t.Fatalf("localTimeout() = %s, want the 7s the caller named", got)
+	}
+	if want := 7*time.Second + 1099*checkoutFileBudget; manager.checkoutTimeout(1099, true) != want {
+		t.Fatalf("checkoutTimeout(1099) = %s, want %s: the named budget plus the tree's allowance", manager.checkoutTimeout(1099, true), want)
+	}
+	if want := 7*time.Second + uncountedCheckoutFiles*checkoutFileBudget; manager.checkoutTimeout(0, false) != want {
+		t.Fatalf("checkoutTimeout(uncounted) = %s, want %s", manager.checkoutTimeout(0, false), want)
+	}
+}
+
+// shortCountBudget holds the count that sizes the checkout to a budget it
+// cannot finish inside, and leaves every other command the manager runs on the
+// budget the manager gave it.
+type shortCountBudget struct {
+	delegate execution.ProcessRunner
+	budget   time.Duration
+}
+
+func (r shortCountBudget) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if containsArguments(command.Args, "ls-tree", "-r") {
+		command.Timeout = r.budget
+	}
+	return r.delegate.Run(ctx, command, observer)
+}
+
+// refusingCount makes the count fail the way Git fails rather than the way the
+// harness ends a command: an answer, with an exit code, which must leave the
+// creation running.
+type refusingCount struct {
+	delegate execution.ProcessRunner
+	refused  bool
+}
+
+func (r *refusingCount) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if containsArguments(command.Args, "ls-tree", "-r") {
+		r.refused = true
+		return execution.ProcessResult{
+			Status:   execution.ProcessFailed,
+			ExitCode: 128,
+			Stderr:   "fatal: not a tree object",
+		}, nil
 	}
 	return r.delegate.Run(ctx, command, observer)
 }

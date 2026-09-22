@@ -926,6 +926,16 @@ record says so in one sentence naming the tree and the budget rather than
 reprinting the progress, the item is charged neither a round nor the re-run that
 started it, and the stoppage is docketed like any other.
 
+Sizing that budget costs one `git ls-tree` the creation did not used to run, and
+it cannot become a new way for a creation to die. A count that fails for its own
+reasons never stops the creation: the add is budgeted for a stand-in tree of two
+thousand files instead, and the run says on standard error that its checkout was
+bounded as an uncounted tree — so an operator reading a creation that dies later
+knows the bound was a stand-in rather than the tree's own size. A count the
+harness itself ended is the one that does stop it, and it stops it in exactly the
+class above: a count killed by the load is the same machine-too-busy death as an
+add killed by it, refused environmentally and charged nothing.
+
 **The run is left in flight for half an hour, and then it is settled.** Nothing
 in the harness continues a stopped run on its own — the scheduler chooses from
 what the tracker calls ready, and a claimed item is not — so a stop nobody typed
