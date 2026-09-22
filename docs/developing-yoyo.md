@@ -203,6 +203,16 @@ with a dump of every goroutine, which names what was waited on and where. So a
 test that would have hung waits instead, and a wait that never ends is reported
 by something that reads the stack rather than a clock.
 
+That `-timeout` is the one wall-clock bound the rule cannot remove, because it
+is what replaces every bound it does remove — so it is sized for the loaded
+machine rather than left at Go's ten minutes, which is a figure this repository
+reaches without hanging. `TEST_TIMEOUT` in the `Makefile` is the whole of it, at
+twenty minutes, and the comment there says what reached the default: at a
+one-minute load average past fifty, `internal/orchestrator`'s race binary passed
+ten minutes with hundreds of its tests still queued on the parallel limit, and
+failed a suite that was working. A package that grows until it needs more than
+this figure is a package to split, not a figure to raise again.
+
 The shape that replaces a bound is one of three. Where the code under test
 already says when it has got somewhere, wait on that: a claim returns its hold, a
 process returns its result, and the test reads `<-done` with nothing beside it.
@@ -244,6 +254,13 @@ load averages from 13 to 59 on sixteen cores, twenty-one runs and no failure.
 and one thing worth knowing before repeating it: `make race` on an unchanged
 tree is served from Go's test cache, so a repetition that is meant to execute
 anything runs under `GOFLAGS=-count=1`.
+
+The repetition was then run over `make check` itself — the whole gate rather
+than its race half — and
+[that record](diagnoses/yoyodyne-ifd-270-ten-checks-under-load.md) has those
+numbers. `GOFLAGS=-count=1` covers it for the same reason: `make test` is
+served from the cache exactly as `make race` is, so any repetition of the gate
+that is meant to execute anything says so on the command line.
 
 ## What a surface may do with emphasis
 

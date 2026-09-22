@@ -13,6 +13,22 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
+# How long one package's test binary may run. Go's own figure is ten minutes,
+# and that is a bound on the machine rather than on the change: this repository
+# is checked at the concurrency it develops at -- several runs' suites at once,
+# one-minute load averages past fifty on sixteen cores -- and at that load
+# internal/orchestrator's race binary alone has passed ten minutes and failed a
+# suite that was working, with 761 tests still queued on the parallel limit. The
+# same package took over six minutes in that run's `make test`, with the race
+# detector off, so the margin was thin before the detector was on it.
+#
+# What the bound buys is a dump of every goroutine instead of a hang, and that
+# is still bought: the figure stays well inside `execution.check_timeout` (30
+# minutes by default, see docs/configuration.md), so a test that genuinely hangs
+# is reported by the binary naming what it waited on rather than killed by the
+# harness with nothing to read.
+TEST_TIMEOUT ?= 20m
+
 .PHONY: build test race vet fmt fmtcheck cachecheck check adoption dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
@@ -47,7 +63,7 @@ build: cachecheck
 # judges the set, where a person running the checks can read them. The grep
 # keeps the one or two lines that matter; the suite above is still the verdict.
 test: cachecheck
-	$(GO) test ./...
+	$(GO) test -timeout $(TEST_TIMEOUT) ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
 	@# The dashboard page's only behavioural evidence is its render comparison,
@@ -74,7 +90,7 @@ test: cachecheck
 	exit $$rendered
 
 race: cachecheck
-	$(GO) test -race ./...
+	$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
 
 vet: cachecheck
 	$(GO) vet ./...
