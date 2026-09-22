@@ -2094,7 +2094,12 @@ integration. A child covers whether it is queued, blocked, or already claimed,
 and the container is ordinary work again once its last unfinished child leaves
 the backlog. And an item that would race work already in flight is sequenced
 behind it rather than started beside it, named with the run it would have raced
-and what the two share — the siblings of one epic, or overlapping files. That one
+and what the two share — the epic one of them was broken out of and the other
+is, or overlapping files. Two items merely filed under one epic are not racing:
+an epic is as often a heading as it is one piece of work broken into several,
+nothing tells the two apart from the outside, and holding every child of a
+heading behind whichever started first serializes the queue rather than
+declining a race. That one
 is a wait rather than a refusal: the conflicts are re-read at every pull from
 what is actually in flight, so the item is pulled at the first pull where the run
 it would have raced has ended, and the slot the hold freed is spent on the next

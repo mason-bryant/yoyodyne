@@ -778,8 +778,16 @@ machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
 Sequencing is the one of those six that is a wait rather than a refusal. Two
-items race when they are siblings of one epic, when one is the epic the other was
-broken out of, or when the files they will change overlap. An item says which
+items race when one is the epic the other was broken out of, or when the files
+they will change overlap. Being filed under one epic is deliberately not a
+third: an epic is as often a heading the backlog is filed under as it is one
+piece of work broken into several, nothing structural tells the two apart, and
+counting every pair of children as a race held most of the queue behind
+whichever of them started first — 29 of 109 unfinished items behind one epic on
+the reading of 2026-09-22. What a real decomposition's children share is caught
+by the surfaces below, which read what the items say rather than what their
+filing implies.
+An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in
 its title, description, design guidance, or acceptance criteria — the fields
 somebody authored, not the notes the harness appends each run's record to — and an
@@ -810,7 +818,7 @@ The line the pass prints for a held item names the run it was held behind — th
 run's identifier, so it can be checked against `yoyo status`, and the item that run
 is over — and says what the last pull that held the item found rather than the
 first. A watching session renders its report when it ends, which can be days after
-a hold was first recorded, and a sibling held behind three runs in turn over that
+a hold was first recorded, and an item held behind three runs in turn over that
 time is one line naming the third. Until 2026-09-18 it named the first, in the
 present tense, and a report that said a run two days dead was "already in flight"
 was read as the guard holding a slot on it.

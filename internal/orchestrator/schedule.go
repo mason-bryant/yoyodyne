@@ -24,10 +24,11 @@ package orchestrator
 // is a heading over the queue rather than an entry in it, and nothing downstream
 // can tell — the tracker reports it as pullable, the reservation sees a different
 // item from its child, and both runs then make the same change twice. The second
-// is whether it is work to start now: two items over the same epic or the same
-// files still integrate correctly when they are raced, and what that costs is a
-// replay, a fresh set of checks, and a fresh review on whichever loses. So they
-// are sequenced instead. See conflict.go.
+// is whether it is work to start now: an item and the epic a run is already
+// over, or two items over the same files, still integrate correctly when they
+// are raced, and what that costs is a replay, a fresh set of checks, and a fresh
+// review on whichever loses. So they are sequenced instead. See conflict.go,
+// which also says why being filed under one epic is not itself a race.
 //
 // The third is whether a developer run is what carries the work at all. An item
 // admitted as conversation-executed — a promotion the architect makes to a
@@ -812,7 +813,8 @@ type Started struct {
 //
 // Six things land here: an unresolved directive, an item whose unfinished
 // children already carry its execution, an item that would have raced work
-// already in flight over the same epic or the same files, an item whose
+// already in flight over the epic it was broken out of or over the same files,
+// an item whose
 // executor is a persona conversation rather than a developer run, an item
 // somebody parked, and an item every free developer slot walked past for the
 // label it prefers — left for another slot, which is a wait on capacity rather
@@ -833,7 +835,7 @@ type Started struct {
 // is how a listing stops being read at all.
 //
 // An item is one line however many pulls passed it over, and the line says what
-// the last of those pulls found rather than the first: a sibling held behind
+// the last of those pulls found rather than the first: an item held behind
 // three runs in turn over a session names the third, with the run itself named
 // so the reader can check it against `yoyo status`.
 type Deferred struct {

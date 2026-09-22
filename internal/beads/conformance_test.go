@@ -565,12 +565,15 @@ func TestDecompositionEdgeConformance(t *testing.T) {
 // TestParentFieldConformance pins the other half of how bd states parentage: the
 // field beside the item, on every read path selection consumes.
 //
-// It is here because a reading in the harness rests on the field alone.
-// orchestrator's in-flight sequencing keys on beads.WorkItem.Parent and
-// deliberately not on the wider DecomposedFrom, so a bd that stopped populating
-// the field would leave that half of the guard reading an empty map — inert, and
-// silently, because every other check of it drives a scripted runner that
-// replays whatever it was handed.
+// No reading in the harness rests on the field alone any more: orchestrator's
+// in-flight sequencing keyed on beads.WorkItem.Parent until yoyodyne-ifd.261 and
+// now reads DecomposedFrom, as the queue-side coverage check already did. What
+// the field still decides is which answer those readers get — DecomposedFrom
+// prefers it over the edge, because that is the tracker answering the question
+// directly — so a bd that stopped populating it, or that populated it with
+// something the edges disagree with, changes what the guard and the coverage
+// check see. That is worth pinning here for the reason the edge is: every other
+// check of either drives a scripted runner that replays whatever it was handed.
 //
 // The field's history is settled rather than assumed: bd 1.1.2 is the version
 // this project has had installed since 2026-07-26, twenty-five days before the
@@ -646,8 +649,8 @@ func TestParentFieldConformance(t *testing.T) {
 			t.Fatalf("%s did not answer both %s and %s", path.name, epic.ID, child.ID)
 		}
 		if decomposed.Parent != epic.ID {
-			t.Fatalf("%s gave the child's parent field as %q, want the epic %s; a bd that stops populating it leaves the "+
-				"scheduler's in-flight sequencing reading an empty map and holding nothing back",
+			t.Fatalf("%s gave the child's parent field as %q, want the epic %s; the field is what DecomposedFrom "+
+				"answers with where it is there, so a bd that stops populating it moves every reader onto the edge",
 				path.name, decomposed.Parent, epic.ID)
 		}
 		if whole.Parent != "" {
