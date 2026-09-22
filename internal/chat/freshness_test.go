@@ -824,6 +824,114 @@ func TestTheTranscriptSaysTheHarnessReReadAStalePicture(t *testing.T) {
 	}
 }
 
+// A refresh records the commit it read against on the durable picture, so the
+// process that resumes the conversation next measures from the repository as the
+// refresh found it rather than from the commit the conversation opened on. Both
+// triggers are checked, because they are two ways into one delivery and only the
+// delivered picture is adopted.
+//
+// The process boundary is the case that matters. A conversation is held over
+// days by a run of separate processes, so a picture that advanced only in the
+// memory of the process that refreshed it would be measured from the opening
+// commit forever: every later turn would read as hundreds of landings behind,
+// the threshold would be past on every message, and the re-read the threshold
+// exists to trigger would be taken again and again over a picture that was
+// already current.
+func TestARefreshRecordsTheCommitItReadAgainstSoTheNextProcessMeasuresFromIt(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		// movement is what has moved when the second turn is taken: past the
+		// threshold is what makes the harness refresh unasked, and within it is
+		// what leaves the operator's own /refresh as the only way the picture moves.
+		movement Movement
+		refresh  bool
+		want     string
+	}{
+		{name: "the harness refreshes a picture past the threshold", movement: Movement{Commits: 500}, want: "harness"},
+		{name: "the operator asks for a refresh", movement: Movement{Commits: 3}, refresh: true, want: "operator"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			provider := &fakeBackend{results: []backendapi.RunResult{
+				{SessionID: "session-24", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+				{SessionID: "session-24", ResolvedModel: "claude-opus-5", FinalText: "From the new picture."},
+			}}
+			refreshedAt := fixedClock{}.Now()
+			ground := &fakeGround{briefing: Briefing{
+				Text:       "# Product context\n\nNewer.\n",
+				GatheredAt: refreshedAt,
+				Commit:     "b2b2b2b2b2b2b2b2",
+			}}
+			options := testOptions(t, provider)
+			options.Store = newTestStore(t, root)
+			options.Ground = ground
+			options.Briefing.GatheredAt = gatheredAt
+			options.Briefing.Commit = "a1a1a1a1a1a1a1a1"
+			session := openTestSession(t, options)
+			if _, err := session.Send(context.Background(), "Remember that."); err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+
+			ground.movement = testCase.movement
+			if testCase.refresh {
+				refreshed, err := session.Refresh(context.Background())
+				if err != nil {
+					t.Fatalf("Refresh() error = %v", err)
+				}
+				// The operator is told which commit the picture moved to, because
+				// "it was re-read" is a claim and a pair of commits is evidence.
+				if rendered := refreshed.Render(); !strings.Contains(rendered, "re-read the repository and the tracker at b2b2b2b2b2b2") ||
+					!strings.Contains(rendered, "gathered 2h ago at a1a1a1a1a1a1") {
+					t.Fatalf("Refreshed.Render() = %q, want it to name both commits", rendered)
+				}
+			}
+			reply, err := session.Send(context.Background(), "And now?")
+			if err != nil {
+				t.Fatalf("Send() after the refresh error = %v", err)
+			}
+			if reply.Picture == nil || reply.Picture.Outcome != PictureRefreshed || reply.Picture.RefreshedBy != testCase.want {
+				t.Fatalf("reply.Picture = %#v, want a %s refresh", reply.Picture, testCase.want)
+			}
+			if reply.Picture.RefreshedTo != "b2b2b2b2b2b2b2b2" || reply.Picture.Commit != "a1a1a1a1a1a1a1a1" {
+				t.Fatalf("reply.Picture = %#v, want the commit it moved from and the one it moved to", reply.Picture)
+			}
+
+			// The delivered picture is on the durable record, commit and all, so a
+			// process that was never here can measure from it.
+			recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if recorded.ContextCommit != "b2b2b2b2b2b2b2b2" || !recorded.ContextGatheredAt.Equal(refreshedAt) {
+				t.Fatalf("the recorded picture = %#v, want the one the refresh read", recorded)
+			}
+
+			// And it does. A fresh session over the same record compares against the
+			// refreshed commit rather than the one the conversation opened on, and
+			// says so in the line the operator reads before every message.
+			resumedGround := &fakeGround{movement: Movement{Commits: 2}}
+			resumedOptions := testOptions(t, &fakeBackend{})
+			resumedOptions.Store = newTestStore(t, root)
+			resumedOptions.Ground = resumedGround
+			resumed := openTestSession(t, resumedOptions)
+			freshness := resumed.Freshness(context.Background())
+			if !strings.Contains(freshness, "context gathered just now at b2b2b2b2b2b2") {
+				t.Fatalf("the resumed freshness line = %q, want it to name the refreshed commit", freshness)
+			}
+			if len(resumedGround.compared) != 1 {
+				t.Fatalf("comparisons made on resuming = %d, want one", len(resumedGround.compared))
+			}
+			if compared := resumedGround.compared[0]; compared.Commit != "b2b2b2b2b2b2b2b2" {
+				t.Fatalf("the resumed process measured against %#v, want the refreshed picture", compared)
+			}
+		})
+	}
+}
+
 // eventsOfType is the conversation's recorded events of one type, in order.
 func eventsOfType(t *testing.T, root string, session *Session, eventType execution.EventType) []execution.Event {
 	t.Helper()

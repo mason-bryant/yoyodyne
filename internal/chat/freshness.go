@@ -108,6 +108,13 @@ type Refreshed struct {
 	// drifted rather than only that it was refreshed.
 	GatheredAt time.Time
 	Was        time.Time
+	// Commit is the repository commit the new picture was taken against, and
+	// WasCommit the one the picture it replaces was taken against. They are what
+	// makes a refresh checkable rather than asserted: a reader who is told only
+	// that a re-read happened has to believe it, and a reader told which commit
+	// the picture moved from and to can see that it did.
+	Commit    string
+	WasCommit string
 	// Problems are what the new picture could not read.
 	Problems []string
 }
@@ -205,6 +212,10 @@ type PictureAge struct {
 	// RefreshProblem is why a re-read the picture's age called for could not be
 	// made, on a stated outcome.
 	RefreshProblem string `json:"refresh_problem,omitempty"`
+	// RefreshedTo is the commit the new picture was taken against, on a refreshed
+	// outcome. Commit above says where the picture was; this says where it went,
+	// so the pair is the movement rather than an assertion that there was one.
+	RefreshedTo string `json:"refreshed_to,omitempty"`
 }
 
 // stale reports a picture that has fallen past the threshold.
@@ -240,6 +251,7 @@ func (s *Session) measurePicture(ctx context.Context) (*PictureAge, error) {
 		age.note(s.refresh.since)
 		age.Outcome = PictureRefreshed
 		age.RefreshedBy = string(s.refresh.trigger)
+		age.RefreshedTo = s.refresh.briefing.Commit
 		return age, s.recordPictureAge(age)
 	}
 	movement := s.options.Ground.Movement(ctx, picture)
@@ -267,10 +279,12 @@ func (s *Session) measurePicture(ctx context.Context) (*PictureAge, error) {
 			// picture the log cannot say was delivered.
 			age.Outcome = PictureRefreshed
 			age.RefreshedBy = string(refreshByHarness)
+			age.RefreshedTo = s.refresh.briefing.Commit
 			return age, err
 		default:
 			age.Outcome = PictureRefreshed
 			age.RefreshedBy = string(refreshByHarness)
+			age.RefreshedTo = s.refresh.briefing.Commit
 		}
 	}
 	return age, s.recordPictureAge(age)
@@ -344,8 +358,8 @@ func (p PictureAge) Render() string {
 		if p.RefreshedBy != string(refreshByHarness) {
 			return ""
 		}
-		return fmt.Sprintf("[picture] %s behind the target branch, past the %d this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded.\n",
-			plural(p.Landings, "landing", "landings"), p.Threshold)
+		return fmt.Sprintf("[picture] %s behind the target branch, past the %d this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded.%s\n",
+			plural(p.Landings, "landing", "landings"), p.Threshold, movedTo(p.Commit, p.RefreshedTo))
 	case PictureStated:
 		return fmt.Sprintf("[picture] %s behind the target branch, past the %d this project allows, and the harness could not re-read it: %s. The reply says how old its picture is.\n",
 			plural(p.Landings, "landing", "landings"), p.Threshold, p.RefreshProblem)
@@ -364,20 +378,26 @@ func (p PictureAge) Render() string {
 // conversation is a snapshot.
 func (s *Session) Freshness(ctx context.Context) string {
 	picture := s.picture()
-	age := ageOf(s.options.clock().Now().Sub(picture.GatheredAt))
+	// The commit is named beside the age because the age alone cannot be checked.
+	// A line saying a picture is hours old and 27 landings behind says the same
+	// thing whether the picture is advancing or stuck, and an operator reading
+	// one before every message has no way to tell the two apart; a commit that
+	// changes between two of these lines is the refresh having landed, and one
+	// that does not is the thing worth looking at.
+	taken := fmt.Sprintf("context gathered %s%s", ageOf(s.options.clock().Now().Sub(picture.GatheredAt)), atCommit(picture.Commit))
 	if !s.briefed() {
 		// The product manager has been given nothing yet, so what the
 		// conversation holds is the picture its next turn will carry: it was
 		// taken moments ago, there is nothing for a comparison to be about, and
 		// spending a repository read to say so would be spending it to print a
 		// zero.
-		return fmt.Sprintf("context gathered %s, as this conversation opened.", age)
+		return taken + ", as this conversation opened."
 	}
 	if s.options.Ground == nil {
-		return fmt.Sprintf("context gathered %s; nothing here can say what has moved since.", age)
+		return taken + "; nothing here can say what has moved since."
 	}
 	movement := s.options.Ground.Movement(ctx, picture)
-	return fmt.Sprintf("context gathered %s; %s.%s", age, movement.render(), movement.hint(s.options.refreshAfterLandings()))
+	return fmt.Sprintf("%s; %s.%s", taken, movement.render(), movement.hint(s.options.refreshAfterLandings()))
 }
 
 // briefed reports whether the product manager has actually been given a
@@ -433,6 +453,8 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 		Since:      movement,
 		GatheredAt: briefing.GatheredAt,
 		Was:        previous.GatheredAt,
+		Commit:     briefing.Commit,
+		WasCommit:  previous.Commit,
 		Problems:   briefing.Problems,
 	}
 	if err := s.emit(execution.EventContextRefreshed, map[string]any{
@@ -489,8 +511,8 @@ func (r Refreshed) Render() string {
 		// caller's error to report rather than something to narrate here.
 		return ""
 	}
-	fmt.Fprintf(&rendered, "re-read the repository and the tracker. The picture it replaces was gathered %s, and %s.\n",
-		ageOf(r.GatheredAt.Sub(r.Was)), r.Since.render())
+	fmt.Fprintf(&rendered, "re-read the repository and the tracker%s. The picture it replaces was gathered %s%s, and %s.\n",
+		atCommit(r.Commit), ageOf(r.GatheredAt.Sub(r.Was)), atCommit(r.WasCommit), r.Since.render())
 	rendered.WriteString("the agent is told what moved when you next say something to it, and reconciles it then.\n")
 	rendered.WriteString("nothing said in this conversation was discarded.\n")
 	for _, problem := range r.Problems {
@@ -579,6 +601,41 @@ func ageOf(age time.Duration) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(age.Hours())/24)
 	}
+}
+
+// atCommit names the commit a picture was taken against, as a clause to hang on
+// the end of a phrase about that picture. A repository that would not say what
+// it was on yields nothing rather than a placeholder: the sentence reads the way
+// it read before the commit was ever recorded, and nothing invents a commit
+// nobody established.
+func atCommit(commit string) string {
+	trimmed := strings.TrimSpace(commit)
+	if trimmed == "" {
+		return ""
+	}
+	return " at " + shortCommit(trimmed)
+}
+
+// movedTo says which commit a refresh moved the picture to, as a sentence to put
+// after the account of the refresh. It says nothing unless both ends are known,
+// because half a movement is not one — a reader shown only where the picture
+// arrived cannot tell a refresh from a restatement.
+func movedTo(from, to string) string {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return ""
+	}
+	return fmt.Sprintf(" The picture moved from %s to %s.", shortCommit(from), shortCommit(to))
+}
+
+// shortCommit is a commit as a person quotes one. The whole hash is on the
+// record; a line an operator reads before every message needs only enough of it
+// to tell one picture from the next.
+func shortCommit(commit string) string {
+	if len(commit) <= 12 {
+		return commit
+	}
+	return commit[:12]
 }
 
 func plural(count int, one, many string) string {

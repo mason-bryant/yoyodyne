@@ -2056,13 +2056,18 @@ one, confidently, because that is genuinely the evidence it has.
 So the conversation says so itself, on one line, as it opens and as it resumes:
 
 ```text
-context gathered 2h ago; 14 commits and 3 tracker changes since. /refresh reads what moved into this conversation.
+context gathered 2h ago at 6b069347e3f4; 14 commits and 3 tracker changes since. /refresh reads what moved into this conversation.
 ```
 
 Freshness is a comparison rather than a timestamp. The picture records when it
 was assembled and what commit the repository was on, both durably, so the
 process that resumes a conversation can say how old it is without having been the
-one that briefed it. What has moved since is two cheap questions: what `HEAD`
+one that briefed it. The commit is named on the line because the age alone
+cannot be checked: a line saying the picture is two hours old and fourteen
+landings behind reads the same whether the picture is advancing or stuck, and a
+commit that changes between two of these lines is a refresh having landed. A
+repository that would not say what it was on leaves the clause out rather than
+printing a commit nobody established. What has moved since is two cheap questions: what `HEAD`
 holds that the picture did not, and what the tracker wrote into its own
 interactions log after the picture was taken. Either comparison can fail — an
 unrecorded commit, a repository that will not answer — and a comparison that
@@ -2105,8 +2110,14 @@ answered, exactly as `/refresh` does and with the same framing to the role, and
 the transcript and `--json` (`picture`) tell you afterwards:
 
 ```text
-[picture] 41 landings behind the target branch, past the 20 this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded.
+[picture] 41 landings behind the target branch, past the 20 this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded. The picture moved from a1a1a1a1a1a1 to b2b2b2b2b2b2.
 ```
+
+The pair of commits is the point of that last sentence, and `/refresh` says the
+same pair its own way. A refresh that landed moves the picture from one commit
+to another, and the commit the freshness line carries on the next message is
+the one it moved to; a re-read that changed nothing is a claim you would
+otherwise have to take on trust.
 
 Where the re-read cannot be made — the tracker is locked, the repository will
 not answer — the reply is still given, and it says in its own text, ahead of
