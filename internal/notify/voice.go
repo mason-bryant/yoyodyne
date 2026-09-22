@@ -198,6 +198,7 @@ var harnessVoice = voice{
 		KindQuestionHeard:            "Heard as a question rather than an instruction, so nothing was recorded against this item; the product manager's answer follows here.",
 		KindIntakeHeld:               "Intake is held for this product: {why}",
 		KindIntakeReleased:           "Intake is released for this product.",
+		KindIntakeEscalated:          "The brake's hold on intake is escalated to the operator by the harness: {why}",
 		KindHoldPlaced:               "All harness activity is held.",
 		KindHoldLifted:               "The hold on harness activity is lifted.",
 		KindWatchStarted:             "A watch session is open on this product: {why}",
@@ -268,6 +269,7 @@ var developerVoice = voice{
 		KindQuestionHeard:            "That was a question rather than direction, so nothing about what I'm building changed by it; the product manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:           "Intake is open again; I'll take what I'm given.",
+		KindIntakeEscalated:          "The harness has stopped probing the line with runs like mine and handed the hold to the operator: {why}",
 		KindHoldPlaced:               "Held before my next provider call. Nothing of the change is lost.",
 		KindHoldLifted:               "The hold is lifted; I'm carrying on.",
 		KindWatchStarted:             "Work can reach me without anybody typing an identifier now: {why}",
@@ -338,6 +340,7 @@ var reviewerVoice = voice{
 		KindQuestionHeard:            "That was a question rather than something I judge the change against, so nothing was recorded; the product manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:           "Intake is open; work will reach me again.",
+		KindIntakeEscalated:          "The harness has handed the brake's hold to the operator rather than probe the line again; nothing new reaches me until it is released: {why}",
 		KindHoldPlaced:               "Held before my next review. Nothing already judged changes.",
 		KindHoldLifted:               "The hold is lifted; reviews resume.",
 		KindWatchStarted:             "Changes will keep arriving for a verdict without anybody starting them: {why}",
@@ -407,6 +410,7 @@ var developmentManagerVoice = voice{
 		KindQuestionHeard:            "That was a question rather than direction, so nothing about this item moved; the product manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:           "Intake is released; I'm pulling from the top of the backlog again.",
+		KindIntakeEscalated:          "The harness escalated the brake's hold to the operator over my head — I was asked every cycle and did not — so no further probe starts and the queue waits on a person: {why}",
 		KindHoldPlaced:               "Everything is held. Nothing new starts, and nothing in flight is lost.",
 		KindHoldLifted:               "The hold is lifted; the work in flight carries on.",
 		KindWatchStarted:             "The queue is being pulled from until somebody stops it, rather than once: {why}",
@@ -477,6 +481,7 @@ var productManagerVoice = voice{
 		KindQuestionHeard:            "I read that as a question rather than an instruction, so nothing was recorded against this item; my answer follows here.",
 		KindIntakeHeld:               "Intake is held, so nothing new is chosen until somebody lifts it: {why}",
 		KindIntakeReleased:           "The operator released intake; the backlog is being pulled from again.",
+		KindIntakeEscalated:          "The brake's hold on intake is now the operator's: the harness stopped asking the development manager and escalated it itself, so nothing I admit is chosen until somebody releases it: {why}",
 		KindHoldPlaced:               "The operator holds all harness activity.",
 		KindHoldLifted:               "The operator lifted the hold.",
 		KindWatchStarted:             "What is admitted is now what is spent on, since the queue is pulled from until somebody stops it: {why}",
@@ -547,6 +552,7 @@ var architectVoice = voice{
 		KindQuestionHeard:            "That was a question rather than a directive, so the record holds nothing from it; the product manager answers it here.",
 		KindIntakeHeld:               "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:           "Intake is released; selection resumes.",
+		KindIntakeEscalated:          "The brake's summons-and-probe loop reached its bound and the harness escalated the hold to the operator, which is the loop working as designed rather than standing silent: {why}",
 		KindHoldPlaced:               "All harness activity is held, at the provider-call boundary rather than mid-generation.",
 		KindHoldLifted:               "The hold is lifted, and every run that stopped for it carries on from its own record.",
 		KindWatchStarted:             "Selection is now a loop rather than a pass, and nothing between its readings is cached: {why}",
@@ -716,9 +722,12 @@ var nextMoves = map[Kind]string{
 	// somebody by name.
 	KindIntakeHeld:     "the operator's — nothing new is chosen until intake is released.",
 	KindIntakeReleased: "the harness's — the backlog is being pulled from again.",
-	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
-	KindHoldLifted:     "the harness's — every run that stopped for the hold carries on from its own record.",
-	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
+	// The harness's own escalation: the account above it already says why in the
+	// hold's own words, so this says only what follows.
+	KindIntakeEscalated: "the operator's — the harness has stopped probing, and nothing new is chosen until `yoyo release` lifts it.",
+	KindHoldPlaced:      "the operator's — nothing runs until the hold is lifted.",
+	KindHoldLifted:      "the harness's — every run that stopped for the hold carries on from its own record.",
+	KindWatchStarted:    "the harness's — the queue is pulled from until somebody stops it.",
 	// The idle poll with nothing else to say: the queue was read, no run is going,
 	// and nothing passed over is a person's to carry. Admitting ready work is then
 	// genuinely the act that changes the answer, which is the only case this clause

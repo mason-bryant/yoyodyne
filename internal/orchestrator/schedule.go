@@ -118,8 +118,10 @@ package orchestrator
 // would otherwise put the whole backlog through a failed run each — and the
 // hold is then worked rather than waited on: the development manager is
 // summoned at once to decide it, and a probe run decides it on evidence if she
-// does not, so the one brake hold that waits on a person is one she escalated
-// (see brake, workBrake, and settleProbe). And a session says what it is doing
+// does not, so a brake hold waits on a person only once it is escalated — by
+// her, or by the harness after that summons-and-probe loop has gone round its
+// configured number of times (see brake, workBrake, and settleProbe). And a
+// session says what it is doing
 // where somebody who is not at its terminal can read it, because an idle
 // session and a dead one are the same silence.
 //
@@ -300,11 +302,14 @@ type ScheduleStaleness interface {
 // each held until somebody noticed. Now the brake summons the development
 // manager the moment it trips, releases on her decision, and — where she has
 // decided nothing by the cooldown — probes the line with one run and releases
-// on that run landing. The one brake hold that waits on a person is one she
-// has escalated. ReleaseBrake is here for those two releases; ReviseBrake is how
-// the summons, the decision's carry-out, and the probe are written onto the
-// hold's own record, so every surface reading the hold says what is deciding
-// it. The operator's hold is never touched by any of them: ReleaseBrake and
+// on that run landing. A brake hold waits on a person only once it is
+// escalated: by her, or by the harness itself once a bounded number of those
+// summons-and-probe cycles have gone round with her not escalating it.
+// ReleaseBrake is here for those two releases; ReviseBrake is how the summons,
+// the decision's carry-out, the probe, and the harness's own escalation are
+// written onto the hold's own record, so every surface reading the hold says
+// what is deciding it. The operator's hold is never touched by any of them:
+// ReleaseBrake and
 // ReviseBrake both refuse any hold that is not the brake's own.
 type ScheduleBrake interface {
 	Brake(trip runstate.IntakeBrake, reason string, at time.Time) (runstate.IntakeHold, error)
@@ -586,6 +591,10 @@ type Pull struct {
 	// probes the line by itself. Zero waits for her summoned turn and no longer,
 	// because the summons is taken before the cooldown is read.
 	BrakeCooldown time.Duration
+	// BrakeEscalationCycles is execution.brake_escalation_cycles as this pull
+	// read it: how many summons-and-probe cycles the brake goes round before it
+	// escalates the hold to the operator itself. Zero never escalates on its own.
+	BrakeEscalationCycles int
 	// Brake places that hold and works it. It is optional, and a session wired
 	// without one counts the storm and reports it without stopping the line,
 	// because a brake nothing can apply must not be reported as applied.
@@ -1004,6 +1013,12 @@ type Schedule struct {
 	// started it again did both, and a reader must not have to infer the second
 	// from the runs that followed.
 	Released []BrakeRelease `json:"released,omitempty"`
+	// BrakeEscalated is the brake's hold this session handed to the operator
+	// itself, at the cycle bound, with the cycles it spent and what stopped the
+	// last probe. It is on the schedule for the reason a release is: a session
+	// that stopped summoning anybody over a hold did something, and a reader must
+	// not have to infer it from the summonses that stopped.
+	BrakeEscalated *runstate.BrakeEscalation `json:"brake_escalated,omitempty"`
 	// SpentUSD is what this pass spent, as the provider reported it: the runs it
 	// started, and the turns it took itself putting stopped work in front of the
 	// development manager. Budget is what it was allowed. Both are absent from a
@@ -1161,6 +1176,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	var brake ScheduleBrake
 	var summons ScheduleSummons
 	var cooldown time.Duration
+	var cycleBound int
 	// redeploying is the session having found a build deployed over the one it is
 	// executing. From that point it claims nothing more and waits out what it
 	// already started, which is the whole of how a restart reaches the machine
@@ -1285,7 +1301,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		// the hold, a blocking keeps it and puts the question to the development
 		// manager again, and anything else leaves the cooldown to decide.
 		if started.Probe {
-			s.settleProbe(ctx, &schedule, brake, summons, cooldown, *started)
+			s.settleProbe(ctx, &schedule, brake, summons, cooldown, cycleBound, *started)
 		}
 	}
 
@@ -1497,7 +1513,7 @@ pulling:
 		}
 		spend = pull.Spend
 		docket = pull.Triage
-		brake, summons, cooldown = pull.Brake, pull.Summons, pull.BrakeCooldown
+		brake, summons, cooldown, cycleBound = pull.Brake, pull.Summons, pull.BrakeCooldown, pull.BrakeEscalationCycles
 		// Stopped work reaches the development manager here, rather than by
 		// somebody carrying it to her. It is done before the brake and before the
 		// hold, because it chooses nothing and starts nothing: what it produces is
@@ -2304,7 +2320,7 @@ func (s Scheduler) brake(ctx context.Context, schedule *Schedule, pull Pull, ses
 		return
 	}
 	at := s.now().UTC()
-	trip := runstate.IntakeBrake{Blocked: storm, CooldownEndsAt: at.Add(pull.BrakeCooldown)}
+	trip := runstate.IntakeBrake{Blocked: storm, CooldownEndsAt: at.Add(pull.BrakeCooldown), CycleBound: pull.BrakeEscalationCycles}
 	held, err := pull.Brake.Brake(trip, reason, at)
 	if err != nil {
 		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
@@ -2411,9 +2427,11 @@ func (s Scheduler) workBrake(schedule *Schedule, pull Pull, hold runstate.Intake
 	}
 	trip := *hold.Brake
 	now := s.now().UTC()
+	// Her release is read ahead of an escalation because the two can stand
+	// together: a hold the harness escalated at the bound is still hers to
+	// release if she finds the line is fine, and that release must not wait on
+	// the operator the harness handed it to.
 	switch {
-	case trip.Escalated():
-		return brakeWaiting
 	case trip.Decision == runstate.BrakeDecisionRelease:
 		if _, released, err := pull.Brake.ReleaseBrake(); err != nil {
 			schedule.BrakeProblem = appendProblem(schedule.BrakeProblem, fmt.Sprintf(
@@ -2426,6 +2444,8 @@ func (s Scheduler) workBrake(schedule *Schedule, pull Pull, hold runstate.Intake
 			})
 		}
 		return brakeReleased
+	case trip.Escalated():
+		return brakeWaiting
 	case trip.Probing():
 		if _, ours := mine[trip.Probe.WorkItemID]; ours {
 			return brakeWaiting
@@ -2515,7 +2535,16 @@ func (s Scheduler) recordNoProbe(schedule *Schedule, pull Pull, found string) {
 // work going to another process, the run parked on the provider, the
 // environment stopping it — is a verdict on nothing, and leaves the cooldown to
 // ask again.
-func (s Scheduler) settleProbe(ctx context.Context, schedule *Schedule, brake ScheduleBrake, summons ScheduleSummons, cooldown time.Duration, started Started) {
+//
+// The blocking is also the one place the loop is counted, because a blocked
+// probe is what makes a cycle: it is what summons her again and starts another
+// cooldown. The cycle that reaches the bound is not summoned over. The harness
+// escalates the hold to the operator instead, on its own record, and the sink
+// says so once to them directly — a loop that costs one of her turns and one
+// run per cooldown must not go round all night on a machine that stays broken,
+// with nothing getting louder because the one role who could escalate it has
+// not.
+func (s Scheduler) settleProbe(ctx context.Context, schedule *Schedule, brake ScheduleBrake, summons ScheduleSummons, cooldown time.Duration, cycleBound int, started Started) {
 	if brake == nil {
 		return
 	}
@@ -2570,11 +2599,30 @@ func (s Scheduler) settleProbe(ctx context.Context, schedule *Schedule, brake Sc
 			trip.Probe.Reason = runstate.BoundBrakeText(started.blockedEntry().Reason)
 			trip.Decision, trip.DecidedAt, trip.DecidedBy, trip.DecisionReason = "", nil, "", ""
 			trip.SummonedAt, trip.SummonProblem = nil, ""
+			trip.Cycles++
+			// The bound is the pull's, re-read like the cooldown beside it, so an
+			// operator who tightens it under a standing loop is heard at the next
+			// probe rather than at the next trip.
+			trip.CycleBound = cycleBound
+			if trip.CycleBoundReached() {
+				trip.Escalation = &runstate.BrakeEscalation{
+					At:     now,
+					Cycles: trip.Cycles,
+					Probe:  started.WorkItemID,
+					Reason: trip.Probe.Reason,
+				}
+				return
+			}
 			trip.CooldownEndsAt = now.Add(cooldown)
 		})
-		if recorded {
-			s.summon(ctx, schedule, brake, summons, revised)
+		if !recorded {
+			return
 		}
+		if revised.Brake != nil && revised.Brake.EscalatedByHarness() {
+			schedule.BrakeEscalated = revised.Brake.Escalation
+			return
+		}
+		s.summon(ctx, schedule, brake, summons, revised)
 	default:
 		revise("the probe's ending", func(trip *runstate.IntakeBrake) {
 			trip.Probe.EndedAt = &now
@@ -4014,6 +4062,10 @@ func (s Schedule) Render() string {
 	}
 	for _, released := range s.Released {
 		fmt.Fprintf(&rendered, "the brake's hold was released at %s: %s\n", released.At.UTC().Format(time.RFC3339), released.Reason)
+	}
+	if escalated := s.BrakeEscalated; escalated != nil {
+		fmt.Fprintf(&rendered, "the brake's hold was escalated to the operator at %s, after %d summons-and-probe cycle(s) with the development manager not escalating it; the last probe run, of %s, blocked: %s\n",
+			escalated.At.UTC().Format(time.RFC3339), escalated.Cycles, escalated.Probe, singleLine(escalated.Reason, maxScheduleReasonBytes))
 	}
 	if s.BrakeProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)

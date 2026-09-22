@@ -688,6 +688,7 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		Poll:                        parts.config.Execution.WorkPoll.Duration(),
 		BlockedRunsBeforeIntakeHold: parts.config.Execution.BlockedRunsBeforeIntakeHold,
 		BrakeCooldown:               parts.config.Execution.BrakeCooldown.Duration(),
+		BrakeEscalationCycles:       parts.config.Execution.BrakeEscalationCycles,
 		// The brake places the operator's own switch, so it is the same store
 		// the hold is read from. What it releases is its own hold and never the
 		// operator's: on the development manager's decision, or on a probe run
@@ -958,10 +959,14 @@ with the blocked runs and the reason each blocked in front of her. She decides
 what happens to the hold: release it, keep it and probe the line with one run,
 or escalate it to you. Where she records nothing by execution.brake_cooldown,
 the session probes by itself: one run started under the hold, whose landing
-reopens intake and whose blocking keeps it held and summons her again. The
-only brake hold that waits on a person is one she escalated; "yoyo release"
-lifts any of them sooner. The hold's own record says who is deciding it and
-what the harness does next, and "yoyo status" reads it back.
+reopens intake and whose blocking keeps it held and summons her again. That
+loop is bounded by execution.brake_escalation_cycles: after that many probes
+have blocked with her not escalating the hold, the session escalates it to
+you itself, and no further probe starts. So the only brake hold that waits
+on a person is one she escalated or one the harness escalated at that bound;
+"yoyo release" lifts any of them sooner. The hold's own record says who is
+deciding it, where the loop stands, and what the harness does next, and
+"yoyo status" reads it back.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.

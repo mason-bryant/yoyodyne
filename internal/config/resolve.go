@@ -215,6 +215,7 @@ func newResolution() *resolution {
 				WorkPoll:                          defaultWorkPoll,
 				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
 				BrakeCooldown:                     defaultBrakeCooldown,
+				BrakeEscalationCycles:             defaultBrakeEscalationCycles,
 				// The declarative path is what a new run executes unless the project
 				// says otherwise, so it is a harness default like every other value
 				// here rather than the absence of a key. A project that wrote nothing
@@ -294,6 +295,7 @@ func newResolution() *resolution {
 			"execution.work_poll":                                 OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"execution.brake_cooldown":                            OriginDefault,
+			"execution.brake_escalation_cycles":                   OriginDefault,
 			"execution.declarative_delivery":                      OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
@@ -335,6 +337,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 		setValue(r.origins, "execution.brake_cooldown", execution.BrakeCooldown, &r.config.Execution.BrakeCooldown, applied.origin)
+		setValue(r.origins, "execution.brake_escalation_cycles", execution.BrakeEscalationCycles, &r.config.Execution.BrakeEscalationCycles, applied.origin)
 		// A supplied slot list replaces the inherited one entirely, and is copied
 		// rather than aliased, for the reasons the check list is: which slot
 		// prefers what is one statement, and a layer's own slice must not become

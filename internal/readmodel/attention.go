@@ -513,15 +513,21 @@ func operatorHoldAttention(hold runstate.OperatorHold) Attention {
 // with whose move it is read off the hold's own record: the operator's for a
 // hold they placed, and for one the brake placed the development manager's
 // while she decides, the harness's while a probe runs or a decision waits to
-// be carried out, and the operator's only once she has escalated it. The
-// record's own Whose words the same cases, and a test holds the two together.
+// be carried out, and the operator's only once it is escalated — by her, or by
+// the harness at the bound on its summons-and-probe loop. The record's own
+// Whose words the same cases in the same order, and a test holds the two
+// together: her release is read ahead of an escalation, because the two can
+// stand together on a hold the harness escalated and her release is what the
+// session acts on.
 func intakeHoldAttention(hold runstate.IntakeHold) Attention {
 	mover := MoverOperator
 	if hold.Braked() {
 		switch {
+		case hold.Brake.Decision == runstate.BrakeDecisionRelease:
+			mover = MoverHarness
 		case hold.Brake.Escalated():
 			mover = MoverOperator
-		case hold.Brake.Decision == runstate.BrakeDecisionRelease, hold.Brake.Decision == runstate.BrakeDecisionProbe, hold.Brake.Probing():
+		case hold.Brake.Decision == runstate.BrakeDecisionProbe, hold.Brake.Probing():
 			mover = MoverHarness
 		default:
 			mover = MoverDevelopmentManager

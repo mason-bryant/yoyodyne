@@ -267,9 +267,15 @@ execution:
   blocked_runs_before_intake_hold: %d
   # How long a tripped brake waits for her decision before it probes the line by
   # itself: one run under the hold, whose landing reopens intake and whose
-  # blocking keeps it held and asks her again. A hold she escalates to you is
-  # the only one that waits on a person.
+  # blocking keeps it held and asks her again. A hold she escalates to you
+  # waits on a person; so does one the harness escalates itself, below.
   brake_cooldown: %s
+  # How many of those summons-and-probe cycles the harness goes round before it
+  # escalates the hold to you itself -- one direct message naming the cycles
+  # spent and what stopped the last probe, and no further probe until somebody
+  # releases it. The default is two hours at the default cooldown. "0" never
+  # escalates on its own, and the loop stands until she does or the line mends.
+  brake_escalation_cycles: %d
   # Every new run compiles the built-in delivery definition and records where it
   # sent the run, beside the run's own record. The delivery is the same delivery
   # either way -- the definition's steps perform nothing -- so what this buys is
@@ -375,6 +381,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.WorkPoll),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		renderScaffoldDuration(effective.Execution.BrakeCooldown),
+		effective.Execution.BrakeEscalationCycles,
 		effective.Execution.DeclarativeDelivery,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,

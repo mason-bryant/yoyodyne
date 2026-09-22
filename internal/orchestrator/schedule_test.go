@@ -2457,14 +2457,17 @@ type scheduleHarness struct {
 	// the hold as it was summoned over and the number of summonses so far.
 	// summonses is every hold this harness was asked to summon her over,
 	// releases every hold the scheduler lifted, and revisions how many times the
-	// brake's record was rewritten. brakeErr refuses the hold, and cooldown is
-	// execution.brake_cooldown as a pull reads it.
-	summon    func(*scheduleHarness, BrakeSummons, int) (Fired, error)
-	summonses []runstate.IntakeHold
-	releases  []runstate.IntakeHold
-	revisions int
-	brakeErr  error
-	cooldown  time.Duration
+	// brake's record was rewritten. brakeErr refuses the hold, cooldown is
+	// execution.brake_cooldown as a pull reads it, and cycleBound is
+	// execution.brake_escalation_cycles — left at zero, which is no bound, by
+	// every test that is not about it.
+	summon     func(*scheduleHarness, BrakeSummons, int) (Fired, error)
+	summonses  []runstate.IntakeHold
+	releases   []runstate.IntakeHold
+	revisions  int
+	brakeErr   error
+	cooldown   time.Duration
+	cycleBound int
 	// tree stands in for the repository an item's stated prerequisites are read
 	// against, and docketed is every unready item this harness was asked to route
 	// to triage, by the key the docket would hold it under. A pull is wired with a
@@ -2613,7 +2616,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		return Pull{}, openErr
 	}
 	h.mu.Lock()
-	blockedRuns, cooldown := h.blockedRuns, h.cooldown
+	blockedRuns, cooldown, cycleBound := h.blockedRuns, h.cooldown, h.cycleBound
 	stoppages, decisions := h.stoppages, h.decisions
 	var escalations ScheduleEscalations
 	if h.escalate != nil {
@@ -2668,6 +2671,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Poll:                        time.Minute,
 		BlockedRunsBeforeIntakeHold: blockedRuns,
 		BrakeCooldown:               cooldown,
+		BrakeEscalationCycles:       cycleBound,
 		Brake:                       h,
 		Summons:                     summons,
 		Spend:                       h,

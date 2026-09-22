@@ -192,8 +192,17 @@ const (
 	// buried in a thread that would misfile them.
 	KindIntakeHeld     Kind = "intake.held"
 	KindIntakeReleased Kind = "intake.released"
-	KindHoldPlaced     Kind = "hold.placed"
-	KindHoldLifted     Kind = "hold.lifted"
+	// The brake's own hold handed to the operator by the harness, after its
+	// summons-and-probe loop went round the configured number of times with the
+	// development manager not escalating it. It is a kind of its own rather than
+	// the hold said again because it is the moment the hold becomes a person's:
+	// the trip was said when it happened and asked nothing of anybody, and this
+	// is the one message about that hold that does. It is said once, tagged to
+	// the operators and sent to them directly, naming the cycles spent and what
+	// stopped the last probe; the hourly line carries it from there.
+	KindIntakeEscalated Kind = "intake.escalated"
+	KindHoldPlaced      Kind = "hold.placed"
+	KindHoldLifted      Kind = "hold.lifted"
 	// What a watch session is doing. A session that stays open until it is told
 	// to stop spends most of its life saying nothing, and an idle one and a dead
 	// one are the same silence: these are what tell them apart in the record. Idle
@@ -397,6 +406,7 @@ func Kinds() []Kind {
 		KindQuestionHeard,
 		KindIntakeHeld,
 		KindIntakeReleased,
+		KindIntakeEscalated,
 		KindHoldPlaced,
 		KindHoldLifted,
 		KindWatchStarted,
@@ -436,7 +446,7 @@ func (k Kind) Valid() bool {
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindDirectiveWithdrawn, KindQuestionHeard,
-		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
+		KindIntakeHeld, KindIntakeReleased, KindIntakeEscalated, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
 		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,

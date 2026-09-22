@@ -166,6 +166,93 @@ func TestABrakeRecordIsRefusedWhereItSaysNothing(t *testing.T) {
 	}
 }
 
+// The harness's own escalation is the second way a brake hold comes to wait on
+// a person, and the record says so apart from her decision: every surface names
+// which of the two it was, no probe is due under it, a probe she decides on
+// afterwards is refused because the bound ended the loop, and her release is
+// still honoured because the line being fine is news whoever finds it out.
+func TestTheHarnessEscalatingAtTheBoundIsRecordedApartFromHerDecision(t *testing.T) {
+	t.Parallel()
+
+	store := newIntakeStoreAt(t, t.TempDir(), "yoyodyne")
+	at := time.Date(2026, 9, 19, 17, 56, 0, 0, time.UTC)
+	trip := IntakeBrake{
+		Blocked:        []BrakeBlockedRun{{WorkItemID: "yoyodyne-1", Reason: "blocked"}},
+		CooldownEndsAt: at.Add(30 * time.Minute),
+		CycleBound:     4,
+	}
+	held, err := store.Brake(trip, "1 run blocked", at)
+	if err != nil {
+		t.Fatalf("Brake() error = %v", err)
+	}
+	// While the loop goes round, every surface names it: which cycle, and when
+	// the harness stops asking.
+	if whose := held.Whose(); !strings.Contains(whose, "summons-and-probe cycle 1 of at most 4") || !strings.Contains(whose, "after 4 probes blocked") {
+		t.Fatalf("Whose() = %q, want the loop and its bound named", whose)
+	}
+	if trip.CycleBoundReached() {
+		t.Fatal("a trip that has spent no cycle reached its bound")
+	}
+	trip.Cycles = 4
+	if !trip.CycleBoundReached() {
+		t.Fatal("a trip that has spent every cycle the bound allows did not reach it")
+	}
+	if unbounded := (IntakeBrake{Cycles: 40}); unbounded.CycleBoundReached() || !strings.Contains(unbounded.Loop(), "no bound configured") {
+		t.Fatalf("an unbounded trip reached a bound, or does not say it has none: %q", unbounded.Loop())
+	}
+
+	// The escalation, as the scheduler records it at the bound.
+	escalatedAt := at.Add(2 * time.Hour)
+	escalated, err := store.ReviseBrake(func(brake *IntakeBrake) error {
+		brake.Cycles = 4
+		brake.Escalation = &BrakeEscalation{At: escalatedAt, Cycles: 4, Probe: "yoyodyne-5", Reason: "the checks failed on main"}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReviseBrake() error = %v", err)
+	}
+	if !escalated.Brake.Escalated() || !escalated.Brake.EscalatedByHarness() || !escalated.WaitsOnAPerson() {
+		t.Fatalf("escalated = %#v, want a hold that waits on a person by the harness's escalation", escalated.Brake)
+	}
+	if escalated.Brake.ProbeDue(escalatedAt.Add(24 * time.Hour)) {
+		t.Fatal("a probe is due under a hold the harness escalated, want none however long the cooldown has run out")
+	}
+	whose := escalated.Whose()
+	for _, want := range []string{"the operator's", "the harness escalated it after 4 summons-and-probe cycles", "yoyodyne-5", "the checks failed on main", "yoyo release"} {
+		if !strings.Contains(whose, want) {
+			t.Fatalf("Whose() = %q, want it to carry %q", whose, want)
+		}
+	}
+	if strings.Contains(whose, "the development manager escalated it") {
+		t.Fatalf("Whose() = %q, want the escalation attributed to the harness rather than to her", whose)
+	}
+	if standing := escalated.Standing(); !strings.Contains(standing, "the harness escalated it to the operator") || !strings.Contains(standing, "until somebody releases it") {
+		t.Fatalf("Standing() = %q, want the harness's escalation and that a person ends it", standing)
+	}
+
+	// A probe she decides on now is refused: the bound ended the loop.
+	if _, err := store.DecideBrake(BrakeDecisionProbe, "try once more", "development-manager conversation chat-1, turn 9", escalatedAt.Add(time.Minute)); !errors.Is(err, ErrBrakeEscalatedByHarness) {
+		t.Fatalf("DecideBrake(probe) after the harness escalated error = %v, want %v", err, ErrBrakeEscalatedByHarness)
+	}
+	// Her release is not.
+	released, err := store.DecideBrake(BrakeDecisionRelease, "the machine was fixed by hand", "development-manager conversation chat-1, turn 9", escalatedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("DecideBrake(release) after the harness escalated error = %v", err)
+	}
+	if whose := released.Whose(); !strings.Contains(whose, "decided to release it") {
+		t.Fatalf("Whose() = %q, want her release read ahead of the harness's escalation", whose)
+	}
+
+	// An escalation that names no cycle is refused, because the cycles spent are
+	// the whole of what the operator is told.
+	if _, err := store.ReviseBrake(func(brake *IntakeBrake) error {
+		brake.Escalation = &BrakeEscalation{At: escalatedAt}
+		return nil
+	}); err == nil {
+		t.Fatal("ReviseBrake() with an escalation naming no cycle error = nil, want a refusal")
+	}
+}
+
 // A summons claims a firing whether or not the cadence is due, and it is a
 // firing like any other: counted, stamped, and paced from, so the scheduled
 // pass does not follow it a minute later over the same ground.

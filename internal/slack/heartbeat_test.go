@@ -141,6 +141,133 @@ func TestAnEscalatedBrakeHoldIsTaggedToTheOperator(t *testing.T) {
 	}
 }
 
+// The other way a brake hold becomes the operator's: the harness's own
+// summons-and-probe loop went round its configured number of times with the
+// development manager not escalating it, and the harness escalated it itself.
+// That is said once, the moment the record shows it, to the operators directly
+// and tagged by member id, naming the cycles spent and what stopped the last
+// probe — and never again on a later pass, because the hourly line carries the
+// hold from there, tagged as any hold that waits on him is.
+func TestTheHarnessEscalatingABrakeHoldIsSaidOnceDirectlyToTheOperator(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.braked(t, moment)
+	harness.now = moment.Add(10 * time.Minute)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+
+	// The loop going round, as the scheduler records it: two cycles spent of a
+	// bound of two, and the last probe blocked.
+	escalated := moment.Add(2 * time.Hour)
+	if _, err := harness.intake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		ended := escalated
+		trip.Probe = &runstate.IntakeProbe{WorkItemID: "yoyodyne-ifd.405", RunID: "run-5", StartedAt: escalated.Add(-20 * time.Minute), EndedAt: &ended, Blocked: true, Reason: "the checks failed on main"}
+		trip.Probes, trip.Cycles, trip.CycleBound = 2, 2, 2
+		trip.Escalation = &runstate.BrakeEscalation{At: escalated, Cycles: 2, Probe: "yoyodyne-ifd.405", Reason: "the checks failed on main"}
+		return nil
+	}); err != nil {
+		t.Fatalf("ReviseBrake() error = %v", err)
+	}
+
+	harness.now = escalated.Add(time.Minute)
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	var said []Delivery
+	for _, delivery := range batch.Deliveries {
+		cursors.Streams[delivery.Stream] = delivery.Cursor
+		if delivery.Posts() && delivery.Notification.Event.Kind == notify.KindIntakeEscalated {
+			said = append(said, delivery)
+		}
+	}
+	if len(said) != 1 {
+		t.Fatalf("said the escalation %d time(s) on the pass that first saw it, want once", len(said))
+	}
+	message := said[0]
+	if !message.Direct || !message.Tag {
+		t.Fatalf("direct = %t, tag = %t, want the escalation sent to the operators directly and tagged to them", message.Direct, message.Tag)
+	}
+	if message.Notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("severity = %q, want a hold handed to a person said as a warning", message.Notification.Event.Severity)
+	}
+	if !message.Notification.Event.At.Equal(escalated) {
+		t.Fatalf("at = %s, want the moment of the escalation %s", message.Notification.Event.At, escalated)
+	}
+	rendered, err := notify.Render(message.Notification.Topic, message.Notification.Speaker, message.Notification.Event)
+	if err != nil {
+		t.Fatalf("the escalation could not be said: %v", err)
+	}
+	for _, fact := range []string{"escalated to the operator by the harness", "2 summons-and-probe cycles", "yoyodyne-ifd.405", "the checks failed on main", "Next: the operator's — the harness has stopped probing", "yoyo release"} {
+		if !strings.Contains(rendered.Body, fact) {
+			t.Fatalf("body %q does not carry %q", rendered.Body, fact)
+		}
+	}
+
+	// A later pass says nothing more about the escalation: the hourly line is
+	// what carries the hold now, tagged to him as any hold that waits on him is.
+	harness.now = escalated.Add(time.Hour + 2*time.Minute)
+	line := harness.line(t, cursors)
+	if line.Notification.Event.Kind != notify.KindLineWaiting || !line.Tag {
+		t.Fatalf("kind = %q, tag = %t, want the hourly line tagged to the operators", line.Notification.Event.Kind, line.Tag)
+	}
+	body, err := notify.Render(line.Notification.Topic, line.Notification.Speaker, line.Notification.Event)
+	if err != nil {
+		t.Fatalf("the line could not be said: %v", err)
+	}
+	if !strings.Contains(body.Body, "Next: the operator's — the harness escalated it after 2 summons-and-probe cycles") {
+		t.Fatalf("body %q does not say the hold is the operator's by the harness's escalation", body.Body)
+	}
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+	harness.now = harness.now.Add(time.Hour)
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+
+	// Released, and the mark goes with the hold: nothing about the escalation is
+	// left in the cursor to be said over the next hold.
+	if _, _, err := harness.intake.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	cursors = harness.poll(t, cursors, notify.KindIntakeReleased)
+	if mark, said := cursors.Streams[productStream].Marked(brakeEscalationMark); said {
+		t.Fatalf("the cursor still carries %q after the hold lifted", mark)
+	}
+}
+
+// While the harness is still working the hold the hourly line names the loop it
+// is in — which cycle, and at what cycle the harness stops asking — so a note
+// that repeats every hour through a night says how much longer it goes on.
+func TestTheHourlyLineNamesTheLoopWhileTheHarnessWorksTheHold(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
+	harness.braked(t, moment)
+	if _, err := harness.intake.ReviseBrake(func(trip *runstate.IntakeBrake) error {
+		trip.Cycles, trip.CycleBound = 1, 4
+		return nil
+	}); err != nil {
+		t.Fatalf("ReviseBrake() error = %v", err)
+	}
+
+	harness.now = moment.Add(10 * time.Minute)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	harness.now = moment.Add(2 * time.Hour)
+	delivery := harness.line(t, cursors)
+	if delivery.Tag || delivery.Direct {
+		t.Fatalf("tag = %t, direct = %t, want a hold the harness is still working said in the channel alone", delivery.Tag, delivery.Direct)
+	}
+	said, err := notify.Render(delivery.Notification.Topic, delivery.Notification.Speaker, delivery.Notification.Event)
+	if err != nil {
+		t.Fatalf("the line could not be said: %v", err)
+	}
+	if !strings.Contains(said.Body, "summons-and-probe cycle 2 of at most 4") || !strings.Contains(said.Body, "escalates it to the operator itself after 4 probes blocked") {
+		t.Fatalf("body %q does not name the loop and its bound", said.Body)
+	}
+}
+
 // A brake hold the harness is working itself asks a person for nothing, and the
 // line says so at the pitch it always had: an hourly note, tagged to nobody,
 // naming the development manager's move. She is summoned about it separately,
