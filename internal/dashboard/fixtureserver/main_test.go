@@ -59,6 +59,16 @@ func TestEveryScenarioLoadsAndAnswersAsNamed(t *testing.T) {
 					t.Fatalf("%s: startable item %s has no fixture card: %+v, %v", name, startable.WorkItemID, item, err)
 				}
 			}
+			// So does every item an entry of the attention line names, because
+			// the entry's card opens it.
+			for _, entry := range standing.NeedsHuman {
+				if entry.WorkItemID == "" {
+					continue
+				}
+				if item, err := model.WorkItem(context.Background(), entry.WorkItemID); err != nil || item.ID != entry.WorkItemID {
+					t.Fatalf("%s: the item %s the %s entry names has no fixture card: %+v, %v", name, entry.WorkItemID, entry.Kind, item, err)
+				}
+			}
 			if _, err := model.WorkItem(context.Background(), "nobody-wrote-this"); !errors.Is(err, readmodel.ErrNoSuchWorkItem) {
 				t.Fatalf("%s: an id with no fixture = %v, want ErrNoSuchWorkItem", name, err)
 			}

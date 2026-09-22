@@ -350,7 +350,28 @@ const scenarios = pages.concat([
   // A poll redraws the page under an open grouping, so the button that opened
   // it is gone by the time Escape closes it, and focus goes to the button now
   // carrying its key.
-  over("closed-after-poll", "busy", { open: [{ grouping: "held" }, { poll: true }], escape: 1 })
+  over("closed-after-poll", "busy", { open: [{ grouping: "held" }, { poll: true }], escape: 1 }),
+  // The Needs-a-human list, opened from the band's tile: every entry of the
+  // attention line by what it is, its kind, and whose move it is; the same
+  // list once a poll finds everything settled; and the list over a standing
+  // whose attention line could not be read.
+  over("attention", "busy", { open: [{ grouping: "attention" }] }),
+  over("attention-empty", "busy", { open: [{ grouping: "attention" }, { poll: { "/api/standing": ok(fixture("standing-settled")) } }] }),
+  over("attention-error", "degraded", { open: [{ grouping: "attention" }] }),
+  // An entry's card over the list: a proposed change with the change and its
+  // reason in full; a run that owes a step; an item a conversation carries,
+  // and the item's own card opened from it; a card whose entry was settled by
+  // the time the page next asked; and one whose line could not be read then.
+  over("attention-amendment", "busy", { open: [{ grouping: "attention" }, { entry: "amendment:amendment-3f9a1c2e8b7d4f6a9c1e2b3d4f5a6b7c" }] }),
+  over("attention-owed-step", "busy", { open: [{ grouping: "attention" }, { entry: "owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70" }] }),
+  over("attention-carried-item", "busy", { open: [{ grouping: "attention" }, { entry: "conversation-carried-item:yoyodyne-ifd.188" }] }),
+  over("attention-carried-item-card", "busy", { items: items("yoyodyne-ifd.188"), open: [{ grouping: "attention" }, { entry: "conversation-carried-item:yoyodyne-ifd.188" }, { item: "yoyodyne-ifd.188" }] }),
+  over("attention-settled", "busy", { open: [{ grouping: "attention" }, { entry: "owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70" }, { poll: { "/api/standing": ok(fixture("standing-settled")) } }] }),
+  over("attention-unreadable", "busy", { open: [{ grouping: "attention" }, { entry: "owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70" }, { poll: { "/api/standing": ok(fixture("standing-degraded")) } }] }),
+  // Escape twice from the item card opened off an entry card: the card
+  // closes, then the list, and focus is back on the tile's label that opened
+  // the list.
+  over("attention-closed", "busy", { items: items("yoyodyne-ifd.188"), open: [{ grouping: "attention" }, { entry: "conversation-carried-item:yoyodyne-ifd.188" }, { item: "yoyodyne-ifd.188" }], escape: 2 })
 ]);
 
 function settle() {
@@ -423,6 +444,11 @@ async function run(scenario) {
   const clicked = [];
   for (const step of scenario.open || []) {
     if (step.poll) {
+      // A poll given answers is the harness having moved in between: the
+      // readings it names are answered differently from here on.
+      if (typeof step.poll === "object") {
+        answers = Object.assign({}, answers, step.poll);
+      }
       intervals.filter(Boolean).forEach((callback) => callback());
       await settle();
       // The poll redraws the sections, so what was clicked is off the page:
@@ -432,7 +458,7 @@ async function run(scenario) {
       }
       continue;
     }
-    const opener = step.item ? ["data-item", step.item] : ["data-grouping", step.grouping];
+    const opener = step.item ? ["data-item", step.item] : step.entry ? ["data-entry", step.entry] : ["data-grouping", step.grouping];
     opened.push(opener);
     clicked.push(openerFor(...opener));
     clicked[clicked.length - 1].dispatch("click", {});

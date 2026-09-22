@@ -281,6 +281,57 @@
     return counts.map(function (each) { return each.label + ": " + each.number; }).join(", ");
   }
 
+  // moverLabel is the mover's possessive, from the vocabulary above.
+  function moverLabel(mover) {
+    var found = null;
+    movers.forEach(function (named) {
+      if (named.mover === mover) {
+        found = named;
+      }
+    });
+    return found ? found.label : String(mover);
+  }
+
+  // moverRank is where a mover stands in the vocabulary's order, which is the
+  // order the list of what waits on a person is shown in: the operator's
+  // first, because the page is his.
+  function moverRank(mover) {
+    var rank = movers.length;
+    movers.forEach(function (named, at) {
+      if (named.mover === mover) {
+        rank = at;
+      }
+    });
+    return rank;
+  }
+
+  // kinds is the read model's own vocabulary for what sort of thing an entry
+  // on the attention line is about, in the model's order, each with the plain
+  // words its card is headed by. A test holds this list to the model's.
+  var kinds = [
+    { attention: "amendment", title: "A change proposed to a document" },
+    { attention: "conversation-carried-item", title: "A work item carried by a conversation" },
+    { attention: "report", title: "The pile of collected reports" },
+    { attention: "owed-step", title: "A run that still owes a step" },
+    { attention: "publication", title: "A promotion the forge has not published" },
+    { attention: "degraded-service", title: "A part of the product left down" },
+    { attention: "hold", title: "A hold over the harness" },
+    { attention: "directive", title: "An unresolved directive" },
+    { attention: "outage", title: "The provider answering nobody" },
+    { attention: "stall", title: "A queue nothing is pulling from" },
+    { attention: "held-work", title: "Admitted work held back" }
+  ];
+
+  function kindTitle(kind) {
+    var found = null;
+    kinds.forEach(function (named) {
+      if (named.attention === kind) {
+        found = named;
+      }
+    });
+    return found ? found.title : String(kind);
+  }
+
   function renderHeader() {
     var standing = model.standing;
     if (standing) {
@@ -322,9 +373,15 @@
 
   // ---- section 1: the status band ----------------------------------------
 
-  function tile(label, figure, unit, detail, className) {
+  // tile is one tile of the band. A tile given a grouping has its label open
+  // the list behind its figure, as a stage's label does in the pipeline.
+  function tile(label, figure, unit, detail, className, grouping) {
     var item = el("div", "tile" + (className ? " " + className : ""));
-    item.appendChild(el("dt", null, label));
+    var head = el("dt", null, grouping ? null : label);
+    if (grouping) {
+      head.appendChild(groupingOpener(grouping, "tile-label", label));
+    }
+    item.appendChild(head);
     var value = el("dd");
     value.appendChild(el("span", "figure", figure));
     value.appendChild(el("span", "unit", unit));
@@ -362,7 +419,9 @@
       // place, exactly as the terminal does, and the reason is listed under the
       // tiles.
       if (standing[line.problem]) {
-        tiles.appendChild(tile(line.label, "—", "could not be read", null, "tile-unreadable"));
+        // The attention line still opens its list, so the reason it could not
+        // be read is readable in full rather than only as a dash.
+        tiles.appendChild(tile(line.label, "—", "could not be read", null, "tile-unreadable", line.list === "needs_human" ? "attention" : null));
         return;
       }
       var items = standing[line.list].length;
@@ -391,15 +450,16 @@
   // the page's most important line; the detail is the line's whole count, which
   // is the figure the terminal prints, and then each role's and the harness's
   // beside it. It asks for attention when something waits on the operator.
+  // Its label opens the list of the entries, each of which opens a card.
   function needsHumanTile(label, entries) {
     if (entries.length === 0) {
-      return tile(label, "nothing", "waiting on a person", null, "tile-quiet");
+      return tile(label, "nothing", "waiting on a person", null, "tile-quiet", "attention");
     }
     var counts = byMover(entries);
     var operator = counts[0];
     var others = counts.slice(1);
     var detail = others.length ? "of " + count(entries.length, "thing") + " waiting in all; " + moverCounts(others) : null;
-    return tile(label, String(operator.number), plural(operator.number, "thing") + " waiting on the operator", detail, operator.number > 0 ? "tile-attention" : null);
+    return tile(label, String(operator.number), plural(operator.number, "thing") + " waiting on the operator", detail, operator.number > 0 ? "tile-attention" : null, "attention");
   }
 
   function landedTile() {
@@ -853,27 +913,38 @@
   // ---- the pop-ups: a grouping's items, and one item's card -------------------
 
   // Two pop-ups, each a dialog over the page with the four states a section
-  // has. The grouping lists the work items behind one figure of the pipeline —
-  // a stage, or a pile under one — by title, drawn from the readings the page
-  // already holds and drawn again on every poll while it is open, so it stays
-  // as live as the figure it was opened from. The card is one work item whole,
-  // read from /api/items/<id> when it is opened and not before, because it costs
-  // a tracker command; a card opens over a grouping, and each closes on its
-  // button, on its backdrop, or on Escape, putting focus back where it was.
+  // has. The grouping lists what is behind one figure — the work items behind
+  // a stage of the pipeline or a pile under one, by title, or the entries
+  // behind the Needs-a-human tile, each by what it is and who it is waiting on —
+  // drawn from the readings the page already holds and drawn again on every
+  // poll while it is open, so it stays as live as the figure it was opened
+  // from. The card is one thing whole: a work item, read from /api/items/<id>
+  // when it is opened and not before, because it costs a tracker command; or
+  // one entry of the attention line, drawn from the standing in hand — an
+  // amendment with its proposed change and its reason in full, a run that owes
+  // a step, an item a conversation carries — and drawn again on every poll, so
+  // an entry settled since the card was opened says so. A card opens over a
+  // grouping, and each closes on its button, on its backdrop, or on Escape,
+  // putting focus back where it was.
   //
-  // Nothing here reads the tracker: the card is the read model's projection of
-  // the item, served by the same process behind the same token.
+  // Nothing here reads the tracker or the amendment store: the card is the read
+  // model's projection of the item or the entry, served by the same process
+  // behind the same token. And nothing here acts: every button opens or closes
+  // a pop-up and does nothing else.
 
   var groupingPopup = document.getElementById("grouping");
   var cardPopup = document.getElementById("card");
   // openGrouping is the key of the grouping that is open, or null; openCard is
-  // the id of the item whose card is open, or null. Each pop-up remembers what
-  // opened it, to give focus back to: the element, and the key it carries,
-  // because every poll clears and redraws the sections, so by the time a
-  // pop-up closes the element that opened it may be gone from the page and
-  // what stands in its place is the element now carrying the same key.
+  // the id of the item whose card is open, and openEntry the key of the
+  // attention entry whose card is open — at most one of the two, or neither.
+  // Each pop-up remembers what opened it, to give focus back to: the element,
+  // and the key it carries, because every poll clears and redraws the
+  // sections, so by the time a pop-up closes the element that opened it may be
+  // gone from the page and what stands in its place is the element now
+  // carrying the same key.
   var openGrouping = null;
   var openCard = null;
+  var openEntry = null;
   var openers = { grouping: null, card: null };
   // openersByKey is every opener on the page by the key it opens, newest last,
   // kept only while it is on the page: what close() gives focus back to when
@@ -898,6 +969,23 @@
   function groupingOpener(key, className, text) {
     var button = opener("data-grouping", key, el("button", "grouping-open" + (className ? " " + className : ""), text));
     button.addEventListener("click", function () { showGrouping(key, { element: button, kind: "data-grouping", key: key }); });
+    return button;
+  }
+
+  // entryKey names one entry of the attention line so a card can be opened on
+  // it and found again on the next poll: its kind and the id of the record it
+  // is about, or, for the two kinds about a set rather than a record, which
+  // set — held work is one entry per wait, and the report pile is one.
+  function entryKey(entry) {
+    if (entry.kind === "held-work") {
+      return entry.kind + ":" + (entry.held_work ? entry.held_work.awaiting : "");
+    }
+    return entry.kind + ":" + (entry.id || "");
+  }
+
+  function entryOpener(key, text, className) {
+    var button = opener("data-entry", key, el("button", "item-open" + (className ? " " + className : ""), text));
+    button.addEventListener("click", function () { showEntry(key, { element: button, kind: "data-entry", key: key }); });
     return button;
   }
 
@@ -932,7 +1020,8 @@
   // the word the pipeline had for it — or why there are none to list. The keys
   // are the pipeline's own: a stage, `pile:<kind>` for a pile under Held back,
   // `stage:<name>` for a pile under Running, and `landed:today` or
-  // `landed:week`.
+  // `landed:week` — and `attention` for the band's Needs-a-human tile, which
+  // lists the entries of the attention line rather than work items.
   function groupingOf(key) {
     var standing = model.standing;
     var parts = key.split(":");
@@ -942,7 +1031,10 @@
       return landedGrouping(which);
     }
     if (!standing) {
-      return { title: "Where the work stands", note: "", state: model.standingError ? "error" : "loading", problem: model.standingError, remedy: whatToDoAboutTheStanding() };
+      return { title: kind === "attention" ? "Needs a human" : "Where the work stands", note: "", state: model.standingError ? "error" : "loading", problem: model.standingError, remedy: whatToDoAboutTheStanding() };
+    }
+    if (kind === "attention") {
+      return attentionGrouping(standing);
     }
     if (kind === "running" || kind === "stage") {
       var running = standing.running_problem ? [] : standing.running;
@@ -990,17 +1082,36 @@
       (period && period.landed_items ? period.landed_items : []).map(function (run) { return { id: run.work_item_id, title: run.title, detail: "landed " + dayAndClock(run.landed_at) }; }));
   }
 
+  // attentionGrouping lists what waits on a person: each entry of the
+  // attention line, in the order the movers' vocabulary puts them — the
+  // operator's first, so the list opens on what the tile's figure counted —
+  // and within one mover in the order the terminal prints them, each by the
+  // thing waiting, with its kind and who it is waiting on beside, and each opening
+  // its card.
+  function attentionGrouping(standing) {
+    var entries = (standing.needs_human_problem ? [] : standing.needs_human).map(function (entry, at) { return { entry: entry, at: at }; });
+    entries.sort(function (a, b) {
+      return (moverRank(a.entry.mover) - moverRank(b.entry.mover)) || (a.at - b.at);
+    });
+    return listing("Needs a human", "what waits on a person, the operator's first, each with its kind and who it is waiting on; each opens its card",
+      standing.needs_human_problem, whatToDoAboutTheStanding(), "Nothing waits on a person.",
+      entries.map(function (each) {
+        return { entry: entryKey(each.entry), kind: each.entry.kind, title: each.entry.what, detail: each.entry.whose };
+      }), "thing");
+  }
+
   // listing folds a grouping's readings into one of the four states: error
   // where its source could not be read, empty where the source was read and
-  // holds nothing, and ready otherwise.
-  function listing(title, note, problem, remedy, empty, items) {
+  // holds nothing, and ready otherwise. The noun is what the heading counts
+  // the items as: work items unless the listing says otherwise.
+  function listing(title, note, problem, remedy, empty, items, noun) {
     if (problem) {
       return { title: title, note: note, state: "error", problem: problem, remedy: remedy };
     }
     if (items.length === 0) {
       return { title: title, note: note, state: "empty", empty: empty };
     }
-    return { title: title, note: note, state: "ready", items: items };
+    return { title: title, note: note, state: "ready", items: items, noun: noun || "item" };
   }
 
   function renderGrouping() {
@@ -1008,15 +1119,23 @@
       return;
     }
     var described = groupingOf(openGrouping);
-    document.getElementById("grouping-heading").textContent = described.title + (described.state === "ready" ? " (" + count(described.items.length, "item") + ")" : "");
+    document.getElementById("grouping-heading").textContent = described.title + (described.state === "ready" ? " (" + count(described.items.length, described.noun) + ")" : "");
     document.getElementById("grouping-note").textContent = described.note || "";
     section("grouping", described.state, described.state === "error" ? described.problem : described.empty, described.remedy);
     var list = document.getElementById("grouping-items");
     clear(list);
     (described.items || []).forEach(function (item) {
       var entry = el("li", "grouping-item");
-      entry.appendChild(itemOpener(item.id, item.title || item.id, "grouping-title"));
-      entry.appendChild(el("span", "item-id", item.id));
+      // A row is a work item, opening its card by id, or an entry of the
+      // attention line, opening its card by key with its kind where the id
+      // would stand.
+      if (item.entry) {
+        entry.appendChild(entryOpener(item.entry, item.title, "grouping-title"));
+        entry.appendChild(el("span", "item-id", item.kind));
+      } else {
+        entry.appendChild(itemOpener(item.id, item.title || item.id, "grouping-title"));
+        entry.appendChild(el("span", "item-id", item.id));
+      }
       if (item.detail) {
         entry.appendChild(el("span", "grouping-detail", item.detail));
       }
@@ -1123,6 +1242,7 @@
   // reading does; anything else is the card's error state, with the reason.
   function showCard(id, from) {
     openCard = id;
+    openEntry = null;
     openers.card = from || null;
     document.getElementById("card-heading").textContent = id;
     document.getElementById("card-note").textContent = "";
@@ -1150,20 +1270,248 @@
 
   function closeCard() {
     openCard = null;
+    openEntry = null;
     close(cardPopup, "card");
+  }
+
+  // ---- the entry card
+
+  // The card on one entry of the attention line. It is drawn from the standing
+  // the page holds, so it costs nothing to open and is drawn again on every
+  // poll: an entry the harness or a person has settled since it was opened is
+  // gone from the standing, and the card says so rather than showing a record
+  // that is no longer waiting on anyone. Every value is the record's own,
+  // written as text; the proposed change and its reason are shown whole.
+
+  // cardItemOpener is a work item's id on an entry card, opening the item's
+  // card in this same pop-up. What opened the entry card stays what focus goes
+  // back to, because the button being clicked is about to be redrawn away.
+  function cardItemOpener(id) {
+    var button = opener("data-item", id, el("button", "item-open item-id", id));
+    button.addEventListener("click", function () { showCard(id, openers.card); });
+    return button;
+  }
+
+  // entryFields lays the entry's record out under plain labels: first what is
+  // waiting and who it is waiting on, in the terminal's words, then the record the
+  // kind names, whole. A work item the entry is about is an opener on its id.
+  function entryFields(entry) {
+    var fields = document.getElementById("card-fields");
+    clear(fields);
+    var add = function (label, value, className) { fields.appendChild(field(label, value, className)); };
+    var addItem = function (label, id) {
+      var row = el("div", "card-field card-field-id");
+      row.appendChild(el("dt", null, label));
+      var body = el("dd");
+      body.appendChild(cardItemOpener(id));
+      row.appendChild(body);
+      fields.appendChild(row);
+    };
+    add("What", entry.what, "card-field-prose");
+    add("Waiting on", entry.whose, "card-field-prose");
+    add("Kind", entry.kind);
+    add("Mover", moverLabel(entry.mover));
+    switch (entry.kind) {
+      case "amendment":
+        var proposal = entry.amendment;
+        if (!proposal) {
+          break;
+        }
+        add("Document", proposal.artifact, "card-field-id");
+        add("Document kind", proposal.kind);
+        add("Owner", proposal.owner);
+        add("Proposed by", proposal.role + (proposal.agent ? " (agent " + proposal.agent + ")" : ""));
+        add("In run", proposal.run_id, "card-field-id");
+        if (proposal.work_item_id) {
+          addItem("Working on", proposal.work_item_id);
+        }
+        add("Proposed change", proposal.change, "card-field-prose");
+        add("Why", proposal.why, "card-field-prose");
+        add("Raised", named(proposal.raised_at) ? dayAndClock(proposal.raised_at) : "");
+        add("Id", proposal.id, "card-field-id");
+        break;
+      case "owed-step":
+        add("Run", entry.id, "card-field-id");
+        if (entry.work_item_id) {
+          addItem("Work item", entry.work_item_id);
+        }
+        if (entry.owed_step) {
+          add("Ended", entry.owed_step.status);
+          add("Phase", entry.owed_step.phase || "none recorded");
+        }
+        break;
+      case "conversation-carried-item":
+        addItem("Work item", entry.work_item_id || entry.id);
+        add("Executor", entry.executor, "card-field-id");
+        add("Role", entry.mover === "unnamed-role" ? "none the harness recognizes from the marker" : entry.mover);
+        break;
+      case "publication":
+        var publication = entry.publication;
+        add("Run", entry.id, "card-field-id");
+        if (entry.work_item_id) {
+          addItem("Work item", entry.work_item_id);
+        }
+        if (!publication) {
+          break;
+        }
+        add("Target branch", publication.target_branch || "not recorded", "card-field-id");
+        add("Branch", publication.branch, "card-field-id");
+        var request = publication.pull_request;
+        add("Pull request", request ? "#" + request.number + " " + request.url + (request.state ? " (" + request.state + ")" : "") + (request.merge_queued ? ", merge queued" : "") : "none recorded");
+        if (publication.merge_drop) {
+          add("Merge dropped", dayAndClock(publication.merge_drop.at) + ": " + publication.merge_drop.reason, "card-field-prose");
+        }
+        break;
+      case "degraded-service":
+        var service = entry.service;
+        if (!service) {
+          break;
+        }
+        add("Service", service.service);
+        add("State", service.state);
+        add("Reason", service.reason, "card-field-prose");
+        add("Died", named(service.died_at) ? dayAndClock(service.died_at) : "");
+        add("Failures", service.failures === undefined ? "" : String(service.failures));
+        add("Log", service.log, "card-field-id");
+        break;
+      case "hold":
+        var hold = entry.operator_hold || entry.intake_hold || entry.capacity_hold;
+        add("Switch", entry.id);
+        if (!hold) {
+          break;
+        }
+        if (entry.capacity_hold) {
+          add("Since", dayAndClock(hold.since));
+          add("Resets", named(hold.resets_at) ? dayAndClock(hold.resets_at) : "no reset named");
+          add("Refusals", count(hold.refusals || 0, "turn") + (hold.parked_runs ? ", " + count(hold.parked_runs, "run") + " parked" : ""));
+          add("Agents", (hold.agents || []).join(", "));
+          add("Models", (hold.models || []).join(", "));
+          add("Alternates", (hold.alternates || []).join(", "));
+        } else {
+          add("Held since", dayAndClock(hold.held_at));
+          if (entry.intake_hold) {
+            add("Held by", hold.held_by);
+            add("Reason", hold.reason, "card-field-prose");
+          }
+        }
+        break;
+      case "directive":
+        var directive = entry.directive;
+        if (!directive) {
+          break;
+        }
+        add("Directive", directive.id, "card-field-id");
+        add("Directive kind", directive.kind);
+        add("Received", "by " + directive.received_by + " at " + dayAndClock(directive.received_at));
+        add("Text", directive.text, "card-field-prose");
+        add("Unresolved", directive.unresolved, "card-field-prose");
+        add("Artifact", directive.artifact, "card-field-id");
+        add("Scope", (directive.scope || []).join(", "), "card-field-id");
+        break;
+      case "outage":
+        var outage = entry.outage;
+        if (!outage) {
+          break;
+        }
+        add("Cause", outage.cause);
+        add("Provider", (outage.provider || "") + (outage.account_alias ? " (account " + outage.account_alias + ")" : ""));
+        add("Since", dayAndClock(outage.since));
+        add("Last seen", dayAndClock(outage.last_seen));
+        add("Refusals", count(outage.refusals || 0, "turn"));
+        add("Detail", outage.detail, "card-field-prose");
+        add("Waiting", outage.waiting, "card-field-prose");
+        break;
+      case "stall":
+        var stall = entry.stall;
+        if (!stall) {
+          break;
+        }
+        add("Reason", stall.reason);
+        add("Says", stall.says, "card-field-prose");
+        add("Clears", stall.clears, "card-field-prose");
+        add("Since", named(stall.since) ? dayAndClock(stall.since) : "");
+        add("Problem", stall.problem, "card-field-prose");
+        break;
+      case "report":
+        var pile = entry.reports;
+        if (!pile) {
+          break;
+        }
+        add("Collected", String(pile.collected));
+        add("Unhandled", String(pile.unhandled));
+        add("Oldest", named(pile.oldest) ? dayAndClock(pile.oldest) + ", " + age(pile.oldest_age || 0) + " ago" : "");
+        add("Worst", pile.worst);
+        break;
+      case "held-work":
+        if (entry.held_work) {
+          add("Awaiting", entry.held_work.awaiting === "carry-out" ? "carry-out of a decision already recorded" : "the development manager's decision");
+          add("Items", count(entry.held_work.count, "admitted item"));
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  // renderEntry draws the open entry card from the standing in hand. Its empty
+  // state is the entry no longer being on the line — settled since the card
+  // was opened — and its error state is the line not being readable now.
+  function renderEntry() {
+    if (!openEntry) {
+      return;
+    }
+    var standing = model.standing;
+    var heading = document.getElementById("card-heading");
+    var note = document.getElementById("card-note");
+    if (!standing) {
+      heading.textContent = "Needs a human";
+      note.textContent = "";
+      clear(document.getElementById("card-fields"));
+      section("card", model.standingError ? "error" : "loading", model.standingError, whatToDoAboutTheStanding());
+      return;
+    }
+    if (standing.needs_human_problem) {
+      heading.textContent = "Needs a human";
+      note.textContent = "";
+      clear(document.getElementById("card-fields"));
+      section("card", "error", standing.needs_human_problem, whatToDoAboutTheStanding());
+      return;
+    }
+    var found = standing.needs_human.filter(function (entry) { return entryKey(entry) === openEntry; });
+    if (found.length === 0) {
+      heading.textContent = "Needs a human";
+      note.textContent = openEntry;
+      clear(document.getElementById("card-fields"));
+      section("card", "empty", "Nothing under " + openEntry + " is waiting on a person any more: it was settled since the page last read where the harness stands, at " + clock(standing.observed_at) + ".");
+      return;
+    }
+    var entry = found[0];
+    heading.textContent = kindTitle(entry.kind);
+    note.textContent = entryKey(entry) + " · read " + clock(standing.observed_at);
+    entryFields(entry);
+    section("card", "ready");
+  }
+
+  function showEntry(key, from) {
+    openCard = null;
+    openEntry = key;
+    openers.card = from || null;
+    renderEntry();
+    open(cardPopup);
+    document.getElementById("card-close").focus();
   }
 
   document.getElementById("grouping-close").addEventListener("click", closeGrouping);
   document.getElementById("grouping-backdrop").addEventListener("click", closeGrouping);
   document.getElementById("card-close").addEventListener("click", closeCard);
   document.getElementById("card-backdrop").addEventListener("click", closeCard);
-  // Escape closes the pop-up on top: the card where one is open, else the
-  // grouping.
+  // Escape closes the pop-up on top: the card where one is open, on an item
+  // or an entry, else the grouping.
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") {
       return;
     }
-    if (openCard !== null) {
+    if (openCard !== null || openEntry !== null) {
       closeCard();
     } else if (openGrouping !== null) {
       closeGrouping();
@@ -1207,9 +1555,10 @@
     renderPipeline();
     renderThroughput();
     renderCapacity();
-    // An open grouping is drawn again from the reading just taken, so it stays
-    // as live as the figure it was opened from.
+    // An open grouping, and an open entry card, are drawn again from the
+    // reading just taken, so each stays as live as what it was opened from.
     renderGrouping();
+    renderEntry();
   }
 
   // ---- the token ------------------------------------------------------------
@@ -1318,6 +1667,7 @@
     // A page starting over — a token just entered — opens with nothing over it.
     openGrouping = null;
     openCard = null;
+    openEntry = null;
     openers = { grouping: null, card: null };
     openersByKey = {};
     setHidden(groupingPopup, true);

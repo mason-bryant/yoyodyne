@@ -35,8 +35,9 @@ var updateRenders = flag.Bool("update-renders", false, "rewrite the rendered pag
 // sections are the five the design names, by the id each carries in the shell.
 var sections = []string{"band", "live", "pipeline", "throughput", "capacity"}
 
-// popups are the two dialogs the page opens over the sections: a grouping of
-// the pipeline listed by title, and one work item's card.
+// popups are the two dialogs the page opens over the sections: a grouping — of
+// the pipeline listed by title, or of the attention line listed by what waits
+// — and one thing's card, a work item's or an attention entry's.
 var popups = []string{"grouping", "card"}
 
 // sectionStates are the states every section has, each a child the panel
@@ -266,11 +267,61 @@ func TestTheNeedsAHumanTileCountsByTheModelsMovers(t *testing.T) {
 			t.Fatalf("the script names %q as %q, and the model says %q", mover, labels[mover], mover.Possessive())
 		}
 	}
-	if !strings.Contains(script, "entry.mover") {
-		t.Fatalf("the script does not read each entry's mover from the model:\n%s", script)
+	// The counting reads each entry's mover and nothing else of the entry: the
+	// two sentences beside it are shown on the entry's card, never parsed.
+	_, counting, found := strings.Cut(script, "function byMover(")
+	if !found {
+		t.Fatalf("the script has no byMover:\n%s", script)
 	}
-	if strings.Contains(script, "entry.whose") || strings.Contains(script, "entry.what") {
-		t.Fatalf("the script reads the mover off the sentence beside it rather than the value the model carries:\n%s", script)
+	counting, _, _ = strings.Cut(counting, "\n  }")
+	if !strings.Contains(counting, "entry.mover") {
+		t.Fatalf("the counting does not read each entry's mover from the model:\n%s", counting)
+	}
+	if strings.Contains(counting, "whose") || strings.Contains(counting, "what") {
+		t.Fatalf("the counting reads the mover off the sentence beside it rather than the value the model carries:\n%s", counting)
+	}
+}
+
+// The kinds the page heads an entry's card by are the model's vocabulary,
+// every one of them and in the model's order, so an entry of a kind the page
+// never heard of cannot arrive: the model refuses one outside its vocabulary,
+// and the page names each one the model admits.
+func TestTheEntryCardsAreHeadedByTheModelsKinds(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title")})
+	_, script := w.get("/assets/dashboard.js", nil)
+	var named []readmodel.AttentionKind
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.Contains(line, `{ attention: "`) {
+			continue
+		}
+		parts := strings.Split(line, `"`)
+		if len(parts) < 5 || strings.TrimSpace(parts[3]) == "" {
+			t.Fatalf("the script's kind line does not carry a token and a title: %q", line)
+		}
+		named = append(named, readmodel.AttentionKind(parts[1]))
+	}
+	kinds := readmodel.AttentionKinds()
+	if len(named) != len(kinds) {
+		t.Fatalf("the script names %d kinds, and the model's vocabulary holds %d: %v against %v", len(named), len(kinds), named, kinds)
+	}
+	for i, kind := range kinds {
+		if named[i] != kind {
+			t.Fatalf("the script's kind %d is %q, and the model's is %q", i, named[i], kind)
+		}
+	}
+	// The card is drawn from the entries the standing carries, and from
+	// nothing the page fetches: the tracker and the amendment store are never
+	// read for it.
+	for _, expected := range []string{"standing.needs_human.filter", "entry.amendment", "entry.owed_step", "entry.executor"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("the script does not read %q from the standing:\n%s", expected, script)
+		}
+	}
+	for _, forbidden := range []string{`"/api/amendments`, `"/api/attention`, `"/api/needs`} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("the script fetches an entry through %q rather than reading the standing:\n%s", forbidden, script)
+		}
 	}
 }
 
@@ -395,12 +446,13 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"held for a person: 1 awaiting a decision, 1 awaiting carry-out (most)",
 			// What waits on a person, counted per mover in the model's order: the
 			// operator's is the figure, and each role's and the harness's are
-			// beside it, out of the whole the terminal prints.
-			`<dt>Needs a human</dt>`,
+			// beside it, out of the whole the terminal prints. The label opens
+			// the list.
+			`<button class="grouping-open tile-label" type="button" data-grouping="attention">Needs a human</button>`,
 			`<span class="figure">2</span>`,
 			`<span class="unit">things waiting on the operator</span>`,
-			`<span class="detail">of 7 things waiting in all; the product manager's: 1, the architect's: 2, the development manager's: 1, the harness's: 1</span>`,
-			"Needs a human: 7 things waiting on a person — the operator's: 2, the product manager's: 1, the architect's: 2, the development manager's: 1, the harness's: 1.",
+			`<span class="detail">of 8 things waiting in all; the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1</span>`,
+			"Needs a human: 8 things waiting on a person — the operator's: 2, the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1.",
 			"22 runs reached the target branch",
 			"at least $1,232.58 from 452 invocations",
 			"1 exchange record could not be read, so the cost is a floor",
@@ -457,6 +509,54 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			`<dd class="card-none">none</dd>`,
 			"cost $18.62",
 		},
+		// The Needs-a-human list: every entry by what it is, in the terminal's
+		// words, with its kind and who it is waiting on, the operator's first, and
+		// each a button that opens its card.
+		"attention": {
+			`<h2 id="grouping-heading" class="popup-title">Needs a human (8 things)</h2>`,
+			`<button class="item-open grouping-title" type="button" data-entry="directive:directive-4f2c">directive directive-4f2c is unresolved: which branch does this land on?</button>`,
+			`<button class="item-open grouping-title" type="button" data-entry="owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70">run run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70 of yoyodyne-ifd.222 ended still owing a step</button>`,
+			`data-entry="amendment:amendment-3f9a1c2e8b7d4f6a9c1e2b3d4f5a6b7c"`, `data-entry="amendment:amendment-7c2b9e4d1a6f3c8e5b0d2f4a6c8e1b3d"`,
+			`data-entry="conversation-carried-item:yoyodyne-ifd.188"`, `data-entry="held-work:decision"`, `data-entry="held-work:carry-out"`, `data-entry="report:"`,
+			`<span class="item-id">amendment</span>`, `<span class="grouping-detail">the architect's — nothing reaches the document until they or the operator decide it</span>`, `<span class="grouping-detail">the harness's — the decision is made, and what is outstanding is the harness acting on it</span>`,
+		},
+		"attention-empty": {`<h2 id="grouping-heading" class="popup-title">Needs a human</h2>`, `<p id="grouping-empty" class="empty">Nothing waits on a person.</p>`},
+		"attention-error": {`<h2 id="grouping-heading" class="popup-title">Needs a human</h2>`, "Could not be read: the recorded directives could not be read: open directives: permission denied"},
+		// An amendment's card: the target document, the proposer, the proposed
+		// change, and why, whole, with the item the proposer was working on
+		// opening its own card.
+		"attention-amendment": {
+			`<h2 id="card-heading" class="popup-title">A change proposed to a document</h2>`,
+			"<dt>What</dt>", "<dt>Waiting on</dt>", "<dt>Kind</dt>", "<dt>Mover</dt>",
+			"<dd>the architect's — nothing reaches the document until they or the operator decide it</dd>",
+			"<dt>Document</dt>", "<dd>v1-harness-design</dd>", "<dt>Document kind</dt>", "<dd>design</dd>", "<dt>Owner</dt>", "<dd>architect</dd>",
+			"<dt>Proposed by</dt>", "<dd>developer (agent developer)</dd>", "<dt>In run</dt>", "<dd>run-5c1e9b2d7a4f3e8c6b0d1f2a3c4e5b6d</dd>",
+			`<button class="item-open item-id" type="button" data-item="yoyodyne-ifd.210">yoyodyne-ifd.210</button>`,
+			"<dt>Proposed change</dt>", "<dd>The design should say that configuration selects sequence and never grants authority.</dd>",
+			"<dt>Why</dt>", "<dd>The invariant exists and the design does not cite it.</dd>",
+			"<dt>Raised</dt>", "<dd>2026-09-19 11:20:00</dd>", "<dd>amendment-3f9a1c2e8b7d4f6a9c1e2b3d4f5a6b7c</dd>",
+		},
+		// An owed step's card: the run, the item, where it stopped, and the
+		// command that settles it, in the terminal's sentence.
+		"attention-owed-step": {
+			`<h2 id="card-heading" class="popup-title">A run that still owes a step</h2>`,
+			"<dd>the operator's — `yoyo reconcile` reports which and settles it</dd>",
+			"<dt>Run</dt>", "<dd>run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70</dd>",
+			`data-item="yoyodyne-ifd.222"`, "<dt>Ended</dt>", "<dd>succeeded</dd>", "<dt>Phase</dt>", "<dd>integrating</dd>",
+		},
+		// A carried item's card: the item and the role.
+		"attention-carried-item": {
+			`<h2 id="card-heading" class="popup-title">A work item carried by a conversation</h2>`,
+			`<dd>yoyodyne-ifd.188 is admitted for "conversation:product-manager" rather than a developer run</dd>`,
+			`<button class="item-open item-id" type="button" data-item="yoyodyne-ifd.188">yoyodyne-ifd.188</button>`,
+			"<dt>Executor</dt>", "<dd>conversation:product-manager</dd>", "<dt>Role</dt>", "<dd>product-manager</dd>", "<dd>the product manager's</dd>",
+		},
+		// The item's own card, opened from the entry's.
+		"attention-carried-item-card": {`<h2 id="card-heading" class="popup-title">The goals document gains a legibility clause</h2>`, "<dd>Executor: conversation:product-manager.</dd>"},
+		// A poll after the card was opened finds the entry settled, and the
+		// list empty; and one that finds the line unreadable says so on both.
+		"attention-settled":    {`<p id="grouping-empty" class="empty">Nothing waits on a person.</p>`, "Nothing under owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70 is waiting on a person any more: it was settled since the page last read where the harness stands, at 14:15:09."},
+		"attention-unreadable": {`<p id="grouping-problem" class="problem">Could not be read: the recorded directives could not be read`, `<p id="card-problem" class="problem">Could not be read: the recorded directives could not be read`},
 	} {
 		body := page(scenario)
 		for _, expected := range expectations {
@@ -472,12 +572,12 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	// pop-up, a pop-up scenario carries the pop-ups it left open over the page
 	// it names rather than that page again, and the one that closed both with
 	// Escape carries neither.
-	for _, scenario := range []string{"busy", "closed"} {
+	for _, scenario := range []string{"busy", "closed", "attention-closed"} {
 		if strings.Contains(page(scenario), `class="popup"`) {
 			t.Errorf("the %s render carries a pop-up nobody opened", scenario)
 		}
 	}
-	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy"} {
+	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy", "attention-amendment": "busy", "attention-error": "degraded"} {
 		if body := page(scenario); strings.Contains(body, `class="panel `) || !strings.Contains(body, "the "+beneath+" render") {
 			t.Errorf("the %s render does not stand alone over the %s render", scenario, beneath)
 		}
@@ -490,16 +590,35 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			t.Errorf("the busy render does not open %s from both its title and its id", id)
 		}
 	}
-	for _, key := range []string{"admitted", "held", "startable", "running", "landed:today", "landed:week", "pile:held", "pile:directive", "stage:developing", "stage:integrating"} {
+	for _, key := range []string{"admitted", "held", "startable", "running", "landed:today", "landed:week", "pile:held", "pile:directive", "stage:developing", "stage:integrating", "attention"} {
 		if !strings.Contains(page("busy"), `data-grouping="`+key+`"`) {
 			t.Errorf("the busy render has nothing that opens the %s grouping", key)
 		}
 	}
 	// A stage that could not be read still opens, so the reason is readable in
-	// full rather than only as a dash.
-	for _, key := range []string{"admitted", "held", "startable"} {
+	// full rather than only as a dash; so does the attention tile, and so does
+	// the tile when nothing waits.
+	for _, key := range []string{"admitted", "held", "startable", "attention"} {
 		if !strings.Contains(page("degraded"), `data-grouping="`+key+`"`) {
 			t.Errorf("the degraded render has nothing that opens the unreadable %s stage", key)
+		}
+	}
+	// Every entry of the busy list opens a card, and every card's entry key is
+	// one the list carries: the attention render names each key once as an
+	// opener, and the amendment card names the item its proposer was working
+	// on as an opener of its own.
+	if strings.Count(page("attention"), `data-entry="`) != 8 {
+		t.Errorf("the attention render does not open a card on each of the 8 entries")
+	}
+	if !strings.Contains(page("attention-amendment"), `data-item="yoyodyne-ifd.210"`) {
+		t.Errorf("the amendment card does not open the item its proposer was working on")
+	}
+	// The card acts on nothing: every button on it opens or closes a pop-up.
+	for _, scenario := range []string{"attention-amendment", "attention-owed-step", "attention-carried-item"} {
+		for _, button := range strings.Split(page(scenario), "<button")[1:] {
+			if !strings.Contains(button, `data-item="`) && !strings.Contains(button, `data-entry="`) && !strings.Contains(button, `data-grouping="`) && !strings.Contains(button, `-close"`) {
+				t.Errorf("the %s render carries a button that neither opens nor closes a pop-up: %.120s", scenario, button)
+			}
 		}
 	}
 	if strings.Contains(page("held"), "the harness pulls next") {

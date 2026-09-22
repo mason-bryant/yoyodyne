@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="empty">
+      <div id="grouping-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="grouping-heading" class="popup-title">Needs a human</h2>
+            <p id="grouping-note" class="popup-note">what waits on a person, the operator's first, each with its kind and who it is waiting on; each opens its card</p>
+          </div>
+          <button type="button" id="grouping-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-empty">
+          <p id="grouping-empty" class="empty">Nothing waits on a person.</p>
+        </div>
+      </div>
+    </div>
+    <div id="card" class="popup" role="dialog" aria-modal="true" aria-labelledby="card-heading" data-state="empty">
+      <div id="card-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="card-heading" class="popup-title">Needs a human</h2>
+            <p id="card-note" class="popup-note">owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70</p>
+          </div>
+          <button type="button" id="card-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-empty">
+          <p id="card-empty" class="empty">Nothing under owed-step:run-2b6f0d3e8a1c4f7b9e5d2a8c6f1b3e70 is waiting on a person any more: it was settled since the page last read where the harness stands, at 14:15:09.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

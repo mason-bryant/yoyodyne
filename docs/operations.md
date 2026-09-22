@@ -2286,7 +2286,9 @@ dropped request.
    figure the terminal prints — what waits on the product manager, the
    architect, the development manager, and the harness, in the model's order
    and each named only where it is not zero. The tile asks for attention when
-   something waits on the operator, not when sixty things wait on a role. Two
+   something waits on the operator, not when sixty things wait on a role. Its
+   label is a button that opens [the list of what is waiting](#opening-what-waits-on-a-person),
+   each entry of which opens a card. Two
    more tiles carry what landed today and in the last seven days, and what it
    cost, the latter prefixed `≥` or `at least` where a record that should be
    in it could not be read.
@@ -2409,6 +2411,60 @@ page last read the standing — which is a different answer from the item not
 being readable, and is said as one. Every value on it reaches the page as JSON
 and is written as text, under the same policy as the rest of the page.
 
+### Opening what waits on a person
+
+The **Needs a human** tile counts; its label opens the list of what it
+counted, and each entry of the list opens a card, in the same two pop-ups as
+above. Both are drawn from [the structured entries the standing
+carries](#where-the-harness-stands-the-four-lines) under
+`standing.needs_human` and from nothing else — the page never reads the
+tracker or the amendment store for them — and both are drawn again on every
+poll while they are open, so they stay as live as the tile.
+
+**The list.** Each entry is the thing waiting, in the sentence the terminal
+prints for it, with its `kind` under it and the terminal's second sentence
+beside — who it is waiting on and what settles it, `the architect's — nothing
+reaches the document until they or the operator decide it` — in the movers'
+order, the operator's first, so the list opens on what the tile's figure
+counted; within one mover the entries are in the terminal's order. It has the
+four states the grouping list has: **empty**
+saying `Nothing waits on a person.`, **error** with the reason the line could
+not be read — the tile showing a dash still opens it, so the reason is
+readable in full — **loading** while the standing has not arrived, and
+**ready**. Each sentence is a button that opens the entry's card.
+
+**An entry's card.** Headed by what sort of thing it is, in plain words — *A
+change proposed to a document*, *A run that still owes a step*, *A work item
+carried by a conversation* — with the entry's key and when the standing was
+read under the heading. Every card opens with the terminal's two sentences,
+**What** and **Waiting on**, then the entry's **Kind** and **Mover**, and
+then the record the kind names, whole, under plain labels:
+
+- an amendment's card shows the **Document**, its **Document kind** and
+  **Owner**, who it was **Proposed by** (the role, and the agent), **In run**
+  which run, **Working on** which item, the **Proposed change** and **Why** in
+  full with their line breaks kept, when it was **Raised**, and its **Id**;
+- an owed step's card shows the **Run**, its **Work item**, and where it
+  stopped — **Ended** with the run's recorded status, and its **Phase** — and
+  the command that settles it is in the *Waiting on* sentence above them,
+  `yoyo reconcile`;
+- a conversation-carried item's card shows the **Work item**, its **Executor**
+  marker, and the **Role** the marker names;
+- the other kinds — a publication, a degraded service, a hold, a directive, an
+  outage, a stall, the report pile, held work — show their own record's fields
+  the same way.
+
+A work item the entry names is a button on the card that opens the item's own
+card in its place, over the list; closing that puts focus back on the list
+entry that opened the entry card. The card has the four states: **ready**;
+**empty** when a poll finds the entry gone from the line — settled since the
+card was opened — which it says in a sentence with the key it was opened on;
+**error** when a poll finds the line unreadable; and **loading** while the
+standing has not arrived. Every value on it reaches the page as JSON and is
+written as text, and no button on it does anything but open or close a pop-up:
+acting on an entry from the page is its own item (`yoyodyne-ifd.432.8`),
+behind the architect's ruling on whose identity the page would act as.
+
 **Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
 holds the page as its own script renders it from the fixtures under
 `internal/dashboard/testdata/fixtures` — the document as the script left it,
@@ -2419,7 +2475,12 @@ and dropping the hidden ones — one file per scenario — `quiet`, `busy`,
 `wrong-token`, `stale`, and `signin` for the page, and `card`, `card-loading`,
 `card-missing`, `card-refused`, `grouping`, `grouping-landed`,
 `grouping-empty`, `grouping-error`, `grouping-loading`, `grouping-card`,
-`closed`, and `closed-after-poll` for the pop-ups, each opened by clicking what a reader would click on
+`closed`, and `closed-after-poll` for the pop-ups on work items, and
+`attention`, `attention-empty`, `attention-error`, `attention-amendment`,
+`attention-owed-step`, `attention-carried-item`,
+`attention-carried-item-card`, `attention-settled`, `attention-unreadable`,
+and `attention-closed` for the list of what waits on a person and the cards
+opened from it, each opened by clicking what a reader would click on
 one of the pages and holding the pop-ups alone, over the page render it names
 — which together show every section and each pop-up in each of its four
 states. They are golden files:

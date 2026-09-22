@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.432.5",
+  "title": "Needs-a-human entries in the read model carry the thing, not a sentence about it",
+  "status": "closed",
+  "priority": 1,
+  "labels": [
+    "dashboard"
+  ],
+  "parent": "yoyodyne-ifd.432",
+  "description": "Each entry carries its kind, the identifier of the record it is about, whose move it is, and the record itself, whole.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Goal served: the harness's surfaces read clearly."
+}
