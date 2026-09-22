@@ -97,6 +97,64 @@ func (s IntegrationStop) ResumeSays(runID string) string {
 	return triage.ResumeIntegrationSays(runID, string(s.Phase), string(s.Cause), s.Cause.Title())
 }
 
+// ReplayConflict is this run's approved change having conflicted when it was
+// replayed onto what its target branch had become. It is the one outcome that
+// leaves the resumed path, and it is a person's to settle exactly as it always
+// was: the environment did not stop the change, the target moved under it.
+//
+// It is recorded as its own fact rather than left to the blocker, because the
+// blocker is a write to the tracker and the tracker can fail to take it. On
+// yoyodyne-ifd.441 it did — the blocker write timed out — so the run's only
+// account of the conflict was the error that ended it, with the timed-out
+// write joined onto its tail, and the integration-stop classifier reading the
+// closed set of transport errors anywhere in that message recorded the conflict
+// as a transport failure the harness could resume past. Written where the
+// conflict is decided, before any write about it is attempted, it survives the
+// write failing; and a run carrying one is never an integration stop, which the
+// record refuses rather than trusts.
+type ReplayConflict struct {
+	// TargetBranch is the branch the replay was onto, which is what the change
+	// conflicts with.
+	TargetBranch string `json:"target_branch"`
+	// Detail is the failure the replay ended on, folded to a line. It is evidence
+	// for whoever reads the record rather than a second classification of it.
+	Detail string `json:"detail,omitempty"`
+	// Phase is the phase the run stopped in.
+	Phase      Phase     `json:"phase"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// Validate reports every contract violation in the record at once.
+func (c ReplayConflict) Validate() error {
+	var problems []error
+	if strings.TrimSpace(c.TargetBranch) == "" {
+		problems = append(problems, errors.New("target_branch is required, because it is what the change conflicts with"))
+	}
+	if len(c.Detail) > MaxEnvironmentalDetailBytes {
+		problems = append(problems, fmt.Errorf("detail is %d bytes, which exceeds the %d byte bound", len(c.Detail), MaxEnvironmentalDetailBytes))
+	}
+	if c.Phase != PhaseReviewing && c.Phase != PhaseIntegrating {
+		problems = append(problems, fmt.Errorf("phase %q is not one an approved change is replayed in", c.Phase))
+	}
+	if c.RecordedAt.IsZero() {
+		problems = append(problems, errors.New("recorded_at is required"))
+	}
+	return errors.Join(problems...)
+}
+
+// Describe says what the stop was, the way a docket entry or a listing reads it.
+func (c ReplayConflict) Describe() string {
+	return fmt.Sprintf("approved, then stopped at the %s phase by a replay conflict onto %s", c.Phase, c.TargetBranch)
+}
+
+// Says is the one sentence every surface says of this conflict: that the run's
+// change is approved, what it conflicted with, and that a person or the
+// repair-continue moves next rather than `yoyo triage resume`. It is the
+// docket's own wording, for the reason IntegrationStop.ResumeSays is.
+func (c ReplayConflict) Says(runID string) string {
+	return triage.ReplayConflictSays(runID, c.TargetBranch)
+}
+
 // IntegrationResumption is one continuation of this run's integration after an
 // environmental stop. It is the run's own account of having been made live
 // again: which stop it superseded, why, and when. It is deliberately not an
@@ -180,6 +238,21 @@ func (s State) validateIntegrationResume() []error {
 		}
 		if s.Integration != nil {
 			problems = append(problems, errors.New("integration_stop cannot be recorded beside a promotion, which is what it says did not happen"))
+		}
+	}
+	if s.ReplayConflict != nil {
+		if err := s.ReplayConflict.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("replay_conflict: %w", err))
+		}
+		if s.Integration != nil {
+			problems = append(problems, errors.New("replay_conflict cannot be recorded beside a promotion, which is what it says did not happen"))
+		}
+		// The two are the two classifications of one stop after an approval — a
+		// decision for a person and weather for the harness — and a record carrying
+		// both is the yoyodyne-ifd.441 misreading written down. It is refused here
+		// so that no classifier, however it reads the error, can produce it.
+		if s.IntegrationStop != nil {
+			problems = append(problems, errors.New("replay_conflict cannot be recorded beside an integration stop: a conflict is a person's to settle and never a stop the harness resumes past"))
 		}
 	}
 	if len(s.IntegrationResumptions) > MaxIntegrationResumptions {

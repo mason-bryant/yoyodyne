@@ -68,6 +68,83 @@ func TestAnIntegrationStopIsOnlyRecordedOnAnApprovedUnpromotedChange(t *testing.
 	}
 }
 
+// conflictedState is a run whose approved change conflicted when it was
+// replayed onto its target, with the conflict recorded on it and no blocker —
+// the shape yoyodyne-ifd.441's run was left in when its blocker write timed out.
+func conflictedState(t *testing.T) State {
+	t.Helper()
+	state := integratedState(t, PhaseIntegrating)
+	state.Status = StatusFailed
+	state.Integration = nil
+	state.Failure = "change cannot be replayed onto the moved integration target: replay onto main failed with exit code 1\nrecord the replay conflict as a blocker: bd update failed with status timed_out and exit code -1: "
+	state.ReplayConflict = &ReplayConflict{
+		TargetBranch: "main",
+		Detail:       "change cannot be replayed onto the moved integration target",
+		Phase:        PhaseIntegrating,
+		RecordedAt:   state.UpdatedAt,
+	}
+	return state
+}
+
+// A replay conflict is its own record, and it is a person's: a run carrying one
+// is never resumable, and the record refuses it beside the integration stop it
+// is the alternative to — which is the 441 misreading written down.
+func TestAReplayConflictIsRecordedAsAPersonsAndNeverBesideAnIntegrationStop(t *testing.T) {
+	t.Parallel()
+
+	conflicted := conflictedState(t)
+	if err := conflicted.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want the conflicted run valid", err)
+	}
+	if conflicted.ResumableIntegration() {
+		t.Fatalf("a replay conflict reads as resumable: %#v", conflicted)
+	}
+	if said := conflicted.ReplayConflict.Says(conflicted.RunID); !strings.Contains(said, "its replay onto main conflicted") ||
+		!strings.Contains(said, "a person to settle the conflict") || !strings.Contains(said, "yoyodyne-ifd.132") || !strings.Contains(said, "not `yoyo triage resume`") {
+		t.Fatalf("Says() = %q, want the conflict, the person or the repair-continue, and the verb that cannot help", said)
+	}
+	if described := conflicted.ReplayConflict.Describe(); described != "approved, then stopped at the integrating phase by a replay conflict onto main" {
+		t.Fatalf("Describe() = %q", described)
+	}
+	for name, shape := range map[string]func(State) State{
+		"beside an integration stop": func(state State) State {
+			state.ReplayConflict.Detail = ""
+			state.IntegrationStop = &IntegrationStop{
+				Cause: CauseTransportFailure, Detail: state.Failure, Phase: PhaseIntegrating, RecordedAt: state.UpdatedAt,
+			}
+			return state
+		},
+		"beside a promotion": func(state State) State {
+			state.Status = StatusSucceeded
+			state.Failure = ""
+			state.Integration = &Integration{
+				TargetBranch: "main", SourceCommit: strings.Repeat("b", 40),
+				TargetCommit: strings.Repeat("b", 40), PreviousTargetCommit: strings.Repeat("a", 40),
+			}
+			return state
+		},
+		"with no target branch": func(state State) State {
+			state.ReplayConflict.TargetBranch = ""
+			return state
+		},
+		"at a phase before the review": func(state State) State {
+			state.ReplayConflict.Phase = PhaseDeveloping
+			return state
+		},
+		"with no time recorded": func(state State) State {
+			state.ReplayConflict.RecordedAt = time.Time{}
+			return state
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := shape(conflictedState(t)).Validate(); err == nil {
+				t.Fatal("Validate() accepted a replay conflict the record cannot have written")
+			}
+		})
+	}
+}
+
 // What a resumed run reads as while it promotes, and what it does not read as
 // once the promotion is over or the replay has put it back through the gate.
 func TestARunReadsAsResumingItsIntegrationOnlyWhileItPromotesAgain(t *testing.T) {

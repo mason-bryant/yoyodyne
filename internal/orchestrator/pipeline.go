@@ -692,6 +692,13 @@ type Outcome struct {
 	// standing and nothing charged. A caller that reported the failure without it
 	// would send a reader to the verbs that each spend something for it.
 	IntegrationStop *runstate.IntegrationStop `json:"integration_stop,omitempty"`
+	// ReplayConflict is this run's approved change having conflicted when it was
+	// replayed onto its target, when that is what stopped it: the one stop after
+	// an approval that a person settles rather than the harness resumes past. It
+	// is reported beside the failure so a reader shown a run that ended at its
+	// promotion is not sent to the resume verb, which would meet the conflict
+	// again.
+	ReplayConflict *runstate.ReplayConflict `json:"replay_conflict,omitempty"`
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
@@ -2082,7 +2089,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	// recorded before the failure is: an aborted replay leaves the branch on that
 	// commit, and the worktree is preserved for whoever picks the conflict up.
 	if recordErr := a.recordRebase(rebase); recordErr != nil {
-		return false, errors.Join(err, recordErr)
+		return false, withFailedRecord(err, recordErr)
 	}
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
 		a.observe(ctx, deliveryIntegrate, "conflicted")
@@ -2179,7 +2186,7 @@ func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
 	blocked := fmt.Errorf("integration lost its target branch after %d of %d permitted retry(s): %w",
 		a.state.IntegrationRetries, limit, cause)
 	if err := a.block(renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
-		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
+		return withFailedRecord(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
 	}
 	return blocked
 }
@@ -2188,9 +2195,26 @@ func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
 // target became. Nothing is forced and nothing is resolved: the worktree and the
 // branch stay exactly as they were, and the conflict is recorded for whoever
 // owns the decision.
+//
+// The conflict is written on the run before the blocker is attempted on the
+// tracker, because the tracker can fail to take it: on yoyodyne-ifd.441 the
+// write timed out, and with nothing else on the run saying what stopped it, the
+// error that ended it was classified from its tail as a transport failure. The
+// record is the account of the conflict that survives the write failing, and it
+// is the fact the docket names the next mover from. It is not saved on its own,
+// for the reason the blocker text is not: the terminal write that ends the run
+// is a moment away and carries it.
 func (a *activeRun) blockOnRebaseConflict(cause error) error {
+	conflicted := &runstate.ReplayConflict{
+		TargetBranch: a.state.TargetBranch,
+		Detail:       singleLine(cause.Error(), runstate.MaxEnvironmentalDetailBytes),
+		Phase:        a.state.Phase,
+		RecordedAt:   a.pipeline.clock().Now().UTC(),
+	}
+	a.state.ReplayConflict = conflicted
+	a.outcome.ReplayConflict = conflicted
 	if err := a.block(renderRebaseConflictNotes(a.outcome, cause.Error())); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the replay conflict as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record the replay conflict as a blocker: %w", err))
 	}
 	return cause
 }
@@ -2207,7 +2231,7 @@ func (a *activeRun) blockOnDivergedTarget(catchup gitworktree.Catchup) error {
 	diverged := fmt.Errorf("%s cannot be brought onto %s before promoting: %s",
 		catchup.TargetBranch, remote, catchup.Held)
 	if err := a.block(renderDivergedTargetNotes(a.outcome, catchup, remote, diverged.Error())); err != nil {
-		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
+		return withFailedRecord(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
 	}
 	return diverged
 }
@@ -2225,7 +2249,7 @@ func (a *activeRun) blockOnPromotedDivergence(integration gitworktree.Integratio
 	diverged := fmt.Errorf("%w; %s cannot be brought onto %s afterwards: %s",
 		cause, integration.TargetBranch, remote, catchup.Held)
 	if err := a.block(renderPromotedDivergenceNotes(a.outcome, integration, catchup, remote, diverged.Error())); err != nil {
-		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
+		return withFailedRecord(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
 	}
 	return diverged
 }
@@ -2390,7 +2414,7 @@ func (a *activeRun) blockOnUnresolvedFindings(limit int) error {
 	cause := fmt.Errorf("independent review requires repair after %d of %d permitted attempt(s): %s",
 		a.state.RepairAttempts, limit, a.outcome.ReviewSummary)
 	if err := a.block(renderBlockerNotes(a.outcome, limit)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
 	}
 	return cause
 }
@@ -2404,7 +2428,7 @@ func (a *activeRun) blockOnFailingCheck(limit int) error {
 	cause := fmt.Errorf("verification failed after %d of %d permitted attempt(s): %s exited with %d",
 		a.state.RepairAttempts, limit, failure.Command, failure.ExitCode)
 	if err := a.block(renderCheckBlockerNotes(a.outcome, failure, limit)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
 	}
 	return cause
 }
@@ -2448,7 +2472,7 @@ func (a *activeRun) blockOnMissingPreservedChange(cause error) error {
 	// carries the cause with it.
 	a.recordEnvironmentalRefusal(runstate.CauseHandbackMissingChange, cause.Error(), nothingRan)
 	if err := a.block(renderMissingPreservedChangeNotes(a.outcome, blocked.Error())); err != nil {
-		return errors.Join(blocked, fmt.Errorf("record the missing preserved change as a blocker: %w", err))
+		return withFailedRecord(blocked, fmt.Errorf("record the missing preserved change as a blocker: %w", err))
 	}
 	return blocked
 }
@@ -2612,8 +2636,11 @@ func (a *activeRun) roundDelivered(ctx context.Context, refusal *runstate.Enviro
 //
 // Nothing here guesses. A cause is named only by a sentinel the refusing package
 // declares, so a message somebody rewords cannot silently move a round into or
-// out of a class that returns budget.
+// out of a class that returns budget. And it is the step's own failure that is
+// read, not the failure of any write the run then attempted about it, for the
+// reason integrationStopCauseOf reads the same.
 func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
+	failure = stepCauseOf(failure)
 	switch {
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
@@ -2622,6 +2649,52 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	default:
 		return "", false
 	}
+}
+
+// stopAndFailedRecord is a step's own failure and the failure of the write the
+// run then attempted about it — a blocker the tracker did not take, a replayed
+// base the store would not save — kept apart rather than joined. Its message is
+// the two in order, exactly as errors.Join's was, so nothing a reader was shown
+// is lost, and both are still found by errors.Is; what changes is that the
+// cause is still the cause afterwards, which stepCauseOf reads back.
+//
+// It exists because of what the join did on yoyodyne-ifd.441. A replay onto
+// main conflicted, the blocker write about it timed out, and the two were
+// joined into the error that ended the run; the integration-stop classifier,
+// reading the closed set of transport errors anywhere in that message, matched
+// the timed-out write on its tail and recorded a conflict a person has to settle
+// as weather the harness could resume past. The resume would have met the same
+// conflict, and the docket sent the development manager to it.
+type stopAndFailedRecord struct {
+	cause  error
+	record error
+}
+
+func (f stopAndFailedRecord) Error() string   { return f.cause.Error() + "\n" + f.record.Error() }
+func (f stopAndFailedRecord) Unwrap() []error { return []error{f.cause, f.record} }
+
+// withFailedRecord pairs what stopped a step with the failure of the write the
+// run then attempted about it. A step that did not fail has only the write's
+// failure to report, and reports that.
+func withFailedRecord(cause, record error) error {
+	if cause == nil {
+		return record
+	}
+	return stopAndFailedRecord{cause: cause, record: record}
+}
+
+// stepCauseOf is the step's own failure inside an error that ended a run: what
+// stopped the step, before any write the run attempted about it afterwards.
+// Every classification of a stop reads this rather than the whole error,
+// because the whole error carries the harness's own failures to record the
+// stop, and those are transport-shaped by nature — a tracker that timed out, a
+// store that would not save — while the stop they were about may be anything.
+func stepCauseOf(failure error) error {
+	var paired stopAndFailedRecord
+	for errors.As(failure, &paired) {
+		failure = paired.cause
+	}
+	return failure
 }
 
 // integrationStopCauseOf reports the environmental cause a failure between an
@@ -2639,9 +2712,19 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // classifies is one the harness would have asked again somewhere else, and a
 // failure it does not is one somebody has to look at. A replay that conflicted,
 // a target that diverged, and an approval that could not be shown independent
-// are all the second kind, and none of them reaches here.
+// are all the second kind, and none of them is classified here.
+//
+// It reads the step's own cause and not the whole error. A stop the run then
+// failed to record carries that failure too, and a blocker write that timed out
+// reads as transport whatever it was recording — which is how yoyodyne-ifd.441's
+// replay conflict came to be recorded as an environmental stop. The conflict is
+// refused by its sentinel besides, ahead of the transport reading, so a
+// conflict is never a stop the harness resumes past whatever wrapped it.
 func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
+	failure = stepCauseOf(failure)
 	switch {
+	case errors.Is(failure, gitworktree.ErrRebaseConflict):
+		return "", false
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
 	case recovery.Recoverable(failure):
@@ -2657,13 +2740,15 @@ func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // with its approval standing, so it is written only where both halves hold: the
 // approval is standing with nothing promoted, and the cause is one the
 // environment answers for. A run stopped for anything else records nothing here
-// and is decided about as it always was.
+// and is decided about as it always was — and a run that already recorded what
+// stopped it as a replay conflict is never asked, because the record refuses
+// the two together and the conflict was decided where it was met.
 //
 // Nothing here is saved on its own. Every caller is a step away from the
 // terminal write that ends the run, and a second write would be one more chance
 // for the record and the item to disagree about what stopped it.
 func (a *activeRun) recordIntegrationStop(cause error) {
-	if !a.state.ApprovedAwaitingIntegration() {
+	if !a.state.ApprovedAwaitingIntegration() || a.state.ReplayConflict != nil {
 		return
 	}
 	named, environmental := integrationStopCauseOf(cause)
@@ -2721,7 +2806,7 @@ func (a *activeRun) blockOnRefusedPaths(refused pathRefusal, limit int) error {
 	cause := fmt.Errorf("protected paths refused after %d of %d permitted attempt(s): %s",
 		a.state.RepairAttempts, limit, strings.Join(refused.refusal.Paths, ", "))
 	if err := a.block(renderPathRefusalBlockerNotes(a.outcome, refused, limit)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the refused protected paths as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record the refused protected paths as a blocker: %w", err))
 	}
 	return cause
 }
@@ -3000,7 +3085,7 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 	}
 	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
 	if err := a.block(renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, limit)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
 	}
 	return cause
 }
@@ -3612,7 +3697,7 @@ func (a *activeRun) blockOnUsageLimit(reason string) error {
 	cause := fmt.Errorf("this run was refused by %s and cannot wait for it: %s",
 		runstate.DescribePause(a.state.PauseCause, a.state.UsageLimitKind), reason)
 	if err := a.block(renderUsageLimitBlockerNotes(a.outcome, reason)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the provider's refusal as a blocker: %w", err))
+		return withFailedRecord(cause, fmt.Errorf("record the provider's refusal as a blocker: %w", err))
 	}
 	return cause
 }
@@ -4320,7 +4405,7 @@ func (a *activeRun) integrate(ctx context.Context) error {
 			a.recordHarnessCommit(integration.SourceCommit)
 			a.state.UpdatedAt = p.clock().Now()
 			if saveErr := p.Store.Save(a.state); saveErr != nil {
-				return errors.Join(fmt.Errorf("integrate approved change: %w", err),
+				return withFailedRecord(fmt.Errorf("integrate approved change: %w", err),
 					fmt.Errorf("record the commit the refused promotion made: %w", saveErr))
 			}
 		}
@@ -6825,6 +6910,13 @@ func renderFailureNotes(outcome Outcome) string {
 	if outcome.IntegrationStop != nil {
 		lines = append(lines, "Integration stop: "+outcome.IntegrationStop.Describe()+
 			"; `yoyo triage resume "+outcome.RunID+"` resumes the promotion with the approval standing once the cause has cleared, charging no review round, repair grant, or re-run")
+	}
+	// An approved change whose replay conflicted says so beside the failure for
+	// the same reason, and in particular where the blocker that would have said
+	// it never reached the item: the reader is otherwise sent to the resume verb,
+	// which replays onto the same target and meets the same conflict.
+	if outcome.ReplayConflict != nil {
+		lines = append(lines, "Replay conflict: "+outcome.ReplayConflict.Describe()+"; "+outcome.ReplayConflict.Says(outcome.RunID))
 	}
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))

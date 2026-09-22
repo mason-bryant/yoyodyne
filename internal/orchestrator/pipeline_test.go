@@ -6050,6 +6050,123 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
 		t.Fatalf("worktree HEAD = %q, want the recorded harness commit %q", head, state.HarnessCommit)
 	}
+	// The conflict is on the record as its own fact, and the docket names a person
+	// as the next mover from it rather than from the blocker's prose.
+	if state.ReplayConflict == nil || state.ReplayConflict.TargetBranch != "main" || state.ReplayConflict.Phase != runstate.PhaseIntegrating {
+		t.Fatalf("replay conflict = %#v, want the conflict onto main recorded at the integrating phase", state.ReplayConflict)
+	}
+	if state.IntegrationStop != nil {
+		t.Fatalf("a replay conflict was recorded as an environmental stop: %#v", state.IntegrationStop)
+	}
+}
+
+// yoyodyne-ifd.441's shape: the replay onto main conflicts, and the blocker
+// write about it then times out at the tracker, so the error that ends the run
+// carries the conflict and then a timed-out `bd update`. The run stops on the
+// conflict path with both sides preserved, exactly as it does when the write
+// lands — recorded as a conflict and never as an environmental stop, whatever
+// the error's tail says — and the docket names the conflict and a person as the
+// next mover rather than the resume verb, which would meet the conflict again.
+func TestAReplayConflictWhoseBlockerWriteTimedOutIsAConflictAndNeverAnIntegrationStop(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-ifd.441", Title: "Task", Status: "open"}}
+	// The exact text internal/beads formats for a `bd` killed on its deadline,
+	// which is in the recovery package's closed set of transport failures and is
+	// what the classifier matched on 441's tail.
+	tracker.blockErr = errors.New("bd update failed with status timed_out and exit code -1: ")
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("this run's answer\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+		runPipelineGit(t, repository, "add", "docs/design.md")
+		runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if !errors.Is(err, gitworktree.ErrRebaseConflict) {
+		t.Fatalf("Run() error = %v, want the replay conflict", err)
+	}
+	// Both sides of the error are preserved: the conflict, and the write that
+	// failed to record it.
+	if !strings.Contains(err.Error(), "cannot be replayed onto the moved integration target") ||
+		!strings.Contains(err.Error(), "record the replay conflict as a blocker: bd update failed with status timed_out") {
+		t.Fatalf("Run() error = %v, want the conflict and the failed blocker write both named", err)
+	}
+	if outcome.Blocked || outcome.Integration != nil || tracker.closed || tracker.blocked {
+		t.Fatalf("Run() outcome = %#v, blocked = %t, closed = %t; want the run stopped with no blocker taken and nothing promoted", outcome, tracker.blocked, tracker.closed)
+	}
+	if outcome.IntegrationStop != nil {
+		t.Fatalf("a replay conflict was reported as an environmental stop: %#v", outcome.IntegrationStop)
+	}
+	if outcome.ReplayConflict == nil || outcome.ReplayConflict.TargetBranch != "main" {
+		t.Fatalf("outcome replay conflict = %#v, want the conflict onto main reported", outcome.ReplayConflict)
+	}
+	// The item's notes name the conflict and who moves next, because the blocker
+	// that would have said so never reached the item.
+	if !strings.Contains(tracker.notes, "Replay conflict: approved, then stopped at the integrating phase by a replay conflict onto main") ||
+		!strings.Contains(tracker.notes, "a person to settle the conflict") || strings.Contains(tracker.notes, "Integration stop:") {
+		t.Fatalf("item notes do not name the conflict as what stopped the run:\n%s", tracker.notes)
+	}
+	// Both sides of the change survive, untouched.
+	if content := readPipelineFile(t, repository, filepath.Join("docs", "design.md")); content != "somebody else's answer\n" {
+		t.Fatalf("target content = %q", content)
+	}
+	if content := readPipelineFile(t, outcome.WorktreePath, filepath.Join("docs", "design.md")); content != "this run's answer\n" {
+		t.Fatalf("preserved worktree content = %q", content)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Status != runstate.StatusFailed || state.Integration != nil || state.IntegrationRetries != 1 || state.Blocker != "" {
+		t.Fatalf("state = status %s, integration %#v, retries %d, blocker %q; want the run failed on its first replay with no blocker recorded", state.Status, state.Integration, state.IntegrationRetries, state.Blocker)
+	}
+	if state.IntegrationStop != nil || state.ResumableIntegration() {
+		t.Fatalf("a replay conflict whose blocker write timed out was recorded as an environmental stop: %#v", state.IntegrationStop)
+	}
+	if state.ReplayConflict == nil || state.ReplayConflict.TargetBranch != "main" || !strings.Contains(state.ReplayConflict.Detail, "cannot be replayed onto the moved integration target") {
+		t.Fatalf("replay conflict = %#v, want the conflict onto main recorded with the replay's failure", state.ReplayConflict)
+	}
+	if !strings.Contains(state.Failure, "cannot be replayed onto the moved integration target") || !strings.Contains(state.Failure, "bd update failed with status timed_out") {
+		t.Fatalf("recorded failure does not preserve both sides:\n%s", state.Failure)
+	}
+	if state.ReviewDecision != string(review.DecisionApprove) || state.RepairAttempts != 0 {
+		t.Fatalf("stopped run = decision %q, %d attempts; want the approval standing and nothing charged", state.ReviewDecision, state.RepairAttempts)
+	}
+	// The docket entry names the conflict and sends the development manager to a
+	// person or the repair-continue, not to the resume.
+	docket := &memoryDocket{}
+	if _, err := docketerOverStore(docket, store, pipeline.Config).RecordStoppedRun(state); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	entry := docket.entries[0]
+	if entry.IntegrationStop != nil || entry.ReplayConflict == nil || entry.ReplayConflict.TargetBranch != "main" {
+		t.Fatalf("docket entry = %#v, want the conflict carried onto it and no integration stop", entry)
+	}
+	rendered := entry.Render()
+	for _, want := range []string{
+		"its replay onto main conflicted",
+		"Next mover: you — this change is approved and its replay conflicted",
+		"yoyodyne-ifd.132",
+		"Died holding its change; the work item carries no blocker for it",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("docket entry does not say %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Next mover: the harness") {
+		t.Fatalf("docket entry sends the development manager to the resume verb:\n%s", rendered)
+	}
+	// And neither verb that reads the record resumes past it: the resume refuses
+	// in the same sentence, and so does the repair.
+	if err := continuableRepair(state); err == nil || !strings.Contains(err.Error(), "its replay onto main conflicted") {
+		t.Fatalf("continuableRepair() error = %v, want the conflict named", err)
+	}
 }
 
 // The conflict half of yoyodyne-ifd.349's shape through the pipeline: an item
