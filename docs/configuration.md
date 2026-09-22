@@ -2899,8 +2899,12 @@ sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
 default every probe the harness will take is taken here and the run continues on
 its own once the limit resets. Lowering it — say to `1h` — makes the process
 sleep probes until it has spent that hour on the run and then exit, with the run
-still in flight and its deadline recorded; running `yoyo run` on the same item
-continues that same run, and that process gets the whole bound again.
+still in flight and its deadline recorded. Two things continue that same run,
+and either process gets the whole bound again: running `yoyo run` on the same
+item, or [`yoyo reconcile`](operations.md#waiting-out-a-provider-usage-limit),
+which continues it itself once the recorded deadline has passed and no process
+is serving the wait, so a run left this way does not hold a developer slot
+until somebody types the verb.
 
 It is also what bounds a run parked on an operator pause — `yoyo pause`, which
 holds everything the harness would spend at every provider-call boundary. That
@@ -2925,9 +2929,14 @@ so a process that dies mid-wait loses nothing and a restart serves the same
 deadline rather than retrying straight back into the limit. What each probe will
 spend is committed before it is spent, for the same reason, and the unspent
 remainder of a probe cut short is given back — so the recorded total is what was
-actually waited. `yoyo reconcile` leaves a paused run alone for the same reason
-it leaves a repair loop alone: it is not an interrupted run, it is a run that is
-owed the attempt it was refused.
+actually waited. `yoyo reconcile` leaves a paused run whose deadline has not
+passed alone for the same reason it leaves a repair loop alone: it is not an
+interrupted run, it is a run that is owed the attempt it was refused. Once the
+deadline has passed with no process serving the wait — the process that was
+asleep on it exited on `usage_limit_in_process_pause` — the sweep continues the
+run itself, in its own worktree and developer session, and the run's record
+says the sweep did; see
+[Waiting out a provider usage limit](operations.md#waiting-out-a-provider-usage-limit).
 
 A reset time that is absent, unreadable, already in the past, or beyond what the
 run has left of `usage_limit_max_pause` stops the run with a blocker naming what

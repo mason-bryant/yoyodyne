@@ -59,21 +59,29 @@ type reconcileOutput struct {
 	// nothing else — every other step it took stands — so it is reported beside
 	// the sweep rather than failing it, exactly as a staleness reading is.
 	StallProblem string `json:"stall_problem,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// Continuations is what this sweep did about the runs that exited on their
+	// in-process usage-limit bound with the deadline since passed: each one
+	// continued in its own worktree and session, hosted by this process to its
+	// end, with what it came to. It is the last thing the sweep does and the one
+	// step that invokes a provider, so a document carrying any is one that was
+	// written after those runs finished.
+	Continuations []orchestrator.WaitContinuation `json:"continuations"`
+	Error         string                          `json:"error,omitempty"`
 }
 
 // reconcileSweep is everything one sweep found, gathered so the reporting takes
 // the sweep rather than a growing list of positional arguments.
 type reconcileSweep struct {
-	Runs         []orchestrator.Reconciliation
-	Recoveries   []orchestrator.PublicationRecovery
-	Publications []orchestrator.PublicationRefresh
-	Settlements  []orchestrator.PublicationSettlement
-	Convergence  orchestrator.Convergence
-	Docketed     int
-	Supervision  []orchestrator.SupervisionResult
-	Stall        *watchdog.Reading
-	StallProblem string
+	Runs          []orchestrator.Reconciliation
+	Recoveries    []orchestrator.PublicationRecovery
+	Publications  []orchestrator.PublicationRefresh
+	Settlements   []orchestrator.PublicationSettlement
+	Convergence   orchestrator.Convergence
+	Docketed      int
+	Supervision   []orchestrator.SupervisionResult
+	Stall         *watchdog.Reading
+	StallProblem  string
+	Continuations []orchestrator.WaitContinuation
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -171,7 +179,7 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	// having been turned on. A reading that fails is reported and does not fail the
 	// sweep: nothing was recorded, and the next pass decides.
 	stall, stallProblem := checkForStall(ctx, parts, *stallAfter)
-	return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{
+	sweep := reconcileSweep{
 		Runs:         results,
 		Recoveries:   recoveries,
 		Publications: publications,
@@ -181,7 +189,104 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 		Supervision:  supervision,
 		Stall:        stall,
 		StallProblem: stallProblem,
-	}, err)
+	}
+	// The runs that exited on their in-process usage-limit bound and whose
+	// deadline has since passed are continued last, after everything the sweep
+	// reads and settles, because this is the one step that invokes a provider
+	// and takes as long as a developer attempt takes. This process hosts each
+	// continued run to its end, exactly as `yoyo run` would, so the terminal
+	// sees the rest of the sweep before it waits: in the text form the report
+	// above is printed first and each continuation is said as it starts and as
+	// it ends; the JSON form is one document, so it is written once the
+	// continued runs have finished, with what they came to in it.
+	reconciler.Continue = continueWaitFrom(parts, stderr)
+	if *jsonOutput {
+		continuations, continueErr := reconciler.ContinueWaits(ctx)
+		sweep.Continuations = continuations
+		return reportReconcileResult(stdout, stderr, true, sweep, errors.Join(err, continueErr))
+	}
+	code := reportReconcileResult(stdout, stderr, false, sweep, err)
+	continuations, continueErr := reconciler.ContinueWaits(ctx)
+	if continueErr != nil {
+		fmt.Fprintf(stderr, "continuing the runs whose usage-limit deadline has passed failed: %v\n", continueErr)
+		code = 1
+	}
+	if printContinuations(stdout, stderr, continuations) {
+		code = 1
+	}
+	return code
+}
+
+// continueWaitFrom is the continuation the sweep continues a run with: the
+// same pipeline `yoyo run` builds, re-entering the run named. It says on
+// standard error that the run is being continued before it is, because what
+// follows is a developer attempt hosted by a command somebody may be waiting on
+// the return of, and a terminal that went quiet for an hour with nothing said
+// reads as a sweep that hung.
+func continueWaitFrom(parts components, stderr io.Writer) func(context.Context, string, string) (orchestrator.Outcome, error) {
+	return func(ctx context.Context, workItemID, runID string) (orchestrator.Outcome, error) {
+		fmt.Fprintf(stderr, "continuing run %s for %s: its usage-limit deadline has passed and no process was serving the wait; this sweep hosts it until it ends\n", runID, workItemID)
+		// The pipeline is a value, so each continued run gets its own, exactly as
+		// each run a pull starts does.
+		pipeline := pipelineFrom(parts)
+		return pipeline.Continue(ctx, workItemID, runID)
+	}
+}
+
+// printContinuations says what each continued run came to, and reports whether
+// any of them is a failure of the sweep's own: a continuation the pipeline
+// refused or that could not be recorded. A continued run that ended stopped is
+// reported as what it ended as and is not one — its stoppage is on the item and
+// on the docket, as any run's is.
+func printContinuations(stdout, stderr io.Writer, continuations []orchestrator.WaitContinuation) bool {
+	failed := false
+	for _, continuation := range continuations {
+		if continuation.Failure != "" {
+			failed = true
+		}
+		fmt.Fprint(stdout, describeContinuation(continuation))
+		if continuation.Failure != "" {
+			fmt.Fprintf(stderr, "  not continued: %s\n", continuation.Failure)
+		}
+	}
+	return failed
+}
+
+// describeContinuation is the lines the text form prints for one continued
+// run: the run and what it was waiting out, then what the sweep did with it,
+// then what the continued run came to in the words `yoyo run` ends on.
+func describeContinuation(continuation orchestrator.WaitContinuation) string {
+	var lines strings.Builder
+	fmt.Fprintf(&lines, "%s (%s): paused for %s past its deadline %s\n",
+		continuation.RunID, continuation.WorkItemID, continuation.Waited, continuation.Deadline.Format(time.RFC3339))
+	if !continuation.Continued {
+		if continuation.Detail != "" {
+			fmt.Fprintf(&lines, "  %s\n", continuation.Detail)
+		}
+		return lines.String()
+	}
+	fmt.Fprintln(&lines, "  continued by this sweep in its own worktree and developer session")
+	outcome := continuation.Outcome
+	if outcome == nil {
+		return lines.String()
+	}
+	switch {
+	case outcome.PausedByOperator != nil:
+		fmt.Fprintf(&lines, "  the operator's pause placed at %s holds it, so it was left as it stands; `yoyo resume` lifts the pause\n",
+			outcome.PausedByOperator.HeldAt.UTC().Format(time.RFC3339))
+	case outcome.Paused && outcome.UsageLimitResetsAt != nil:
+		fmt.Fprintf(&lines, "  the provider refused it again: paused for %s until %s, and a sweep after that continues it again\n",
+			runstate.DescribePause(outcome.PauseCause, outcome.UsageLimitKind), outcome.UsageLimitResetsAt.UTC().Format(time.RFC3339))
+	case outcome.Paused:
+		fmt.Fprintln(&lines, "  paused again, and left in flight to be continued")
+	case outcome.Integration != nil:
+		fmt.Fprintf(&lines, "  ended %s: integrated into %s at %s\n", outcome.Status, outcome.Integration.TargetBranch, outcome.Integration.SourceCommit)
+	case outcome.Blocked:
+		fmt.Fprintf(&lines, "  ended %s in the %s phase with a blocker on the item; the development manager decides what happens to it\n", outcome.Status, outcome.Phase)
+	default:
+		fmt.Fprintf(&lines, "  ended %s in the %s phase\n", outcome.Status, nonEmptyValue(string(outcome.Phase), "unrecorded"))
+	}
+	return lines.String()
 }
 
 // checkForStall takes one reading of whether this product has gone quiet and
@@ -279,20 +384,32 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			failed = true
 		}
 	}
+	// A continuation the pipeline refused or that could not be recorded is a
+	// run still holding its slot with nothing serving it, which is what this
+	// step exists to end; a continued run that ended stopped is not.
+	for _, continuation := range sweep.Continuations {
+		if continuation.Failure != "" {
+			failed = true
+		}
+	}
 	if jsonOutput {
 		output := reconcileOutput{
-			Runs:         results,
-			Recoveries:   sweep.Recoveries,
-			Publications: publications,
-			Settlements:  sweep.Settlements,
-			Convergence:  convergence,
-			Docketed:     docketed,
-			Supervision:  sweep.Supervision,
-			Stall:        sweep.Stall,
-			StallProblem: sweep.StallProblem,
+			Runs:          results,
+			Recoveries:    sweep.Recoveries,
+			Publications:  publications,
+			Settlements:   sweep.Settlements,
+			Convergence:   convergence,
+			Docketed:      docketed,
+			Supervision:   sweep.Supervision,
+			Stall:         sweep.Stall,
+			StallProblem:  sweep.StallProblem,
+			Continuations: sweep.Continuations,
 		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
+		}
+		if output.Continuations == nil {
+			output.Continuations = []orchestrator.WaitContinuation{}
 		}
 		if output.Supervision == nil {
 			output.Supervision = []orchestrator.SupervisionResult{}
@@ -377,6 +494,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		printConvergence(stdout, stderr, convergence)
 		printSupervision(stdout, sweep.Supervision)
 		printStall(stdout, stderr, sweep.Stall, sweep.StallProblem)
+		printContinuations(stdout, stderr, sweep.Continuations)
 	}
 	if failed {
 		return 1
@@ -662,7 +780,7 @@ thread that has spent every round it was given is closed as unresolved and the
 operator told. Nothing is put in front of a role here — recovering from a lost
 process is never a reason to ask a question nobody asked for.
 
-Last, it reads whether anything is happening at all. When nothing has started for
+Its last reading is whether anything is happening at all. When nothing has started for
 --stall-after, the tracker reports work ready, and no hold, no still-moving run
 and no provider usage window accounts for it, that is recorded against the
 product as a stall — which `+"`yoyo status`"+` reads back afterwards and the Slack sink,
@@ -670,6 +788,16 @@ if one is running, takes to the operators once. It is here because this sweep ru
 whether or not reporting was ever turned on: how promptly a stopped harness is
 noticed is this threshold and how often whatever runs this sweep does, so an
 unattended pass should run at least as often as the threshold it sets.
+
+After all of that, it continues the runs that exited on their in-process
+usage-limit bound and whose recorded deadline has since passed with no process
+serving the wait — each in its own worktree and developer session, as
+`+"`yoyo run <item>`"+` would, with the run's record saying the sweep did it. This
+process hosts each continued run to its end, so the command stays open for as
+long as those runs take and says which run it is continuing on standard error
+before it does; with --json the one document is written once they have
+finished. A run whose deadline has not passed, and one a live process holds,
+are left exactly as they are.
 
 Options:
   --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)

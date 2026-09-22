@@ -1323,17 +1323,19 @@ func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outco
 				inFlight.RunID),
 		}
 	}
-	// Two shapes of run are re-entered here: one inside its repair loop, and one
-	// at the promotion its approval already authorized. The second is the
-	// integration resume, and it is the same entry point because it is the same
-	// act — the run named is adopted and carried on, and a fresh run can satisfy
-	// neither.
-	if !resumableRepair(inFlight) && !resumableIntegration(inFlight) {
+	// Three shapes of run are re-entered here: one inside its repair loop, one
+	// at the promotion its approval already authorized, and one asleep on a
+	// recorded usage-limit deadline whose process exited on the in-process
+	// bound. The second is the integration resume; the third is what the
+	// reconcile sweep continues once the deadline has passed. All three are the
+	// same entry point because they are the same act — the run named is adopted
+	// and carried on, and a fresh run can satisfy none of them.
+	if !resumableRepair(inFlight) && !resumableIntegration(inFlight) && !pausedForUsageLimit(inFlight) {
 		return Outcome{}, ContinuationMismatchError{
 			WorkItemID: workItemID,
 			RunID:      runID,
 			InFlight:   inFlight.RunID,
-			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop or an approved promotion this can re-enter",
+			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop, an approved promotion, or a recorded usage-limit wait this can re-enter",
 				inFlight.Status, inFlight.Phase),
 		}
 	}
