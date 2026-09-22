@@ -200,8 +200,11 @@ func TestARepairAttemptIsChargedToRepairThroughAWholeRun(t *testing.T) {
 	if repair.RunID != outcome.RunID || repair.WorkItemID != tracker.item.ID {
 		t.Errorf("repair line = %#v, want the run and the item it served", repair)
 	}
-	if !repair.Known() || repair.AmountUSD != 1.5 {
-		t.Errorf("repair line = %#v, want the provider's own figure", repair)
+	// The repair resumed the developer's session, so the provider reported $3.00
+	// — what the session had cost by then — and the line is the $1.50 the repair
+	// added to it, with the reported total kept beside it.
+	if !repair.Known() || repair.AmountUSD != 1.5 || repair.ReportedTotalUSD != 3.0 {
+		t.Errorf("repair line = %#v, want what the repair itself cost", repair)
 	}
 	if err := repair.Validate(); err != nil {
 		t.Errorf("recorded line does not satisfy the durable contract: %v", err)
@@ -258,14 +261,21 @@ func TestABranchReviewRecordsWhatItSpentAgainstTheReview(t *testing.T) {
 // way a real one does on its terminal. Without it every line would be classified
 // unknown, which is a true answer about a provider that said nothing and not the
 // property these tests are about.
+// The amount is what each invocation costs, and what the provider is made to
+// report is the running total of its session -- which is what a provider asked
+// to resume one reports. A run's repair attempts resume the developer's session,
+// so its second terminal says what the session has cost rather than what the
+// attempt did, and the line recorded from it is the difference.
 func priceInvocations(provider *fakeBackend, amount float64) {
 	inner := provider.run
+	reported := map[string]float64{}
 	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := inner(request)
 		if err != nil {
 			return result, err
 		}
-		result.CostUSD = amount
+		reported[result.SessionID] += amount
+		result.CostUSD = reported[result.SessionID]
 		result.CostReported = true
 		return result, nil
 	}
@@ -292,4 +302,16 @@ type recordingSpendLog struct {
 func (l *recordingSpendLog) Append(line runstate.Spend) error {
 	l.lines = append(l.lines, line)
 	return nil
+}
+
+// ReportedSessionTotal answers from the lines this log has already taken, the
+// way the durable store answers from the lines it has already written.
+func (l *recordingSpendLog) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	total, found := 0.0, false
+	for _, line := range l.lines {
+		if line.SessionID == sessionID && line.Known() {
+			total, found = line.ReportedTotal(), true
+		}
+	}
+	return total, found, nil
 }

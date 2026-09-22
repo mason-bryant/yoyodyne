@@ -355,6 +355,11 @@ func (s *Session) meteredFailover() modelfailover.Invoker {
 		RecordFailure: func(err error) {
 			s.spendProblem = appendProblem(s.spendProblem, singleLine(err.Error(), maxTrackerFailureBytes))
 		},
+		// And the crossing is counted the same way the conversation's own turns
+		// are. A turn the alternate served cost what it cost, and a figure that
+		// left it out would be an operator watching a conversation whose spend
+		// stopped moving the moment it crossed.
+		Recorded: s.countSpend,
 	}
 }
 

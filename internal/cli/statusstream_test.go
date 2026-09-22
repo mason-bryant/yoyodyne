@@ -911,9 +911,13 @@ func recordStreamConversation(t *testing.T, stateRoot string, startedAt time.Tim
 	}
 	sequence := uint64(1)
 	appendConversationEvent(t, store, id, sequence, execution.EventRunStarted, startedAt, map[string]any{"session_id": "session-chat"})
-	for _, turn := range turns {
+	// Every turn resumes the one session, so each terminal reports what the
+	// conversation has cost since it opened rather than what the turn cost: a
+	// dollar a turn is recorded as $1, $2, $3. What the ledger reports is the
+	// dollar each of them added.
+	for turnIndex, turn := range turns {
 		sequence++
-		appendConversationEvent(t, store, id, sequence, execution.EventRunCompleted, turn, streamCost(1))
+		appendConversationEvent(t, store, id, sequence, execution.EventRunCompleted, turn, streamCost(float64(turnIndex+1)))
 	}
 	return id
 }

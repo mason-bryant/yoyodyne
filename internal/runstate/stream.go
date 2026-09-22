@@ -442,6 +442,13 @@ func scanStreamLog(path string, kind StreamKind, priced bool) (streamScan, error
 	defer file.Close()
 
 	var scanned streamScan
+	// costs turns each terminal's reported figure into what that invocation cost,
+	// by the rule the ledger prices a run by. It earns most of its keep on a
+	// conversation, which is one session resumed turn after turn: a log of three
+	// hundred turns carries the running total three hundred times, and summing
+	// those is what had this product's management conversations reading thirty
+	// times what they cost.
+	var costs SessionCosts
 	// reviewing is the review bracket the ledger keeps for a run log recorded
 	// before a terminal named its own role, kept here for the same logs and the
 	// same reason. It decides nothing for a terminal that names itself.
@@ -487,7 +494,7 @@ func scanStreamLog(path string, kind StreamKind, priced bool) (streamScan, error
 		scanned.invocations = append(scanned.invocations, Invocation{
 			At:      terminal.Timestamp,
 			Role:    invocationRole(kind, terminal, announced),
-			CostUSD: terminal.Payload.TotalCostUSD,
+			CostUSD: costs.Own(terminal.Payload.SessionID, terminal.Payload.TotalCostUSD),
 			Usage:   terminal.tokens(),
 		})
 	}
@@ -525,9 +532,12 @@ type Invocation struct {
 	At time.Time `json:"at,omitzero"`
 	// Role is the role whose invocation this was, and empty where the terminal
 	// named none.
-	Role    domain.AgentRole `json:"role,omitempty"`
-	CostUSD float64          `json:"cost_usd"`
-	Usage   TokenUsage       `json:"usage"`
+	Role domain.AgentRole `json:"role,omitempty"`
+	// CostUSD is this invocation's own cost. Where the terminal reported the
+	// session's running total, as one resuming a session does, it is what that
+	// total moved by rather than the total itself -- see OwnCostUSD.
+	CostUSD float64    `json:"cost_usd"`
+	Usage   TokenUsage `json:"usage"`
 }
 
 // UndatedDay is where spend whose moment could not be read is grouped. It still

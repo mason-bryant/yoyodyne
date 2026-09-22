@@ -22,7 +22,7 @@ func TestAskingAnotherRoleAnswersInsideTheSameReply(t *testing.T) {
 
 	provider := &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: "Let me ask the architect.\n\n" + askBlock(`{"ask":{"role":"architect","question":"what does this goal cost, and what am I missing?"}}`)},
-		{SessionID: "session-1", CostUSD: 0.125, FinalText: "The architect says it is twice what the ordering assumed, so I will place it behind the migration.\n\n" +
+		{SessionID: "session-1", CostUSD: 0.125, CostReported: true, FinalText: "The architect says it is twice what the ordering assumed, so I will place it behind the migration.\n\n" +
 			askBlock(`{"ask":{"role":"architect","exchange":"exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","settled":"twice what the ordering assumed"}}`)},
 		{SessionID: "session-1", FinalText: "Placed behind the migration."},
 	}}
