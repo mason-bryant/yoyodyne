@@ -39,6 +39,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/dashboard"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
@@ -241,6 +242,7 @@ func Diagnose(ctx context.Context, env Environment) Report {
 	report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, repository))
 	report.Findings = append(report.Findings, diagnosis.checkStateRoot())
 	report.Findings = append(report.Findings, diagnosis.checkChecks(resolved, repository)...)
+	report.Findings = append(report.Findings, diagnosis.checkNode(repository)...)
 	report.Findings = append(report.Findings, diagnosis.checkArtifactHomes(project, repository, resolved))
 	report.Findings = append(report.Findings, diagnosis.checkProviders(ctx, resolved)...)
 	report.Findings = append(report.Findings, diagnosis.checkFailover(resolved))
@@ -538,6 +540,55 @@ func (d *diagnosis) checkChecks(resolved config.Resolved, repository string) []F
 		Status:  StatusOK,
 		Summary: fmt.Sprintf("%s configured, and every command resolves here", countOf(len(resolved.Config.Checks), "check")),
 		Detail:  strings.Join(resolved.Config.Checks, "; "),
+	}}
+}
+
+// checkNode asks whether this machine can run the dashboard page's script,
+// which is Node and nothing else. The page is drawn by a script a Go test cannot
+// run, so its only behavioural evidence is the render comparison that script
+// feeds, and a machine without Node produces none of it.
+//
+// It is asked only of a product that ships the dashboard, which is what carrying
+// the render script means: Node is this product's development dependency rather
+// than a tool every project wants reported. A repository without the script is
+// told nothing, rather than told its Node is fine or that it is missing one it
+// has no use for.
+//
+// The three answers are the three the render test itself gives, deliberately, so
+// that what the doctor says and what a run's checks do are one statement: Node
+// present is fine; Node absent in an environment that declares its own absence
+// is worth knowing and stops nothing; Node absent with nothing declaring it is a
+// problem, because the check that would have caught it is the check that now
+// fails.
+func (d *diagnosis) checkNode(repository string) []Finding {
+	const check = "node"
+	script := filepath.Join(repository, filepath.FromSlash(dashboard.RenderScript))
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		return nil
+	}
+	if path, err := d.lookPath(dashboard.NodeProgram); err == nil {
+		return []Finding{{
+			Check:   check,
+			Status:  StatusOK,
+			Summary: "node is installed, so the dashboard page's renders are compared rather than skipped",
+			Detail:  path,
+		}}
+	}
+	if declared := strings.TrimSpace(d.getenv(dashboard.NodeUnavailableVariable)); declared != "" {
+		return []Finding{{
+			Check:   check,
+			Status:  StatusWarning,
+			Summary: fmt.Sprintf("node is not installed and %s declares this environment deliberately has none, so the dashboard page's renders are not compared here", dashboard.NodeUnavailableVariable),
+			Detail:  fmt.Sprintf("%s=%s; %s needs it", dashboard.NodeUnavailableVariable, declared, dashboard.RenderScript),
+			Remedy:  d.installCommand(dashboard.NodeProgram),
+		}}
+	}
+	return []Finding{{
+		Check:   check,
+		Status:  StatusProblem,
+		Summary: "node is not installed, so the dashboard page's renders cannot be compared and its render test fails",
+		Detail:  fmt.Sprintf("%s runs under node; %s names it as a development dependency", dashboard.RenderScript, dashboard.NodeDocumentation),
+		Remedy:  d.installCommand(dashboard.NodeProgram),
 	}}
 }
 

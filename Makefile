@@ -50,6 +50,25 @@ test: cachecheck
 	$(GO) test ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
+	@# The dashboard page's only behavioural evidence is its render comparison,
+	@# and `go test ./...` prints one line per package -- so a run that compared
+	@# every render and a run where the render test skipped for want of Node read
+	@# identically as `ok ... internal/dashboard`. That is the silence the render
+	@# test's own failure was written to end, and a package line cannot end it.
+	@# So the one line that says which of the two happened is printed here.
+	@#
+	@# It is captured rather than piped, because a pipe would make grep's status
+	@# the step's and a failing render test would pass the gate. -count=1 is for
+	@# the same reason in the other direction: a cached line is the last run's
+	@# answer printed as this run's.
+	@render=$$($(GO) test -count=1 -v -run '^TestThePageRendersEverySectionInEveryState$$' ./internal/dashboard 2>&1); \
+	status=$$?; \
+	line=$$(printf '%s\n' "$$render" | grep -E '^--- (PASS|SKIP|FAIL): TestThePageRendersEverySectionInEveryState'); \
+	case "$$line" in \
+		"--- PASS:"*) printf '%s\n' "$$line" ;; \
+		*) printf '%s\n' "$$render" ;; \
+	esac; \
+	exit $$status
 
 race: cachecheck
 	$(GO) test -race ./...

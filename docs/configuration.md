@@ -5166,6 +5166,20 @@ entry names — the keychain item by name, the file by its existence and mode �
 without ever reading the token. A supplied token that is not there is a warning
 carrying the command that stores it.
 
+It reports Node separately, under `node`, and asks about it whether or not the
+service is enabled — what it goes by is the repository carrying
+`internal/dashboard/testdata/render.js`, which is what says a product ships the
+dashboard at all. The page is drawn by a script only Node can run, so a machine
+without Node produces none of the page's evidence and its render check fails
+there: an absence is a problem carrying the install command, an absence that
+`YOYODYNE_NODE_UNAVAILABLE` declares is a warning quoting the declaration, and
+every product that ships no dashboard is asked nothing. Nothing in the harness
+sets that variable — it is set by whoever built an environment deliberately
+without Node, so a declared absence is a decision somebody made rather than a
+tool nobody installed.
+[Working on yoyo itself](developing-yoyo.md#what-a-checkout-needs-besides-go)
+names Node as the development dependency this is about.
+
 **[`yoyo start`](operations.md#starting-the-product-and-stopping-it) is what
 acts on this section.** It starts the product's supervisor, which reads the
 section and starts every enabled part it knows how to: the Slack sink as
