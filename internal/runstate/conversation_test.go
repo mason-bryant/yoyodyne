@@ -77,6 +77,100 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	}
 }
 
+// A picture a refresh read and no turn delivered outlives the process that read
+// it: the record says which picture is waiting, and the text of it waits beside
+// the record. It is beside rather than inside because a picture is close to the
+// megabyte a record may be altogether — a record carrying one would be a record
+// the store refused to save, which is a conversation that can record nothing at
+// all in exchange for one saved re-read.
+func TestAPictureWaitingForDeliveryOutlivesTheProcessThatReadIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	read := conversation.StartedAt.Add(time.Hour)
+	conversation.PendingPicture = &PendingPicture{
+		GatheredAt:                read,
+		Commit:                    "b2b2b2b2b2b2",
+		ShippedDocumentationBytes: 912345,
+		Replaces:                  conversation.StartedAt,
+		Commits:                   500,
+		TrackerChanges:            40,
+		Trigger:                   "harness",
+		Threshold:                 20,
+	}
+	conversation.UpdatedAt = read
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := store.SavePendingPictureText(identity, "# Product context\n\nNewer.\n"); err != nil {
+		t.Fatalf("SavePendingPictureText() error = %v", err)
+	}
+
+	// A second store over the same root is what the process that delivers it sees.
+	next := newConversationStore(t, root)
+	loaded, err := next.Load(identity)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded.PendingPicture, conversation.PendingPicture) {
+		t.Fatalf("the waiting picture = %#v, want %#v", loaded.PendingPicture, conversation.PendingPicture)
+	}
+	text, err := next.PendingPictureText(identity)
+	if err != nil {
+		t.Fatalf("PendingPictureText() error = %v", err)
+	}
+	if text != "# Product context\n\nNewer.\n" {
+		t.Fatalf("PendingPictureText() = %q", text)
+	}
+	// The text is not a conversation, so listing the conversations never reads it
+	// as one.
+	recorded, err := next.Recorded()
+	if err != nil {
+		t.Fatalf("Recorded() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("Recorded() = %d conversations, want the one", len(recorded))
+	}
+
+	// Delivering it clears both halves, and a conversation with nothing waiting
+	// reports nothing rather than failing.
+	if err := next.ClearPendingPictureText(identity); err != nil {
+		t.Fatalf("ClearPendingPictureText() error = %v", err)
+	}
+	if err := next.ClearPendingPictureText(identity); err != nil {
+		t.Fatalf("second ClearPendingPictureText() error = %v", err)
+	}
+	if text, err := next.PendingPictureText(identity); err != nil || text != "" {
+		t.Fatalf("PendingPictureText() after clearing = %q, %v", text, err)
+	}
+
+	// A picture nothing can date or attribute is one nothing can deliver, so the
+	// record refuses it rather than keeping a re-read nobody can use.
+	undated := conversation
+	undated.PendingPicture = &PendingPicture{Commit: "b2b2b2b2b2b2"}
+	if err := store.Save(undated); err == nil || !strings.Contains(err.Error(), "must say when it was gathered") {
+		t.Fatalf("Save() with an undated waiting picture error = %v", err)
+	}
+}
+
+// The text beside the record is bounded, and the bound is above what a turn may
+// be handed: a picture larger than that is one no conversation could carry
+// anyway, and a file that grew without one is a state directory that fills up on
+// a conversation nobody is having.
+func TestThePictureWaitingBesideARecordIsBounded(t *testing.T) {
+	t.Parallel()
+
+	store := newConversationStore(t, t.TempDir())
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	oversized := strings.Repeat("x", MaxPendingPictureBytes+1)
+	if err := store.SavePendingPictureText(identity, oversized); err == nil || !strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("SavePendingPictureText() oversized error = %v", err)
+	}
+}
+
 func TestConversationStoreAppendsAndReadsEvents(t *testing.T) {
 	t.Parallel()
 

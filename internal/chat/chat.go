@@ -104,6 +104,13 @@ type Store interface {
 	// has never held this conversation has no session to resume and has to be
 	// handed the record instead — and the record is here.
 	LoadEvents(conversationID string) ([]execution.Event, error)
+	// The text of a picture a refresh has taken and no turn has delivered yet. It
+	// is kept beside the record rather than in it because of its size, and it is
+	// reached through the store for the reason everything else durable here is:
+	// the process that took the re-read is often not the one that delivers it.
+	SavePendingPictureText(identity runstate.ConversationIdentity, text string) error
+	PendingPictureText(identity runstate.ConversationIdentity) (string, error)
+	ClearPendingPictureText(identity runstate.ConversationIdentity) error
 }
 
 // Hold is this process's claim on the conversation, which it can put down while
@@ -844,20 +851,31 @@ func Open(options Options) (*Session, error) {
 	if err := options.Store.Save(session.state); err != nil {
 		return nil, fmt.Errorf("record new conversation: %w", err)
 	}
+	// A new conversation inherits nothing from the one it replaces, and an
+	// undelivered picture is the one piece of that kept outside the record: the
+	// new record names none, so the text beside it goes rather than sitting there
+	// until some later refresh happens to overwrite it.
+	if err := options.Store.ClearPendingPictureText(options.identity()); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 
 // adopt takes one durable record as this session's own. It is everything about
 // a conversation that outlives the process holding it, and nothing else: what
-// only ever lived in this process — the run it started, the picture it is
-// carrying, what it has spent — is untouched, because no other process wrote
-// any of it.
+// only ever lived in this process — the run it started, what it has spent — is
+// untouched, because no other process wrote any of it.
 func (s *Session) adopt(existing runstate.Conversation) {
 	s.state = existing
 	// A record written before the agent was part of the identity acquires it
 	// here, so the conversation an operator resumes today is recorded tomorrow
 	// as the agent's rather than only as the role's.
 	s.state.Agent = s.options.Agent
+	// A re-read that was taken and never delivered is one of the things that does
+	// outlive the process, which it did not used to be: the turn that was to carry
+	// it can fail, and reading the repository and the tracker again from the same
+	// old commit is what that used to cost.
+	s.restorePendingPicture()
 	s.deliveredAmendments = map[string]bool{}
 	for _, id := range existing.DeliveredAmendmentIDs {
 		s.deliveredAmendments[id] = true
@@ -1642,7 +1660,8 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	// from one only once the turn that delivered it succeeded, so a refresh
 	// nobody was told about never makes the record claim the conversation is
 	// current.
-	if s.carried != nil {
+	delivered := s.carried != nil
+	if delivered {
 		s.state.ContextGatheredAt = s.carried.GatheredAt
 		s.state.ContextCommit = s.carried.Commit
 		s.state.ContextShippedDocumentationBytes = s.carried.ShippedDocumentationBytes
@@ -1651,6 +1670,16 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	}
 	if err := s.record(); err != nil {
 		return result.FinalText, err
+	}
+	// The picture has landed and the record no longer names one waiting, so the
+	// text kept beside the record goes with it. It is removed after that record is
+	// written rather than before: text nothing points at is replaced by the next
+	// refresh, where a record naming text that is gone would cost the re-read this
+	// whole arrangement exists to save.
+	if delivered {
+		if err := s.options.Store.ClearPendingPictureText(s.options.identity()); err != nil {
+			return result.FinalText, err
+		}
 	}
 	return result.FinalText, nil
 }
@@ -3329,6 +3358,10 @@ func (s *Session) record() error {
 	s.state.PendingConcerns = s.unansweredConcerns()
 	s.state.PendingNotices = s.notices
 	s.state.PendingNoticesDropped = s.noticesDropped
+	// And the picture a refresh read that no turn has delivered, for the sharpest
+	// version of the same reason: a re-read this process kept to itself was thrown
+	// away by every turn that failed.
+	s.state.PendingPicture = s.pendingPicture()
 	if err := s.options.Store.Save(s.state); err != nil {
 		return fmt.Errorf("record conversation turn: %w", err)
 	}

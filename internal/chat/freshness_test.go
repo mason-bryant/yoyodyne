@@ -464,7 +464,7 @@ func TestAPicturePastTheThresholdIsReReadBeforeTheTurnIsAnswered(t *testing.T) {
 	prompt := provider.requests[1].Prompt
 	for _, required := range []string{
 		"# Refreshed product context",
-		"The harness re-read the repository and the tracker before answering this turn",
+		"The harness re-read the repository and the tracker for this conversation",
 		"500 landings behind the target branch, past the 20 this project allows",
 		"CLAUDE.md opens with a section saying a developer run never writes to the tracker.",
 		"Should CLAUDE.md say developer runs never use the tracker?",
@@ -929,6 +929,229 @@ func TestARefreshRecordsTheCommitItReadAgainstSoTheNextProcessMeasuresFromIt(t *
 				t.Fatalf("the resumed process measured against %#v, want the refreshed picture", compared)
 			}
 		})
+	}
+}
+
+// A re-read is durable before the turn that would carry it is asked, so a turn
+// that fails leaves the picture advanced rather than throwing the re-read away.
+// The next process carries what was read instead of walking the repository and
+// the tracker again from the same old commit.
+//
+// This is the amplifier of 2026-09-20 measured from the side that would have
+// shown it. Every management turn was being refused that day by a backstop that
+// had drifted below the bundle it was meant to backstop; each refused turn had
+// been preceded by a completed re-read that went down with the process, so one
+// stuck picture became 21 full re-reads of the repository and the tracker, each
+// one measured from the same month-old commit and each one discarded. The
+// backstop was corrected the next day, which removed that day's reason for the
+// turns to fail. Turns fail for other reasons, and this is what stops the next
+// burst of them costing a re-read apiece.
+func TestAReReadSurvivesTheTurnThatFailedToDeliverIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	refreshedAt := fixedClock{}.Now()
+	refreshed := Briefing{
+		Text:                      "# Product context\n\nThe brief was rewritten this morning.\n",
+		GatheredAt:                refreshedAt,
+		Commit:                    "b2b2b2b2b2b2b2b2",
+		ShippedDocumentationBytes: 912345,
+	}
+
+	// The first process: one turn that lands, and then a turn past the threshold
+	// whose provider fails after the harness has re-read.
+	provider := &fakeBackend{
+		results: []backendapi.RunResult{
+			{SessionID: "session-25", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		},
+		errs: []error{nil, errors.New("the turn was refused")},
+	}
+	ground := &fakeGround{briefing: refreshed}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Ground = ground
+	options.Briefing.GatheredAt = gatheredAt
+	options.Briefing.Commit = "a1a1a1a1a1a1a1a1"
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "Remember that."); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	ground.movement = Movement{Commits: 500, TrackerChanges: 40}
+	if _, err := session.Send(context.Background(), "What is missing from the brief?"); err == nil {
+		t.Fatal("the second turn was expected to fail")
+	}
+	if ground.gathers != 1 {
+		t.Fatalf("the stale picture was re-read %d time(s), want once", ground.gathers)
+	}
+
+	// The failed turn delivered nothing, so the conversation is still recorded as
+	// working from the old picture — and the re-read it completed is on the record
+	// beside it, with the commit it read against.
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.ContextGatheredAt.Equal(gatheredAt) || recorded.ContextCommit != "a1a1a1a1a1a1a1a1" {
+		t.Fatalf("a turn that failed moved the delivered picture: %#v", recorded)
+	}
+	if recorded.PendingPicture == nil {
+		t.Fatal("the completed re-read was discarded with the turn that failed")
+	}
+	if recorded.PendingPicture.Commit != "b2b2b2b2b2b2b2b2" || !recorded.PendingPicture.GatheredAt.Equal(refreshedAt) {
+		t.Fatalf("the recorded re-read = %#v, want the picture and the commit it read against", recorded.PendingPicture)
+	}
+	if recorded.PendingPicture.Commits != 500 || recorded.PendingPicture.Trigger != "harness" || recorded.PendingPicture.Threshold != DefaultRefreshAfterLandings {
+		t.Fatalf("the recorded re-read = %#v, want what moved and what took it", recorded.PendingPicture)
+	}
+
+	// A second process, which was never here. It reads nothing: the picture it
+	// hands the role is the one the failed turn left.
+	resumedProvider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-25", ResolvedModel: "claude-opus-5", FinalText: "From the picture the last turn read."},
+	}}
+	resumedGround := &fakeGround{movement: Movement{Commits: 500, TrackerChanges: 40}}
+	resumedOptions := testOptions(t, resumedProvider)
+	resumedOptions.Store = newTestStore(t, root)
+	resumedOptions.Ground = resumedGround
+	resumed := openTestSession(t, resumedOptions)
+
+	// The operator is told what is waiting rather than being sent to spend a
+	// second re-read on it.
+	freshness := resumed.Freshness(context.Background())
+	if !strings.Contains(freshness, "a re-read taken just now at b2b2b2b2b2b2 is waiting, and is delivered with the next thing said to the agent") {
+		t.Fatalf("Freshness() = %q, want the re-read that is waiting", freshness)
+	}
+
+	reply, err := resumed.Send(context.Background(), "And now?")
+	if err != nil {
+		t.Fatalf("Send() in the next process error = %v", err)
+	}
+	if resumedGround.gathers != 0 {
+		t.Fatalf("the next process re-read the repository %d time(s), want the completed re-read carried", resumedGround.gathers)
+	}
+	if len(resumedGround.compared) != 0 {
+		t.Fatalf("the next process measured a picture it was about to replace: %#v", resumedGround.compared)
+	}
+	prompt := resumedProvider.requests[0].Prompt
+	for _, required := range []string{
+		"# Refreshed product context",
+		"500 landings behind the target branch, past the 20 this project allows",
+		"The brief was rewritten this morning.",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("the turn in the next process = %q, want it to carry %q", prompt, required)
+		}
+	}
+
+	// The measurement says the picture was carried rather than read this turn,
+	// because the two cost different things and only one of them is a walk over
+	// the repository.
+	if reply.Picture == nil || reply.Picture.Outcome != PictureRefreshed || !reply.Picture.Carried {
+		t.Fatalf("reply.Picture = %#v, want a refreshed picture carried from the failed turn", reply.Picture)
+	}
+	if reply.Picture.RefreshedBy != "harness" || reply.Picture.Landings != 500 {
+		t.Fatalf("reply.Picture = %#v, want what the failed turn's re-read recorded", reply.Picture)
+	}
+	// And what the operator is told says the same: this reply carried a read
+	// rather than making one, which is a read they could otherwise go looking for
+	// in a log that holds it against an earlier turn.
+	rendered := reply.Picture.Render()
+	if !strings.Contains(rendered, "already re-read the repository and the tracker for a turn that did not land") ||
+		!strings.Contains(rendered, "carries that picture rather than reading again") {
+		t.Fatalf("PictureAge.Render() = %q, want it to say the picture was carried", rendered)
+	}
+	measured := eventsOfType(t, root, resumed, execution.EventContextMeasured)
+	var carried PictureAge
+	if err := json.Unmarshal(measured[len(measured)-1].Payload, &carried); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !carried.Carried || carried.Outcome != PictureRefreshed {
+		t.Fatalf("the recorded measurement = %#v, want it to say the picture was carried", carried)
+	}
+
+	// And the delivery adopts it: the conversation is recorded as working from
+	// the picture that was read before the failure, and nothing is left waiting.
+	recorded, err = newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.ContextCommit != "b2b2b2b2b2b2b2b2" || !recorded.ContextGatheredAt.Equal(refreshedAt) {
+		t.Fatalf("the delivered picture was not adopted: %#v", recorded)
+	}
+	if recorded.ContextShippedDocumentationBytes != 912345 {
+		t.Fatalf("the carried picture's shipped documentation size = %d, want 912345", recorded.ContextShippedDocumentationBytes)
+	}
+	if recorded.PendingPicture != nil {
+		t.Fatalf("a delivered picture is still recorded as waiting: %#v", recorded.PendingPicture)
+	}
+	text, err := newTestStore(t, root).PendingPictureText(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("PendingPictureText() error = %v", err)
+	}
+	if text != "" {
+		t.Fatalf("the delivered picture's text was kept: %q", text)
+	}
+}
+
+// A picture the record says is waiting and whose text is not there is not a
+// picture: it is dropped, and the turn measures and re-reads exactly as it would
+// have. Delivering the frame of a refresh with no product context in it would
+// brief the role with nothing and record that as the picture it holds.
+func TestAWaitingPictureWithNoTextIsReReadRatherThanDelivered(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{
+		results: []backendapi.RunResult{{SessionID: "session-26", ResolvedModel: "claude-opus-5", FinalText: "Noted."}},
+		errs:    []error{nil, errors.New("the turn was refused")},
+	}
+	ground := &fakeGround{briefing: Briefing{
+		Text:       "# Product context\n\nNewer.\n",
+		GatheredAt: fixedClock{}.Now(),
+		Commit:     "b2b2b2b2b2b2b2b2",
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Ground = ground
+	options.Briefing.GatheredAt = gatheredAt
+	options.Briefing.Commit = "a1a1a1a1a1a1a1a1"
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "Remember that."); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	ground.movement = Movement{Commits: 500}
+	if _, err := session.Send(context.Background(), "What is missing?"); err == nil {
+		t.Fatal("the second turn was expected to fail")
+	}
+
+	identity := runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager}
+	if err := newTestStore(t, root).ClearPendingPictureText(identity); err != nil {
+		t.Fatalf("ClearPendingPictureText() error = %v", err)
+	}
+
+	resumedProvider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-26", ResolvedModel: "claude-opus-5", FinalText: "From a fresh read."},
+	}}
+	resumedGround := &fakeGround{
+		movement: Movement{Commits: 500},
+		briefing: Briefing{Text: "# Product context\n\nNewer still.\n", GatheredAt: fixedClock{}.Now(), Commit: "c3c3c3c3c3c3c3c3"},
+	}
+	resumedOptions := testOptions(t, resumedProvider)
+	resumedOptions.Store = newTestStore(t, root)
+	resumedOptions.Ground = resumedGround
+	resumed := openTestSession(t, resumedOptions)
+	reply, err := resumed.Send(context.Background(), "And now?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if resumedGround.gathers != 1 {
+		t.Fatalf("a picture with no text was re-read %d time(s), want the ordinary re-read", resumedGround.gathers)
+	}
+	if reply.Picture == nil || reply.Picture.Carried {
+		t.Fatalf("reply.Picture = %#v, want a picture read this turn rather than carried", reply.Picture)
+	}
+	if !strings.Contains(resumedProvider.requests[0].Prompt, "Newer still.") {
+		t.Fatalf("the turn = %q, want the picture this turn read", resumedProvider.requests[0].Prompt)
 	}
 }
 
