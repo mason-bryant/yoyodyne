@@ -395,25 +395,48 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 	// pass on the fakes being quick. The gate is abandoned on a timer for the
 	// reason the promotion test's is: a continuation that never arrives should
 	// fail this test rather than hang the binary.
+	//
+	// The first arrival starts that timer rather than this line arming it, so
+	// what it bounds is how long the second continuation takes to join the
+	// first — which is the claim — rather than everything the sweep does before
+	// either is entered. A sweep that hosts them one after the other has no
+	// second arrival at all, so it spends the whole window however quick the
+	// machine is; a machine slow enough to spend the window reaching the first
+	// arrival used to fail this on its own, which is a verdict about the load
+	// rather than about the sweep.
 	gate := newArrivalGate(len(items))
 	var abandoned atomic.Bool
-	abandon := time.AfterFunc(30*time.Second, func() {
-		abandoned.Store(true)
-		gate.abandon()
-	})
-	defer abandon.Stop()
-	var mu sync.Mutex
-	entered := 0
+	var (
+		mu      sync.Mutex
+		entered int
+		abandon *time.Timer
+	)
+	arrive := func() {
+		mu.Lock()
+		entered++
+		if abandon == nil {
+			abandon = time.AfterFunc(30*time.Second, func() {
+				abandoned.Store(true)
+				gate.abandon()
+			})
+		}
+		mu.Unlock()
+		gate.arrive()
+	}
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if abandon != nil {
+			abandon.Stop()
+		}
+	}()
 	reconciler := Reconciler{
 		Tracker:   &fakeTracker{item: beads.WorkItem{ID: items[0], Title: "Task", Status: "in_progress"}},
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     sweepStore,
 		Clock:     &pausingClock{now: resetsAt.Add(time.Minute)},
 		Continue: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
-			mu.Lock()
-			entered++
-			mu.Unlock()
-			gate.arrive()
+			arrive()
 			return serving[workItemID].Continue(ctx, workItemID, runID)
 		},
 	}

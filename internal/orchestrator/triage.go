@@ -437,7 +437,7 @@ func (d Docketer) joinDecisions(entries []triage.Entry, published map[string]pub
 		if entry.Class == triage.ClassPublication {
 			publication = published[entry.RunID]
 		}
-		entry.Counters = d.counters(decisions.counters, entry.Counters.RepairAttempts, len(decisions.claimed), publication)
+		entry.Counters = d.counters(decisions.counters, entry.RunID, entry.Counters.RepairAttempts, len(decisions.claimed), publication)
 		entry.Rerun = rerunOf(*entry, decisions.claimed)
 		// Joined here and never written, exactly as the re-run above is: an override
 		// answers the escalation this entry produced, so it is always made after the
@@ -1283,7 +1283,13 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 // per: that budget is the publication's rather than the item's, so the entry
 // carries what has been decided and made about the one publication it describes
 // beside the item's total.
-func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int, publication publicationRearms) triage.Counters {
+//
+// runID is the stoppage the entry is about, and is what makes the standing below
+// this entry's own rather than the item's. An entry that names no run — an
+// unready item, a dispatch that never became one — carries no standing, which is
+// the truth about it: nothing can have been decided about a stoppage that never
+// happened, however much the item has been decided about elsewhere.
+func (d Docketer) counters(ledger runstate.TriageCounters, runID string, repairAttempts, rerunsCarriedOut int, publication publicationRearms) triage.Counters {
 	permitted := d.Caps.Overridden(ledger.Overrides)
 	return triage.Counters{
 		ReviewRounds:        ledger.ReviewRounds,
@@ -1314,6 +1320,13 @@ func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerun
 		// that refuses can never be two different counts.
 		Crossings:      ledger.DelegatedCrossings(),
 		CrossingsBound: runstate.MaxDelegatedCapCrossings,
+		// What stands decided about this entry's own stoppage, reduced by the
+		// ledger itself to the shape the shared carry-out rule reads. It is the
+		// one figure here that is not an item total, and it is read from the same
+		// record the status surfaces read it from, by the same rule: an item that
+		// read as the harness's on the docket and as the development manager's on
+		// the status head would be one piece of work with two next movers.
+		Standing: ledger.Standing(runID),
 	}
 }
 
@@ -1390,7 +1403,7 @@ func (d Docketer) recordedCounters(state runstate.State, publication publication
 	if err != nil {
 		return triage.Counters{}, fmt.Errorf("read what triage has recorded about %s: %w", state.WorkItemID, err)
 	}
-	return d.counters(ledger, state.RepairAttempts, 0, publication), nil
+	return d.counters(ledger, state.RunID, state.RepairAttempts, 0, publication), nil
 }
 
 // publicationsOf indexes what each run's record says about the publication it
@@ -1410,18 +1423,20 @@ func publicationsOf(recorded []runstate.State) map[string]publicationRearms {
 // unreadyCounters is what the item has spent and what it may still spend, and
 // the reason it could not be read where that is the answer. Nothing this finding
 // did costs the item anything — no run was made — so the repair attempts and the
-// re-runs carried out are zero rather than counted from anywhere.
+// re-runs carried out are zero rather than counted from anywhere. Neither entry
+// names a run, so neither carries a standing: there is no stoppage for a decision
+// to have been made about.
 func (d Docketer) unreadyCounters(workItemID string) (triage.Counters, string) {
 	if d.Decisions == nil {
-		return d.counters(runstate.TriageCounters{}, 0, 0, publicationRearms{}),
+		return d.counters(runstate.TriageCounters{}, "", 0, 0, publicationRearms{}),
 			"nothing was wired to read what triage has recorded about " + workItemID + ", so the figures beside this entry are the configured caps and no spend at all"
 	}
 	ledger, err := d.Decisions.Counters(workItemID)
 	if err != nil {
-		return d.counters(runstate.TriageCounters{}, 0, 0, publicationRearms{}),
+		return d.counters(runstate.TriageCounters{}, "", 0, 0, publicationRearms{}),
 			fmt.Sprintf("read what triage has recorded about %s: %v", workItemID, err)
 	}
-	return d.counters(ledger, 0, 0, publicationRearms{}), ""
+	return d.counters(ledger, "", 0, 0, publicationRearms{}), ""
 }
 
 func docketFindings(findings []runstate.Finding) []triage.Finding {

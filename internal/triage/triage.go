@@ -533,6 +533,14 @@ type Counters struct {
 	// was.
 	Crossings      int `json:"crossings"`
 	CrossingsBound int `json:"crossings_bound"`
+	// Standing is what triage has decided about the one stoppage this entry is
+	// about, which is the only figure here that is not the item's. Every count
+	// above is an item total, and a total cannot say whether the decision it
+	// records was made about this run or about some other run of the same item —
+	// so the next mover read off one names the harness for a stoppage nobody has
+	// decided a thing about. It is joined wherever the docket is read, from the
+	// same record and by the same rule the status surfaces read.
+	Standing Standing `json:"standing,omitempty"`
 }
 
 // CrossingsSpent reports an item whose delegated crossings are gone, which is the
@@ -585,16 +593,70 @@ func (o Override) Describe() string {
 // than a repeat of this one.
 func (c Counters) Decided() bool { return c.Reruns > c.RerunsCarriedOut }
 
-// AwaitingCarryOut reports a decision recorded about this item that the harness
-// has still to act on, whichever of the two it is: a re-run nothing has claimed,
-// or a repair grant whose rounds are unspent.
+// Standing is what triage has decided about one stoppage, reduced to the facts
+// the rule below turns on. It is a shape rather than a record because the two
+// readers that ask the question hold the decision in two different forms — the
+// docket carries a copy of the item's counters, and the read model has the
+// durable ledger itself — and what must not be copied is the rule.
+type Standing struct {
+	// Decided is a decision recorded about this stoppage at all. An item's budget
+	// having been spent is not one: the spend may have been for another run of the
+	// same item.
+	Decided bool `json:"decided,omitempty"`
+	// Spends is that decision being one of the three that buy another attempt,
+	// which are the only three the harness carries out.
+	Spends bool `json:"spends,omitempty"`
+	// Repair is the decision being a repair grant, which is the one kind whose
+	// carrying out the decision itself cannot report.
+	Repair bool `json:"repair,omitempty"`
+	// GrantOutstanding is the item standing committed to rounds it has not spent,
+	// which is what says a granted repair has not been handed back yet.
+	GrantOutstanding bool `json:"grant_outstanding,omitempty"`
+}
+
+// AwaitingCarryOut reports a decision standing about one stoppage that the
+// harness has still to act on. It is the one rule that answers it, and both the
+// docket's next-mover line and the status surfaces' held-work wait read from
+// here: an item given two answers is given two next movers, which is a
+// disagreement only the operator can adjudicate.
 //
 // It is the question the whole docket was failing to answer separately. An entry
-// says a stoppage happened, and until now nothing on it said whether what it was
-// waiting for was a decision or the carrying out of one — so a docket of
-// already-decided stoppages read as a decision backlog, which on 2026-09-07 it
-// did for days.
-func (c Counters) AwaitingCarryOut() bool { return c.Decided() || c.GrantOutstanding() }
+// says a stoppage happened, and until the distinction existed nothing on it said
+// whether what it was waiting for was a decision or the carrying out of one — so
+// a docket of already-decided stoppages read as a decision backlog, which on
+// 2026-09-07 it did for days.
+//
+// Only the three decisions that buy another attempt are ones the harness carries
+// out. A wait, a re-scope and an escalation are decided and leave the harness
+// nothing to do, so an item still held under one of them is held by what the
+// development manager decided rather than by anything outstanding, and naming the
+// harness as its next mover would send an operator to watch for a run nothing is
+// going to start.
+//
+// A granted repair is asked of the grant rather than of the decision, because a
+// repair continues the run it was granted for: the same run stops again carrying
+// the same decision, so the decision alone would go on claiming a carry-out that
+// has already happened. The grant standing unspent is what actually says it has
+// not.
+//
+// A re-run and a merge re-arm are answered from the decision itself, which is
+// sufficient because carrying either one out changes what the reading is about.
+// A re-run produces a fresh run, and once that run stops it is the latest one the
+// item has, so the hold names it instead and nothing stands recorded about it. A
+// re-arm the forge then honours settles the publication and lifts the hold.
+func AwaitingCarryOut(standing Standing) bool {
+	if !standing.Decided || !standing.Spends {
+		return false
+	}
+	if standing.Repair {
+		return standing.GrantOutstanding
+	}
+	return true
+}
+
+// AwaitingCarryOut reports a decision standing about this entry's own stoppage
+// that the harness has still to act on, by the shared rule above.
+func (c Counters) AwaitingCarryOut() bool { return AwaitingCarryOut(c.Standing) }
 
 // Rerun is the re-run the harness has already claimed against one docketed
 // stoppage: what a guard refuses a second of, named on the entry it is about.
@@ -1451,8 +1513,16 @@ func (e Entry) renderIntegrationStop() string {
 }
 
 // renderNextMover says which of the two waits this entry is in and who has to
-// move next: a stoppage nobody has decided about is yours, and a decision
-// already recorded is the harness's to carry out.
+// move next: a stoppage with nothing outstanding about it is yours, and one
+// whose recorded decision the harness has still to act on is the harness's.
+//
+// Which of the two it is comes from AwaitingCarryOut, the same rule the status
+// surfaces' held-work wait reads, over this entry's own stoppage rather than
+// over the item's totals. An item's budget having been spent says a decision was
+// made about some run of it; it does not say this run, and it does not say the
+// decision left the harness anything to do — a wait, a re-scope and an
+// escalation leave it nothing, and are the development manager's answer rather
+// than something to watch for.
 //
 // It is never silent, because the state it names is the one the docket could not
 // say before: an entry describing a decided stoppage read exactly like one
@@ -1476,9 +1546,9 @@ func (e Entry) renderNextMover() string {
 		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
 	}
 	if e.Counters.AwaitingCarryOut() {
-		return "      Next mover: the harness — a decision about this item is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+		return "      Next mover: the harness — a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
 	}
-	return "      Next mover: you — nothing is recorded as decided about this item, so it is waiting on your decision.\n"
+	return "      Next mover: you — nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
 }
 
 // renderDecisions says what triage has already decided about this item, in the

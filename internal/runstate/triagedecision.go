@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The decisions triage may record. They are the development manager's own
@@ -201,6 +203,28 @@ func (c TriageCounters) DecisionOf(runID string) (TriageDecision, bool) {
 		}
 	}
 	return TriageDecision{}, false
+}
+
+// Standing is what this record says about one stopped run, in the shape the
+// shared carry-out rule reads. It is the one place the ledger is reduced to that
+// shape, so the docket's copy of the counters and a surface reading the ledger
+// itself are reading the same facts rather than each deriving their own.
+func (c TriageCounters) Standing(runID string) triage.Standing {
+	decision, decided := c.DecisionOf(runID)
+	return triage.Standing{
+		Decided:          decided,
+		Spends:           decision.Spends(),
+		Repair:           decision.Decision == TriageDecisionRepair,
+		GrantOutstanding: c.GrantOutstanding(),
+	}
+}
+
+// AwaitingCarryOut reports a decision standing about one stopped run that the
+// harness has still to act on. It is triage.AwaitingCarryOut over this record,
+// and exists so that a caller holding the ledger asks the question in one call
+// rather than assembling the standing itself.
+func (c TriageCounters) AwaitingCarryOut(runID string) bool {
+	return triage.AwaitingCarryOut(c.Standing(runID))
 }
 
 // RecordDecision records a triage decision that spends nothing: a re-scope, a
