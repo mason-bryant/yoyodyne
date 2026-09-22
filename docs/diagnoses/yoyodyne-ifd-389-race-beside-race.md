@@ -43,6 +43,39 @@ average peaked at 59 on a sixteen-core machine, which is well past the
 load-average-near-forty at which the earlier run of this item saw Git killed
 at its flat thirty seconds and the tests named in the item reach their bounds.
 
+## Two named tests whose disposition is not in this item's diff
+
+**`TestStatusFollowLatestDrainsTheStreamItLeaves`** (`internal/cli`). The
+item's note of 2026-09-19 names a real race behind it — `AppendEvent` creates
+the successor's log and then writes it, and a `--latest` follow whose look
+fires between the two switches to an empty log and does not re-read it until
+the test's hour-long poll — and says to fix `followOne` or the test's successor
+setup rather than the wait. The successor setup was fixed on the base this
+branch was cut from, by `cdc957e` (yoyodyne-ifd.141.2, 2026-09-19): the
+successor's log is written under a store of its own and moved into the followed
+store with one rename, so the follow's `Find`, which lists `*.events.jsonl` and
+orders by modification time, cannot see the log until it is whole. `followOne`
+itself is not changed here because it is not where the defect was: it reads a
+stream it switched to at once, and re-reads it on the poll, which is 200 ms in
+production and an hour only in this test, where the hour is what isolates the
+drain from ordinary polling. What this item changes about the test is the
+wait — `waitForOutput` is on the buffer's own write announcements rather than
+a ten-second clock — and that is safe only because the race it would otherwise
+hang on is closed by the rename; the two changes are one fix read from two
+sides.
+
+**The shell suites in `internal/composition`.** The note of 2026-09-18 names a
+"status tool" suite and the adoption walkthrough as the Go tests that run shell
+from the package directory. There is one such test in `internal/composition`,
+`TestTheAdoptionWalkthroughRefusesAScratchRootInsideARepository`, and it is
+the one given `cmd.Dir = t.TempDir()`; `bin/yoyo-status` no longer exists and
+nothing in the package runs a status-tool suite. The "status tool" in the
+report was the composition census — the test beside the walkthrough that
+classifies every file in the repository — which is the reader that listed the
+shell's `sh-thd-*` scratch file, rather than a second writer of one. The
+`internal/cli` release-verb and release-notes suites are the other two and are
+given a scratch directory the same way.
+
 ## What that does and does not show
 
 It shows that the suite no longer fails on load at the concurrency this
