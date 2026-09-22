@@ -1098,12 +1098,29 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		Artifacts:       docketArtifacts(state),
 		Environmental:   docketEnvironmental(state.Environmental),
 		IntegrationStop: docketIntegrationStop(state.IntegrationStop),
+		ReplayConflict:  docketReplayConflict(state.ReplayConflict),
 		Counters:        counters,
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
 	}
 	return entry, nil
+}
+
+// docketReplayConflict carries the run's record of its approved change
+// conflicting on replay onto the entry, in the docket's own shape. It is what
+// tells the development manager the stoppage is hers or a person's, and not
+// the resume verb's — which, on the one run where the blocker write failed, the
+// entry could otherwise only have said from the failure's prose.
+func docketReplayConflict(conflicted *runstate.ReplayConflict) *triage.ReplayConflict {
+	if conflicted == nil {
+		return nil
+	}
+	return &triage.ReplayConflict{
+		TargetBranch: conflicted.TargetBranch,
+		Detail:       singleLine(conflicted.Detail, triage.MaxMessageBytes),
+		Phase:        string(conflicted.Phase),
+	}
 }
 
 // docketIntegrationStop carries the run's record of the environment stopping

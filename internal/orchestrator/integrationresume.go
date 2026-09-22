@@ -421,6 +421,14 @@ func resumableStop(prior runstate.State) error {
 	if prior.ResumptionsLeft() == 0 {
 		return fmt.Errorf("%w: run %s has been resumed %d times, which is the bound on one run's resumptions; an environment that has stopped the same promotion that often is a machine somebody has to look at, and `yoyo triage rerun` is what starts the item over once it is right", ErrNotResumable, prior.RunID, len(prior.IntegrationResumptions))
 	}
+	// A replay that conflicted is refused in the docket's own sentence for it
+	// rather than in the general one below, because it is the stop a reader most
+	// reaches for this verb on — the change is approved and stood at its
+	// promotion — and the verb would replay onto the same target and meet it
+	// again.
+	if prior.ReplayConflict != nil {
+		return fmt.Errorf("%w: %s", ErrNotResumable, prior.ReplayConflict.Says(prior.RunID))
+	}
 	if prior.IntegrationStop == nil {
 		return fmt.Errorf("%w: run %s stopped after its approval for something the environment does not answer for — %s — so it is a person's to decide about", ErrNotResumable, prior.RunID, singleLine(nonEmpty(prior.Failure, prior.Blocker, "the record names no failure"), 240))
 	}

@@ -1788,7 +1788,11 @@ the error that ended it — a dirty checkout by the worktree manager's sentinel,
 a transport that did not answer by the same closed reading of the error's
 text the [recovery rule](operations.md#waiting-out-a-network-that-dropped)
 waits out elsewhere — and where the change was approved and nothing was
-promoted, it writes an *integration stop* on the run: the cause and the step. The docket entry carries
+promoted, it writes an *integration stop* on the run: the cause and the step.
+It reads the step's own failure and not the whole error: a run that stopped
+and then could not record the stop ends on both, and a blocker write that
+timed out reads as transport whatever it was recording, which is how
+yoyodyne-ifd.441's replay conflict was once recorded as weather. The docket entry carries
 it too, names the harness as the next mover, and prints the command — in one
 sentence saying the change is approved, what stopped it, and that `yoyo triage
 resume` is what it needs. The channel line for the stop ends on that same
@@ -1836,7 +1840,13 @@ One thing leaves the resumed path, and it leaves it exactly as it always did:
 a replay onto a target that moved re-earns the checks and the review like any
 replay, and a replay that conflicts stops the run for a person with both sides
 preserved. A conflict is never recorded as an integration stop, because the
-environment does not answer for it.
+environment does not answer for it; it is recorded on the run as a *replay
+conflict* instead, written before the blocker about it is attempted on the
+tracker so it survives that write failing, and the record refuses the two
+together. The docket entry for such a run names the conflict and you as the
+next mover — or the repair-continue, once `yoyo triage repair` extends to
+conflicts (yoyodyne-ifd.132) — and says the resume is not the answer; asked
+anyway, the resume and the repair both refuse in the same sentence.
 
 Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 `/reports`, `/refresh` — means the same thing in every conversation, because

@@ -978,3 +978,49 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 		t.Fatalf("final run = %s, removed %t, swept %v, resumptions %d; want it succeeded with the restored checkout cleaned up by its own integration", final.Status, final.WorktreeRemoved, final.WorktreeSweptAt, len(final.IntegrationResumptions))
 	}
 }
+
+// The classifier reads the cause the pipeline recorded — the step's own failure
+// before any write it attempted afterwards — and not the whole error. The 441
+// shape is a replay conflict whose blocker write timed out: the tail is in the
+// recovery package's closed set, and the whole was read as transport. The cause
+// alone is a conflict, which is refused by its sentinel whatever wraps it; and
+// the same write failing after a genuinely environmental stop does not hide the
+// stop.
+func TestAnIntegrationStopIsClassifiedFromTheStepsOwnCauseAndNeverFromAFailedRecord(t *testing.T) {
+	t.Parallel()
+
+	conflict := fmt.Errorf("change cannot be replayed onto the moved integration target: %w", gitworktree.ErrRebaseConflict)
+	timedOut := fmt.Errorf("record the replay conflict as a blocker: %w", errors.New("bd update failed with status timed_out and exit code -1: "))
+	dirty := fmt.Errorf("integrate approved change: %w", gitworktree.ErrPrimaryNotReady)
+	transport := errors.New("bd show failed with status timed_out and exit code -1: ")
+	for name, tc := range map[string]struct {
+		failure error
+		cause   runstate.EnvironmentalCause
+		stop    bool
+	}{
+		"the 441 shape: a conflict, then a timed-out blocker write":  {failure: withFailedRecord(conflict, timedOut)},
+		"a conflict wrapped again after the failed write":            {failure: fmt.Errorf("run ended: %w", withFailedRecord(conflict, timedOut))},
+		"a conflict whose blocker write landed":                      {failure: conflict},
+		"a conflict joined the old way, matched on its tail before":  {failure: errors.Join(conflict, timedOut)},
+		"a dirty checkout, then a store that would not save":         {failure: withFailedRecord(dirty, errors.New("record the commit the refused promotion made: disk full")), cause: runstate.CauseDirtyPrimary, stop: true},
+		"a tracker read that timed out, with nothing recorded after": {failure: transport, cause: runstate.CauseTransportFailure, stop: true},
+		"a diverged target, then a timed-out blocker write":          {failure: withFailedRecord(errors.New("main cannot be brought onto origin before promoting: diverged"), timedOut)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cause, stop := integrationStopCauseOf(tc.failure)
+			if stop != tc.stop || cause != tc.cause {
+				t.Fatalf("integrationStopCauseOf(%v) = %q, %t; want %q, %t", tc.failure, cause, stop, tc.cause, tc.stop)
+			}
+		})
+	}
+	// Both sides are still in the error: the message carries them in order, and
+	// errors.Is finds each.
+	paired := withFailedRecord(conflict, timedOut)
+	if !errors.Is(paired, gitworktree.ErrRebaseConflict) || !strings.Contains(paired.Error(), "cannot be replayed onto") || !strings.Contains(paired.Error(), "bd update failed with status timed_out") {
+		t.Fatalf("withFailedRecord() = %v; want the conflict and the failed write both preserved", paired)
+	}
+	if stepCauseOf(paired) != conflict || stepCauseOf(conflict) != conflict || withFailedRecord(nil, timedOut) != timedOut {
+		t.Fatal("stepCauseOf() did not read the step's own cause back")
+	}
+}

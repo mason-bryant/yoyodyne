@@ -560,6 +560,12 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 // replaced said only that there was nothing to repair — true, and what sent the
 // development manager to a re-run of an undisputed change.
 //
+// An approved change whose replay conflicted is asked about next, and refused
+// in the docket's own sentence for it, for the same reason: the conflict is the
+// one thing on the record, and a refusal that said only that no failure was
+// returned to the developer would be true and point nowhere. Until the
+// continuation extends to conflicts (yoyodyne-ifd.132) a person settles it.
+//
 // The recorded repair input is the last of them and the one that makes this the
 // action it is. A run that stopped with no failure returned to it — a provider
 // that kept refusing, a replay that conflicted — has no repair loop to continue:
@@ -568,6 +574,9 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 func continuableRepair(prior runstate.State) error {
 	if prior.IntegrationStop != nil {
 		return errors.New(prior.IntegrationStop.ResumeSays(prior.RunID))
+	}
+	if prior.ReplayConflict != nil {
+		return errors.New(prior.ReplayConflict.Says(prior.RunID))
 	}
 	if prior.WorktreePath == "" || prior.Branch == "" || prior.BaseCommit == "" || prior.TargetBranch == "" {
 		return fmt.Errorf("run %s recorded no preserved worktree to continue in, so there is no change to repair; a fresh run of the item is what it needs", prior.RunID)

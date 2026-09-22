@@ -3886,7 +3886,10 @@ record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, whose replay conflicted, or that died before anything judged its work,
 never had a failure returned to its developer, so there is no repair loop to
-re-enter; a re-run is what those need. The preserved worktree has
+re-enter; a re-run is what those need. A run whose record says its approved
+change conflicted on replay is refused in the docket's own sentence for it,
+naming the conflict and a person as the next mover, until this verb extends to
+replay conflicts (yoyodyne-ifd.132). The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the

@@ -579,6 +579,59 @@ func TestAStoppedRunEntryWithABlockerDoesNotAlsoPrintTheFailure(t *testing.T) {
 	}
 }
 
+// An approved change whose replay conflicted names the conflict and a person
+// as the next mover — or the repair-continue, once it extends to conflicts —
+// and never the resume verb, which would meet the conflict again. It says so
+// on the entry that carries no blocker in particular, because that is the entry
+// yoyodyne-ifd.441 produced when the blocker write timed out, and it was then
+// the only surface that could name the conflict at all.
+func TestAReplayConflictEntryNamesTheConflictAndAPersonNotTheResume(t *testing.T) {
+	t.Parallel()
+
+	conflicted := stoppedRunEntry()
+	conflicted.Blocker = ""
+	conflicted.Failure = "change cannot be replayed onto the moved integration target: replay onto main failed\nrecord the replay conflict as a blocker: bd update failed with status timed_out and exit code -1: "
+	conflicted.ReplayConflict = &ReplayConflict{TargetBranch: "main", Detail: "change cannot be replayed onto the moved integration target", Phase: "integrating"}
+	if err := conflicted.Validate(); err != nil {
+		t.Fatalf("Validate() refused an entry carrying a replay conflict: %v", err)
+	}
+	rendered := conflicted.Render()
+	for _, want := range []string{
+		"run " + conflicted.RunID + "'s change is approved and its replay onto main conflicted",
+		"a person to settle the conflict",
+		"yoyodyne-ifd.132",
+		"Next mover: you — this change is approved and its replay conflicted",
+		"What the replay found",
+		"carries no blocker",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the rendered entry does not say %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Next mover: the harness") {
+		t.Fatalf("the rendered entry sends the reader to the resume verb:\n%s", rendered)
+	}
+	// A decision already recorded about it is still the harness's to carry out,
+	// as for any other stoppage.
+	decided := conflicted
+	decided.Counters.Reruns = 1
+	if !strings.Contains(decided.Render(), "Next mover: the harness — a decision about this item is already recorded") {
+		t.Fatalf("a decided conflict did not name the carry-out as the next move:\n%s", decided.Render())
+	}
+	// The two classifications of one stop never stand together, and a conflict is
+	// only ever a stopped run's.
+	both := conflicted
+	both.IntegrationStop = &IntegrationStop{Cause: "transport-failure", Phase: "integrating"}
+	if err := both.Validate(); err == nil || !strings.Contains(err.Error(), "never both") {
+		t.Fatalf("Validate() error = %v, want the conflict refused beside an integration stop", err)
+	}
+	published := publicationEntry()
+	published.ReplayConflict = conflicted.ReplayConflict
+	if err := published.Validate(); err == nil || !strings.Contains(err.Error(), "replay_conflict: only a stopped run") {
+		t.Fatalf("Validate() error = %v, want the conflict refused on a publication entry", err)
+	}
+}
+
 // The failure is held to the bound the blocker beside it is, and for the same
 // reason: an entry too big to record is a stoppage that reaches nobody.
 func TestAnEntryIsRefusedWhenItsFailureExceedsTheBound(t *testing.T) {
