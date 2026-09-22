@@ -52,6 +52,42 @@ last recorded walk, kept from the README split as a readable record of what the
 walkthrough actually prints; CI is what re-runs it now, so the file is a
 snapshot rather than the evidence anything rests on.
 
+## What a checkout needs besides Go
+
+**Node**, for the dashboard. The page is drawn by its own script, which a Go
+test cannot run, so its only behavioural evidence is
+`internal/dashboard/testdata/render.js` running that script under Node against
+the fixtures and the result being held to the renders under
+`internal/dashboard/testdata/renders`. A machine without Node produces none of
+that, so `make test` **fails** there rather than skipping:
+
+```text
+--- FAIL: TestThePageRendersEverySectionInEveryState
+    node is not on the PATH, so the page's script was never run and the renders
+    under testdata/renders were never compared …
+```
+
+Install it — `brew install node` on macOS, your package manager elsewhere — and
+`yoyo doctor` says so too, under `node`, before a check has to.
+
+**An environment that deliberately has no Node declares it**, in
+`YOYODYNE_NODE_UNAVAILABLE`, whose value says which environment that is; the
+render test then skips, quoting the declaration, and the fixture-shape and route
+tests hold as they always did. Nothing in the harness sets it, and nothing here
+sets it today — the machine the checks run on has Node — so it is there for a
+container or a sandbox somebody builds without one, and setting it is that
+person saying so. Nothing else skips, because the whole point is that a machine
+that simply never installed Node stops reading as a green run — which is what
+`make test` printing the render test's own line, after the suite, is there to
+make visible either way:
+
+```text
+--- PASS: TestThePageRendersEverySectionInEveryState (3.36s)
+```
+
+Go and Git are the rest of it, and `bd` for the tracker; `make check` and
+`yoyo doctor` between them name anything missing.
+
 ## The tracker version CI pins
 
 The `adoption` job installs `bd` from a prebuilt upstream release at a pinned
@@ -348,11 +384,11 @@ Go check has ever run a line of bash.
 | A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
 | A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
 | A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh` or `scripts/release-body.sh`. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
-| The release verb committing a derived export that a run does not declare as churn the primary checkout may acquire | `internal/cli` (`release_repository_test.go`) | Either declare the path in `AllowedPrimaryChanges` as well, or take it back out of `derived_exports`. The containment is one-way on purpose: a run may come to tolerate a path the cut has no business committing on the operator's behalf, so widening the run's list alone is fine and widening the cut's alone is not. |
+| The release verb excusing from its clean-tree check a derived export that a run does not declare as churn the primary checkout may acquire | `internal/cli` (`release_repository_test.go`) | Either declare the path in `AllowedPrimaryChanges` as well, or take it back out of `derived_exports`. The containment is one-way on purpose: a run may come to tolerate a path the cut has no business leaving dirty under a tag, so widening the run's list alone is fine and widening the cut's alone is not. |
 | A shell file a shell will not parse — every `.sh` here, the tools in `bin`, and the hooks the tracker installs | `internal/composition` | Fix the syntax. Parsing is `bash -n`, which reads a script and runs none of it, so it is safe to point at the release verb and the adoption walkthrough. It is the floor rather than the gate: shell with a suite gets executed as well. |
 | A YAML or JSON file that does not decode | `internal/composition` | Fix the file. What each one means belongs to whatever reads it — Claude Code, Codex, the tracker, the harness — but one that nothing can parse is this repository's defect whoever owns the schema, and it is not a defect a reviewer reading a diff reliably sees. |
 | A workflow that is not shaped like one — no trigger, no jobs, or a job with no runner or no steps | `internal/composition` | Fix the workflow. Decoding is not enough for these: the release workflow is triggered by a tag push, so what is wrong with it would otherwise first misbehave during a real publication. |
-| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and skips without, saying so: a machine without Node holds the fixtures' shape and the routes and not the renders. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
+| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and fails without, naming it: a machine without Node compares no renders at all, so passing there would say nothing about the page. The one environment that skips instead is one declaring its own absence of Node in `YOYODYNE_NODE_UNAVAILABLE`, which nothing here sets — see [what a checkout needs besides Go](#what-a-checkout-needs-besides-go). Either way the fixtures' shape and the routes are held. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
 | A file no content class recognizes, a class that recognizes nothing, or a class crediting its coverage to a check the project no longer declares | `internal/composition` | Write the class, retire it, or say what covers it now. This is the audit rather than a gate: it holds what this repository is made of against what its declared checks actually exercise, so a new kind of content cannot arrive covered by nothing and unnoticed — which is how shell got here. |
 
 Fixtures written to be malformed on purpose are not walked: anything under a
@@ -434,7 +470,8 @@ content is the case the audit is for.
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
 cadence costs two commands rather than a procedure once
-[this tag's notes are on `main`](#every-cut-writes-its-notes):
+[this tag's notes are on `main`](#every-cut-writes-its-notes) and
+[carry their readiness result](#release-readiness):
 
 ```sh
 make release VERSION=v0.3.0
@@ -442,8 +479,8 @@ git push origin v0.3.0
 ```
 
 It gates on [this release's notes](releases/README.md), on [release
-readiness](#release-readiness), walks [the documented adoption
-path](../scripts/walk-adoption.sh), runs
+readiness](#release-readiness) and on that result being in the notes `main`
+holds, walks [the documented adoption path](../scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
@@ -452,37 +489,48 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
-Two things are written before the tag, in one housekeeping commit placed after
-the last gate is green. The tracker's own exports —
-`.beads/interactions.jsonl` and `.beads/issues.jsonl` — do not count as a dirty
-tree: they are derived from a store that is authoritative elsewhere, the
-archives a release ships are not built from them (the notes are drafted from
-one, and are committed before the cut), and the walkthrough this gate runs
-rewrites them itself, so refusing on them would stall most days of a daily
-cadence. The
-readiness result is stamped into `docs/releases/<tag>.md` and goes into the same
-commit, so the notes the tag names carry the conformance result of the tree it
-names rather than one taken on whichever day the notes were drafted; it is
-written only where it differs from the section the notes already carry, so a cut
-that changes neither it nor the exports has nothing to commit. Committing both
-rather than excepting them keeps the tag naming a tree with nothing uncommitted
-in it. On a day it had to make that commit it prints
-`git push --atomic origin main <tag>`, because origin does not have it and the
-branch has to carry it; on a day it had nothing to commit, `git push origin
-<tag>`.
+**A cut writes nothing to `main`.** The tag names the commit `origin/main`
+held when the gates started, which is the commit the gates ran on; the cut
+makes no commit of its own, on `main` or anywhere the tag could name, and the
+push it prints is the tag alone. That is what a protected default branch
+allows, and it is how the v0.5.0 cut on 2026-09-20 could not finish: the verb
+then committed its own housekeeping on `main` and tagged that, and a branch
+that requires a pull request refused the push — a pull request produces a
+different commit, so the tag named a tree `main` would never hold, and a
+second cut had fresh housekeeping it could not push either. So whether `main`
+is protected is now asked of the forge before anything is built, both ways a
+forge can protect a branch, and the cut says what that changes rather than
+finding out at the push: on a protected branch the readiness result reaches
+the notes only through the pull request the cut opens, and publishing is the
+tag alone. On a branch that is not protected the path is the same. Where the
+forge cannot be asked — `gh` not installed, or a remote it does not know — the
+cut says that went unchecked and takes the same path.
 
-That commit is made with hooks turned off, since a tracker installs a hook that
-exports after every commit and it would rewrite the very files the commit
-exists to clean. Turning them off is `core.hooksPath`, which git honours from
-2.9, so 2.9 is the verb's floor and its header says so: older git ignores the
-option rather than refusing it, and the hook would run.
+Two things the tree carries are handled differently because of that. The
+tracker's own exports — `.beads/interactions.jsonl` and `.beads/issues.jsonl`
+— do not count as a dirty tree and are never committed: they are derived from
+a store that is authoritative elsewhere, the archives a release ships are not
+built from them (the notes are drafted from one, and are committed before the
+cut), a harness running beside the cut rewrites them continuously and the
+walkthrough this gate runs rewrites them itself, so refusing on them would
+stall most days of a daily cadence and committing them would be a commit
+`main` cannot take. They are excluded from the tree check and left where they
+lie; the tag is placed on the commit by hash, so what they look like on disk
+changes nothing about what it names. And the readiness result reaches
+`docs/releases/<tag>.md` ahead of the tag rather than under it, [through a pull
+request of its own](#release-readiness), so the cut that finds it absent stops
+there and the cut after the merge goes through. Between them, integration may
+land more on `main`; the cut says so and tags the commit its gates ran on,
+which `main` still holds, and refuses only a `main` that was rewritten
+underneath it.
 
 It stops at the tag. Publishing is the `git push`, which is the irreversible
 half and what the release workflow acts on, so it stays something you do
 deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
 executes every one of those refusals against fabricated repositories, and
-`make test` runs it, so changing the verb is checked by the same command as
-changing anything else.
+drives a scratch remote whose `main` refuses every direct push through the
+two-cut loop to a pushed tag, and `make test` runs it, so changing the verb is
+checked by the same command as changing anything else.
 
 ## Release readiness
 
@@ -507,17 +555,36 @@ file to make the gate perform anything but reads.
 The cut asks for it as the Markdown section a release's notes carry, and there
 is one invocation rather than two — a gate read one way and a notes section
 written from a second run would be two results, and only one of them would be
-the one that refused or did not. On a green cut that section is stamped into
-`docs/releases/<tag>.md` between two HTML-comment markers and committed with the
-tag's housekeeping, replacing an earlier one rather than accumulating beside it,
-and leaving everything the product manager wrote around it alone.
+the one that refused or did not. On a green cut that section has to be in
+`docs/releases/<tag>.md` on `main` before the tag exists, between two
+HTML-comment markers, replacing an earlier one rather than accumulating beside
+it, and leaving everything the product manager wrote around it alone. It gets
+there the way every other change reaches `main`: a cut that finds the notes
+carrying no result, or a stale one, commits the stamped notes on a branch
+named `release/<tag>-readiness-<commit>` on top of the commit `origin/main`
+holds — with plumbing, so nothing in the checkout is touched — pushes it, opens
+the pull request for it where `gh` is installed, says so, and stops before
+spending the walkthrough. Merge it and cut again; the second cut finds the
+result current and goes through. A cut run again before the merge finds the
+branch and says so rather than pushing over it.
+
+"Current" is the verdict and the pinned definition, not the whole section: the
+counts in a reading move with the tracker every day, and a harness running
+beside the cut moves them between the merge and the next cut, so a stamp held
+to the whole text would never be current and the loop would never close. What
+the notes record is the reading the first cut took, one commit behind the tag;
+what the tag certifies is that a second reading, on the tree it names, ended
+the same way — and a mismatch on that second reading refuses the tag before
+anything is stamped.
 
 ## Every cut writes its notes
 
 A release nobody can read is a release nobody adopts, so
 [`docs/releases/<tag>.md`](releases/README.md) is a gate rather than a courtesy.
 The cut checks for it before it spends the walkthrough, and a tag with no notes
-is the one refusal that leaves something behind: it drafts them and stops.
+is the first of the two refusals that leave something behind: it drafts them
+and stops. The second is the readiness stamp, committed on a branch and opened
+as a pull request, which is the second `make release` in the loop below.
 
 ```sh
 make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
@@ -525,7 +592,10 @@ $EDITOR docs/releases/v0.3.1.md    # place each item; the judgement is yours
 git add docs/releases/v0.3.1.md    # the draft is a new file, so -a will not do
 git commit -m "v0.3.1 release notes"
 git push origin main               # or a pull request, where main is protected
-make release VERSION=v0.3.1        # green, and the tag carries its own notes
+make release VERSION=v0.3.1        # stamps the readiness result on a branch,
+                                   # opens its pull request, and stops
+                                   # ...merge it, and bring main up to date...
+make release VERSION=v0.3.1        # green, and the tag names what main holds
 git push origin v0.3.1
 ```
 
@@ -542,8 +612,17 @@ through a branch and a merged pull request; the direct push above is the short
 form for a repository that permits one. Either way the cut runs once
 `origin/main` carries the notes. Only a checkout whose origin is unreachable
 skips this, and the cut says that went unchecked rather than passing over it.
+
+**The second `make release` is not a retry.** The notes you committed carry no
+readiness result — a draft never does — so the cut that finds them on `main`
+[stamps the result into them on a branch and opens the pull request for
+it](#release-readiness), and that is the second stop. It is a pull request like
+any other, so it goes through the same review and checks, and the cut after
+the merge is the one that tags. Nothing here is written to `main` by the cut
+itself, which is what a protected `main` permits.
 [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh) executes this
-loop against a scratch repository with a real remote, unpushed notes and all.
+loop against a scratch repository with a real remote, unpushed notes and all,
+and again against one whose `main` refuses every direct push.
 
 The draft comes from the tracker rather than the commit log:
 [`scripts/release-notes.sh`](../scripts/release-notes.sh) reads the work items

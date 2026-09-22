@@ -105,6 +105,10 @@ func brokenInstallations() map[string]func(*world) {
 		"a configured check names a program this machine does not have": func(w *world) {
 			w.configuration = strings.Replace(healthyConfig, "go test ./...", "cargo test --all", 1)
 		},
+		"the product ships the dashboard and node is not installed": func(w *world) {
+			w.shipsDashboard()
+			w.absent("node")
+		},
 		"an artifact home has no index at its door": func(w *world) {
 			w.undocument("docs/designs")
 		},
@@ -268,6 +272,79 @@ func TestTheSlackServiceWithoutItsTokensIsAWarningWithTheStoreCommand(t *testing
 	if !report.Healthy() {
 		t.Fatalf("Diagnose() = %s, want an installation that still runs work: %s", report.Status, render(report))
 	}
+}
+
+// Node is what draws the dashboard page, so a product that ships the dashboard
+// is asked whether this machine has it and every other product is asked nothing.
+// The three answers are the three the render test itself gives, which is what
+// keeps the diagnosis and the checks one statement rather than two.
+func TestNodeIsAskedOfAProductThatShipsTheDashboard(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a product that does not ship the dashboard is not asked", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.absent("node")
+		report := world.diagnose()
+		if finding, found := findingFor(report, "node"); found {
+			t.Fatalf("node = %s %q, want nothing said about a product with no dashboard to draw: %s", finding.Status, finding.Summary, render(report))
+		}
+	})
+
+	t.Run("node installed is ok", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsDashboard()
+		report := world.diagnose()
+		finding, found := findingFor(report, "node")
+		if !found || finding.Status != StatusOK {
+			t.Fatalf("node = %+v, found = %t, want ok: %s", finding, found, render(report))
+		}
+	})
+
+	// An environment that declares its own absence has chosen not to have Node,
+	// so it is worth knowing rather than a problem — and the declaration is
+	// quoted, because which environment declared it is the whole of what a
+	// reader acts on.
+	t.Run("a declared absence is a warning naming the declaration", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsDashboard()
+		world.absent("node")
+		world.variables[dashboard.NodeUnavailableVariable] = "this container is built without Node"
+		report := world.diagnose()
+		finding, _ := findingFor(report, "node")
+		if finding.Status != StatusWarning {
+			t.Fatalf("node = %s %q, want a warning: a declared absence stops no run here", finding.Status, finding.Summary)
+		}
+		if !strings.Contains(finding.Detail, "this container is built without Node") {
+			t.Errorf("detail = %q, want the declaration quoted", finding.Detail)
+		}
+		if !report.Healthy() {
+			t.Fatalf("Diagnose() = %s, want an installation that still runs work: %s", report.Status, render(report))
+		}
+	})
+
+	// Nothing declaring it is the case this whole arrangement exists for: the
+	// machine simply never installed Node, the render test now fails there, and
+	// the finding says so before the check does.
+	t.Run("an undeclared absence is a problem naming what to install", func(t *testing.T) {
+		t.Parallel()
+		world := newWorld(t)
+		world.shipsDashboard()
+		world.absent("node")
+		report := world.diagnose()
+		finding, _ := findingFor(report, "node")
+		if finding.Status != StatusProblem {
+			t.Fatalf("node = %s %q, want a problem: the render test fails on such a machine", finding.Status, finding.Summary)
+		}
+		if finding.Remedy != "brew install node" {
+			t.Errorf("remedy = %q, want the install command for this platform", finding.Remedy)
+		}
+		if !strings.Contains(finding.Detail, dashboard.NodeDocumentation) {
+			t.Errorf("detail = %q, want %s named as where Node is written down", finding.Detail, dashboard.NodeDocumentation)
+		}
+	})
 }
 
 // A dashboard bound outside loopback names where its token is stored, and the
@@ -1155,6 +1232,10 @@ type world struct {
 	// released install, where the version is the whole of the comparison.
 	build  string
 	leases []*leaseHold
+	// variables are what this machine's environment says beyond the state root,
+	// which is how an environment that declares its own missing tools is
+	// arranged.
+	variables map[string]string
 }
 
 const currentVersion = "v1.2.3"
@@ -1179,6 +1260,7 @@ func newWorld(t *testing.T) *world {
 		stateRoot:     t.TempDir(),
 		project:       t.TempDir(),
 		goos:          "darwin",
+		variables:     map[string]string{},
 	}
 	// A machine where everything answers. Each broken installation is this with
 	// exactly one thing changed, so what a test arranges is what it is about.
@@ -1337,7 +1419,7 @@ func (w *world) diagnose() Report {
 // the ordinary way a checks list goes wrong -- is a state a test can arrange by
 // writing the configuration alone.
 func (w *world) lookPath(program string) (string, error) {
-	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "gh": true, "go": true, "security": true}
+	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "gh": true, "go": true, "security": true, "node": true}
 	if !installed[program] || w.missing[program] {
 		return "", errors.New("exec: \"" + program + "\": executable file not found in $PATH")
 	}
@@ -1349,7 +1431,22 @@ func (w *world) getenv(name string) string {
 	case "YOYODYNE_STATE_HOME":
 		return w.stateRoot
 	default:
-		return ""
+		return w.variables[name]
+	}
+}
+
+// shipsDashboard puts the dashboard page's render script in the repository,
+// which is what says a product ships the dashboard and is therefore asked about
+// Node. The contents are irrelevant to the check, which asks whether the script
+// is there rather than what it does.
+func (w *world) shipsDashboard() {
+	w.t.Helper()
+	script := filepath.Join(w.project, filepath.FromSlash(dashboard.RenderScript))
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		w.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(script, []byte("// the page's own renderer\n"), 0o644); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
 	}
 }
 
