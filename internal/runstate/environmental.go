@@ -90,6 +90,21 @@ const (
 	// transport failure has been found spending an item's budgets on a verdict
 	// nobody rendered (yoyodyne-ifd.394).
 	CauseTransportFailure EnvironmentalCause = "transport-failure"
+	// CauseProcessVanished is a run recorded as running with no live process
+	// behind it and no ending ever recorded: the harness stopped its provider on
+	// time — a stream that went silent, or a total budget that ran out — and left
+	// the run in flight to be continued, and nothing continued it. The record
+	// went on saying "running" while nothing was, so the run held a developer
+	// slot and the in-flight guard refused everything beside it, and the
+	// development manager's decision about it could not be carried out because
+	// the run never recorded a stoppage for the docket to carry. Two runs did
+	// that for a day and a half on 2026-09-20 (yoyodyne-ifd.428.4).
+	//
+	// It is recorded by the reconciling sweep rather than by the run, because the
+	// run is exactly what is not there to record it. The sweep names what it
+	// observed — no process, no ending, and the last moment the record moved — so
+	// nobody has to edit a run record by hand to end one of these.
+	CauseProcessVanished EnvironmentalCause = "process-vanished"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -97,7 +112,7 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished:
 		return true
 	default:
 		return false
@@ -119,6 +134,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the build that dispatched it was older than the decision it carried out"
 	case CauseTransportFailure:
 		return "the tracker, the forge, or the network did not answer"
+	case CauseProcessVanished:
+		return "the process carrying the run was gone and no ending was ever recorded"
 	default:
 		return string(c)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -122,7 +123,25 @@ type Reconciler struct {
 	// pipeline's is: a test must be able to take the backoff without taking the
 	// time, and a sweep given none waits on a timer.
 	Sleep func(ctx context.Context, duration time.Duration) error
+	// VanishedGrace is how long a run whose provider the harness stopped on time
+	// may sit in flight with nothing continuing it before the sweep settles it
+	// rather than reporting it resumable. Zero takes DefaultVanishedGrace.
+	VanishedGrace time.Duration
 }
+
+// DefaultVanishedGrace is how long a run the harness stopped on time is left
+// for something to continue it before the sweep settles it as a run whose
+// process vanished.
+//
+// It is the claim audit's threshold, and for the same reason it is that long
+// rather than shorter: the run's own record says it may be continued, so the
+// grace is the room a `yoyo run` somebody typed is given to adopt it before the
+// sweep decides nobody is going to. Acting early costs a continuation the
+// development manager then decides instead; acting late is the failure this
+// exists to end — two runs read as running for a day and a half on 2026-09-20,
+// each holding a developer slot, with the sweep reporting both resumable on
+// every pass and nothing resuming either.
+const DefaultVanishedGrace = readmodel.DefaultDeadClaimThreshold
 
 // ReconcileAction names what reconciliation did with one run.
 type ReconcileAction string
@@ -269,12 +288,36 @@ func (r Reconciler) reconcileRun(ctx context.Context, recorded runstate.State) R
 
 // settle decides one run from its durable state and what the repository shows.
 func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	// A run whose provider the harness stopped on time is owed the rest of the
+	// attempt it was making, for the length of the grace and no longer. Nothing
+	// in the harness continues such a run on its own — the scheduler chooses from
+	// what the tracker calls ready and a claimed item is not — so a run nobody
+	// typed `yoyo run` for stays "running" for good: filling a developer slot,
+	// refusing every item beside it as a race, and reported resumable by every
+	// sweep, whether as a stopped provider or, where the stop fell inside its
+	// repair loop, as a repair that can continue. Past the grace it is settled as
+	// what it is, a run whose process is gone, so the stoppage reaches the
+	// development manager and her decision has something to be carried out
+	// against. It is asked ahead of every other reading of the record because
+	// each of those reads the same record and says "resumable" of it, and that
+	// word is what let two of these stand for a day and a half. The lease this
+	// sweep holds is what says the process is gone: a continuation somebody did
+	// start holds it, and this is never reached.
+	if stoppedProviderIsResumable(state) && r.vanished(state) {
+		return r.settleVanished(ctx, state)
+	}
 	// A run its own pipeline can still continue is left alone. Ending it here
 	// would discard a change that can still be finished, and finishing it here
 	// would mean starting the developer reconciliation must never start.
 	if resumableRepair(state) {
 		result := reconciliationOf(state, ActionResumable)
 		result.Detail = fmt.Sprintf("the repair loop can continue from durable state at attempt %d", state.RepairAttempts)
+		if state.ProviderStop != "" {
+			// The stop fell inside the repair loop, so this reading is what a
+			// vanished run inside its grace looks like, and it says so.
+			result.Detail += fmt.Sprintf("; its provider was stopped because %s, and a sweep after %s of nothing continuing it settles it as a stopped run",
+				describeProviderStop(state.ProviderStop), r.vanishedGrace())
+		}
 		return result, nil
 	}
 	// A run waiting out a provider that refused it is not an interrupted run at
@@ -320,12 +363,15 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 		return result, nil
 	}
 	// A run whose provider the harness stopped on time is not an interrupted run
-	// either: it recorded what stopped it and is owed the rest of the attempt it
-	// was making, in the worktree and session that attempt already established.
+	// either, inside the grace read at the top: it recorded what stopped it and is
+	// owed the rest of the attempt it was making, in the worktree and session that
+	// attempt already established. The reading says how long that lasts, because
+	// "resumable" on its own is the word that let two of these stand for a day
+	// and a half.
 	if stoppedProviderIsResumable(state) {
 		result := reconciliationOf(state, ActionResumable)
-		result.Detail = fmt.Sprintf("the run's provider was stopped because %s and it can continue from durable state",
-			describeProviderStop(state.ProviderStop))
+		result.Detail = fmt.Sprintf("the run's provider was stopped because %s and it can continue from durable state; `yoyo run %s` continues it, and a sweep after %s of nothing continuing it settles it as a stopped run",
+			describeProviderStop(state.ProviderStop), state.WorkItemID, r.vanishedGrace())
 		return result, nil
 	}
 	// A run whose merge the forge queued is not an interrupted run: it finished,
@@ -918,6 +964,113 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 // something is preserved that a person has to replan, reuse, or retire.
 func (r Reconciler) abandon(ctx context.Context, state runstate.State, observation gitworktree.Observation) (Reconciliation, error) {
 	reason := fmt.Sprintf("the run was interrupted in the %s phase with nothing integrated, and no attempt of the harness can finish it", nonEmpty(string(state.Phase), "unrecorded"))
+	return r.abandonFor(ctx, state, observation, reason)
+}
+
+// vanished reports a run the harness stopped on time that has now sat in flight,
+// with nothing continuing it, for the whole of the grace. The age is measured
+// from the record's last write, which for such a run is the stop itself: nothing
+// writes to a parked run until something continues it, and a continuation would
+// be holding the lease this sweep has.
+func (r Reconciler) vanished(state runstate.State) bool {
+	return r.clock().Now().Sub(state.UpdatedAt) >= r.vanishedGrace()
+}
+
+func (r Reconciler) vanishedGrace() time.Duration {
+	if r.VanishedGrace > 0 {
+		return r.VanishedGrace
+	}
+	return DefaultVanishedGrace
+}
+
+// settleVanished ends a run whose provider the harness stopped on time and which
+// nothing then continued. It is the one settlement here the record did not ask
+// for: the run says it may be continued, and what this decides is that nobody
+// is going to, on the evidence that the grace has passed and the lease was free
+// to take.
+//
+// The stoppage is recorded as an environmental one — the harness's own doing
+// rather than the work's — naming exactly what the sweep observed: no live
+// process, no ending recorded, and the last moment the record moved. Whether the
+// round it ends is refused, in the class's sense, is decided the way every
+// environmental round is: on whether it delivered anything. A stopped attempt
+// that left a change in its worktree or on its branch spent what it spent, and
+// the change is what the development manager decides about; one that left
+// nothing is a round the item must not have paid for, and a repair grant it
+// consumed is given back. Neither is read from the run's own account of itself,
+// because that account was written by a process that is gone; both are read
+// from the repository.
+//
+// Everything past that is the settlement an interrupted run already gets — the
+// item blocked with the account of it, the run terminal with the blocker on it,
+// the artifacts untouched, and the stoppage docketed — so a repair-continue the
+// development manager decides carries out exactly as it does for a run a killed
+// process left. Nothing here removes, moves, or judges the change.
+func (r Reconciler) settleVanished(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	observation := gitworktree.Observation{}
+	if state.WorktreePath != "" {
+		var err error
+		observation, err = r.Worktrees.Observe(ctx, worktreeOf(state))
+		if err != nil {
+			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("observe run %s artifacts: %w", state.RunID, err)
+		}
+	}
+	now := r.clock().Now().UTC()
+	state.Environmental = vanishedRefusal(&state, observation, now)
+	reason := vanishedReason(state, r.vanishedGrace())
+	// The stop is an instruction to continue later, and the record refuses to
+	// carry one on a terminal run: what it said is kept in the refusal's detail
+	// and in the reason, which is where a reader of the settled run finds it.
+	state.ProviderStop = ""
+	return r.abandonFor(ctx, state, observation, reason)
+}
+
+// vanishedRefusal is the environmental account of a run whose process vanished,
+// settled where it is written: the sweep is the only process that will ever
+// look at this round, so there is no later settle to leave the class to.
+//
+// The round delivered something if the worktree holds uncommitted work or the
+// branch has moved past the base the run recorded. A run with no worktree
+// recorded delivered nothing, and that is known rather than guessed — the
+// harness never gave it anywhere to deliver to. The grant is returned only on a
+// round that delivered nothing, which is the class's own rule; the review round
+// is never returned here, because a stopped attempt never reached the verdict
+// that would have charged one.
+func vanishedRefusal(state *runstate.State, observation gitworktree.Observation, now time.Time) *runstate.EnvironmentalRefusal {
+	refusal := &runstate.EnvironmentalRefusal{
+		Cause: runstate.CauseProcessVanished,
+		Detail: singleLine(fmt.Sprintf(
+			"no live process held run %s, no ending was recorded on it, and it last wrote to its record at %s, when the harness stopped its provider because %s",
+			state.RunID, state.UpdatedAt.UTC().Format(time.RFC3339), describeProviderStop(state.ProviderStop)),
+			runstate.MaxEnvironmentalDetailBytes),
+		RecordedAt: now,
+		Settled:    true,
+	}
+	delivered := state.WorktreePath != "" &&
+		(observation.WorktreeDirty ||
+			(observation.BranchExists && observation.BranchCommit != "" && observation.BranchCommit != state.BaseCommit))
+	if delivered {
+		return refusal
+	}
+	refusal.Refused = true
+	refusal.GrantReturned = state.ReturnGrantedRound()
+	return refusal
+}
+
+// vanishedReason is the sweep's account of why it ended a run the record said
+// could be continued. It says what was observed and what was decided from it,
+// because it is what the work item, the run's own record, and the docket entry
+// all carry, and a reader of any of them is owed the same sentence: nobody
+// edited this record by hand, the harness settled it, and here is why.
+func vanishedReason(state runstate.State, grace time.Duration) string {
+	return fmt.Sprintf(
+		"the run was recorded as running in the %s phase with no live process behind it: the harness stopped its provider at %s because %s, no ending was ever recorded, and nothing continued the run within %s of that, so the harness settled it as an environmental stop. Nothing about the change was judged, and the branch and worktree are left exactly as the run left them",
+		nonEmpty(string(state.Phase), "unrecorded"), state.UpdatedAt.UTC().Format(time.RFC3339), describeProviderStop(state.ProviderStop), grace)
+}
+
+// abandonFor is abandon with the reason the caller has, for the one settlement
+// whose reason is not an interruption at all.
+func (r Reconciler) abandonFor(ctx context.Context, state runstate.State, observation gitworktree.Observation, reason string) (Reconciliation, error) {
 	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
 	if err != nil {
 		return reconciliationOf(state, ActionFailed), err
