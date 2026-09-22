@@ -46,6 +46,13 @@ jobs:
       - name: Package a release and verify it names its version
         run: make dist-verify VERSION=v0.0.0-ci
 
+      # And that every archive records the commit it was built from. The
+      # release workflow holds its archives to the commit the tag names with
+      # this same target, so a checkout Go does not stamp -- or a stamp read
+      # back wrong -- fails here, on a change, rather than on a tag push.
+      - name: Verify the archives record the commit they were built from
+        run: make dist-verify-commit COMMIT="$(git rev-parse HEAD)"
+
       # The release verb's value is the cuts it refuses, and a refusal nobody
       # exercises is a refusal nobody has. This runs those against fabricated
       # repositories rather than this one, so it needs no provider, no network,

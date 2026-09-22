@@ -7,7 +7,9 @@
 exists and committed with the commit the tag names, so the release page and the
 repository tell one story rather than two: the
 [release workflow](../../.github/workflows/release.yml) publishes this file as
-the release's body, with the install preamble under it.
+the release's body, with the install preamble under it and nothing else — no
+changelog derived from the commit log, which is [not what notes
+are](../developing-yoyo.md#what-a-release-page-carries).
 
 [`v0.3.0.md`](v0.3.0.md) is the exception and says so here rather than in
 itself: it was written after `v0.3.0` was tagged and pushed, so the repository

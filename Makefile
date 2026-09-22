@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck cachecheck check adoption dist dist-verify clean-dist release release-notes
+.PHONY: build test race vet fmt fmtcheck cachecheck check adoption dist dist-verify dist-verify-commit clean-dist release release-notes
 .NOTPARALLEL: check
 
 # Every Go command below writes what it compiles to the build cache before it
@@ -151,6 +151,38 @@ dist-verify: dist
 		exit 1; \
 	fi; \
 	echo "$$stem reports version $$reported"
+
+# A release's archives are built from the commit the tag names and no other.
+# Every binary records the commit it was built from in its build information
+# (`go version -m` reads it back as vcs.revision), and that is what a report
+# filed against a release binary names, so an archive built anywhere else
+# misattributes every report against it. This unpacks each archive and holds
+# what it records to COMMIT. The release workflow runs it with the commit the
+# tag names; CI runs it on every change with HEAD, so the tag push is a rerun
+# rather than a first execution. Go records the commit only from a checkout
+# whose .git is a directory, so from a worktree, whose .git is a file, every
+# archive records nothing and this fails saying so -- which is the truth about
+# those archives rather than a defect in the check.
+dist-verify-commit:
+	@set -e; \
+	if [ -z "$(COMMIT)" ]; then \
+		echo "dist-verify-commit: pass COMMIT=<sha> to hold the archives to" >&2; \
+		exit 1; \
+	fi; \
+	unpacked=$(DIST)/.verify-commit; \
+	rm -rf "$$unpacked"; mkdir -p "$$unpacked"; \
+	trap 'rm -rf "$$unpacked"' EXIT; \
+	for archive in $(DIST)/*.tar.gz; do \
+		[ -f "$$archive" ] || { echo "dist-verify-commit: no archives in $(DIST); run dist first" >&2; exit 1; }; \
+		tar -xzf "$$archive" -C "$$unpacked" yoyo; \
+		recorded=$$($(GO) version -m "$$unpacked/yoyo" \
+			| awk '$$1 == "build" && $$2 ~ /^vcs\.revision=/ { sub("vcs.revision=", "", $$2); print $$2 }'); \
+		if [ "$$recorded" != "$(COMMIT)" ]; then \
+			echo "dist-verify-commit: $$archive records '$${recorded:-no commit}', not $(COMMIT)" >&2; \
+			exit 1; \
+		fi; \
+		echo "$$archive records $$recorded"; \
+	done
 
 # Cutting one release, gate included. `dist` is what a release consists of;
 # this is the one invocation around it that makes a daily cadence cheap enough

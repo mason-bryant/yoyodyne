@@ -22,6 +22,21 @@
 # it, and the tags cut before the notes home existed are exactly the ones that
 # would otherwise turn a rerun of this workflow into a red build.
 #
+# The body is the curated notes and the preamble and nothing else. The forge
+# would append a changelog derived from the commit log if asked, and v0.5.0's
+# publication asked, with `--generate-notes` beside `--notes-file`: some six
+# hundred commits' worth went under 84,765 characters of notes and the forge
+# refused the page for length. A commit message says what one change did; the
+# work item behind it says what somebody wanted, which is the difference between
+# notes and a changelog, and the notes are what a release page carries.
+#
+# The forge's bound is still there, so the length is measured once here rather
+# than discovered as a refusal after the archives are built. A body over the
+# limit is refused, naming the limit and the notes file; one past a configured
+# fraction of it is published with a warning, so growth is seen a release or two
+# before the refusal. RELEASE_BODY_WARN_PERCENT sets the fraction, as a whole
+# percentage of the limit.
+#
 # Requires bash. Nothing in the repository is written: the only thing written is
 # the destination the caller named.
 
@@ -30,6 +45,12 @@ set -euo pipefail
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 preamble="$repository/.github/release-notes-preamble.md"
 notes_home="$repository/docs/releases"
+
+# The forge's bound on a release body, in characters, quoted from its refusal:
+# "body is too long (maximum is 125000 characters)". Measured in bytes below,
+# which can only overstate it.
+forge_limit=125000
+warn_percent="${RELEASE_BODY_WARN_PERCENT:-75}"
 
 refuse() { printf '\nrelease-body: %s\n' "$*" >&2; exit 1; }
 
@@ -63,3 +84,15 @@ else
 fi
 
 cat "$preamble" >> "$destination"
+
+case "$warn_percent" in
+  (''|*[!0-9]*) refuse "RELEASE_BODY_WARN_PERCENT is '$warn_percent', which is not a whole percentage" ;;
+esac
+length="$(wc -c < "$destination" | tr -d ' ')"
+warn_at=$((forge_limit * warn_percent / 100))
+if [ "$length" -gt "$forge_limit" ]; then
+  refuse "the body is $length characters and the forge refuses one over $forge_limit; shorten $notes"
+elif [ "$length" -gt "$warn_at" ]; then
+  printf 'release-body: WARNING: the body is %s characters, past %s%% of the %s the forge allows; %s is what grows\n' \
+    "$length" "$warn_percent" "$forge_limit" "$notes" >&2
+fi

@@ -281,7 +281,7 @@ Go check has ever run a line of bash.
 | This repository's own copy of the delivery definition, `.yoyodyne/workflows/delivery.yaml`, digesting to something other than the built-in it was copied from | `internal/orchestrator` (`definition_repository_test.go`) | Carry the change into both files, or, if the divergence is meant, change the test that holds them together. This project keeps its own definition like any other project does, so its runs execute the copy while the parity harness measures the built-in; editing one alone would leave the two measuring different sequences with nothing saying so. Comments are not compared — the digest is what an instance pins, and the copy carries a header of its own. |
 | A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
 | A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
-| A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh` or `scripts/release-body.sh`. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
+| A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh`, `scripts/release-body.sh`, or the publish step of `.github/workflows/release.yml`, which the suite holds to passing the notes file alone. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
 | The release verb committing a derived export that a run does not declare as churn the primary checkout may acquire | `internal/cli` (`release_repository_test.go`) | Either declare the path in `AllowedPrimaryChanges` as well, or take it back out of `derived_exports`. The containment is one-way on purpose: a run may come to tolerate a path the cut has no business committing on the operator's behalf, so widening the run's list alone is fine and widening the cut's alone is not. |
 | A shell file a shell will not parse — every `.sh` here, the tools in `bin`, and the hooks the tracker installs | `internal/composition` | Fix the syntax. Parsing is `bash -n`, which reads a script and runs none of it, so it is safe to point at the release verb and the adoption walkthrough. It is the floor rather than the gate: shell with a suite gets executed as well. |
 | A YAML or JSON file that does not decode | `internal/composition` | Fix the file. What each one means belongs to whatever reads it — Claude Code, Codex, the tracker, the harness — but one that nothing can parse is this repository's defect whoever owns the schema, and it is not a defect a reviewer reading a diff reliably sees. |
@@ -544,9 +544,53 @@ side by side, one the operator asked for, one from a reviewer's report, one the
 development manager decomposed — and the refusals against a fabricated
 repository and a fabricated export, and `make test` runs it.
 
-The release workflow publishes that same file as the release page's body, with
-the install preamble under it, so the release page and the repository tell one
-story rather than two. [`scripts/release-body.sh`](../scripts/release-body.sh)
-is the composition, kept as a script rather than inline in the workflow because
-workflow YAML on a tag trigger first executes during a real publication; the
-test above covers it, including what a tag with no notes file publishes.
+## What a release page carries
+
+A release page carries three things and nothing else: the tag's notes, under
+their title, with the install preamble
+([`.github/release-notes-preamble.md`](../.github/release-notes-preamble.md))
+under them; the archives `make dist` built for the tag, one per platform in
+the Makefile's `PLATFORMS`; and their `checksums.txt`. The [release workflow](../.github/workflows/release.yml)
+publishes that on a tag push, so the release page and the repository tell one
+story rather than two.
+
+What it does not carry is a changelog. The forge will append one derived from
+the commit log if `gh release create` is passed `--generate-notes`, and
+v0.5.0's publication passed it beside `--notes-file`: some six hundred commits'
+worth went under 84,765 characters of curated notes, and the forge refused the
+page as over its bound of 125,000 characters. The distinction is the one
+[above](#every-cut-writes-its-notes) and in [the notes' own
+README](releases/README.md): the work item says what somebody wanted and the
+commit log says what each change did, which is the difference between notes and
+a changelog. The publish step passes the notes file alone, and
+[`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh) fails if
+`--generate-notes` reappears in it.
+
+[`scripts/release-body.sh`](../scripts/release-body.sh) is the composition,
+kept as a script rather than inline in the workflow because workflow YAML on a
+tag trigger first executes during a real publication. It measures what it
+composed against the forge's bound: past a configured fraction of it — 75% by
+default, `RELEASE_BODY_WARN_PERCENT` to set it — the body is published with a
+warning in the workflow's log, so the notes are seen growing a release or two
+before they cost a publication; over the bound it refuses, naming the limit and
+the notes file, before any archive is published. The test above holds the
+composed body to being exactly the notes and the preamble, and exercises the
+warning and the refusal, alongside what a tag with no notes file publishes.
+The curated notes alone are what grows — the next draft carries every item's
+description, which is what makes a redraft of v0.5.0 some 300 KB — so a
+release whose notes approach the bound is one the product manager shortens by
+hand, and the warning is what says so before the refusal does.
+
+The archives are built at the commit the tag names and no other. The workflow's
+checkout is the tag's, and `make dist-verify-commit COMMIT=<sha>` holds every
+archive to it after the build: a binary records the commit it was built from
+in its build information (`go version -m` reads it back as `vcs.revision`),
+which is what a report filed against a release binary names, so an archive
+built anywhere else misattributes every report against it. That is what
+v0.5.0's first archives did — the cut's `dist` ran ahead of the housekeeping
+commit the tag was then placed on, and they were rebuilt by hand. CI runs the
+same target on every change against `HEAD`, so a tag push reruns an exercised
+path. Go records the commit only from a checkout whose `.git` is a directory,
+so from a worktree — a developer run's, for one — the target reports that the
+archives record no commit and fails, which is true of those archives rather
+than a defect in the check.

@@ -26,7 +26,11 @@
 #
 # scripts/release-body.sh is covered here too, against the notes these cases
 # just wrote. It is what the release workflow runs on a tag push, so the only
-# other place it would ever execute is a real publication.
+# other place it would ever execute is a real publication. What it composes is
+# held to be the notes and the preamble and nothing else, the workflow's publish
+# step is held to passing that file alone, and the measure against the forge's
+# bound on length is exercised on both sides of it -- because v0.5.0's page was
+# refused for a changelog the forge appended, and the notes grow.
 #
 # Everything lives under one temporary root that is removed on exit. The real
 # tracker is never read and nothing outside that root is written.
@@ -309,6 +313,57 @@ contains "$body" "Watch mode" "the tag's own notes are the body"
 contains "$body" "## Key functionality" "with their sections intact"
 contains "$body" "## Install" "and the install preamble under them"
 missing "$body" "# v0.2.0" "the file's title is dropped, because the page already carries it"
+missing "$output" "WARNING" "and a body of ordinary length is composed without a warning"
+
+step "the body is the curated notes and the preamble and nothing else"
+# Held byte for byte, because what overflowed v0.5.0's release page was not the
+# notes: it was a commit-derived changelog the forge appended beside them. The
+# notes say what somebody wanted; a changelog says what each commit did; a
+# release page carries the first.
+expected="$scratch/expected-body.md"
+{ tail -n +2 "$notes"; printf '\n'; cat "$project/.github/release-notes-preamble.md"; } > "$expected"
+if cmp -s "$composed" "$expected"; then
+  pass "the composed body is exactly the notes under their title, a blank line, and the preamble"
+else
+  fail "the composed body carries something other than the notes and the preamble -- got: $body"
+fi
+# And the workflow that publishes it passes that file alone. `--generate-notes`
+# is the flag that asked the forge for the changelog, and it is held out of the
+# publish step here rather than remembered.
+workflow="$repository/.github/workflows/release.yml"
+publish="$(awk '/gh release create/ { inside = 1 } inside { print } inside && /^[[:space:]]*$/ { exit }' "$workflow")"
+contains "$publish" "--notes-file" "the workflow's publish step passes the notes file"
+missing "$publish" "--generate-notes" "and never asks the forge to append a changelog"
+
+step "a body near the forge's bound is published with a warning, and one over it is refused"
+# The forge refuses a body over 125,000 characters. v0.5.0's curated notes were
+# 84,765 on their own and grow with the backlog, so the composition measures
+# what it wrote: past a configured fraction of the bound it warns, so the
+# growth is seen a release or two before it costs a publication, and over the
+# bound it refuses here, naming the limit, instead of the forge refusing later
+# with the archives already built.
+python3 -c "print('# v0.4.0'); print('x' * 100000)" > "$project/docs/releases/v0.4.0.md"
+if output="$( ( cd "$project" && bash scripts/release-body.sh v0.4.0 "$composed" ) 2>&1 )"; then
+  pass "a body under the forge's bound is composed"
+else
+  fail "release-body.sh refused a body under the bound -- got: $output"
+fi
+contains "$output" "WARNING" "with a warning, past the default fraction of the bound"
+contains "$output" "past 75% of the 125000" "that names the fraction and the bound"
+contains "$output" "v0.4.0.md" "and the notes file, which is what grows"
+output="$( ( cd "$project" && RELEASE_BODY_WARN_PERCENT=90 bash scripts/release-body.sh v0.4.0 "$composed" ) 2>&1 )" || true
+missing "$output" "WARNING" "the fraction is configured: at 90% the same body warns of nothing"
+output="$( ( cd "$project" && RELEASE_BODY_WARN_PERCENT=lots bash scripts/release-body.sh v0.4.0 "$composed" ) 2>&1 )" || true
+contains "$output" "is not a whole percentage" "and a fraction that is not one is refused"
+python3 -c "print('# v0.4.0'); print('x' * 126000)" > "$project/docs/releases/v0.4.0.md"
+if output="$( ( cd "$project" && bash scripts/release-body.sh v0.4.0 "$composed" ) 2>&1 )"; then
+  fail "release-body.sh composed a body the forge would refuse -- got: $output"
+else
+  pass "a body over the forge's bound is refused"
+fi
+contains "$output" "the forge refuses one over 125000" "naming the bound"
+contains "$output" "shorten $project/docs/releases/v0.4.0.md" "and the notes file to shorten"
+rm -f "$project/docs/releases/v0.4.0.md"
 
 step "a tag with no notes publishes the preamble rather than failing the workflow"
 if output="$( ( cd "$project" && bash scripts/release-body.sh v9.9.9 "$composed" ) 2>&1 )"; then

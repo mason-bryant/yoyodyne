@@ -46,17 +46,37 @@ jobs:
       - name: Build the release binaries and verify they name the tag
         run: make dist-verify VERSION="$TAG"
 
+      # The archives are built from the commit the tag names and no other. The
+      # checkout above is the tag's by default, and this holds it to that
+      # rather than assuming it: every archive's binary records the commit it
+      # was built from, and this reads it back out of the archive about to be
+      # published. An archive built anywhere else names the wrong commit in
+      # every report filed against it, which is what v0.5.0's first archives
+      # did: the cut built them ahead of the housekeeping commit the tag was
+      # then placed on, and they were rebuilt by hand. CI runs this same target
+      # on every change, against HEAD.
+      - name: Verify every archive was built at the tagged commit
+        run: make dist-verify-commit COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+
       # The release page's body is the notes the repository already carries for
       # this tag, so the two tell one story instead of two. The composition is a
       # script rather than inline YAML because inline YAML in a tag-triggered
       # workflow first executes against a real published release; that one is
       # exercised by scripts/release-notes-test.sh on every change, including
-      # what it does for a tag whose notes file does not exist.
+      # what it does for a tag whose notes file does not exist and what it does
+      # with a body near the forge's bound on length.
       - name: Assemble the release notes
         run: |
           bash scripts/release-body.sh "$TAG" "$RUNNER_TEMP/release-body.md"
           echo "NOTES_FILE=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
+      # The body is that file and nothing else. `--generate-notes` is never
+      # passed: it makes the forge append a changelog derived from the commit
+      # log under the notes, which for v0.5.0 was some six hundred commits
+      # under 84,765 characters of notes, and the forge refused the page for
+      # length. The notes say what somebody wanted and the commit log does not,
+      # and the assembled body is measured against the forge's bound before it
+      # gets here. scripts/release-notes-test.sh holds this step to that.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,5 +84,4 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file "$NOTES_FILE" \
-            --generate-notes \
             dist/*.tar.gz dist/checksums.txt
