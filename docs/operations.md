@@ -1662,6 +1662,32 @@ the page's pop-up on a grouping lists what the figure counted rather than a
 list assembled from the other lines — and both are absent, like the refusals,
 where the queue could not be read.
 
+Each entry under `standing.needs_human` is the thing waiting rather than a
+sentence about it: its `kind`, from a closed set — `amendment`,
+`conversation-carried-item`, `report`, `owed-step`, `publication`,
+`degraded-service`, `hold`, `directive`, `outage`, `stall`, `held-work` — the
+`id` of the record it is about (an amendment's, a directive's, a run's, a work
+item's, a service's name, or which switch a hold is: `operator`, `intake`, or
+`capacity`), the `mover` whose move it is, in the same closed vocabulary the
+page counts by (`operator`, a role such as `architect` or
+`development-manager`, `harness`, `forge`, `nobody`, or `unnamed-role`), and
+the record itself, whole, under a field named for the kind — `amendment`,
+`directive`, `outage`, `stall`, `reports`, `service`, `owed_step`,
+`publication`, `held_work`, and for a hold `operator_hold`, `intake_hold`, or
+`capacity_hold`, whichever switch the `id` names. An `amendment` carries the
+target document, the proposer's role, agent, run, and work item, the proposed
+change, and why, none of it cut to a line. An entry about one admitted work
+item — the carried item, the item a run was carrying, the item an amendment's
+proposer was working on — names it under `work_item_id` as well; a carried
+item carries its `executor` marker rather than a record of its own. Two kinds
+carry no `id`, because each is about a set rather than a record: `report` is
+the pile, and `held-work` is how many items are in one of the two waits. The
+`what` and `whose` the terminal prints are there beside them, and they are
+derived from those fields at the moment the answer is written rather than
+stored, so a record and the line about it cannot disagree; a document whose
+`what` says something its fields do not, or whose `kind` or `mover` is outside
+its vocabulary, is refused when the model reads it back.
+
 One thing is carried there that the four lines do not print: what is parked or
 held on provider capacity, one run and one conversation at a time, under
 `standing.capacity_blocked`. The hold above is every role refused at once; this

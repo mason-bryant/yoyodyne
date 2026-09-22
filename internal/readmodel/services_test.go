@@ -49,7 +49,7 @@ func TestADegradedServiceWaitsOnTheOperatorWithTheSupervisorsReason(t *testing.T
 	if len(standing.NeedsHuman) != 1 {
 		t.Fatalf("NeedsHuman = %+v, want the one degraded child", standing.NeedsHuman)
 	}
-	if got := standing.NeedsHuman[0]; !strings.Contains(got.What, "scheduler service is degraded") || !strings.Contains(got.What, "died 6 times") || !strings.HasPrefix(got.Whose, "the operator's") {
+	if got := standing.NeedsHuman[0]; !strings.Contains(got.What(), "scheduler service is degraded") || !strings.Contains(got.What(), "died 6 times") || !strings.HasPrefix(got.Whose(), "the operator's") {
 		t.Errorf("attention = %+v, want the child, the reason, and whose move it is", got)
 	}
 	rendered := standing.Render()

@@ -59,10 +59,10 @@ func TestAnExpiredLoginIsTheBannerAndAnAttentionEntry(t *testing.T) {
 	}
 	found := 0
 	for _, attention := range standing.NeedsHuman {
-		if strings.Contains(attention.What, "the operator must log in") && strings.Contains(attention.Whose, "log in to the provider") {
+		if strings.Contains(attention.What(), "the operator must log in") && strings.Contains(attention.Whose(), "log in to the provider") {
 			found++
 		}
-		if strings.Contains(attention.Whose, "yoyo release") && strings.Contains(attention.What, "provider") {
+		if strings.Contains(attention.Whose(), "yoyo release") && strings.Contains(attention.What(), "provider") {
 			t.Fatalf("needs a human = %+v, want no release prescribed for a wait it does not lift", attention)
 		}
 	}
@@ -89,7 +89,7 @@ func TestAnExpiredLoginIsWhyNothingStarts(t *testing.T) {
 		t.Fatalf("since = %s, want when the login expired", stall.Since)
 	}
 	waiting, attention := stall.Waiting()
-	if !attention || !strings.Contains(waiting.Whose, "log in to the provider") {
+	if !attention || !strings.Contains(waiting.Whose(), "log in to the provider") {
 		t.Fatalf("waiting = %+v, %t; want the outage as something waiting on the operator", waiting, attention)
 	}
 	// The switches somebody placed still answer first: an operator who paused

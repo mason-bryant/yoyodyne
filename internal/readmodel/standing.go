@@ -348,14 +348,6 @@ type WorkItemRef struct {
 	Title      string `json:"title,omitempty"`
 }
 
-// Attention is one thing waiting on a person: what it is, and whose move it is.
-// The move is half the fact — a thread that says something is waiting without
-// saying who on is the silence this whole surface exists to end.
-type Attention struct {
-	What  string `json:"what"`
-	Whose string `json:"whose"`
-}
-
 // Standing is where the harness stands, in the four lines and nothing else.
 // Every line carries its own problem rather than a shared one, because a
 // tracker that will not answer says nothing whatever about the runs in flight,
@@ -566,7 +558,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.
 	if switches.providerAway && stall.Reason != ReasonProviderAway {
-		needs = append(needs, Attention{What: switches.providerOutage.Says(), Whose: ReasonProviderAway.Whose()})
+		needs = append(needs, outageAttention(switches.providerOutage))
 	}
 	// The hold is waiting on a person in the one way a window is not: the window
 	// lifts on the provider's clock, and the configuration that let it hold every
@@ -581,10 +573,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// and the reports themselves are filed and forgotten by the roles that filed
 	// them.
 	if standing.Reports.OldestAge > maxUndecidedReportAge {
-		needs = append(needs, Attention{
-			What:  standing.Reports.Describe(),
-			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the schedule that works it is not keeping up",
-		})
+		needs = append(needs, reportsAttention(standing.Reports))
 	}
 	// A stall that is holding admitted work back and is nobody else's line to
 	// carry is attention in its own right. Nothing else reports it: a live session
@@ -1172,11 +1161,7 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	attention := make([]Attention, 0, 4)
 	if held.operatorHeld {
-		attention = append(attention, Attention{
-			What: fmt.Sprintf("all harness activity is held, since %s",
-				held.operator.HeldAt.UTC().Format(time.RFC3339)),
-			Whose: "the operator's — nothing runs until `yoyo resume` lifts it",
-		})
+		attention = append(attention, operatorHoldAttention(held.operator))
 	}
 	if held.intakeHeld {
 		// Who placed it is on the record and is said with it: the same switch is
@@ -1188,18 +1173,10 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		// runs, and the operator's only once she has escalated it — with the
 		// probe named where one is in flight, so the line says what is being
 		// tried rather than only that something is.
-		attention = append(attention, Attention{
-			What: fmt.Sprintf("intake is held, since %s: %s",
-				held.intake.HeldAt.UTC().Format(time.RFC3339), singleLine(intakeClause(held.intake), maxRefusalBytes)),
-			Whose: held.intake.Whose(),
-		})
+		attention = append(attention, intakeHoldAttention(held.intake))
 	}
 	for _, paused := range held.pausing {
-		attention = append(attention, Attention{
-			What: fmt.Sprintf("directive %s is unresolved: %s",
-				paused.ID, singleLine(paused.Unresolved, maxRefusalBytes)),
-			Whose: "the operator's — the work it affects waits until `yoyo directive resolve` settles it",
-		})
+		attention = append(attention, directiveAttention(paused))
 	}
 	problem := strings.Join(held.problems, "; ")
 
@@ -1209,11 +1186,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		problem = joinProblems(problem, fmt.Sprintf("the proposed changes could not be read: %v", err))
 	} else {
 		for _, proposal := range amendment.Pending(records) {
-			attention = append(attention, Attention{
-				What: fmt.Sprintf("a change to %s is proposed and undecided (%s)", proposal.Artifact, proposal.ID),
-				Whose: fmt.Sprintf("the %s's — nothing reaches the document until they or the operator decide it",
-					proposal.Owner),
-			})
+			attention = append(attention, amendmentAttention(proposal))
 		}
 	}
 
@@ -1229,10 +1202,7 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 		problem = joinProblems(problem, fmt.Sprintf("the runs that owe a step could not be read: %v", err))
 	} else {
 		for _, state := range outstanding {
-			attention = append(attention, Attention{
-				What:  fmt.Sprintf("run %s of %s ended still owing a step", state.RunID, state.WorkItemID),
-				Whose: "the operator's — `yoyo reconcile` reports which and settles it",
-			})
+			attention = append(attention, owedStepAttention(state))
 		}
 	}
 	// What is awaiting the forge is read by the record's own predicate, over every
@@ -1267,17 +1237,11 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 // them with the reason against each.
 func Held(awaitingDecision, awaitingCarryOut int) []Attention {
 	attention := make([]Attention, 0, 2)
-	if awaiting := awaitingDecision; awaiting > 0 {
-		attention = append(attention, Attention{
-			What:  fmt.Sprintf("%s %s the development manager's decision", count(awaiting, "admitted item"), awaits(awaiting)),
-			Whose: "the development manager's — nothing pulls a stopped item until she decides what happens to it",
-		})
+	if awaitingDecision > 0 {
+		attention = append(attention, heldWorkAttention(HeldAwaitingDecision, awaitingDecision))
 	}
-	if awaiting := awaitingCarryOut; awaiting > 0 {
-		attention = append(attention, Attention{
-			What:  fmt.Sprintf("%s %s carry-out of a decision already recorded", count(awaiting, "admitted item"), awaits(awaiting)),
-			Whose: "the harness's — the decision is made, and what is outstanding is the harness acting on it",
-		})
+	if awaitingCarryOut > 0 {
+		attention = append(attention, heldWorkAttention(HeldAwaitingCarryOut, awaitingCarryOut))
 	}
 	return attention
 }
@@ -1305,14 +1269,7 @@ func HandedOff(queue backlog.Queue) []Attention {
 		if entry.Executor.DeveloperRun() {
 			continue
 		}
-		whose := "the role it names — in conversation; no run will ever be started for it"
-		if role := entry.Executor.Role(); role != "" {
-			whose = "the " + role.Title() + "'s — in conversation; no run will ever be started for it"
-		}
-		attention = append(attention, Attention{
-			What:  fmt.Sprintf("%s is admitted for %q rather than a developer run", entry.ID, entry.Executor),
-			Whose: whose,
-		})
+		attention = append(attention, carriedItemAttention(entry.ID, entry.Executor))
 	}
 	return attention
 }

@@ -108,6 +108,27 @@
   "awaiting_carry_out": 0,
   "needs_human": [
     {
+      "kind": "hold",
+      "id": "capacity",
+      "mover": "operator",
+      "capacity_hold": {
+        "holding": true,
+        "since": "2026-09-19T12:02:00Z",
+        "resets_at": "2026-09-19T18:50:00Z",
+        "refusals": 7,
+        "kind": "seven_day",
+        "agents": [
+          "architect",
+          "developer",
+          "development-manager",
+          "product-manager",
+          "reviewer"
+        ],
+        "models": [
+          "opus"
+        ],
+        "alternates": []
+      },
       "what": "every role is held by the provider's usage window, since 2026-09-19T12:02:00Z, until 2026-09-19T18:50:00Z",
       "whose": "the operator's — the window lifts on the provider's clock, and enabling failover on the agents is what would move the work onto another model before it does"
     }
