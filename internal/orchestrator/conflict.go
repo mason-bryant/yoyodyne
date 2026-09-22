@@ -10,11 +10,39 @@ package orchestrator
 //
 // What they cost is the point. Two runs started at once over the same files are
 // one promotion plus, on the loser, a replay, a fresh set of checks, and an
-// entirely fresh review — or a stopped run and an item waiting for a person. The
-// siblings of one epic are the ordinary way to arrive there: work broken out of
-// one piece is work over one part of the repository, and the queue offers all of
-// it at once. So the scheduler declines to buy that cost when it can see it
-// coming, and sequences the two rather than racing them.
+// entirely fresh review — or a stopped run and an item waiting for a person. So
+// the scheduler declines to buy that cost when it can see it coming, and
+// sequences the two rather than racing them.
+//
+// Two things let it see one coming: an item and the epic a run is already over,
+// which are one scope however the tracker files them, and two items that will
+// change the same files. Sharing a parent is deliberately not a third, though
+// it was until yoyodyne-ifd.261.
+//
+// The intent this map carried was that two children of one epic race each other:
+// work broken out of one piece is work over one part of the repository. That is
+// true of a decomposition and false of a heading, and nothing structural tells
+// one from the other — both are an item with children, and a heading's children
+// are unrelated to each other by construction. This tracker files its whole
+// backlog under headings ("Scheduler and pipeline", "CLI and operator
+// surfaces"), so the rule held every child of a heading behind whichever of them
+// started first: on the reading of 2026-09-22, 29 of the 109 unfinished items
+// sat behind one epic and 15 behind another. That is the queue serialized rather
+// than one race declined, and it was measured throughput loss rather than a
+// hypothesis — one of the two causes named for the idle line of 2026-09-04.
+//
+// So the intent is amended rather than honored, and what replaces it is the
+// relation that really is one piece of work: an item and the epic it was broken
+// out of. That draws the container-versus-decomposed line where it can be drawn
+// soundly rather than guessed at. An epic nobody is running is a container and
+// holds nothing back, whatever hangs off it; an epic a run is over is one whose
+// execution a child of it would be carrying, so that child waits. It is the
+// yoyodyne-ifd.121 shape — the epic in flight, the decomposition creating its
+// child underneath it, the two started as two runs of one scope — and it is the
+// half yoyodyne-ifd.256 left open. Two children of a heading race nothing by
+// having been filed together, and two children of a real decomposition that will
+// touch the same code are caught by the surfaces below, which read what the
+// items say rather than what their filing implies.
 //
 // It is choosing rather than enforcing, which is why it is here and not
 // downstream. And it is only choosing: nothing here holds an item back past the
@@ -70,7 +98,8 @@ type conflict struct {
 }
 
 // inFlight is what the runs already going have taken, as one pull sees it: the
-// epics they were broken out of, and the surfaces they will change.
+// items they are over, the epics those items were broken out of, and the
+// surfaces they will change.
 //
 // It is built per pull and grows as that pull starts things. An item started
 // three entries ago is in flight as surely as one another process is running,
@@ -83,19 +112,21 @@ type conflict struct {
 // pull request preserved for a person — is a record, and a record holds no
 // epic. See occupiedItems, which is where that reading is made.
 type inFlight struct {
-	// epics maps an epic identifier to the in-flight run working under it. Both
-	// an item's parent and the item itself are keys: two children of one epic
-	// race each other, and a child races the epic it was broken out of.
+	// running maps the item each in-flight run is over to that run. A candidate
+	// broken out of one of these would be carrying part of that run's own scope,
+	// which is the race the header describes.
+	running map[string]holder
+	// carrying maps the epic an in-flight run's item was broken out of to that
+	// run, so an epic is not started beside a run already carrying a piece of its
+	// execution. The queue-side coverage check answers the same question from the
+	// tracker's own reading of the backlog; this answers it for a child this pull
+	// started itself, and for a run over an item the reading no longer lists.
 	//
-	// The parent read here is the one the tracker states as a field, and
-	// deliberately not the wider reading beads.WorkItem.DecomposedFrom does. A
-	// tracker that hangs its whole backlog off one root epic states that the
-	// wider way too, and holding every item back behind whichever child of the
-	// root is already running is serializing the queue rather than declining one
-	// race — which the header above says is exactly what this is not. Widening it
-	// wants a container epic told from a decomposed one first, and that question
-	// is not answered here.
-	epics map[string]holder
+	// It is keyed by the epic rather than by the child, and read only against a
+	// candidate's own identifier. A candidate is never compared against it by
+	// parent, which is what would put two children of one heading back into a
+	// queue behind each other.
+	carrying map[string]holder
 	// taken is the surfaces each in-flight run holds, in the order the runs
 	// were taken, so which conflict is reported for a candidate is stable rather
 	// than an artifact of map ordering.
@@ -108,7 +139,7 @@ type takenSurfaces struct {
 }
 
 func newInFlight() *inFlight {
-	return &inFlight{epics: map[string]holder{}}
+	return &inFlight{running: map[string]holder{}, carrying: map[string]holder{}}
 }
 
 // take records a run over an item as work in flight, so nothing that would race
@@ -123,21 +154,27 @@ func (f *inFlight) take(item beads.WorkItem, run string) {
 		return
 	}
 	by := holder{item: id, run: strings.TrimSpace(run)}
-	f.claim(id, by)
-	if parent := strings.TrimSpace(item.Parent); parent != "" {
-		f.claim(parent, by)
+	claim(f.running, id, by)
+	// Parentage is read whichever way the tracker states it, as the queue-side
+	// coverage check reads it. bd states it as a field beside the item and as a
+	// parent-child edge, a store may use either, and this project's own export
+	// uses only the edge — so a reading of the field alone sees such a store as a
+	// backlog nothing was ever broken out of, and this guard as an empty map.
+	// beads.WorkItem.DecomposedFrom is where both readings live.
+	if parent := item.DecomposedFrom(); parent != "" {
+		claim(f.carrying, parent, by)
 	}
 	if paths := surface.Of(item); len(paths) > 0 {
 		f.taken = append(f.taken, takenSurfaces{by: by, paths: paths})
 	}
 }
 
-// claim records one epic identifier against the first in-flight run to hold it.
-// The first rather than the last, so a candidate held back at one pull is told
-// about the same run at the next one for as long as that run lasts.
-func (f *inFlight) claim(epic string, by holder) {
-	if _, held := f.epics[epic]; !held {
-		f.epics[epic] = by
+// claim records one identifier against the first in-flight run to hold it. The
+// first rather than the last, so a candidate held back at one pull is told about
+// the same run at the next one for as long as that run lasts.
+func claim(held map[string]holder, id string, by holder) {
+	if _, taken := held[id]; !taken {
+		held[id] = by
 	}
 }
 
@@ -147,15 +184,21 @@ func (f *inFlight) claim(epic string, by holder) {
 // serialize the queue.
 func (f *inFlight) against(item beads.WorkItem) (conflict, bool) {
 	id := strings.TrimSpace(item.ID)
-	if parent := strings.TrimSpace(item.Parent); parent != "" {
-		if by, held := f.epics[parent]; held && by.item != id {
-			return conflict{With: by, Over: "the epic " + parent + " both were broken out of"}, true
+	// The epic this item was broken out of, with a run already over it: the
+	// child carries part of that run's own scope, so it waits rather than
+	// racing it. Only a run over the epic itself holds a child back — a run over
+	// another child of the same epic is not this item's work, whatever the two
+	// share by being filed together.
+	if parent := item.DecomposedFrom(); parent != "" {
+		if by, held := f.running[parent]; held && by.item != id {
+			return conflict{With: by, Over: "the epic " + parent + " this item was broken out of"}, true
 		}
 	}
-	// The other direction: a run over the epic this item belongs to. Nothing
-	// else catches it — the coverage check reads an item's own children, which
-	// says nothing about a parent somebody else is already running.
-	if by, held := f.epics[id]; held && by.item != id {
+	// The other direction: this item is the epic, and a run is already over a
+	// child carrying part of its execution. The queue-side coverage check
+	// ordinarily catches that from the tracker's own reading; this catches the
+	// child started later in this same pull, which that reading predates.
+	if by, held := f.carrying[id]; held && by.item != id {
 		return conflict{With: by, Over: "the epic " + id + " that run was broken out of"}, true
 	}
 	mine := surface.Of(item)
