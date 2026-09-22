@@ -275,6 +275,24 @@ func TestBranchReviewCannotApproveAPartlyDescribedBranch(t *testing.T) {
 	if !strings.Contains(provider.request.Prompt, "12 older commit(s) of this branch are not listed") {
 		t.Errorf("the reviewer was not told its history was cut: %q", provider.request.Prompt)
 	}
+
+	// A described history whose bound fell on test data is the other case, and it
+	// approves: the narrowing that lets a fixture-heavy work item close is the
+	// same rule at this scope, and the verdict names what it covered.
+	fixtures := &fakeBackend{finalText: `{"decision":"approve","summary":"the commits agree","fixtures":["internal/dashboard/testdata/renders/busy.html"]}`}
+	whole := newBranchRequest(nil)
+	whole.Changes.Truncated = true
+	whole.Changes.OmittedFiles = []gitworktree.OmittedFile{{
+		Path: "internal/dashboard/testdata/renders/busy.html", Bytes: 21873, Reason: gitworktree.OmittedPatchFull,
+		Class: gitworktree.FileClassFixture, Bound: 262144, Digest: "git-blob:" + strings.Repeat("a", 40),
+	}}
+	approved, err := (Reviewer{Backend: fixtures, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), whole)
+	if err != nil {
+		t.Fatalf("Review() error = %v, want an approval over listed fixtures", err)
+	}
+	if approved.Decision != DecisionApprove {
+		t.Fatalf("Review() decision = %q, want an approval", approved.Decision)
+	}
 }
 
 func TestBranchReviewRejectsARequestThatNamesNoAccumulatedChange(t *testing.T) {

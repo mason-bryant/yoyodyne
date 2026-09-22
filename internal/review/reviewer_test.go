@@ -1174,6 +1174,141 @@ func TestReviewRejectsApprovalWhenTheChangeIsIncomplete(t *testing.T) {
 	}
 }
 
+// The refusal above is narrowed to the omissions that really leave a change
+// unjudged. A change whose test data alone outgrew the bound presents its code
+// whole — the bound is spent in class order — and lists each fixture with its
+// size and digest, and that change is approvable; one that kept out a source or
+// test file, or that named a fixture with nothing anybody could open, is not.
+//
+// Without the narrowing such a change could be reviewed and never closed, which
+// is the question yoyodyne-ifd.404 left open behind yoyodyne-ifd.141.3's diff.
+func TestAnApprovalIsGivenOverListedFixturesAndRefusedOverEverythingElse(t *testing.T) {
+	t.Parallel()
+
+	fixture := gitworktree.OmittedFile{
+		Path: "internal/dashboard/testdata/renders/busy.html", Bytes: 21873,
+		Reason: gitworktree.OmittedPatchFull, Class: gitworktree.FileClassFixture,
+		Bound: 262144, DiffBytes: 21873, Digest: "sha256:" + strings.Repeat("a", 64),
+	}
+	approving := func() string {
+		return `{"decision":"approve","approves":"implementation","summary":"the read model is whole","fixtures":["internal/dashboard/testdata/renders/busy.html"]}`
+	}
+
+	// Only listed fixtures behind the bound: approvable.
+	provider := &fakeBackend{finalText: approving()}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Patch:        "diff --git a/internal/readmodel/throughput.go b/internal/readmodel/throughput.go\n",
+		Truncated:    true,
+		OmittedFiles: []gitworktree.OmittedFile{fixture},
+	}
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v, want an approval over listed fixtures", err)
+	}
+	if result.Decision != DecisionApprove {
+		t.Fatalf("Review() decision = %q, want an approval", result.Decision)
+	}
+	if !reflect.DeepEqual(result.Verdict.Fixtures, []string{fixture.Path}) {
+		t.Fatalf("Review() fixtures = %#v, want the fixture the approval covered", result.Verdict.Fixtures)
+	}
+
+	// The same change with a source file behind the bound is not.
+	for name, omitted := range map[string][]gitworktree.OmittedFile{
+		"a source file the bound cut": {
+			fixture,
+			{Path: "internal/readmodel/throughput.go", Bytes: 13216, Reason: gitworktree.OmittedPatchFull,
+				Class: gitworktree.FileClassSource, Bound: 262144, DiffBytes: 13216, Digest: "sha256:" + strings.Repeat("b", 64)},
+		},
+		"a test file the bound cut": {
+			{Path: "internal/readmodel/throughput_test.go", Bytes: 15189, Reason: gitworktree.OmittedPatchFull,
+				Class: gitworktree.FileClassTest, Bound: 262144, DiffBytes: 15189, Digest: "sha256:" + strings.Repeat("c", 64)},
+		},
+		"a fixture listed with nothing to open": {
+			{Path: "internal/dashboard/testdata/renders/link.html", Bytes: 0, Reason: gitworktree.OmittedUnreadable,
+				Class: gitworktree.FileClassFixture},
+		},
+		"a fixture the listing cannot identify": {
+			{Path: "internal/dashboard/testdata/renders/stale.html", Bytes: 22126, Reason: gitworktree.OmittedPatchFull,
+				Class: gitworktree.FileClassFixture, Bound: 262144, DiffBytes: 22126},
+		},
+	} {
+		refused := &fakeBackend{finalText: approving()}
+		cut := newRequest(nil)
+		cut.Changes = gitworktree.ChangeDiff{Patch: "diff --git a/x b/x\n", Truncated: true, OmittedFiles: omitted}
+
+		result, err := (Reviewer{Backend: refused, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), cut)
+		if err == nil || !strings.Contains(err.Error(), "cannot approve an incomplete change representation") {
+			t.Errorf("%s: Review() error = %v, want the approval refused", name, err)
+		}
+		if result.Decision != "" {
+			t.Errorf("%s: Review() decision = %q, want no approval", name, result.Decision)
+		}
+	}
+}
+
+// What replaces the crude refusal is the reviewer saying what its approval
+// covered: an approval over a change whose fixtures the bound kept out names
+// every one of them. A verdict that does not is asked for again rather than
+// settled, because the change is sound and the answer is one turn away.
+func TestAnApprovalOverOmittedFixturesNamesTheFixturesItCovered(t *testing.T) {
+	t.Parallel()
+
+	omitted := []gitworktree.OmittedFile{
+		{Path: "internal/dashboard/testdata/renders/busy.html", Bytes: 21873, Reason: gitworktree.OmittedPatchFull,
+			Class: gitworktree.FileClassFixture, Bound: 262144, Digest: "sha256:" + strings.Repeat("a", 64)},
+		{Path: "internal/dashboard/testdata/renders/stale.html", Bytes: 22126, Reason: gitworktree.OmittedPatchFull,
+			Class: gitworktree.FileClassFixture, Bound: 262144, Digest: "sha256:" + strings.Repeat("b", 64)},
+	}
+	changes := gitworktree.ChangeDiff{Patch: "diff --git a/x b/x\n", Truncated: true, OmittedFiles: omitted}
+
+	silent := &fakeBackend{finalText: `{"decision":"approve","approves":"implementation","summary":"fine"}`}
+	request := newRequest(nil)
+	request.Changes = changes
+	result, err := (Reviewer{Backend: silent, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	var unaccounted UnaccountedFixturesError
+	if !errors.As(err, &unaccounted) {
+		t.Fatalf("Review() error = %v, want an approval that accounted for no fixture refused", err)
+	}
+	if !reflect.DeepEqual(unaccounted.Fixtures, []string{omitted[0].Path, omitted[1].Path}) {
+		t.Fatalf("unaccounted fixtures = %#v, want both of them", unaccounted.Fixtures)
+	}
+	if result.Decision != "" {
+		t.Fatalf("Review() decision = %q, want no approval", result.Decision)
+	}
+
+	// Half a list is not an account either.
+	partial := &fakeBackend{finalText: `{"decision":"approve","approves":"implementation","summary":"fine","fixtures":["internal/dashboard/testdata/renders/busy.html"]}`}
+	half := newRequest(nil)
+	half.Changes = changes
+	if _, err := (Reviewer{Backend: partial, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), half); !errors.As(err, &unaccounted) {
+		t.Fatalf("Review() error = %v, want the unnamed fixture refused", err)
+	} else if !reflect.DeepEqual(unaccounted.Fixtures, []string{omitted[1].Path}) {
+		t.Fatalf("unaccounted fixtures = %#v, want the one that was not named", unaccounted.Fixtures)
+	}
+
+	// A repair is never asked for the list: it approves nothing, so there is
+	// nothing for the list to say was covered.
+	repairing := &fakeBackend{finalText: `{"decision":"repair","summary":"not yet","findings":[{"severity":"major","message":"handle the empty case"}]}`}
+	sent := newRequest(nil)
+	sent.Changes = changes
+	if _, err := (Reviewer{Backend: repairing, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), sent); err != nil {
+		t.Fatalf("Review() error = %v, want a repair that lists no fixture to stand", err)
+	}
+	// And the reviewer was asked for it, in the evidence and in the schema.
+	for _, want := range []string{
+		"- internal/dashboard/testdata/renders/busy.html",
+		`list every one of them in the verdict's "fixtures" field`,
+	} {
+		if !strings.Contains(repairing.request.Prompt, want) {
+			t.Errorf("the evidence does not ask for the fixture account (%q):\n%s", want, repairing.request.Prompt)
+		}
+	}
+	if !strings.Contains(repairing.request.SystemPrompt, `"fixtures":["path"]`) {
+		t.Errorf("the contract's schema has no fixtures field:\n%s", repairing.request.SystemPrompt)
+	}
+}
+
 // An approval says what it approves, because that is what decides whether the
 // work item closes. yoyodyne-ifd.284 is what an approval that cannot say it
 // costs: the reviewer wrote "offered as evidence rather than implementation" in

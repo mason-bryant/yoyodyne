@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -1289,9 +1290,13 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 		t.Fatalf("UnifiedChanges() per-file error = %v", err)
 	}
 	// The file the per-file bound dropped is recorded by name, with the size it
-	// actually is and the bound it exceeded, so what a reviewer is handed says
-	// "delivered but too large to show" rather than nothing at all.
-	wantOversized := []OmittedFile{{Path: "big.txt", Bytes: 4400, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 64}}
+	// actually is, the bound it exceeded, and the digest of what it delivers, so
+	// what a reviewer is handed says "delivered but too large to show" rather than
+	// nothing at all — and a person opening it can prove they opened that file.
+	wantOversized := []OmittedFile{{
+		Path: "big.txt", Bytes: 4400, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 64,
+		Digest: digestOf(strings.Repeat("a line of new content\n", 200)),
+	}}
 	if !perFile.Truncated || !reflect.DeepEqual(perFile.OmittedFiles, wantOversized) {
 		t.Fatalf("per-file bound = %#v", perFile)
 	}
@@ -1306,7 +1311,10 @@ func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() file-count error = %v", err)
 	}
-	wantCounted := []OmittedFile{{Path: "small.txt", Bytes: 6, Reason: OmittedTooManyFiles, Class: FileClassSource, Bound: 1}}
+	wantCounted := []OmittedFile{{
+		Path: "small.txt", Bytes: 6, Reason: OmittedTooManyFiles, Class: FileClassSource, Bound: 1,
+		Digest: digestOf("small\n"),
+	}}
 	if len(counted.UntrackedFiles) != 1 || !counted.Truncated || !reflect.DeepEqual(counted.OmittedFiles, wantCounted) {
 		t.Fatalf("file-count bound = %#v", counted)
 	}
@@ -1383,7 +1391,10 @@ func TestManagerUnifiedChangesAccountsForEveryDeliveredFile(t *testing.T) {
 	// The size is the file's own and the bound is the one it was measured
 	// against, so a reviewer reads how far over the ceiling the file is rather
 	// than being told a name and left to guess.
-	want := OmittedFile{Path: "corpus.txt", Bytes: int64(len(oversized)), Reason: OmittedTooLarge, Class: FileClassSource, Bound: DefaultMaxDiffFileBytes}
+	want := OmittedFile{
+		Path: "corpus.txt", Bytes: int64(len(oversized)), Reason: OmittedTooLarge, Class: FileClassSource,
+		Bound: DefaultMaxDiffFileBytes, Digest: digestOf(oversized),
+	}
 	if omissions["corpus.txt"] != want {
 		t.Errorf("oversized omission = %#v, want %#v", omissions["corpus.txt"], want)
 	}
@@ -1392,8 +1403,11 @@ func TestManagerUnifiedChangesAccountsForEveryDeliveredFile(t *testing.T) {
 		!strings.Contains(described, strconv.Itoa(DefaultMaxDiffFileBytes)) {
 		t.Errorf("described omission = %q, want the file, the bound, and what became of it", described)
 	}
-	if omissions["alias.go"].Reason != OmittedUnreadable {
-		t.Errorf("symlink omission = %#v, want it named as unreadable", omissions["alias.go"])
+	// A symlink is not delivered content, so there is nothing to digest and the
+	// omission carries none: a listing with no digest is what tells the rule
+	// below that this omission is not one anybody could open.
+	if alias := omissions["alias.go"]; alias.Reason != OmittedUnreadable || alias.Digest != "" || alias.ListedWhole() {
+		t.Errorf("symlink omission = %#v, want it named as unreadable with nothing to open", alias)
 	}
 	if strings.Contains(changes.Patch, "generated line") {
 		t.Errorf("patch included an oversized file:\n%s", changes.Patch)
@@ -1429,7 +1443,7 @@ func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
 	if tracked := changes.OmittedFiles[0]; tracked.Path != "README.txt" || tracked.Bytes != 15 || tracked.Reason != OmittedBinary || tracked.DiffBytes == 0 {
 		t.Fatalf("tracked binary omission = %#v, want README.txt named as binary with its diff measured", tracked)
 	}
-	if changes.OmittedFiles[1] != (OmittedFile{Path: "new.bin", Bytes: 11, Reason: OmittedBinary, Class: FileClassSource}) {
+	if changes.OmittedFiles[1] != (OmittedFile{Path: "new.bin", Bytes: 11, Reason: OmittedBinary, Class: FileClassSource, Digest: digestOf("new\x00binary\n")}) {
 		t.Fatalf("untracked binary omission = %#v, want new.bin", changes.OmittedFiles[1])
 	}
 	for _, unreviewable := range []string{"Binary files", "new.bin"} {
@@ -1500,13 +1514,17 @@ func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
 	if strings.Contains(bounded.Patch, "a-large.txt") || strings.Contains(bounded.Patch, "committed content") {
 		t.Errorf("the file the bound dropped is partly in the patch:\n%s", bounded.Patch)
 	}
-	want := []OmittedFile{{Path: "a-large.txt", Bytes: 5600, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 600, DiffBytes: int64(len(whole.Patch) - len(bounded.Patch))}}
+	want := []OmittedFile{{
+		Path: "a-large.txt", Bytes: 5600, Reason: OmittedTooLarge, Class: FileClassSource, Bound: 600,
+		DiffBytes: int64(len(whole.Patch) - len(bounded.Patch)),
+		Digest:    digestOf(strings.Repeat("a line of committed content\n", 200)),
+	}}
 	if !reflect.DeepEqual(bounded.OmittedFiles, want) {
 		t.Fatalf("omitted files = %#v, want %#v", bounded.OmittedFiles, want)
 	}
-	if described := want[0].Describe(); !strings.Contains(described, "a-large.txt (5600 bytes)") ||
+	if described := want[0].Describe(); !strings.Contains(described, "a-large.txt (5600 bytes, "+want[0].Digest+")") ||
 		!strings.Contains(described, "too large to show") || !strings.Contains(described, "600 bytes") {
-		t.Errorf("described omission = %q, want the file, its size, and the bound", described)
+		t.Errorf("described omission = %q, want the file, its size, its digest, and the bound", described)
 	}
 
 	// A file that would have fit on its own but reached the bound after another
@@ -2007,6 +2025,14 @@ func writeFile(t *testing.T, root, relative, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", relative, err)
 	}
+}
+
+// digestOf is the digest an omission record carries for content this test
+// wrote. It is computed here rather than copied in as a hex literal so a test
+// that changes the content it writes cannot go on asserting the old file's
+// digest.
+func digestOf(content string) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(content)))
 }
 
 type recordingProcessRunner struct {

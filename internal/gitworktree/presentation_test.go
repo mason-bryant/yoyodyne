@@ -287,6 +287,58 @@ func TestTheDashboardPageChangeReplayedThroughTheBoundPresentsTheReadModelWhole(
 			t.Errorf("%s is shown with %d of its %d lines", path, strings.Count(section, line), want)
 		}
 	}
+
+	// And the change is one a reviewer can approve. Ordering the bound put the
+	// code in front of her; this is the other half of it — every omission is a
+	// fixture, and every one of those is listed with the size and the digest that
+	// make it openable, so nothing about the representation refuses the approval.
+	// Without it the change is reviewable and unclosable, which is what
+	// yoyodyne-ifd.404 left behind and what yoyodyne-ifd.425 is for.
+	if problems := changes.UnreviewableOmissions(); len(problems) > 0 {
+		t.Errorf("the change cannot be approved: %s", strings.Join(problems, "; "))
+	}
+	for _, omitted := range changes.OmittedFiles {
+		if !strings.HasPrefix(omitted.Digest, "sha256:") || !omitted.ListedWhole() {
+			t.Errorf("omission = %#v, want it delivered as evidence somebody can open and check", omitted)
+		}
+	}
+}
+
+// The narrowed refusal, at the grain the rule is written in: an omission is one
+// a review can be completed over only where it is test data and the listing says
+// which bytes were kept out.
+func TestUnreviewableOmissionsNamesWhatAnApprovalCannotCover(t *testing.T) {
+	t.Parallel()
+
+	listed := OmittedFile{
+		Path: "internal/dashboard/testdata/renders/busy.html", Bytes: 21873, Reason: OmittedPatchFull,
+		Class: FileClassFixture, Bound: 262144, Digest: "sha256:" + strings.Repeat("a", 64),
+	}
+	deleted := OmittedFile{
+		Path: "internal/dashboard/testdata/renders/gone.html", Bytes: 0, Reason: OmittedPatchFull,
+		Class: FileClassFixture, Bound: 262144, DiffBytes: 5600,
+	}
+	for name, testCase := range map[string]struct {
+		omitted []OmittedFile
+		problem string
+	}{
+		"a listed fixture":                {omitted: []OmittedFile{listed}},
+		"a fixture the change deletes":    {omitted: []OmittedFile{deleted}},
+		"source the bound cut":            {omitted: []OmittedFile{{Path: "internal/readmodel/throughput.go", Bytes: 13216, Reason: OmittedPatchFull, Class: FileClassSource}}, problem: "is source and the patch does not show it"},
+		"a test the bound cut":            {omitted: []OmittedFile{{Path: "internal/readmodel/throughput_test.go", Bytes: 15189, Reason: OmittedPatchFull, Class: FileClassTest}}, problem: "is test and the patch does not show it"},
+		"a fixture with nothing to open":  {omitted: []OmittedFile{{Path: "internal/dashboard/testdata/link.html", Reason: OmittedUnreadable, Class: FileClassFixture}}, problem: "does not list whole"},
+		"a fixture the listing cannot id": {omitted: []OmittedFile{{Path: "internal/dashboard/testdata/renders/stale.html", Bytes: 22126, Reason: OmittedPatchFull, Class: FileClassFixture}}, problem: "does not list whole"},
+	} {
+		problems := ChangeDiff{Truncated: true, OmittedFiles: testCase.omitted}.UnreviewableOmissions()
+		switch {
+		case testCase.problem == "" && len(problems) > 0:
+			t.Errorf("%s: unreviewable = %#v, want an omission a review can be completed over", name, problems)
+		case testCase.problem != "" && len(problems) != 1:
+			t.Errorf("%s: unreviewable = %#v, want the one omission named", name, problems)
+		case testCase.problem != "" && !strings.Contains(problems[0], testCase.problem):
+			t.Errorf("%s: unreviewable = %q, want it to say %q", name, problems[0], testCase.problem)
+		}
+	}
 }
 
 // dashboardPageDiffShape is yoyodyne-ifd.141.3's diff against its recorded

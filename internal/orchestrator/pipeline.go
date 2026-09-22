@@ -5422,9 +5422,14 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		// from an answer nobody gave is the false closure this channel exists to
 		// stop. Refusing outright would cost a built, checked, approved change its
 		// whole run over one missing word.
+		// An approval over a change whose test data the bound kept out, that did not
+		// say which of those fixtures it accounted for, is asked again on the same
+		// budget for the same reason: the change is sound, and what is missing is
+		// the reviewer's statement of what the approval covered.
 		var undecodable review.UndecodableVerdictError
 		var incomplete review.IncompleteApprovalError
-		if !reasked && (errors.As(err, &undecodable) || errors.As(err, &incomplete)) {
+		var unaccounted review.UnaccountedFixturesError
+		if !reasked && (errors.As(err, &undecodable) || errors.As(err, &incomplete) || errors.As(err, &unaccounted)) {
 			reasked = true
 			continue
 		}
@@ -5575,7 +5580,8 @@ func reviewReachedProvider(reported providerEvidence, err error) bool {
 	}
 	var undecodable review.UndecodableVerdictError
 	var incomplete review.IncompleteApprovalError
-	return errors.As(err, &undecodable) || errors.As(err, &incomplete)
+	var unaccounted review.UnaccountedFixturesError
+	return errors.As(err, &undecodable) || errors.As(err, &incomplete) || errors.As(err, &unaccounted)
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of
