@@ -780,6 +780,15 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	if !outcome.Blocked || !tracker.blocked {
 		t.Fatalf("blocked = %t (tracker %t), want the divergence on the item", outcome.Blocked, tracker.blocked)
 	}
+	// A divergence found after the promotion is the same held catch-up to the
+	// brake as one found before it: a stop the harness made, counted toward
+	// nothing.
+	if outcome.DivergedTarget == nil || outcome.DivergedTarget.Held == "" {
+		t.Fatalf("diverged target = %#v, want the held catch-up on the outcome", outcome.DivergedTarget)
+	}
+	if !environmentalStop(outcome) {
+		t.Fatal("the brake would count this stop, want a diverged target classified environmental where the brake counts stops")
+	}
 	if len(forge.merges) != 0 {
 		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
 	}
@@ -966,6 +975,15 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 	// positions, and the statement that neither was chosen over the other.
 	if !outcome.Blocked || !tracker.blocked {
 		t.Fatalf("blocked = %t (tracker %t), want the stoppage on the item", outcome.Blocked, tracker.blocked)
+	}
+	// And the outcome carries the held catch-up as what stopped the run, which
+	// is what the brake reads to count the stop toward nothing: a refusal the
+	// harness will not catch up from is the environment's, not a verdict.
+	if outcome.DivergedTarget == nil || outcome.DivergedTarget.Held == "" || outcome.DivergedTarget.RemoteCommit != publishedCommit(t, remote, "main") {
+		t.Fatalf("diverged target = %#v, want the held catch-up on the outcome", outcome.DivergedTarget)
+	}
+	if !environmentalStop(outcome) {
+		t.Fatal("the brake would count this refusal, want a diverged target classified environmental where the brake counts stops")
 	}
 	for _, want := range []string{
 		"target branch and the one on the remote have diverged",

@@ -773,7 +773,18 @@ type Outcome struct {
 	// reconcile` sweeps every target branch and would do it again — so a
 	// catch-up that was held is a fact to report, not outstanding work anybody
 	// has to track.
-	Catchup        *gitworktree.Catchup `json:"catchup,omitempty"`
+	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
+	// DivergedTarget is the catch-up the harness would not make, when that is
+	// what stopped this run: the remote target does not contain the local one,
+	// or the primary checkout holds work the catch-up would overwrite, and only
+	// a person can say which history is right. It is set beside the blocker that
+	// hands the item to that person, before or after the local promotion. The
+	// stop is the environment's rather than a verdict on the change, and unlike
+	// an IntegrationStop it is not one the harness resumes from — so it is not
+	// that record, and what reads it is the brake, which counts a stop of this
+	// class toward nothing: three of them tripped it on 2026-09-21 over one
+	// divergence the item's own blocker had already put in front of a person.
+	DivergedTarget *gitworktree.Catchup `json:"diverged_target,omitempty"`
 	WorkItemClosed bool                 `json:"work_item_closed"`
 	// WorktreeRemoved and BranchRemoved report each artifact separately, because
 	// cleanup removes them in two steps and a partial result must not describe
@@ -2227,10 +2238,17 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 // close this item as integrated against a divergence no later sweep can
 // reconcile. Nothing is forced and nothing is reset — both branches are left
 // exactly where they are and named for whoever settles them.
+//
+// The held catch-up goes on the outcome before the blocker is written, because
+// it is what stopped the run whether or not the tracker takes the note: the
+// brake reads it to count the stop as the environment's, and a refusal recorded
+// only when the item could be written would count toward the brake exactly
+// when nothing else had told anybody about it.
 func (a *activeRun) blockOnDivergedTarget(catchup gitworktree.Catchup) error {
 	remote := a.pipeline.Config.Execution.Remote
 	diverged := fmt.Errorf("%s cannot be brought onto %s before promoting: %s",
 		catchup.TargetBranch, remote, catchup.Held)
+	a.outcome.DivergedTarget = &catchup
 	if err := a.block(renderDivergedTargetNotes(a.outcome, catchup, remote, diverged.Error())); err != nil {
 		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
 	}
@@ -2249,6 +2267,9 @@ func (a *activeRun) blockOnPromotedDivergence(integration gitworktree.Integratio
 	remote := a.pipeline.Config.Execution.Remote
 	diverged := fmt.Errorf("%w; %s cannot be brought onto %s afterwards: %s",
 		cause, integration.TargetBranch, remote, catchup.Held)
+	// The same held catch-up, for the same reader: the brake counts this stop
+	// toward nothing whichever side of the promotion the divergence was found on.
+	a.outcome.DivergedTarget = &catchup
 	if err := a.block(renderPromotedDivergenceNotes(a.outcome, integration, catchup, remote, diverged.Error())); err != nil {
 		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
 	}

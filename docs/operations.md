@@ -368,7 +368,18 @@ escalated, which she does by recording the decision and reporting it at
 `warning` severity so it reaches you. Only verdicts and check failures against
 a change that was present count toward the trip — an environmental stop, a
 dirty checkout or a transport that did not answer, is a verdict on nothing and
-counts toward nothing, and neither does a provider answering nobody.
+counts toward nothing, and neither does a provider answering nobody. A
+promotion refused because the target branch
+[diverged from the forge](#unwedging-a-target-branch-that-diverged-from-the-forge)
+is in the same class: a catch-up the harness will not make is a stop the
+harness made, every run that reaches integration meets the same one until a
+person settles the branches, and the brake does not trip on any number of them.
+What tells you is the run's own blocker — the item is stopped with both branch
+positions and the recovery steps, said in its thread at `critical` and put on
+the development manager's docket, once per run rather than once per trip. On
+2026-09-21 three identical diverged-target refusals tripped the brake, which
+held the line a second time over the one cause the first blocker had already
+put in front of a person.
 
 The hold's own record says where it stands, and every surface reads it from
 there: `yoyo status` names the hold on its "Needs a human" line with who it is
