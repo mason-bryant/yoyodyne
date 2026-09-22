@@ -143,11 +143,7 @@ func TestAConversationThatDoesNotAnswerInTimeIsSaidRatherThanWaitedOnForever(t *
 	// a bare read here would be racing the goroutine it is asking about. That
 	// gap is the mechanism working, and this is the assertion catching up with
 	// it.
-	select {
-	case <-talker.stopped:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the turn was left running after the client stopped waiting on it")
-	}
+	<-talker.stopped
 }
 
 // The bound holds against a callee that never learns it was cancelled.
@@ -178,16 +174,15 @@ func TestTheWaitIsBoundedEvenWhenTheConversationNeverObservesCancellation(t *tes
 	// settle() is what the sink's own shutdown waits on. It has to return while
 	// the call underneath is still going, or a sink cannot be stopped by anything
 	// short of killing it.
+	// It is waited for and not bounded: a settle that waits for the call would
+	// hang this test until the binary's own timeout names the goroutine, which
+	// is the failure, said by the stack rather than by a clock.
 	settled := make(chan struct{})
 	go func() {
 		defer close(settled)
 		sink.steering.settle()
 	}()
-	select {
-	case <-settled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("settle() did not return while the conversation was still running, so the sink cannot shut down")
-	}
+	<-settled
 
 	answer := onlyPost(t, posts)
 	if !strings.Contains(answer.Text, "I waited") {

@@ -219,13 +219,8 @@ func TestASignalKeyDuringAChoiceIsRaised(t *testing.T) {
 	// Ctrl-C, as a negotiated keyboard reports it rather than as a signal the
 	// terminal raised.
 	keys.Write([]byte("\x1b[99;5u"))
-	select {
-	case pressed := <-raised:
-		if pressed != signalInterrupt {
-			t.Fatalf("raised %v, want the interrupt", pressed)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Ctrl-C during a choice was not raised")
+	if pressed := <-raised; pressed != signalInterrupt {
+		t.Fatalf("raised %v, want the interrupt", pressed)
 	}
 	// The key was a signal and not a keystroke: the list is still there, still
 	// answerable, and the marker has not moved.
@@ -273,13 +268,8 @@ func TestSuspendingDuringAChoiceTakesTheListDownAndPutsItBack(t *testing.T) {
 
 	// Ctrl-Z, as a negotiated keyboard reports it.
 	keys.Write([]byte("\x1b[122;5u"))
-	select {
-	case screen := <-stopped:
-		if strings.Contains(screen, "Retire the work") || strings.Contains(screen, choiceKeys) {
-			t.Fatalf("the list was still on screen when the process stopped:\n%s", screen)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Ctrl-Z during a choice did not stop the conversation")
+	if screen := <-stopped; strings.Contains(screen, "Retire the work") || strings.Contains(screen, choiceKeys) {
+		t.Fatalf("the list was still on screen when the process stopped:\n%s", screen)
 	}
 
 	// Resumed: the list is drawn back with the marker where it was left.

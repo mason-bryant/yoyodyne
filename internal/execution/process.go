@@ -138,6 +138,30 @@ func (RealClock) Now() time.Time {
 
 type OSProcessRunner struct {
 	Clock Clock
+	// budget arms the total budget once the process is running, and is nil for
+	// a real timer. What it returns is the channel that fires when the budget is
+	// spent and a stop for a process that finished first. It is armed after
+	// Start rather than before it because the exec is not the process running:
+	// a budget armed ahead of a slow exec fired inside Start and came back as
+	// ErrProcessNotStarted, which is an answer about the machine given to a
+	// question about the work. A test supplies one it fires itself, so what
+	// ends the process it started is the test's own signal rather than a guess
+	// at how long a loaded machine takes to exec a helper.
+	budget func(time.Duration) (<-chan time.Time, func())
+	// idle is where the idle bound comes from, for the same reason: nil is a
+	// real timer, and a test supplies a bound it trips or holds itself, so a
+	// test about a process that keeps talking is not lost to a helper binary
+	// that took longer than the bound to start.
+	idle func(time.Duration) idleBound
+}
+
+// armBudget starts the total budget's clock.
+func (r OSProcessRunner) armBudget(timeout time.Duration) (<-chan time.Time, func()) {
+	if r.budget != nil {
+		return r.budget(timeout)
+	}
+	timer := time.NewTimer(timeout)
+	return timer.C, func() { timer.Stop() }
 }
 
 func (r OSProcessRunner) Run(ctx context.Context, command Command, observer OutputObserver) (ProcessResult, error) {
@@ -169,13 +193,7 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 		}, nil
 	}
 
-	runCtx := ctx
-	cancelTimeout := func() {}
-	if command.Timeout > 0 {
-		runCtx, cancelTimeout = context.WithTimeout(ctx, command.Timeout)
-	}
-	defer cancelTimeout()
-	processCtx, stopProcess := context.WithCancel(runCtx)
+	processCtx, stopProcess := context.WithCancel(ctx)
 	defer stopProcess()
 
 	process := exec.CommandContext(processCtx, command.Name, command.Args...)
@@ -206,6 +224,16 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	if err := process.Start(); err != nil {
 		return result, fmt.Errorf("%w: start %q: %w", ErrProcessNotStarted, command.Name, err)
 	}
+	// The budget's clock starts here, with the process running, and never
+	// earlier: see OSProcessRunner.budget for what arming it before Start cost.
+	// A nil channel never fires, so a command with no budget needs no case of
+	// its own below.
+	var spent <-chan time.Time
+	if command.Timeout > 0 {
+		var stopBudget func()
+		spent, stopBudget = r.armBudget(command.Timeout)
+		defer stopBudget()
+	}
 
 	outputs := make(chan Output)
 	scanErrors := make(chan error, 2)
@@ -225,7 +253,8 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	stdoutTruncated := false
 	stderrTruncated := false
 	stalled := false
-	idle := newIdleWatch(command.IdleTimeout)
+	timedOut := false
+	idle := r.armIdle(command.IdleTimeout)
 	defer idle.stop()
 drain:
 	for {
@@ -286,6 +315,14 @@ drain:
 			stalled = true
 			stopProcess()
 			idle.stop()
+		case <-spent:
+			// The process has had all the time it was given, whatever it was
+			// doing with it. The tree is terminated and the drain carries on
+			// until both pipes close, as for a stall; the channel is put out of
+			// the select so a budget that has fired is not read again.
+			timedOut = true
+			stopProcess()
+			spent = nil
 		}
 	}
 
@@ -332,7 +369,7 @@ drain:
 		// The runner stopped this process itself, so the kill it observes is its
 		// own and says nothing about what the process was doing.
 		result.Status = ProcessStalled
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+	case timedOut || errors.Is(ctx.Err(), context.DeadlineExceeded):
 		result.Status = ProcessTimedOut
 	case errors.Is(ctx.Err(), context.Canceled):
 		result.Status = ProcessCancelled
@@ -370,9 +407,30 @@ func truncationMarker(maxOutput int, record string) string {
 	return fmt.Sprintf("[output truncated at %d bytes; the whole of it is in %s]", maxOutput, record)
 }
 
-// idleWatch bounds the gap between one line of process output and the next. It
+// idleBound bounds the gap between one line of process output and the next. It
 // is the whole of the runner's liveness signal: a process that keeps producing
 // output keeps resetting it, and only one that produces nothing at all trips it.
+type idleBound interface {
+	// expired reports the bound elapsing. A disabled bound returns a nil
+	// channel, which never fires, so a caller selecting on it needs no special
+	// case.
+	expired() <-chan time.Time
+	// reset starts the bound over, which every line of output does.
+	reset()
+	// stop disables the bound for good. It is idempotent, so a bound that has
+	// already tripped can still be cleaned up by the caller's deferred stop.
+	stop()
+}
+
+// armIdle starts the idle bound's clock.
+func (r OSProcessRunner) armIdle(timeout time.Duration) idleBound {
+	if r.idle != nil {
+		return r.idle(timeout)
+	}
+	return newIdleWatch(timeout)
+}
+
+// idleWatch is the idle bound as a real timer.
 type idleWatch struct {
 	timeout time.Duration
 	timer   *time.Timer
@@ -386,8 +444,6 @@ func newIdleWatch(timeout time.Duration) *idleWatch {
 	return watch
 }
 
-// expired reports the idle bound elapsing. A disabled watch returns a nil
-// channel, which never fires, so a caller selecting on it needs no special case.
 func (w *idleWatch) expired() <-chan time.Time {
 	if w.timer == nil {
 		return nil
@@ -402,8 +458,6 @@ func (w *idleWatch) reset() {
 	w.timer.Reset(w.timeout)
 }
 
-// stop disables the watch for good. It is idempotent, so a watch that has
-// already tripped can still be cleaned up by the caller's deferred stop.
 func (w *idleWatch) stop() {
 	if w.timer == nil {
 		return

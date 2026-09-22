@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // screen is enough of a terminal to see what the console drew. The console
@@ -189,19 +188,30 @@ func escapeLength(text string) int {
 }
 
 // recorder is a terminal's output as a test can read it while the console is
-// still writing to it from another goroutine.
+// still writing to it from another goroutine. Every write is also announced on
+// `written`, which holds one announcement however many writes made it, so a
+// test that looked at the screen and did not find what it wanted waits there
+// for the console's next write rather than for a clock.
 type recorder struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
-	width  int
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	width   int
+	written chan struct{}
 }
 
-func newRecorder(width int) *recorder { return &recorder{width: width} }
+func newRecorder(width int) *recorder {
+	return &recorder{width: width, written: make(chan struct{}, 1)}
+}
 
 func (r *recorder) Write(text []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.buffer.Write(text)
+	n, err := r.buffer.Write(text)
+	select {
+	case r.written <- struct{}{}:
+	default:
+	}
+	return n, err
 }
 
 // raw is everything written so far, for a test that replays it at a width the
@@ -233,20 +243,25 @@ func (r *recorder) window(height int) *screen {
 
 // await waits for the screen to say something, which is how a test watches a
 // console that is being driven by the goroutine reading the operator's
-// keystrokes rather than by the test itself.
+// keystrokes rather than by the test itself. It waits on the console's own
+// writes and never on a clock: the two seconds it used to allow is the kind of
+// bound a loaded machine under the race detector reaches with the console
+// working. A screen that never says it is reported by the binary's own timeout,
+// with this goroutine and what it was waiting for named in the dump.
 func (r *recorder) await(t *testing.T, what string, satisfied func(*screen) bool) *screen {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	for waited := false; ; waited = true {
 		rendered := r.screen()
 		if satisfied(rendered) {
 			return rendered
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("waiting for %s; screen was:\n%s", what, rendered.text())
+		// Said once, so a test that never got there says what it was after
+		// beside the dump that says where it was waiting.
+		if !waited {
+			t.Logf("waiting for %s; screen was:\n%s", what, rendered.text())
 		}
-		time.Sleep(time.Millisecond)
+		<-r.written
 	}
 }
 

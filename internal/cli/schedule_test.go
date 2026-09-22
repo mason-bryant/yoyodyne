@@ -521,16 +521,15 @@ func TestATakeoverThatDoesNotHappenIsGivenUpOnWithinItsDeadline(t *testing.T) {
 	go func() { failed <- takeWithin(context.Background(), wedged, wedged.Args(), 50*time.Millisecond) }()
 
 	<-wedged.held
-	select {
-	case err := <-failed:
-		if err == nil {
-			t.Fatal("takeWithin() reported nothing about a re-execution that never happened")
-		}
-		if !strings.Contains(err.Error(), "had not happened") {
-			t.Fatalf("takeWithin() = %v, want it to say the re-execution did not happen in the time it was given", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the takeover was still waiting on a re-execution that is not coming, which is the wedge itself")
+	// Waited for and not bounded: a takeover still waiting on a re-execution
+	// that is not coming is the wedge itself, and it is reported by the binary's
+	// own timeout naming this goroutine rather than by a clock here.
+	err := <-failed
+	if err == nil {
+		t.Fatal("takeWithin() reported nothing about a re-execution that never happened")
+	}
+	if !strings.Contains(err.Error(), "had not happened") {
+		t.Fatalf("takeWithin() = %v, want it to say the re-execution did not happen in the time it was given", err)
 	}
 }
 
@@ -554,13 +553,8 @@ func TestASignalDuringTheTakeoverEndsTheSession(t *testing.T) {
 	// to land.
 	<-wedged.held
 	cancel()
-	select {
-	case code := <-done:
-		if code != 1 {
-			t.Fatalf("takeUpTheDeploy() = %d, want a takeover the operator stopped to fail the command", code)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the session went on waiting to restart after it was asked to stop")
+	if code := <-done; code != 1 {
+		t.Fatalf("takeUpTheDeploy() = %d, want a takeover the operator stopped to fail the command", code)
 	}
 	if !strings.Contains(said.String(), "asked to stop") {
 		t.Fatalf("stderr = %q, want it to say the session was stopped rather than that the re-execution failed on its own", said.String())

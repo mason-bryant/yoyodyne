@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -155,8 +156,19 @@ func TestTheAdoptionWalkthroughRefusesAScratchRootInsideARepository(t *testing.T
 	// tracker, and a network this has no business needing.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	walk := exec.CommandContext(ctx, "bash", adoptionWalkthroughPath)
+	walkthrough, err := filepath.Abs(adoptionWalkthroughPath)
+	if err != nil {
+		t.Fatalf("Abs(%q) error = %v", adoptionWalkthroughPath, err)
+	}
+	walk := exec.CommandContext(ctx, "bash", walkthrough)
 	walk.Env = append(os.Environ(), "TMPDIR="+root)
+	// Run from a scratch directory rather than from this package's: bash 3.2
+	// writes a here-document to a scratch file, and puts it in the working
+	// directory when TMPDIR is not writable -- which the TMPDIR above, inside a
+	// repository the walk refuses, may be by the time the shell needs one. Run
+	// from here, that file was listed by the census in the tests beside this one
+	// a moment before the shell unlinked it.
+	walk.Dir = t.TempDir()
 	report, err := walk.CombinedOutput()
 	if err == nil {
 		t.Fatalf("%s walked a scratch root inside a git repository:\n%s", adoptionWalkthroughPath, report)
