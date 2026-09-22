@@ -579,7 +579,10 @@ func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
 // deliberately given no backend: settling an interrupted run is never a reason
 // to invoke a provider. The forge client it does get can only ask what became
 // of a merge the forge queued, which is the one thing a finished run can still
-// be waiting on.
+// be waiting on. The one continuation the sweep makes — a run that exited on
+// its in-process usage-limit bound, continued once its deadline has passed —
+// is wired by the sweep verb alone, in reconcile.go, because whatever wires it
+// hosts the continued run to its end and the conversation's settle must not.
 func reconcilerFrom(parts components) orchestrator.Reconciler {
 	return orchestrator.Reconciler{
 		Tracker:   parts.tracker(),

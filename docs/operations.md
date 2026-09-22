@@ -407,8 +407,25 @@ rolling window can free room before the quoted edge — so a probe into a window
 that is still closed costs one refused request and re-parks on whatever the
 provider now reports. A run sleeps probes inside this process until it has spent
 `execution.usage_limit_in_process_pause` on this run, and then exits with the
-run still in flight instead of sleeping the next one; running `yoyo run` on the
-same item continues it, with the whole bound available to that process again.
+run still in flight instead of sleeping the next one. Two things continue it,
+each with the whole bound available to its process again: running `yoyo run`
+on the same item, and [`yoyo reconcile`](#recovering-interrupted-runs), which
+continues such a run itself once its recorded deadline has passed and no
+process holds its lease — in the same worktree and developer session, through
+the same continuation `yoyo run` makes, with the run's record saying the sweep
+did it. Until yoyodyne-ifd.428.5 the verb was the only continuation, and a run
+nobody typed it for had exactly the shape of
+[a stopped provider nothing continued](#when-a-provider-stalls-or-runs-out-of-budget):
+no live process, no ending, a developer slot held and the in-flight guard
+refusing every item beside it — indefinitely, because neither that settlement
+nor the claim audit touches a run that is only waiting. A run whose deadline
+has not passed is left as the wait it is, whether a process is asleep on it or
+not, and one a live process holds is left to that process whatever the clock
+says. The sweep hosts the continued run to its end exactly as `yoyo run` would,
+so `yoyo reconcile` typed by hand with such a run waiting stays open for the
+length of a developer attempt, saying which run it is continuing and why on
+standard error before it does; `--json` writes its one document once the
+continued runs have finished, with what each came to under `continuations`.
 That bound counts every probe this process has already slept rather than each
 one on its own, because a bound applied per probe would stop bounding how long
 the process stays open at all.
@@ -1082,8 +1099,13 @@ convergence sweep below finishes it on the next pass. Other reports on this page
 still reach you when the evidence demands it — a preserved blocker, a diverged
 remote, a catch-up that could not finish — but none of them asks reconcile to
 exercise judgement: it reports and leaves the decision where it belongs.
-Reconcile never invokes a provider either: a lost process handle is not a
-reason to start a second developer for an item.
+Settling never invokes a provider either: a lost process handle is not a
+reason to start a second developer for an item. The one provider invocation the
+sweep makes is the last thing it does, and it starts no second developer: a run
+[paused on a usage limit](#waiting-out-a-provider-usage-limit) whose process
+exited on the in-process bound is continued by the sweep itself once its
+deadline has passed, in the run's own worktree and developer session, which is
+the same run's own attempt reissued rather than a new one.
 
 **None of the three stands forever.** Every sweep asks the remote again about
 each publication the record says is merged and unfinished, and finishes the ones
@@ -1281,7 +1303,8 @@ The one thing the sweep costs is `/continue` on a stoppage past the tail, which
 needs the checkout it was going to hand back. The branch is still there and so is
 the preserved work, so replanning or re-running the item is not affected.
 
-The last thing the sweep does is read whether anything is happening at all. When
+The last reading the sweep takes — after every settlement above and before the
+one thing it continues, below — is whether anything is happening at all. When
 nothing has started for `--stall-after` — ten minutes by default — the tracker
 reports work ready, and no hold, no still-moving run and no provider usage window
 accounts for it, that is recorded against the product as a stall and said here:
@@ -1304,12 +1327,16 @@ branch already level with the remote has nothing to catch up to, cleanup over
 artifacts that are already gone does nothing, and a stall already standing is not
 recorded twice. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
-inside its repair loop, one paused for a provider usage limit, one whose
+inside its repair loop, one paused for a provider usage limit whose deadline
+has not passed, one whose
 provider the harness stopped on time and the half hour below has not passed
 for, one paused for an [unresolved
 directive](conversation.md#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
-for that command to pick up.
+for that command to pick up. A run paused for a usage limit whose deadline has
+passed with no process serving the wait is the one the sweep
+[continues itself](#waiting-out-a-provider-usage-limit), as the last thing it
+does.
 
 **A run whose process vanished is settled here, and nobody edits its record by
 hand.** A run whose provider [the harness stopped on time](#when-a-provider-stalls-or-runs-out-of-budget)
@@ -1832,8 +1859,10 @@ reading as it polls, at most once per `--stall-after`: that is the harness's own
 loop, and it catches the session that is alive and has stopped starting anything —
 a queue whose ready items are all claimed by runs that died, say. A session that
 died itself writes nothing at all, so [`yoyo reconcile`](#recovering-interrupted-runs)
-takes the same reading as the last step of the sweep that settles what a dead
-process left behind. That ordering is why it is that sweep and not another: a
+takes the same reading as the last reading of the sweep that settles what a dead
+process left behind — after every settlement, and before the one step that
+follows it, [continuing a usage-limit wait](#waiting-out-a-provider-usage-limit)
+whose deadline has passed. That ordering is why it is that sweep and not another: a
 killed run goes on saying it is in flight until the settling, and a phantom run
 counted as activity would silence this for exactly the crash it exists to catch.
 
@@ -1922,8 +1951,10 @@ in for.
 
 Two kinds of claim are never given back. A run that stopped short and is owed a
 continuation keeps its claim however quiet it has gone — one waiting out a
-[usage limit](#waiting-out-a-provider-usage-limit), an
-[overloaded provider](#waiting-out-an-overloaded-provider), or
+[usage limit](#waiting-out-a-provider-usage-limit) or an
+[overloaded provider](#waiting-out-an-overloaded-provider), which the
+reconciling sweep continues itself once the deadline has passed and no process
+is serving the wait, one waiting out
 [a provider nobody can reach](#waiting-out-a-provider-nobody-can-reach), one parked by
 [`yoyo pause`](#pausing-everything-and-resuming-it), one held up by an
 unresolved directive or by work its item depends on, and one whose provider
