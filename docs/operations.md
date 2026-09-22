@@ -866,6 +866,23 @@ worktree — ends the run, and it still says the harness stopped the provider.
 Short Git commands keep their flat deadlines, which is the right bound for a
 command whose duration is known.
 
+**The run is left in flight for half an hour, and then it is settled.** Nothing
+in the harness continues a stopped run on its own — the scheduler chooses from
+what the tracker calls ready, and a claimed item is not — so a stop nobody typed
+`yoyo run` for used to leave a run that read as running for good, with no live
+process behind it and no ending ever recorded. Each one held a developer slot,
+the in-flight guard refused every item beside it as a race, the claim audit left
+it alone as a wait, `yoyo reconcile` reported it resumable on every pass, and the
+development manager's repair-continue about it was refused for want of a
+docketed stoppage, because the run never recorded one. Two runs stood that way
+from 2026-09-20 07:20 until somebody asked, a day and a half later. So a sweep
+that finds a stopped run nothing has continued for thirty minutes — measured
+from the stop, which is the last thing the record wrote — settles it as
+[a run whose process vanished](#recovering-interrupted-runs): the item is
+blocked with what the sweep observed, the stoppage is docketed, and the slot is
+free. Inside the half hour the sweep still reports the run resumable and says
+when the grace ends.
+
 ## When a run says more than the harness keeps
 
 There is a third bound beside those two, and it is not a deadline: how much of a
@@ -1288,10 +1305,43 @@ artifacts that are already gone does nothing, and a stall already standing is no
 recorded twice. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
 inside its repair loop, one paused for a provider usage limit, one whose
-provider the harness stopped on time, one paused for an [unresolved
+provider the harness stopped on time and the half hour below has not passed
+for, one paused for an [unresolved
 directive](conversation.md#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
+
+**A run whose process vanished is settled here, and nobody edits its record by
+hand.** A run whose provider [the harness stopped on time](#when-a-provider-stalls-or-runs-out-of-budget)
+is left in flight to be continued, and nothing continues one on its own; a run
+nobody typed `yoyo run` for therefore goes on reading as running with no live
+process behind it and no ending ever recorded. The sweep settles one of those
+once thirty minutes have passed since the stop with nothing continuing it —
+the lease it takes to settle a run is what says no process holds it, since a
+continuation somebody did start would be holding that lease — and settles it as
+an environmental stop rather than as a verdict on anything. The run's record
+and the work item both carry what the sweep observed and nothing more: that no
+live process held the run, that no ending was recorded, when the record last
+moved, and why the provider was stopped. The branch and worktree are left
+exactly as a stopped run's are, the item is blocked with that account, and the
+stoppage goes on the triage docket, so a repair-continue the development
+manager decides about it carries out as it does for any stopped run — on the
+change the run already has, in its own worktree and developer session. That
+carry-out still asks what it asks of every stoppage: a run stopped inside its
+repair loop, with a failing check or the reviewer's findings handed back to it,
+is continued; one stopped in its first attempt, with nothing handed back, is
+refused a repair in the same words any such run is, and a re-run from the
+preserved branch is what the development manager records instead. The
+slot the run was holding and the in-flight guard's hold over the items beside it
+release with the record going terminal. `yoyo status <item>` reads the run as
+`stopped` with that reason under it. Whether the round it ends spent anything
+is decided as every environmental round is: one that left a change behind spent
+what it spent, and one that left nothing gives back the repair grant that bought
+it. What you never do is open a run's JSON and change `status` yourself: a
+record edited by hand carries no account of who ended the run or why, the
+docket and every status surface are derived from the record rather than from
+the edit, and the sweep already writes the whole of it on the next
+`yoyo reconcile`.
 
 ## Git maintenance, and the one prune that is still yours
 
@@ -1875,8 +1925,11 @@ continuation keeps its claim however quiet it has gone — one waiting out a
 [usage limit](#waiting-out-a-provider-usage-limit), an
 [overloaded provider](#waiting-out-an-overloaded-provider), or
 [a provider nobody can reach](#waiting-out-a-provider-nobody-can-reach), one parked by
-[`yoyo pause`](#pausing-everything-and-resuming-it), and one held up by an
-unresolved directive or by work its item depends on. Each of those returns and
+[`yoyo pause`](#pausing-everything-and-resuming-it), one held up by an
+unresolved directive or by work its item depends on, and one whose provider
+[the harness stopped on time](#when-a-provider-stalls-or-runs-out-of-budget) —
+which the audit leaves as a wait and the reconciling sweep, not the audit,
+settles once nothing has continued it for half an hour. Each of those returns and
 lets its process exit, so its record goes as still as a killed one's, and its
 item is claimed on purpose with the worktree and developer session that
 continuation needs. Every one of those is a wait that is still pending, which is

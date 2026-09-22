@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary drives a real run to
@@ -1011,9 +1014,11 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 }
 
 // A run whose provider the harness stopped on time is not an interrupted run
-// either: it is owed the rest of an attempt, in the worktree and session that
-// attempt established. Settling it would discard a change that can still be
-// finished.
+// either, for as long as the grace lasts: it is owed the rest of an attempt, in
+// the worktree and session that attempt established, and settling it inside the
+// grace would discard a change a `yoyo run` somebody is about to type can still
+// finish. TestReconcileSettlesAStoppedRunNothingContinued is the other side of
+// the grace.
 func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
 	t.Parallel()
 
@@ -1037,6 +1042,11 @@ func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
 	if !strings.Contains(results[0].Detail, "stopped emitting events") {
 		t.Fatalf("reconciliation did not report why the provider was stopped: %q", results[0].Detail)
 	}
+	// The sweep says how long the run is left resumable, because a reading that
+	// said only "resumable" was what let two of these sit for a day and a half.
+	if !strings.Contains(results[0].Detail, "settles it as a stopped run") {
+		t.Fatalf("reconciliation did not say the grace ends in a settlement: %q", results[0].Detail)
+	}
 	after, err := store.Load(paused.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -1056,5 +1066,325 @@ func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
 	}
 	if outcome.RunID != before.RunID || outcome.Integration == nil {
 		t.Fatalf("resumed run = %#v, want the reconciled run integrated", outcome)
+	}
+}
+
+// A run the harness stopped on time that nothing then continued is a run whose
+// process has vanished: its record goes on saying "running" with no live process
+// behind it and no ending ever written, so it holds a developer slot, the
+// in-flight guard refuses every item beside it, the claim audit leaves it as a
+// wait, and every sweep reports it resumable while nothing resumes it. Two of
+// these did exactly that from 2026-09-20 07:20 until somebody asked. Past the
+// grace the sweep settles it as an environmental stop naming what it observed,
+// the item is blocked with the same account, the artifacts are left exactly as
+// they were, and the stoppage is docketed — so the development manager's
+// repair-continue has an entry to carry out against, and the slot is free.
+func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	first := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
+	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused {
+		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
+	}
+	stopped, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The process that hosted the run has returned: nothing holds the lease, and
+	// the item still reads as claimed, which is exactly the state the two runs of
+	// 2026-09-20 were found in.
+	tracker.item.Status = "in_progress"
+
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewDocketStore() error = %v", err)
+	}
+	// The grace has passed and nothing continued the run. The clock is the
+	// sweep's own rather than a shortened grace, so what is tested is the default
+	// the operator gets.
+	later := &pausingClock{now: stopped.UpdatedAt.Add(DefaultVanishedGrace)}
+	reconciler := Reconciler{
+		Tracker:   tracker,
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Docket:    docketerOverStore(docket, store, firstPipeline.Config),
+		Clock:     later,
+	}
+	results, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the vanished run settled as blocked", results)
+	}
+	for _, want := range []string{"no live process behind it", "stopped emitting events", "no ending was ever recorded", "the harness settled it as an environmental stop"} {
+		if !strings.Contains(results[0].Detail, want) {
+			t.Fatalf("reconciliation detail %q does not say %q", results[0].Detail, want)
+		}
+	}
+	if results[0].Outcome != runstate.OutcomeStopped {
+		t.Fatalf("outcome = %q, want the run read as stopped work somebody owns", results[0].Outcome)
+	}
+
+	// The record is terminal with the account on it, the stop it carried is now
+	// evidence in the refusal rather than a promise to continue, and the change is
+	// exactly where the developer left it.
+	settled, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Status.Terminal() || settled.CompletedAt == nil || settled.Blocker == "" || settled.ProviderStop != "" {
+		t.Fatalf("settled run = %#v, want a terminal record carrying the blocker and no provider stop", settled)
+	}
+	if !strings.Contains(settled.Failure, "the harness settled it as an environmental stop") {
+		t.Fatalf("settled run's reason does not say the harness settled it: %q", settled.Failure)
+	}
+	refusal := settled.Environmental
+	if refusal == nil || refusal.Cause != runstate.CauseProcessVanished || !refusal.Settled {
+		t.Fatalf("environmental refusal = %#v, want the vanished process recorded and settled", refusal)
+	}
+	for _, want := range []string{"no live process held run " + paused.RunID, "no ending was recorded", stopped.UpdatedAt.UTC().Format(time.RFC3339), "stopped emitting events"} {
+		if !strings.Contains(refusal.Detail, want) {
+			t.Fatalf("refusal detail %q does not say %q", refusal.Detail, want)
+		}
+	}
+	// The stopped attempt had written to its worktree, so the round delivered
+	// something and is not refused in the class's sense: nothing is given back,
+	// and the change is what the development manager decides about.
+	if refusal.Refused || refusal.GrantReturned || refusal.RoundReturned {
+		t.Fatalf("refusal = %#v, want a round that delivered left spent", refusal)
+	}
+	if settled.WorktreeRemoved || settled.BranchRemoved || settled.WorktreePath != stopped.WorktreePath || settled.Branch != stopped.Branch {
+		t.Fatalf("settled run = %#v, want the branch and worktree preserved exactly as the stopped run's were", settled)
+	}
+	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "partial.txt")); err != nil {
+		t.Fatalf("the stopped attempt's work is not where it was left: %v", err)
+	}
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "the harness settled it as an environmental stop") {
+		t.Fatalf("item blocked = %t with reason %q, want the item blocked with the sweep's account", tracker.blocked, tracker.blockReason)
+	}
+
+	// The slot and the in-flight guard read the same listing, and the run is no
+	// longer in it.
+	incomplete, err := store.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	if len(incomplete) != 0 {
+		t.Fatalf("in flight = %#v, want the settled run holding no slot", incomplete)
+	}
+
+	// And the stoppage is on the docket, carrying the environmental account, so a
+	// repair-continue decided about it has something to carry out against.
+	entries, err := docket.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].RunID != paused.RunID || entries[0].Class != triage.ClassStoppedRun || entries[0].Closed != nil {
+		t.Fatalf("docket = %#v, want the vanished run docketed as a stopped run nobody has decided about", entries)
+	}
+	entry := entries[0]
+	if entry.Environmental == nil || entry.Environmental.Cause != string(runstate.CauseProcessVanished) || entry.Environmental.Account == "" {
+		t.Fatalf("docketed environmental = %#v, want the vanished process and its accounting", entry.Environmental)
+	}
+	if !strings.Contains(entry.Blocker, "the harness settled it as an environmental stop") {
+		t.Fatalf("docketed blocker is not the sweep's account:\n%s", entry.Blocker)
+	}
+	if entry.Artifacts.WorktreePath != stopped.WorktreePath || entry.Artifacts.Branch != stopped.Branch || entry.Artifacts.WorktreeRemoved || entry.Artifacts.BranchRemoved {
+		t.Fatalf("artifacts = %#v, want the preserved worktree and branch", entry.Artifacts)
+	}
+
+	// A second sweep finds a settled run and nothing to do: the stoppage is keyed
+	// to the run, so it is docketed once however many sweeps walk past it.
+	again, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("second Reconcile() error = %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+	entries, err = docket.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("docket = %#v, want the one entry", entries)
+	}
+}
+
+// The whole of it, over a real repository, for the case one of the two runs of
+// 2026-09-20 was actually in: a run inside its repair loop — a failing check
+// handed back to the developer — whose repair attempt the harness stopped on
+// time and nothing continued. The sweep settles and dockets it, the development manager decides
+// repair-continue about the entry, and the carry-out re-enters the same run in
+// the same worktree and session and lands the change. Before this, the decision
+// was refused for want of a docketed stoppage, because the run never recorded
+// one.
+func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// The first attempt leaves the check failing; the repair attempt the check
+	// hands back is the one the harness stops on time.
+	stalling := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	attempts := 0
+	stalling.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role != domain.RoleDeveloper {
+			return backend.RunResult{}, fmt.Errorf("unexpected role %q before the repair attempt stalled", request.Role)
+		}
+		attempts++
+		if attempts == 1 {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("incomplete\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: stalling.developerSession, ResolvedModel: developerResolved,
+				FinalText: "implemented the work item", Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: stalling.developerSession, IsError: true,
+			StopReason: string(execution.ProcessStalled), Process: execution.ProcessResult{Status: execution.ProcessStalled, ExitCode: -1}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	checks := []string{"test -f fixed.txt"}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
+	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
+		t.Fatalf("Run() error = %v, outcome = %#v, want the repair attempt stopped on time", err, paused)
+	}
+	stopped, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if stopped.CheckFailure == nil || stopped.RepairAttempts != 1 {
+		t.Fatalf("stopped run = %#v, want the failing check on the record with one repair attempt spent", stopped)
+	}
+	tracker.item.Status = "in_progress"
+
+	docket := &memoryDocket{}
+	reconciler := Reconciler{
+		Tracker:   tracker,
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Docket:    docketerOverStore(docket, store, pipeline.Config),
+		Clock:     &pausingClock{now: stopped.UpdatedAt.Add(DefaultVanishedGrace)},
+	}
+	results, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the vanished run settled as blocked", results)
+	}
+	if len(docket.entries) != 1 || docket.entries[0].Check == nil || docket.entries[0].Environmental == nil {
+		t.Fatalf("docket = %#v, want the stoppage docketed with the failing check and the vanished process on it", docket.entries)
+	}
+
+	// The development manager decides repair-continue about the docketed
+	// stoppage, exactly as the conversation records one, and the carry-out
+	// re-enters the run rather than refusing for want of a stoppage.
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	continuing := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "fixed.txt"), []byte("fixed\n"), 0o600)
+	}, approveVerdict)
+	continuer := RepairContinuer{
+		Docket:             docket,
+		Runs:               store,
+		Intake:             intake,
+		Decisions:          store.Triage(),
+		Items:              tracker,
+		Worktrees:          worktrees,
+		ConfiguredAttempts: pipeline.Config.Execution.RepairAttemptsBeforeReplan,
+		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, continuing, checks), continuing).
+				Continue(ctx, workItemID, runID)
+		},
+	}
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID, Reason: continueReasoning})
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run continued and its change landed", result, tracker.closed)
+	}
+	continued := continuing.requestsForRole(domain.RoleDeveloper)
+	if len(continued) != 1 || continued[0].SessionID != stalling.developerSession || continued[0].WorkingDirectory != stopped.WorktreePath {
+		t.Fatalf("continued attempts = %#v, want one, in the stopped run's own session and worktree", continued)
+	}
+	// The vanished process's account belonged to the round the continuation
+	// superseded, and a run that landed carries neither it nor a stop.
+	landed, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if landed.Environmental != nil || landed.ProviderStop != "" || landed.Blocker != "" {
+		t.Fatalf("landed run = %#v, want the settled stoppage superseded", landed)
+	}
+}
+
+// A vanished process that left nothing behind is a round the item must not have
+// paid for, and the repair grant that bought it is given back — which is the
+// environmental class's own rule, applied to the one round nothing else will
+// ever settle.
+func TestAVanishedProcessThatDeliveredNothingReturnsItsGrant(t *testing.T) {
+	t.Parallel()
+
+	now := baseTime
+	state := runstate.State{
+		RunID:        "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:   "yoyodyne-task",
+		Status:       runstate.StatusRunning,
+		Phase:        runstate.PhaseDeveloping,
+		UpdatedAt:    now.Add(-time.Hour),
+		WorktreePath: "/worktrees/yoyodyne-task",
+		Branch:       "yoyodyne/yoyodyne-task/01234567",
+		BaseCommit:   "base",
+		ProviderStop: runstate.ProviderStopStalled,
+		RepairContinuations: []runstate.RepairContinuation{{
+			GrantedAttempts: 2, Reason: "granted", ContinuedAt: now.Add(-2 * time.Hour),
+		}},
+	}
+	clean := gitworktree.Observation{WorktreePresent: true, BranchExists: true, BranchCommit: "base"}
+	refusal := vanishedRefusal(&state, clean, now)
+	if err := refusal.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !refusal.Refused || !refusal.GrantReturned || refusal.RoundReturned {
+		t.Fatalf("refusal = %#v, want the round refused and the grant returned", refusal)
+	}
+	if state.CarriedOutRepairAttempts() != 0 {
+		t.Fatalf("carried out = %d, want the returned grant not counted as carried out", state.CarriedOutRepairAttempts())
+	}
+	if !strings.Contains(refusal.Describe(), "granted repair round it consumed was returned") {
+		t.Fatalf("Describe() = %q, want the return said", refusal.Describe())
+	}
+
+	// A branch that moved past the base is a delivery, however clean the
+	// worktree is: the harness commits what a developer leaves before it advances.
+	committed := runstate.State{RunID: state.RunID, WorktreePath: state.WorktreePath, BaseCommit: "base", ProviderStop: runstate.ProviderStopStalled, UpdatedAt: state.UpdatedAt}
+	delivered := vanishedRefusal(&committed, gitworktree.Observation{WorktreePresent: true, BranchExists: true, BranchCommit: "ahead"}, now)
+	if delivered.Refused || delivered.GrantReturned {
+		t.Fatalf("refusal = %#v, want a round that delivered left spent", delivered)
+	}
+	if err := delivered.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }

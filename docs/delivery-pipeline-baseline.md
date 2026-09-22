@@ -425,7 +425,8 @@ listing another process has moved on from. **It never starts a developer.**
 | Action | When |
 | --- | --- |
 | `held` | A live process holds the run; it is left alone |
-| `resumable` | The run's own pipeline can continue it: a repair loop with durable state, a usage-limit or overload pause, a directive pause, a dependency pause, an operator hold, or a provider stopped on time |
+| `resumable` | The run's own pipeline can continue it: a repair loop with durable state, a usage-limit or overload pause, a directive pause, a dependency pause, an operator hold, or a provider stopped on time within the last thirty minutes |
+| `blocked`, for a run whose process vanished | A provider stopped on time that nothing continued for thirty minutes (`Reconciler.VanishedGrace`): the run is settled as an environmental stop (`process-vanished`) naming what the sweep observed, the item is blocked, the artifacts are left as they were, and the stoppage is docketed |
 | `queued` | The forge accepted a merge it has not performed; nothing can be decided until it does |
 | `completed` | The work is promoted — recorded, or found in the target branch by containment — so the item is settled by the run's own records, its landing claim and what its reviewer approved: closed, or put back parked or waiting, and the artifacts removed |
 | `blocked` | Nothing could finish the run; the item carries a durable blocker and the work is preserved |
