@@ -405,8 +405,13 @@ func TestStatusSaysWhichEndingAStaleBlockClearHad(t *testing.T) {
 		}},
 	}, "", false)
 	rendered := out.String()
-	if !strings.Contains(rendered, `stale blocked status cleared at the claim: no read confirmed the clear: 5 read(s) returned status "blocked" rather than open, and the item was left for the next pull`) {
+	if !strings.Contains(rendered, `stale blocked status at the claim: no read confirmed the clear: 5 read(s) returned status "blocked" rather than open, and the item was left for the next pull`) {
 		t.Fatalf("rendered = %q, want the unconfirmed clear said with what the tracker returned", rendered)
+	}
+	// Never as cleared: the line's label must not assert the clear the tracker
+	// never confirmed.
+	if strings.Contains(rendered, "cleared") {
+		t.Fatalf("rendered = %q, reports an unconfirmed clear as cleared", rendered)
 	}
 }
 
