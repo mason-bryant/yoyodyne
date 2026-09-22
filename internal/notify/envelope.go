@@ -83,6 +83,14 @@ const (
 	// failing is a repair attempt, and neither is a verdict on the change.
 	KindChecksPassed Kind = "checks.passed"
 	KindChecksFailed Kind = "checks.failed"
+	// The gate in front of the checks: a change refused for touching a path its
+	// work item does not grant. It is a repair attempt exactly as a failing check
+	// is, and it was silent in the thread until it had a kind — the note on the
+	// blocked item and `yoyo status` said why a round was spent, and the thread
+	// showed a repair round happening with no stated reason. It carries the paths
+	// and what the item grants, because the grant is what would admit them and
+	// the one thing a reader of the thread can act on.
+	KindPathRefused Kind = "paths.refused"
 	// The reviewer's verdict is two kinds rather than one with a field, because
 	// an approval and a request for repairs are different news and are said
 	// differently by every persona that says them.
@@ -363,6 +371,7 @@ func Kinds() []Kind {
 		KindRunStarted,
 		KindChecksPassed,
 		KindChecksFailed,
+		KindPathRefused,
 		KindReviewApproved,
 		KindReviewRepairs,
 		KindPromoted,
@@ -419,7 +428,7 @@ func (k Kind) Valid() bool {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
 		KindTrackerBlockRefused, KindTrackerRefusalUnresolved, KindWorkApproved, KindWorkDeclined,
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut, KindCapCrossed,
-		KindRunStarted, KindChecksPassed, KindChecksFailed,
+		KindRunStarted, KindChecksPassed, KindChecksFailed, KindPathRefused,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
@@ -703,6 +712,19 @@ type Detail struct {
 	// them.
 	Command  string `json:"command,omitempty"`
 	ExitCode int    `json:"exit_code,omitempty"`
+	// RefusedPaths, OmittedPaths, and Grants are the protected-path gate's
+	// refusal, read by KindPathRefused: the paths the change touched that the
+	// item never granted, how many further ones the record's bound dropped from
+	// that list, and what the item did grant. They are the record's own three
+	// fields rather than a sentence about them, because the refusal is read
+	// beside the grants — a refusal that looks wrong is most often a grant that
+	// named the path differently — and a reader given only the paths cannot see
+	// that. Empty grants are the ordinary case and are said as the item granting
+	// nothing, which is a fact about the item rather than an absence in the
+	// record: the gate records every grant it read whenever it refuses.
+	RefusedPaths []string `json:"refused_paths,omitempty"`
+	OmittedPaths int      `json:"omitted_paths,omitempty"`
+	Grants       []string `json:"grants,omitempty"`
 	// Findings is how many the reviewer raised, read by KindReviewRepairs.
 	Findings int `json:"findings,omitempty"`
 	// Requested is what each of those findings asked for, one entry per finding

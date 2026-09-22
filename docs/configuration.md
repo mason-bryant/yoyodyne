@@ -1099,6 +1099,12 @@ attempt, over every path the change touches — tracked, untracked, and both sid
 of a move. A change that touches one of these paths without a grant is refused
 and handed back to the same developer inside the same repair loop a failing check
 uses, spending from the same budget, and the refusal names how a grant is made.
+Where the product [reports to Slack](slack/setup.md), each refusal handed back
+is also said in the item's thread, in the developer's voice, naming the refused
+paths, what the item grants, and the grant line that would admit them — so a
+repair round spent on it is a round with a stated reason rather than one only
+the item's notes explain. A refusal that finds the budget already spent buys no
+round, and the blocker line that ends the run is what names its paths.
 No reviewer is asked about it: the class of finding this replaces used to cost an
 Opus review cycle to reach, and it costs a string comparison here. A run whose
 repair budget is spent still refusing is blocked on the work item, with the
