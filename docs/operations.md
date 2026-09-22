@@ -943,6 +943,27 @@ state onto what the forge has:
 ./bin/yoyo reconcile --json
 ```
 
+**Run it from wherever you are standing, the preserved worktree included.**
+Recovery and inspection happen inside the worktree a failed run left behind,
+and a project whose `.yoyodyne` is checked in gives that worktree a copy of the
+configuration — so every verb here, run from inside it, used to resolve the
+repository to the worktree itself, a directory under `execution.worktree_root`,
+and refuse with `repository and worktree roots must not contain one another`
+(reported twice on 2026-08-19 and fixed in `yoyodyne-ifd.335`). Now `yoyo
+reconcile`, `yoyo cost`, `yoyo directive`, `yoyo pause`, `yoyo resume`, `yoyo
+run`, `yoyo review`, and `yoyo chat` run from inside a worktree the harness
+manages address the checkout that worktree was added from — the primary
+checkout, which is what every one of them means by "the repository" — exactly
+as they do run from that checkout; `yoyo status` and `yoyo reports` never
+built the manager that refused and were never caught by it. The one thing
+still refused is a repository that sits under the worktree root and is not a
+worktree of a checkout outside it, and that refusal says what to do: run
+`yoyo` from the checkout the worktrees were added from, or point
+`execution.worktree_root` outside the repository.
+`TestVerbsRunFromInsideAManagedWorktree` in `internal/cli` drives the verbs
+from a worktree it creates, and [the configuration
+guide](configuration.md#discovery) says how the resolution is made.
+
 It compares the recorded run against the repository and Beads, and then finishes
 the run's own remaining step or hands the item to you. A run it settled into an
 ending that is not success is reported twice over: what the sweep did with it,
