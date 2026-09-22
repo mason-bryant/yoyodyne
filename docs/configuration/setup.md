@@ -5,7 +5,6 @@ resolve today and point at sections a later tranche moves; the tranche that
 moves a section retargets the link:
 
   #what-init-proposes-for-checks      -> configuration/runs.md (117.3)
-  #what-reaches-the-queue             -> configuration/goals.md (117.2)
   #triage-thresholds                  -> configuration/recovery.md (117.3)
   #waiting-out-a-provider-that-refuses -> configuration/recovery.md (117.3)
   #provider-accounts                  -> configuration/agents.md (117.4; the
@@ -20,6 +19,8 @@ moves a section retargets the link:
                                       -> no row in docs/docs-map.md; they stay
                                          in configuration.md until the map
                                          gives them a home
+
+117.2 retargeted #what-reaches-the-queue to goals.md when it landed that guide.
 
 "The configuration index ... lists the other guides" below is a forward claim:
 configuration.md becomes the index in 117.4.
@@ -425,7 +426,7 @@ Up to three layers produce the effective configuration, later ones winning:
    that left this door open would be a gate the product manager could walk around
    by choosing the other one. An operator who wants the old behavior back sets
    `work_items: automatic`, which admits directly again against goals they have
-   approved. See [what reaches the queue](../configuration.md#what-reaches-the-queue).
+   approved. See [what reaches the queue](goals.md#what-reaches-the-queue).
 2. **The built-in bundle**, named by `extends`, and present only if a project
    asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
    `approvals`, and the five default agents. It deliberately supplies no
