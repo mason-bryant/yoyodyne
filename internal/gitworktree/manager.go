@@ -3,6 +3,7 @@ package gitworktree
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -653,6 +654,36 @@ type OmittedFile struct {
 	// for an untracked file, which is measured by its size before it is
 	// rendered at all.
 	DiffBytes int64 `json:"diff_bytes,omitempty"`
+	// Digest is the content digest of the file at the tip of the change. It is
+	// what turns a named omission into openable evidence: the size says how much
+	// was kept out and the digest says exactly which bytes, so a person opening
+	// the fixture afterwards can prove they opened what the review was made over
+	// rather than what the file became later. Nothing else binds a verdict to
+	// content the patch never carried.
+	//
+	// It says which digest it is, because the two scopes deliver the file in
+	// different places and a reader checks it where they are sent. A worktree's
+	// change carries `sha256:<hex>` of the file on disk, which is what somebody
+	// holding the worktree checks with `shasum -a 256`; a branch's accumulated
+	// change carries `git-blob:<object-id>`, which is what `git rev-parse
+	// <commit>:<path>` answers at the tip it sends them to.
+	//
+	// It is empty in the two cases where the change leaves nothing at the tip to
+	// digest: a file the change deletes, whose zero size says the same thing, and
+	// a path that is not a readable regular file, whose reason does. Both are
+	// stated rather than left to be inferred, because a missing digest and an
+	// undigestable file are different facts about the change.
+	Digest string `json:"digest,omitempty"`
+	// Undigestable reports that the change leaves something at this path that is
+	// not a readable regular file — a symlink, a socket, a device — so there is
+	// no content to digest and nothing anybody could open, whatever the bound
+	// above says about why the patch does not show it.
+	//
+	// It is carried because a missing digest has two causes that measure
+	// identically: this, and a file the change deletes. Both are zero bytes with
+	// no digest, and only one of them is a listing a reader has the whole of, so
+	// without this the two are the same record and a link reads as a deletion.
+	Undigestable bool `json:"undigestable,omitempty"`
 }
 
 // Describe is the one sentence a reader is given about a file that is in the
@@ -681,15 +712,82 @@ func (f OmittedFile) Describe() string {
 	return fmt.Sprintf("%s: delivered but not shown.", f.sized())
 }
 
-// sized is the path with the file's size at the tip beside it, and its class
-// where the class is not the source a reader assumes: a reviewer told that a
-// fixture was kept out reads the omission differently from one told that code
-// was.
+// sized is the path with the file's size at the tip beside it, its digest where
+// there is content at the tip to digest, and its class where the class is not
+// the source a reader assumes: a reviewer told that a fixture was kept out reads
+// the omission differently from one told that code was, and a person opening the
+// fixture afterwards needs the digest to know it is the one the review covered.
 func (f OmittedFile) sized() string {
-	if f.Class == "" || f.Class == FileClassSource {
-		return fmt.Sprintf("%s (%d bytes)", f.Path, f.Bytes)
+	qualities := []string{fmt.Sprintf("%d bytes", f.Bytes)}
+	if f.Digest != "" {
+		qualities = append(qualities, f.Digest)
 	}
-	return fmt.Sprintf("%s (%d bytes, %s)", f.Path, f.Bytes, f.Class.Describe())
+	// Why there is no digest, where the reason for the omission does not already
+	// say it: the reader is otherwise sent to open something the change does not
+	// leave there to open.
+	if f.Digest == "" && f.Undigestable {
+		qualities = append(qualities, "not a regular file at the tip, so nothing to open")
+	}
+	if f.Class != "" && f.Class != FileClassSource {
+		qualities = append(qualities, f.Class.Describe())
+	}
+	return fmt.Sprintf("%s (%s)", f.Path, strings.Join(qualities, ", "))
+}
+
+// ListedWhole reports an omission a reader has the whole of: the path, the size,
+// and the digest that says which bytes were kept out. It is the half of
+// yoyodyne-ifd.425's rule that a listing can fail — an omission the patch names
+// with nothing to open is an absence rather than evidence — and it is what
+// UnreviewableOmissions below holds every omitted fixture to.
+//
+// A file that is not a readable regular file is never listed whole: there is
+// nothing delivered for anybody to open, whatever the patch says about it. That
+// holds for a path Git tracks as well as one it does not, by two different marks
+// — an untracked one is omitted as unreadable, and a tracked one keeps the
+// reason of whichever bound dropped it and carries Undigestable — because a
+// tracked path that became a link has a rendered diff the bound had no room for,
+// and naming it unreadable would claim there was nothing to diff.
+//
+// A file the change deletes is listed whole with no digest at all: the change
+// leaves nothing at the tip, which is the whole of its content there, and its
+// zero size says so beside the reason. That is the case the flag above exists to
+// keep this from confusing a link with.
+func (f OmittedFile) ListedWhole() bool {
+	if f.Path == "" || f.Reason == OmittedUnreadable || f.Undigestable {
+		return false
+	}
+	return f.Digest != "" || f.Bytes == 0
+}
+
+// UnreviewableOmissions names every part of this change's representation a
+// review cannot be completed over, and answers nothing where the representation
+// is one a reviewer can judge.
+//
+// It exists because "any omission refuses approval" made a whole class of change
+// reviewable and unclosable. A change whose test data alone outgrows the patch
+// bound presents its code whole — the bound is spent in class order, so what it
+// keeps out is fixtures — and was then refused approval for the omission that
+// ordering exists to produce, which is the dashboard page's shape
+// (yoyodyne-ifd.141.3) and the question yoyodyne-ifd.404 left open. The product
+// manager's rule narrows the refusal to the two omissions that really do leave a
+// change unjudged: a non-fixture file the patch could not show, and a fixture the
+// patch named without saying what it is.
+//
+// A truncation with nothing named is the third, and it is not an omitted file at
+// all: a branch whose history the bound clipped reports itself truncated and
+// lists no file, and a reviewer cannot tell what it did not see. The caller adds
+// that case, which is why this answers a list rather than a verdict.
+func (d ChangeDiff) UnreviewableOmissions() []string {
+	var problems []string
+	for _, file := range d.OmittedFiles {
+		switch {
+		case file.Class != FileClassFixture:
+			problems = append(problems, fmt.Sprintf("%s is %s and the patch does not show it", file.Path, file.Class.Describe()))
+		case !file.ListedWhole():
+			problems = append(problems, fmt.Sprintf("%s is test data the patch does not show and does not list whole: %s", file.Path, file.Describe()))
+		}
+	}
+	return problems
 }
 
 // ChangedFile is one entry of a change's tree listing: a path the change
@@ -1147,39 +1245,77 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 		if err != nil {
 			return ChangeDiff{}, err
 		}
-		omit := func(reason OmissionReason, bound int64, diffBytes int) {
+		// A file the bounds keep out is digested as well as measured, so what the
+		// patch could not show is evidence somebody can open and prove rather than
+		// a name and a byte count. Only a regular file the worktree still holds is
+		// digested: a file the change deletes leaves nothing at the tip, which the
+		// omission records as no digest and zero bytes.
+		omit := func(reason OmissionReason, bound int64, diffBytes int) error {
+			digest, undigestable := "", false
+			switch {
+			case regular:
+				computed, err := m.fileDigest(path, candidate.path)
+				if err != nil {
+					return err
+				}
+				digest = computed
+			case m.irregularAtTip(path, candidate.path):
+				// Nothing regular is there to digest and the path is there all
+				// the same: a symlink under a fixture directory, a socket, a
+				// device. It is recorded rather than folded into the reason,
+				// because the reason is which bound dropped the file and that is
+				// still true of it — a tracked path that became a link has a
+				// rendered diff the bound had no room for, and calling it
+				// unreadable would say there was nothing to diff. What the flag
+				// buys is the one thing the measurements cannot say: this omission
+				// and a deletion both carry zero bytes and no digest, and only
+				// this tells them apart for ListedWhole.
+				undigestable = true
+			}
 			changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
-				Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class, Bound: bound, DiffBytes: int64(diffBytes),
+				Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class,
+				Bound: bound, DiffBytes: int64(diffBytes), Digest: digest, Undigestable: undigestable,
 			})
 			changes.Truncated = true
 			if !candidate.tracked {
 				omittedNew++
 			}
+			return nil
 		}
 		if candidate.tracked {
+			var err error
 			switch {
 			case containsBinaryDiff(candidate.patch):
-				omit(OmittedBinary, 0, len(candidate.patch))
+				err = omit(OmittedBinary, 0, len(candidate.patch))
 			case len(candidate.patch) > limits.MaxTotalBytes:
-				omit(OmittedTooLarge, int64(limits.MaxTotalBytes), len(candidate.patch))
+				err = omit(OmittedTooLarge, int64(limits.MaxTotalBytes), len(candidate.patch))
 			case len(candidate.patch) > remaining:
-				omit(OmittedPatchFull, int64(limits.MaxTotalBytes), len(candidate.patch))
+				err = omit(OmittedPatchFull, int64(limits.MaxTotalBytes), len(candidate.patch))
 			default:
 				patch.WriteString(candidate.patch)
 				remaining -= len(candidate.patch)
+			}
+			if err != nil {
+				return ChangeDiff{}, err
 			}
 			continue
 		}
 		newFiles++
 		switch {
 		case newFiles > limits.MaxFiles:
-			omit(OmittedTooManyFiles, int64(limits.MaxFiles), 0)
+			if err := omit(OmittedTooManyFiles, int64(limits.MaxFiles), 0); err != nil {
+				return ChangeDiff{}, err
+			}
 			continue
 		case !regular:
-			omit(OmittedUnreadable, 0, 0)
+			if err := omit(OmittedUnreadable, 0, 0); err != nil {
+				return ChangeDiff{}, err
+			}
 			continue
 		case size > int64(limits.MaxFileBytes):
-			omit(OmittedTooLarge, int64(limits.MaxFileBytes), 0)
+			if err := omit(OmittedTooLarge, int64(limits.MaxFileBytes), 0); err != nil {
+				return ChangeDiff{}, err
+			}
 			continue
 		}
 		filePatch, err := m.untrackedPatch(ctx, path, candidate.path)
@@ -1188,13 +1324,16 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 		}
 		switch {
 		case containsBinaryDiff(filePatch):
-			omit(OmittedBinary, 0, 0)
+			err = omit(OmittedBinary, 0, 0)
 		case len(filePatch) > remaining:
-			omit(OmittedPatchFull, int64(limits.MaxTotalBytes), 0)
+			err = omit(OmittedPatchFull, int64(limits.MaxTotalBytes), 0)
 		default:
 			patch.WriteString(filePatch)
 			remaining -= len(filePatch)
 			changes.UntrackedFiles = append(changes.UntrackedFiles, candidate.path)
+		}
+		if err != nil {
+			return ChangeDiff{}, err
 		}
 	}
 	if accounted := len(changes.UntrackedFiles) + omittedNew; accounted != len(untracked) {
@@ -1429,6 +1568,29 @@ func (m *Manager) untrackedFiles(ctx context.Context, path string) ([]string, er
 	return files, nil
 }
 
+// irregularAtTip reports a path the worktree still holds as something other
+// than a regular file — a symlink, a socket, a device. It exists to tell two
+// omissions apart that untrackedSize answers identically: a path that is gone
+// and a path that is there and undigestable both measure zero and report
+// regular=false, and only this says which. The difference decides an approval,
+// because a change that deletes a fixture leaves nothing at the tip to digest
+// and is completely listed without one, where a link leaves something nobody
+// can open and is not.
+//
+// It refuses the same paths untrackedSize refuses, and follows nothing: Lstat
+// asks about the link rather than its target, which is the whole question here.
+func (m *Manager) irregularAtTip(path, relative string) bool {
+	clean := filepath.Clean(relative)
+	if filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(path, filepath.FromSlash(clean)))
+	if err != nil {
+		return false
+	}
+	return !info.Mode().IsRegular()
+}
+
 // untrackedSize measures one untracked file, and reports whether it is a
 // regular file the harness can render at all. The size is read before any bound
 // is applied, because the size is what a reader is told about a file the bounds
@@ -1452,6 +1614,34 @@ func (m *Manager) untrackedSize(path, relative string) (int64, bool, error) {
 		return 0, false, nil
 	}
 	return info.Size(), true, nil
+}
+
+// fileDigest is the SHA-256 of one file in a worktree, as `sha256:<hex>`, for an
+// omission record that has to say which bytes the patch could not show. It
+// answers nothing for a path the change leaves nothing at, which is what a
+// deletion leaves behind and is the one case a caller must not read as a failure.
+//
+// It refuses the same paths untrackedSize refuses, and for the same reason: a
+// path that climbs out of the worktree is not part of the change whatever the
+// listing said, and it is never followed here.
+func (m *Manager) fileDigest(path, relative string) (string, error) {
+	clean := filepath.Clean(relative)
+	if filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", nil
+	}
+	file, err := os.Open(filepath.Join(path, filepath.FromSlash(clean)))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("digest omitted file: %w", err)
+	}
+	defer file.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, file); err != nil {
+		return "", fmt.Errorf("digest omitted file: %w", err)
+	}
+	return fmt.Sprintf("sha256:%x", sum.Sum(nil)), nil
 }
 
 // untrackedPatch renders one untracked file as a new-file patch. The caller has

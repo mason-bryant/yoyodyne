@@ -70,8 +70,10 @@ type BranchReview struct {
 	HeadCommit    string           `json:"head_commit"`
 	// Commits is how many of the branch's commits were described to the
 	// reviewer, and CommitsOmitted how many the bounds dropped. Truncated says
-	// the reviewer was shown an incomplete change, whichever half was cut, which
-	// is the fact that decides whether an approval was even available to it.
+	// the reviewer was shown an incomplete change, whichever half was cut. It no
+	// longer decides on its own whether an approval was available: a range whose
+	// test data alone outgrew the bound is approvable, and which omissions refuse
+	// one is the review's own rule rather than this flag's.
 	Commits        int       `json:"commits"`
 	CommitsOmitted int       `json:"commits_omitted,omitempty"`
 	Truncated      bool      `json:"truncated,omitempty"`

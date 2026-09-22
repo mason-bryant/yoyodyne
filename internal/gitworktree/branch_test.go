@@ -112,6 +112,18 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	if got := change.Changes.OmittedFiles[0].Bytes; got != int64(len(strings.Repeat("one\n", 400))) {
 		t.Fatalf("omitted file size = %d, want the blob's size at the tip", got)
 	}
+	// And it is digested at the same tip, so the file a person opens there with
+	// `git show` can be checked against what this review was made over. A branch
+	// carries Git's own object id, which is what `git rev-parse <commit>:<path>`
+	// answers where the evidence sends them.
+	blob, err := attemptGit(repository, "rev-parse", change.HeadCommit+":first.txt")
+	if err != nil {
+		t.Fatalf("git rev-parse error = %v: %s", err, blob)
+	}
+	object := strings.TrimSpace(blob)
+	if got := change.Changes.OmittedFiles[0].Digest; got != "git-blob:"+object {
+		t.Fatalf("omitted file digest = %q, want the blob at the tip (%s)", got, object)
+	}
 }
 
 // A range that deletes a file it could not show names the deletion at zero
@@ -138,7 +150,9 @@ func TestBranchChangesMeasuresADeletedFileAtZero(t *testing.T) {
 	for _, file := range change.Changes.OmittedFiles {
 		omitted[file.Path] = file
 	}
-	if got, ok := omitted["README.txt"]; !ok || got.Bytes != 0 || got.DiffBytes == 0 {
+	// It carries no digest either, for the same reason the size is zero: the tip
+	// holds nothing to digest, which is the whole of the file's content there.
+	if got, ok := omitted["README.txt"]; !ok || got.Bytes != 0 || got.DiffBytes == 0 || got.Digest != "" {
 		t.Fatalf("omitted README = %#v, want the deletion named at zero bytes with its diff measured", got)
 	}
 	if got := omitted["first.txt"].Bytes; got != 1600 {

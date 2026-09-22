@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,6 +286,118 @@ func TestTheDashboardPageChangeReplayedThroughTheBoundPresentsTheReadModelWhole(
 		line := "+" + strings.Repeat("x", 39) + "\n"
 		if want := dashboardPageDiffShape[path] / 40; strings.Count(section, line) != want {
 			t.Errorf("%s is shown with %d of its %d lines", path, strings.Count(section, line), want)
+		}
+	}
+
+	// And the change is one a reviewer can approve. Ordering the bound put the
+	// code in front of her; this is the other half of it — every omission is a
+	// fixture, and every one of those is listed with the size and the digest that
+	// make it openable, so nothing about the representation refuses the approval.
+	// Without it the change is reviewable and unclosable, which is what
+	// yoyodyne-ifd.404 left behind and what yoyodyne-ifd.425 is for.
+	if problems := changes.UnreviewableOmissions(); len(problems) > 0 {
+		t.Errorf("the change cannot be approved: %s", strings.Join(problems, "; "))
+	}
+	for _, omitted := range changes.OmittedFiles {
+		if !strings.HasPrefix(omitted.Digest, "sha256:") || !omitted.ListedWhole() {
+			t.Errorf("omission = %#v, want it delivered as evidence somebody can open and check", omitted)
+		}
+	}
+}
+
+// A fixture the change delivers as a symlink is not a fixture anybody can open,
+// and it refuses the approval whether Git tracks it or not. Tracked is the case
+// worth a test of its own: the worktree holds no regular file there, so the
+// omission measures zero bytes and digests to nothing exactly as a deletion
+// does, and it keeps the reason of whichever bound dropped it rather than being
+// renamed unreadable — that reason is still true of it. Told apart from a
+// deletion only by the flag, and read as one without it, it would have been a
+// whole listing and let the approval past.
+func TestATrackedSymlinkFixtureIsNotReadAsADeletedOne(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-link", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "internal/readmodel/standing.go", strings.Repeat("// the read model this page depends on\n", 40))
+	writeFile(t, worktree.Path, "internal/dashboard/testdata/renders/busy.html", strings.Repeat("<li>a rendered row</li>\n", 40))
+	if err := os.Symlink("busy.html", filepath.Join(worktree.Path, "internal/dashboard/testdata/renders/latest.html")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: published attempt")
+
+	// A bound the source spends and the fixtures cannot fit inside, so the link
+	// is reached with the patch already full.
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 1800})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	omitted := map[string]OmittedFile{}
+	for _, file := range changes.OmittedFiles {
+		omitted[file.Path] = file
+	}
+	link, ok := omitted["internal/dashboard/testdata/renders/latest.html"]
+	if !ok {
+		t.Fatalf("omitted files = %#v, want the link among them", changes.OmittedFiles)
+	}
+	if !link.Undigestable || link.Digest != "" || link.Bytes != 0 || link.ListedWhole() {
+		t.Errorf("tracked link omission = %#v, want nothing to open and a listing that is not whole", link)
+	}
+	// The reason still says which bound dropped it, which is what a deletion
+	// dropped by the same bound would say — the flag is the whole difference.
+	if link.Reason == OmittedUnreadable {
+		t.Errorf("tracked link omission = %#v, want the bound that dropped it rather than a claim there was nothing to diff", link)
+	}
+	if described := link.Describe(); !strings.Contains(described, "nothing to open") {
+		t.Errorf("described omission = %q, want it to say why there is no digest", described)
+	}
+	// And it is what stops the approval, where the regular fixture beside it is
+	// listed whole and stops nothing.
+	if render := omitted["internal/dashboard/testdata/renders/busy.html"]; !strings.HasPrefix(render.Digest, "sha256:") || !render.ListedWhole() {
+		t.Errorf("regular fixture omission = %#v, want it listed whole with a digest", render)
+	}
+	problems := changes.UnreviewableOmissions()
+	if len(problems) != 1 || !strings.Contains(problems[0], "latest.html") {
+		t.Fatalf("unreviewable = %#v, want the link named as the one omission no approval covers", problems)
+	}
+}
+
+// The narrowed refusal, at the grain the rule is written in: an omission is one
+// a review can be completed over only where it is test data and the listing says
+// which bytes were kept out.
+func TestUnreviewableOmissionsNamesWhatAnApprovalCannotCover(t *testing.T) {
+	t.Parallel()
+
+	listed := OmittedFile{
+		Path: "internal/dashboard/testdata/renders/busy.html", Bytes: 21873, Reason: OmittedPatchFull,
+		Class: FileClassFixture, Bound: 262144, Digest: "sha256:" + strings.Repeat("a", 64),
+	}
+	deleted := OmittedFile{
+		Path: "internal/dashboard/testdata/renders/gone.html", Bytes: 0, Reason: OmittedPatchFull,
+		Class: FileClassFixture, Bound: 262144, DiffBytes: 5600,
+	}
+	for name, testCase := range map[string]struct {
+		omitted []OmittedFile
+		problem string
+	}{
+		"a listed fixture":                {omitted: []OmittedFile{listed}},
+		"a fixture the change deletes":    {omitted: []OmittedFile{deleted}},
+		"source the bound cut":            {omitted: []OmittedFile{{Path: "internal/readmodel/throughput.go", Bytes: 13216, Reason: OmittedPatchFull, Class: FileClassSource}}, problem: "is source and the patch does not show it"},
+		"a test the bound cut":            {omitted: []OmittedFile{{Path: "internal/readmodel/throughput_test.go", Bytes: 15189, Reason: OmittedPatchFull, Class: FileClassTest}}, problem: "is test and the patch does not show it"},
+		"a fixture with nothing to open":  {omitted: []OmittedFile{{Path: "internal/dashboard/testdata/link.html", Reason: OmittedUnreadable, Class: FileClassFixture}}, problem: "does not list whole"},
+		"a fixture the listing cannot id": {omitted: []OmittedFile{{Path: "internal/dashboard/testdata/renders/stale.html", Bytes: 22126, Reason: OmittedPatchFull, Class: FileClassFixture}}, problem: "does not list whole"},
+	} {
+		problems := ChangeDiff{Truncated: true, OmittedFiles: testCase.omitted}.UnreviewableOmissions()
+		switch {
+		case testCase.problem == "" && len(problems) > 0:
+			t.Errorf("%s: unreviewable = %#v, want an omission a review can be completed over", name, problems)
+		case testCase.problem != "" && len(problems) != 1:
+			t.Errorf("%s: unreviewable = %#v, want the one omission named", name, problems)
+		case testCase.problem != "" && !strings.Contains(problems[0], testCase.problem):
+			t.Errorf("%s: unreviewable = %q, want it to say %q", name, problems[0], testCase.problem)
 		}
 	}
 }
