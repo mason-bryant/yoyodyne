@@ -967,7 +967,12 @@ func killAddMidCheckout(t *testing.T, repository, name string, age time.Duration
 	if err := os.Remove(filepath.Join(registration, "index")); err != nil {
 		t.Fatalf("Remove(index) error = %v", err)
 	}
-	writeFile(t, registration, "locked", "initializing")
+	// Written the way Git writes it, with the trailing newline its own
+	// write_file adds. This shape is recognized by the lock alone — it is the
+	// one a listing describes perfectly well, so no other rule catches it — and
+	// a fixture that wrote the word bare would pass against a reader that only
+	// ever compares the word, and say nothing about the file Git leaves.
+	writeFile(t, registration, "locked", "initializing\n")
 	then := time.Now().Add(-age)
 	entries, err := os.ReadDir(registration)
 	if err != nil {
@@ -1125,29 +1130,39 @@ func TestManagerRemovalQueuesOnTheWorktreeRegistryLease(t *testing.T) {
 
 // Concurrent creation is the condition every guard here exists for, and a
 // guard only ever exercised one command at a time is a guard nothing has tested.
-// So creations and registration walks are run against one repository at the
-// same time, and the assertion is that none of them fails: the lease is what
-// makes that deterministic rather than likely, since a creation of the
-// harness's own holds it from before its `git worktree add` until the checkout
-// is verified, and every walking command waits for it.
+// So creations and registration walks are run against one repository at the same
+// time, and the assertion is that none of them fails.
 //
-// Git run outside this manager — a check, an agent's own command, a second
-// harness — takes no lease and is not covered by this. What covers that is the
-// re-run in runBounded, which is probabilistic by nature and is stressed rather
-// than asserted: a test that has to cross a window measured in milliseconds to
-// mean anything passes just as readily by never crossing it.
+// Every one of them goes through a manager, which is the shape a machine running
+// several developers actually has: each run has a manager of its own over the
+// one repository, and two managers queue on the lease exactly as two processes
+// do, because the lock belongs to the open file description rather than to the
+// process. That is what makes this deterministic rather than likely — a creation
+// holds the lease from before its `git worktree add` until the checkout is
+// verified, and every walking command waits for it.
+//
+// Git run outside a manager — a check, an agent's own command, a second harness
+// on an older binary — takes no lease, and nothing here asserts about it. What
+// covers that is the re-run in runBounded, and the place to hold it to that is
+// TestManagerRunsAnyGitCommandAgainWhenItCrossesACreation, which injects the
+// crossing rather than racing for it. Asserting on it here would be asserting
+// that roughly 150ms of re-run always outlasts a window this machine's load
+// decides the width of, which is a flake waiting for a busy afternoon.
 func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testing.T) {
 	t.Parallel()
 
 	repository := newRepository(t)
-	worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
-	manager, err := New(Options{
-		Runner:         execution.OSProcessRunner{},
-		RepositoryRoot: repository,
-		WorktreeRoot:   worktreeRoot,
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
+	newManager := func() *Manager {
+		t.Helper()
+		manager, err := New(Options{
+			Runner:         execution.OSProcessRunner{},
+			RepositoryRoot: repository,
+			WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		return manager
 	}
 
 	// One worktree is made first and never removed, so `worktrees/` itself is
@@ -1163,54 +1178,37 @@ func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testin
 	var running sync.WaitGroup
 	failures := make(chan error, 64)
 
-	// Two kinds of creation run beside the walks, because they are covered by
-	// different things. One goes through the manager, which takes the lease.
-	running.Add(1)
-	go func() {
-		defer running.Done()
-		for attempt := 0; time.Now().Before(deadline); attempt++ {
-			worktree, err := manager.Create(context.Background(), CreateRequest{
-				// The branch a creation makes is named from the front of the run
-				// id, and a removal deliberately leaves the branch, so the front
-				// of the id is what has to differ each time round.
-				RunID:      fmt.Sprintf("run-%08x%024x", attempt, attempt),
-				WorkItemID: "yoyodyne-beside",
-				BaseRef:    "HEAD",
-			})
-			if err != nil {
-				failures <- fmt.Errorf("Create() beside a walk: %w", err)
-				return
+	for creator := 0; creator < 2; creator++ {
+		manager := newManager()
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			for attempt := 0; time.Now().Before(deadline); attempt++ {
+				worktree, err := manager.Create(context.Background(), CreateRequest{
+					// The branch a creation makes is named from the front of the
+					// run id, and a removal deliberately leaves the branch, so
+					// the front of the id is what has to differ each time round
+					// and between the two creators.
+					RunID:      fmt.Sprintf("run-%02x%06x%024x", creator, attempt, attempt),
+					WorkItemID: "yoyodyne-beside",
+					BaseRef:    "HEAD",
+				})
+				if err != nil {
+					failures <- fmt.Errorf("Create() beside a walk: %w", err)
+					return
+				}
+				// Removing puts the other unguarded half of the bookkeeping — an
+				// entry taken away a piece at a time — beside the walks as well.
+				if _, err := manager.RemovePreservedWorktree(context.Background(), worktree, KeepUncommittedWork); err != nil {
+					failures <- fmt.Errorf("RemovePreservedWorktree() beside a walk: %w", err)
+					return
+				}
 			}
-			// Removing puts the other unguarded half of the bookkeeping — an
-			// entry taken away a piece at a time — beside the walks as well.
-			if _, err := manager.RemovePreservedWorktree(context.Background(), worktree, KeepUncommittedWork); err != nil {
-				failures <- fmt.Errorf("RemovePreservedWorktree() beside a walk: %w", err)
-				return
-			}
-		}
-	}()
-
-	// The other is Git run outside the manager, as a check or an agent's own
-	// command is, which takes no lease. It is the load this test is really
-	// about: it registers and unregisters entries as fast as Git can, so the
-	// half-written instant comes round often enough for a walk to cross it, and
-	// what has to survive that is the re-run rather than the lease. Its own
-	// failures are not the subject — a raw add crossing another raw add has
-	// nothing covering it, which is the point — so they are not collected.
-	beside := filepath.Join(t.TempDir(), "beside")
-	running.Add(1)
-	go func() {
-		defer running.Done()
-		for attempt := 0; time.Now().Before(deadline); attempt++ {
-			path := fmt.Sprintf("%s-%d", beside, attempt)
-			if _, err := attemptGit(repository, "worktree", "add", "--quiet", "--detach", path, "HEAD"); err != nil {
-				continue
-			}
-			_, _ = attemptGit(repository, "worktree", "remove", "--force", path)
-		}
-	}()
+		}()
+	}
 
 	for walker := 0; walker < 4; walker++ {
+		manager := newManager()
 		running.Add(1)
 		go func() {
 			defer running.Done()
@@ -1220,13 +1218,12 @@ func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testin
 					return
 				}
 				// A rebase, a checkout and a branch deletion walk the
-				// registrations the listing walks; a branch made and deleted is
-				// the cheapest of them to run in a loop.
-				// It is also the sharp one. A listing that crosses a creation is
-				// caught twice — the re-run, and then the bookkeeping answering
-				// what Git refused — so it reports success either way; a branch
-				// has only the re-run under it, and a crossing that outlives
-				// that comes back as a refusal nothing softens.
+				// registrations the listing walks, and a branch is the cheapest
+				// of them to run in a loop. It is also the one with the least
+				// under it: a listing that crossed a creation would be caught
+				// twice — the re-run, and then the bookkeeping answering what Git
+				// refused — while a branch has only the lease and the re-run, so
+				// a crossing it met would come back as a refusal nothing softens.
 				branch := fmt.Sprintf("walker-%d", walker)
 				result, err := manager.run(context.Background(), "-C", repository, "branch", "--force", branch, "HEAD")
 				if err != nil {

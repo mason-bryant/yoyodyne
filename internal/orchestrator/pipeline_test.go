@@ -3769,7 +3769,83 @@ func pipelineRepository(t *testing.T) string {
 	t.Cleanup(func() { removeLinkedPipelineWorktrees(t, repository) })
 	runPipelineGit(t, repository, "add", ".")
 	runPipelineGit(t, repository, "commit", "-m", "initial")
+	startCreationLoop(t, repository)
 	return repository
+}
+
+// creationLoopVariable turns on a worktree-creation loop against every
+// repository a pipeline test builds. It is off by default and nothing in
+// `make check` sets it.
+const creationLoopVariable = "YOYODYNE_TEST_CREATION_LOOP"
+
+// startCreationLoop runs `git worktree add` and `git worktree remove` against
+// this test's own repository for as long as the test lasts, when
+// YOYODYNE_TEST_CREATION_LOOP is set.
+//
+// It exists for a question a single pass of the suite cannot answer. The runs a
+// concurrent-runs test hosts write one repository's worktree bookkeeping, and a
+// command that walks that bookkeeping while another run is registering used to
+// fail outright — a rebase was seen doing it with `failed to read
+// .git/worktrees/<other>/commondir`. Whether that still reproduces is a
+// question about a window measured in milliseconds, so the honest way to ask it
+// is to widen the window: create and remove registrations continuously
+// underneath the runs and see whether anything fails. That is a stress
+// condition rather than an assertion, which is why it is a switch rather than
+// something every run of the suite pays for:
+//
+//	YOYODYNE_TEST_CREATION_LOOP=1 go test ./internal/orchestrator \
+//	  -run 'TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn|TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand' \
+//	  -count=20 -race
+//
+// The loop is Git run directly rather than through the worktree manager, so it
+// takes no registry lease — which is the point. A run's own Git is leased and
+// therefore cannot meet a half-written entry; this is the neighbour that is not,
+// and what has to survive it is the re-run underneath every Git command.
+//
+// It bounds itself twice over. Its own deadline stops it whatever becomes of
+// the test, and the test's cleanup closes its channel and waits for it, so a
+// test that fails early never leaves a loop running against a repository Go is
+// about to delete.
+func startCreationLoop(t *testing.T, repository string) {
+	t.Helper()
+	if os.Getenv(creationLoopVariable) == "" {
+		return
+	}
+	// One entry is held for the whole loop, because Git deletes worktrees/
+	// itself when its last entry goes and a walk crossing that dies on the
+	// directory rather than on an entry — a different race from the one this is
+	// here to produce.
+	held := filepath.Join(t.TempDir(), "creation-loop-held")
+	runPipelineGit(t, repository, "worktree", "add", "--quiet", "--detach", held, "HEAD")
+
+	base := filepath.Join(t.TempDir(), "creation-loop")
+	stop := make(chan struct{})
+	stopped := make(chan int)
+	go func() {
+		cycles := 0
+		deadline := time.Now().Add(10 * time.Minute)
+		for time.Now().Before(deadline) {
+			select {
+			case <-stop:
+				stopped <- cycles
+				return
+			default:
+			}
+			path := fmt.Sprintf("%s-%d", base, cycles)
+			// Its own failures are not the subject: a raw add crossing another
+			// raw add has nothing covering it, which is exactly why the runs
+			// beside it do.
+			if _, err := attemptPipelineGit(repository, "worktree", "add", "--quiet", "--detach", path, "HEAD"); err == nil {
+				_, _ = attemptPipelineGit(repository, "worktree", "remove", "--force", path)
+			}
+			cycles++
+		}
+		stopped <- cycles
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		t.Logf("creation loop ran %d add/remove cycles against %s", <-stopped, repository)
+	})
 }
 
 // disablePipelineMaintenance stops Git from handing this repository to a
