@@ -962,7 +962,10 @@ told about yet, the work item it last ran, which proposed changes to its own
 documents it has already been shown, and when its picture of the
 repository and tracker was gathered and against what commit, and the normalized
 event stream is stored beside it — including what the operator asked the harness
-to do, which is recorded in the conversation's own log beside the runs' logs.
+to do, which is recorded in the conversation's own log beside the runs' logs. A
+re-read that has been taken and not yet delivered is recorded too, with the text
+of it kept in a file beside the record rather than inside it, because a picture
+is close to the whole of what one record may be.
 
 ## Talking to the other agents
 
@@ -2118,6 +2121,33 @@ same pair its own way. A refresh that landed moves the picture from one commit
 to another, and the commit the freshness line carries on the next message is
 the one it moved to; a re-read that changed nothing is a claim you would
 otherwise have to take on trust.
+
+**A re-read outlives the turn it was taken for.** Both kinds — yours and the
+harness's — are written to the conversation's durable record before the turn
+that would carry them is asked: which picture is waiting and the commit it was
+read against, with the text of it kept beside the record. So a turn that fails
+leaves the picture advanced rather than throwing the re-read away, and the next
+process delivers what was already read instead of walking the repository and the
+tracker again from the same old commit. The `context.measured` event says which
+of the two happened — a picture read for this turn, or one carried from a
+refresh a failed turn left — because the two cost different things, and the
+freshness line says so too rather than sending you to spend a second re-read on
+a picture already in hand:
+
+```text
+context gathered 3h ago at a1a1a1a1a1a1; a re-read taken 12m ago at b2b2b2b2b2b2 is waiting, and is delivered with the next thing said to the agent.
+```
+
+That is the amplifier of 2026-09-20. Every management turn was being refused
+that day by the turn-size backstop, and each refusal came after a completed
+re-read that went down with the process holding it, so one stuck picture became
+21 full re-reads of the repository and the tracker — all of them discarded, all
+of them measured from the same month-old commit. The backstop was corrected the
+next day, which removed that day's reason for the turns to fail; turns fail for
+other reasons, and this is what stops the next burst of them costing a re-read
+apiece. Only the delivery still moves the picture the conversation is working
+from: a refresh nobody was told about is a picture waiting, never one that
+landed.
 
 Where the re-read cannot be made — the tracker is locked, the repository will
 not answer — the reply is still given, and it says in its own text, ahead of

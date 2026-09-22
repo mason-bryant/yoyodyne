@@ -42,6 +42,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // Briefing is one picture of the product: the text the product manager is
@@ -124,6 +125,9 @@ type Refreshed struct {
 // had fallen too far behind. It waits here rather than replacing anything: the
 // conversation is not discarded, and what the product manager believes is only
 // corrected by telling it, on its next turn, what moved.
+//
+// It waits on the durable record as well as here, which is what makes it survive
+// the turn that was going to deliver it. See recordPendingPicture.
 type pendingRefresh struct {
 	briefing Briefing
 	since    Movement
@@ -134,6 +138,13 @@ type pendingRefresh struct {
 	// tells the role why it is being re-briefed unasked.
 	trigger   refreshTrigger
 	threshold int
+	// carried says this picture was read back from the durable record rather than
+	// taken by this session: a refresh whose turn failed, waiting for the next
+	// thing that says something to the agent. It changes nothing about the
+	// delivery and is recorded with the measurement, because "the repository was
+	// read for this turn" and "a completed read was carried across a failure" are
+	// the same picture with different things to learn from them.
+	carried bool
 }
 
 // refreshTrigger is what caused a refresh, recorded with it so the log and the
@@ -216,6 +227,13 @@ type PictureAge struct {
 	// outcome. Commit above says where the picture was; this says where it went,
 	// so the pair is the movement rather than an assertion that there was one.
 	RefreshedTo string `json:"refreshed_to,omitempty"`
+	// Carried says the refreshed picture was read by an earlier turn that failed
+	// before it could deliver it, and this turn carried it rather than reading the
+	// repository and the tracker again. It is on the measurement because the two
+	// cost different things: a re-read is a walk over the repository and the
+	// tracker, and carrying one is a file beside the conversation's record. A
+	// burst of failing turns used to pay the first of those once per failure.
+	Carried bool `json:"carried,omitempty"`
 }
 
 // stale reports a picture that has fallen past the threshold.
@@ -252,6 +270,7 @@ func (s *Session) measurePicture(ctx context.Context) (*PictureAge, error) {
 		age.Outcome = PictureRefreshed
 		age.RefreshedBy = string(s.refresh.trigger)
 		age.RefreshedTo = s.refresh.briefing.Commit
+		age.Carried = s.refresh.carried
 		return age, s.recordPictureAge(age)
 	}
 	movement := s.options.Ground.Movement(ctx, picture)
@@ -358,6 +377,14 @@ func (p PictureAge) Render() string {
 		if p.RefreshedBy != string(refreshByHarness) {
 			return ""
 		}
+		// A carried picture says so rather than claiming a read this reply did not
+		// make. The operator is being told what the reply was built from, and "the
+		// harness re-read before answering" would be a re-read they could go looking
+		// for in a log that has it against an earlier turn.
+		if p.Carried {
+			return fmt.Sprintf("[picture] %s behind the target branch, past the %d this project allows; the harness had already re-read the repository and the tracker for a turn that did not land, and this reply carries that picture rather than reading again.%s\n",
+				plural(p.Landings, "landing", "landings"), p.Threshold, movedTo(p.Commit, p.RefreshedTo))
+		}
 		return fmt.Sprintf("[picture] %s behind the target branch, past the %d this project allows; the harness re-read the repository and the tracker before answering, and nothing said here was discarded.%s\n",
 			plural(p.Landings, "landing", "landings"), p.Threshold, movedTo(p.Commit, p.RefreshedTo))
 	case PictureStated:
@@ -392,6 +419,15 @@ func (s *Session) Freshness(ctx context.Context) string {
 		// spending a repository read to say so would be spending it to print a
 		// zero.
 		return taken + ", as this conversation opened."
+	}
+	// A re-read the harness is already holding is said here rather than left for
+	// the operator to spend another one discovering. What moved has been read, the
+	// turn that was to carry it did not land, and the next thing said to the agent
+	// delivers it — so the comparison below is not made either: it would count a
+	// drift this picture is about to be replaced over.
+	if s.refresh != nil {
+		return fmt.Sprintf("%s; a re-read taken %s%s is waiting, and is delivered with the next thing said to the agent.",
+			taken, ageOf(s.options.clock().Now().Sub(s.refresh.briefing.GatheredAt)), atCommit(s.refresh.briefing.Commit))
 	}
 	if s.options.Ground == nil {
 		return taken + "; nothing here can say what has moved since."
@@ -457,6 +493,14 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 		WasCommit:  previous.Commit,
 		Problems:   briefing.Problems,
 	}
+	// The picture is durable before the turn that would deliver it is asked, so a
+	// turn that fails leaves it advanced rather than discarding a completed
+	// re-read. Without this the next process read the repository and the tracker
+	// again from the same old commit, which is how one stuck picture became 21
+	// discarded re-reads on 2026-09-20.
+	if err := s.recordPendingPicture(); err != nil {
+		return refreshed, err
+	}
 	if err := s.emit(execution.EventContextRefreshed, map[string]any{
 		"gathered_at":                 briefing.GatheredAt,
 		"replaces":                    previous.GatheredAt,
@@ -468,6 +512,97 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 		return refreshed, fmt.Errorf("record the refresh: %w", err)
 	}
 	return refreshed, nil
+}
+
+// recordPendingPicture writes the picture this session is holding for its next
+// turn to the durable record: the text beside the record, and which picture that
+// text is in the record itself. The text goes first, so a process interrupted
+// between the two leaves text nothing points at — which the next refresh
+// replaces — rather than a record naming text that is not there.
+func (s *Session) recordPendingPicture() error {
+	if s.refresh == nil {
+		return nil
+	}
+	if err := s.options.Store.SavePendingPictureText(s.options.identity(), s.refresh.briefing.Text); err != nil {
+		return fmt.Errorf("keep the picture the refresh read: %w", err)
+	}
+	return s.record()
+}
+
+// pendingPicture is the picture this session is holding for its next turn, as
+// the durable record keeps it. It is derived where the record is written rather
+// than set beside it, for the reason the undecided proposals are: the record and
+// this process must never come to disagree about what is still owed.
+func (s *Session) pendingPicture() *runstate.PendingPicture {
+	if s.refresh == nil {
+		return nil
+	}
+	return &runstate.PendingPicture{
+		GatheredAt:                s.refresh.briefing.GatheredAt,
+		Commit:                    s.refresh.briefing.Commit,
+		ShippedDocumentationBytes: s.refresh.briefing.ShippedDocumentationBytes,
+		Replaces:                  s.refresh.was,
+		Commits:                   s.refresh.since.Commits,
+		TrackerChanges:            s.refresh.since.TrackerChanges,
+		RepositoryProblem:         s.refresh.since.RepositoryProblem,
+		TrackerProblem:            s.refresh.since.TrackerProblem,
+		Trigger:                   string(s.refresh.trigger),
+		Threshold:                 s.refresh.threshold,
+	}
+}
+
+// restorePendingPicture takes up a picture a refresh read and no turn delivered,
+// from the record this session has just adopted. It is what makes a completed
+// re-read outlive the turn it was taken for: the process that took it may be
+// gone, and what it read is still the repository as it stands.
+//
+// The record decides, not this process. A record naming no pending picture is one
+// whose picture has been delivered or replaced by whoever wrote it, so anything
+// this session was holding is dropped rather than delivered a second time.
+func (s *Session) restorePendingPicture() {
+	recorded := s.state.PendingPicture
+	switch {
+	case recorded == nil:
+		s.refresh = nil
+		return
+	case s.refresh != nil &&
+		s.refresh.briefing.GatheredAt.Equal(recorded.GatheredAt) &&
+		s.refresh.briefing.Commit == recorded.Commit:
+		// This session already holds the very picture the record names, text and
+		// all, which is the ordinary case at an interactive prompt: reading it back
+		// would be a megabyte off the disk to arrive where we are.
+		return
+	}
+	text, err := s.options.Store.PendingPictureText(s.options.identity())
+	if err != nil || strings.TrimSpace(text) == "" {
+		// The record names a picture whose text is not there to be delivered. What
+		// is owed cannot be met, so it is dropped and the picture's age is measured
+		// as it would have been: the next turn re-reads if it is past the threshold
+		// and records that it did. That costs a walk over the repository and the
+		// tracker, which is worse than carrying the picture and better than briefing
+		// the role with nothing.
+		s.refresh = nil
+		s.state.PendingPicture = nil
+		return
+	}
+	s.refresh = &pendingRefresh{
+		briefing: Briefing{
+			Text:                      text,
+			GatheredAt:                recorded.GatheredAt,
+			Commit:                    recorded.Commit,
+			ShippedDocumentationBytes: recorded.ShippedDocumentationBytes,
+		},
+		since: Movement{
+			Commits:           recorded.Commits,
+			TrackerChanges:    recorded.TrackerChanges,
+			RepositoryProblem: recorded.RepositoryProblem,
+			TrackerProblem:    recorded.TrackerProblem,
+		},
+		was:       recorded.Replaces,
+		trigger:   refreshTrigger(recorded.Trigger),
+		threshold: recorded.Threshold,
+		carried:   true,
+	}
 }
 
 // picture is what the product manager is working from — or, before it has been
@@ -575,7 +710,13 @@ func (p pendingRefresh) prompt() string {
 		// what it would otherwise have had to state in its reply: a picture past
 		// the threshold is one whose advice about the repository has to say how old
 		// it is, and this is the harness answering that instead.
-		fmt.Fprintf(&prompt, "The harness re-read the repository and the tracker before answering this turn, because the picture you were working from had fallen %s behind the target branch, past the %d this project allows. That picture was gathered %s, and %s. What follows is the product as it stands now.\n\n",
+		//
+		// What it is not told is when the read happened. The picture may have been
+		// read for an earlier turn that failed and carried here, and a sentence
+		// saying it was read for this one would be a small false claim about the
+		// evidence under it; when it was read is on the record, where the cost of
+		// it is what the question is about.
+		fmt.Fprintf(&prompt, "The harness re-read the repository and the tracker for this conversation, because the picture you were working from had fallen %s behind the target branch, past the %d this project allows. That picture was gathered %s, and %s. What follows is the product as it stands now.\n\n",
 			plural(p.since.Commits, "landing", "landings"), p.threshold, ageOf(p.briefing.GatheredAt.Sub(p.was)), p.since.render())
 	default:
 		fmt.Fprintf(&prompt, "The operator had the harness re-read the repository and the tracker. The context you were given when this conversation opened was gathered %s, and %s. What follows is the product as it stands now.\n\n",
