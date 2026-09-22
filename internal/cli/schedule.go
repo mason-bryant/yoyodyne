@@ -953,7 +953,7 @@ because releasing it changed the item. Runs blocking one after another with
 nothing landing between them hold intake at
 execution.blocked_runs_before_intake_hold -- verdicts and check failures on
 changes that were present; a stop the environment made counts toward nothing --
-and the same poll summons the development manager's sweep out of its cadence
+and the same poll summons the development manager's sweep ahead of its schedule
 with the blocked runs and the reason each blocked in front of her. She decides
 what happens to the hold: release it, keep it and probe the line with one run,
 or escalate it to you. Where she records nothing by execution.brake_cooldown,

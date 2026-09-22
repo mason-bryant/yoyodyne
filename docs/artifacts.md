@@ -256,7 +256,7 @@ and quote what it was.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking
-the set work may be attributed to, and a repository with no goals in force is
+the set work may be attributed to, and a repository with no active goals is
 told that nothing was checked rather than having its queue reported as
 unattributed.
 
@@ -280,7 +280,7 @@ the statement is bold and the lines about it italic, and that emphasis is an
 addition and never the meaning — the same discipline everything else the harness
 dresses holds to. What separates two goals is the blank line, what says a line is
 about the goal above it is the indent and its label, and what says a goal is no
-longer in force is said in words, so a listing piped to a file, read with
+longer active is said in words, so a listing piped to a file, read with
 `NO_COLOR` set, or shown on a terminal that says it is dumb says exactly what it
 says dressed. `--json` carries none of it. The listing closes with a line naming
 what these goals sit underneath — the goals the product brief states, and the

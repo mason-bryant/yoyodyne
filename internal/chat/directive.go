@@ -434,7 +434,7 @@ func (d DirectiveWithdrawn) Render() string {
 	}
 	var rendered strings.Builder
 	rendered.WriteString(d.Directive.Render())
-	rendered.WriteString("this directive is no longer in force; nothing is enforced against it from now.\n")
+	rendered.WriteString("this directive no longer applies; nothing is enforced against it from now.\n")
 	rendered.WriteString("nothing was deleted: what you said is kept, and /directives shows it as withdrawn.\n")
 	if d.Directive.Kind.Pauses() && !d.Directive.Resolved() {
 		rendered.WriteString("the work it paused can carry on, without what it was waiting for having been answered.\n")
@@ -469,7 +469,7 @@ func renderDirectives(recorded []directive.Directive) string {
 	for _, group := range []struct {
 		label string
 		items []directive.Directive
-	}{{"in force", live}, {"no longer in force", over}} {
+	}{{"active", live}, {"no longer active", over}} {
 		if len(group.items) == 0 {
 			fmt.Fprintf(&rendered, "%s: none\n", group.label)
 			continue

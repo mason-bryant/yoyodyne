@@ -82,7 +82,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	// it would buy is silence that means waiting-on-you, which is the thing the
 	// heartbeat exists to end. What an operator can change is how often.
 	if *heartbeat <= 0 {
-		fmt.Fprintln(stderr, "heartbeat must be positive; it is a cadence rather than a switch, because silence has to mean nothing to do")
+		fmt.Fprintln(stderr, "heartbeat must be positive; it says how often to repeat rather than whether to, because silence has to mean nothing to do")
 		return 2
 	}
 	// A number passed here decides nothing, so it is said rather than swallowed: a

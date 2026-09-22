@@ -358,7 +358,7 @@ func renderSweep(recorded runstate.Sweep) string {
 	// that ran because the line stopped, and a reader scanning the log for why
 	// the hourly cadence has an extra entry in it is owed the answer first.
 	if recorded.Summoned != "" {
-		fmt.Fprintf(&rendered, "  summoned out of its cadence by %s\n", recorded.Summoned)
+		fmt.Fprintf(&rendered, "  summoned ahead of its schedule by %s\n", recorded.Summoned)
 	}
 	if recorded.Result == nil {
 		fmt.Fprintf(&rendered, "  no account of this pass was recorded: %s\n", nonEmptySweepProblem(recorded.Problem))
@@ -398,7 +398,7 @@ func nonEmptySweepProblem(problem string) string {
 func printSweepsUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo sweeps [options]
 
-What the recurring tasks found on their own cadence. A recurring task wakes a
+What the recurring tasks found on their own schedule. A recurring task wakes a
 role every so often to look at its own domain -- the development manager over
 work that has stopped moving, say -- and nobody is watching those turns, so each
 firing ends in a durable report. This is where they are read.
@@ -420,10 +420,10 @@ summary and no findings, which on a healthy harness is most of them; a pass that
 produced no account says so and names what stopped it; and a pass stopped by its
 turn bound is recorded as partial, so it is never mistaken for a finished one.
 
-A pass the intake brake summoned out of its cadence says so under its header,
+A pass the intake brake summoned ahead of its schedule says so under its header,
 naming what tripped the brake. It is the development manager's sweep fired the
 moment the line stopped, with the blocked runs in front of her, and it counts as
-a firing: the cadence runs on from it.
+a firing: the schedule runs on from it.
 
 The twenty most recent passes are shown by default, which for an hourly task is
 under a day. "--limit 200" reads further back and "--limit 0" reads every pass

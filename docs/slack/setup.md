@@ -602,7 +602,7 @@ the forge to publish them:
 
 Four states count: the operator holding all harness activity, a held intake
 (whoever held it), a watch session that has found nothing it can start, and no
-watch session running at all. Each closes on whose move it is, in the words
+watch session running at all. Each closes on who it is waiting on, in the words
 `yoyo status` puts on its attention line — for a held intake, the hold's own:
 yours for one you placed, the development manager's or the harness's for one
 the brake is working, and yours once she has escalated it. That last one is the
@@ -620,7 +620,7 @@ promoted, the thread reads as landed, and the pull request sits on the forge. So
 the count comes back with the line while the publication stands, and a line with
 nothing ready at all says so as long as there is one. It is the same derivation
 the attention line of `yoyo status` names each of them on, so what the count says
-is waiting is what the terminal lists, with whose move it is against each; and
+is waiting is what the terminal lists, with who it is waiting on against each; and
 it stops counting a publication the moment the forge records the merge, which
 [`yoyo reconcile`](../operations.md#recovering-interrupted-runs) writes onto the
 record whether the harness made the merge or somebody made it by hand.
@@ -853,7 +853,7 @@ proposed to a document it does not own, a cap the
 development manager crossed on his own authority, and every turn of an ask
 exchange are all at the channel level — the released claim because the line was
 idle behind it for as long as it stood; the crossing because it is a veto by
-reading, in force as it is recorded and yours to undo only if you see it; the
+reading, applying as it is recorded and yours to undo only if you see it; the
 last because an exchange is a
 question waiting on you, and a
 question shown only inside a thread while its answer is shown at the top would be
@@ -1089,9 +1089,9 @@ turned into a work item stops wearing :thinking_face: at the moment there is
 something to go and read.
 
 The check mark says you have an answer, not that your instruction has lapsed.
-An operational directive is in force from the moment it is recorded and stays
+An operational directive applies from the moment it is recorded and stays
 there; carrying it out records what it produced and withdraws nothing, so it is
-still listed by `yoyo directive list` as in force, with what it became under it.
+still listed by `yoyo directive list` as active, with what it became under it.
 What ends one is you withdrawing it — `yoyo directive withdraw --by <who>
 --reason <why> <id>`, or `/withdraw` in a conversation — which takes it out of
 force without deleting it. There is no way to do that from a thread, but a

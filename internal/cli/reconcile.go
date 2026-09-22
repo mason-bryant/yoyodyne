@@ -668,7 +668,7 @@ and no provider usage window accounts for it, that is recorded against the
 product as a stall — which `+"`yoyo status`"+` reads back afterwards and the Slack sink,
 if one is running, takes to the operators once. It is here because this sweep runs
 whether or not reporting was ever turned on: how promptly a stopped harness is
-noticed is this threshold and the cadence of whatever runs this sweep, so an
+noticed is this threshold and how often whatever runs this sweep does, so an
 unattended pass should run at least as often as the threshold it sets.
 
 Options:

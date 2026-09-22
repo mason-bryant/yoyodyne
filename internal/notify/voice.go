@@ -969,7 +969,7 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 	}
 	move, ok := nextMove(event)
 	if !ok {
-		return Message{}, fmt.Errorf("render %s: nothing says whose move follows it", event.Kind)
+		return Message{}, fmt.Errorf("render %s: nothing says who it waits on next", event.Kind)
 	}
 	message := Message{
 		SchemaVersion: SchemaVersion,

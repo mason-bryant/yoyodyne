@@ -35,22 +35,32 @@ the prose the check reads, every one of them a term with a row below.
 | `docket`      | the list of stopped runs, of runs that died before they started, and of items dispatch would not start, waiting on the development manager | `yoyo reconcile` and `yoyo triage` output, and the product manager's context bundle; `internal/runstate`; [management and supervision](designs/management-and-supervision.md)                                                            |
 | `handback`    | handing the work back to the developer that made it                                                                                        | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document                                                                                                                                        |
 | `heartbeat`   | how often to repeat                                                                                                                        | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md)                                                                                                                         |
-| `in force`    | active, or still applies                                                                                                                   | [the prose governing how invariants are amended](decisions/invariants/README.md), which only the architect changes                                                                                                                       |
 | `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
 | `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
+| `re-arm`      | repeat the merge request a forge dropped, once per publication — the `yoyo triage rearm` verb and the budget it spends                     | `yoyo triage rearm` and its help; the merge re-arms count in `yoyo status`; the development manager's triage decisions and `yoyo ground`; `internal/orchestrator` and `internal/runstate`                                                |
 | `seat`        | an instance of a specific persona type — a developer seat, the product manager seat — often with persistent memory but not always. A *developer slot* is the harness's word for the capacity one developer seat fills: the seat is what does the work, and the slot is what it takes up while it does | the operator's own conversations, which is where the word came from; [a developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label), the yoyodyne-ifd.388 mechanism, and the reliability seat yoyodyne-ifd.415 configured under it |
 | `sink`        | the process that posts to Slack                                                                                                            | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                                 |
 | `steer`       | direct the work, or change what is being worked on                                                                                         | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                          |
 
 
-Three entries are here because the word is still written somewhere no other role
-may edit. `in force`, `minute zero` and `posture` are the sweep's decoration
-rather than mechanism names, and each survives only in the invariants home: two
-inside the text of an active invariant, and `in force` in the prose that governs
-how an invariant is amended. That wording is the architect's alone — the sweep
-says so outright — so the entry is what keeps the word readable until the
-architect decides otherwise, and each is retired when it does. The operator has
-objected to `in force` by name, so these three are the entries most worth losing.
+Two entries are here because the word is still written somewhere no other role
+may edit. `minute zero` and `posture` are the sweep's decoration rather than
+mechanism names, and each survives only inside the text of an active
+invariant. That wording is the architect's alone — the sweep says so outright —
+so the entry is what keeps the word readable until the architect decides
+otherwise, and each is retired when it does. `in force` was the third of these
+until yoyodyne-ifd.418 retired it: the operator objected to it by name, so it is
+now listed below as replaced, with the governed documents that still carry it
+named on its row until the architect amends them.
+
+One entry is a command's own name. The sweep replaced `re-arm` in the prose of
+the governed documents, but `yoyo triage rearm` is a verb an operator types and
+`yoyo status` counts, and a word a command is called cannot be swept out of the
+command's help without renaming the command. So it is registered, and a row
+permits its term everywhere the check reads — the governed documents included,
+in every spelling — not only in the command's output. What keeps it out of a
+sentence that could have said *repeat the merge request* is the reviewer, not
+the check.
 
 One entry is the operator's word rather than the project's. He introduced
 `seat` on 2026-09-19 and wants to keep using it, so its row is what makes it
@@ -69,28 +79,33 @@ ordinary word that said the same thing. The second column is the wording to
 write instead, rather than a claim that every occurrence has been changed: where
 one of these was written in the prose of a governed document it was replaced,
 and the rest are still in places outside this sweep — mostly the tracker's own
-items, which are the product manager's to reword. One exception the re-run
-confirms: `re-arm` is still written once in `designs/v1-harness-design.md`,
-inside a recorded amendment reason in the frontmatter, which is the architect's
-account of what it decided on a date rather than a sentence to clarify. The
-check does not read frontmatter, for that reason. Either way the check below
-refuses any of them coming back into the prose of a governed document without an
-entry.
+items, which are the product manager's to reword. The check below refuses any
+of them coming back into the prose of a governed document, or into the strings
+the commands, the conversation, and the notifier print, without an entry.
 
+The third column is the one exception, and it is a narrow one. A governed
+document is its owner's alone to reword, so a term retired from everywhere else
+can still be written in one while its owner gets to the amendment. The row names
+each such document, in backticks and repository-relative, and the check excuses
+the term there and nowhere else: not in another document, and never in a
+command's or the notifier's strings. The excuse ends with the amendment. Once a
+named document no longer carries the term the check refuses the row itself, so
+the document comes off the row rather than staying excused for a word it no
+longer says.
 
-| Term                | Write instead                                                                                                                                                                 |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cadence`           | how often it repeats — still in the `yoyo slack` refusal *heartbeat must be positive; it is a cadence rather than a switch*, which is a shipped string rather than a document |
-| `one pane of glass` | one window                                                                                                                                                                    |
-| `re-arm`            | repeat the merge request                                                                                                                                                      |
-| `seam`              | the boundary, named for what attaches to what                                                                                                                                 |
-| `sidecar`           | a separate directory outside the repository                                                                                                                                   |
-| `soak`              | a trial run kept alongside the old path for comparison                                                                                                                        |
-| `starving`          | stopping                                                                                                                                                                      |
-| `supersession pile` | the list of superseded pull requests                                                                                                                                          |
-| `tranche`           | stage, or part 1 of 4                                                                                                                                                         |
-| `wedged`            | stuck, or the condition said outright                                                                                                                                         |
-| `whose-move`        | waiting on you                                                                                                                                                                |
+| Term                | Write instead                                          | Still written in, until its owner amends it                                                                                                    |
+| ------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cadence`           | how often it repeats, or its schedule                  |                                                                                                                                                |
+| `in force`          | active, or still applies                               | `docs/decisions/invariants/README.md`, `docs/designs/artifact-contract.md`, `docs/designs/portable-agent-configuration.md`                     |
+| `one pane of glass` | one window                                             |                                                                                                                                                |
+| `seam`              | the boundary, named for what attaches to what          |                                                                                                                                                |
+| `sidecar`           | a separate directory outside the repository            |                                                                                                                                                |
+| `soak`              | a trial run kept alongside the old path for comparison |                                                                                                                                                |
+| `starving`          | stopping                                               |                                                                                                                                                |
+| `supersession pile` | the list of superseded pull requests                   |                                                                                                                                                |
+| `tranche`           | stage, or part 1 of 4                                  |                                                                                                                                                |
+| `wedged`            | stuck, or the condition said outright                  |                                                                                                                                                |
+| `whose-move`        | waiting on you — or, of a thing, who it is waiting on  |                                                                                                                                                |
 
 
 
@@ -117,6 +132,22 @@ with no entry here fails, naming the file, the line, and the ordinary wording to
 write instead. It also holds this document to its own shape: an entry that
 defines nothing, or names no place the term is used, fails the same check.
 
+It reads the strings an operator is shown as well as the documents, since
+yoyodyne-ifd.418: every string literal in the Go source of `internal/cli`,
+`internal/chat`, `internal/notify`, `internal/slack`, `internal/readmodel`,
+`internal/dashboard`, `internal/directive`, and `internal/goal` — the commands
+and their help, the conversation, the notifier's lines, the read model every
+surface projects, and the refusals `yoyo directive` and `yoyo goals` print —
+and the dashboard's own script, style, and page under
+`internal/dashboard/assets`, read whole. A string there is held to the same
+register as a sentence in a document, with the one difference that nothing
+excuses it: a term retired from the documents and still in the help text has
+not been retired, which is what this is for. Only string literals are read, and
+only outside test files — a comment is written for whoever reads the code, and a
+test names the wording it refuses as often as the wording it wants. The
+dashboard's script is read comments and all, because nothing cheap tells a
+comment from a string in a language the check does not parse.
+
 A term of more than one word is looked for however its parts are spaced —
 `minute zero`, `minute-zero`, `minutezero`, and a `minute` a line wrap left with
 its `zero` on the next line are the same coinage and all four fail. That cuts
@@ -132,9 +163,10 @@ Three things it deliberately does not read. A document's frontmatter is identity
 and revision history, and a revision's recorded reason is what somebody decided
 in their own words on a date — rewriting one to change a word falsifies a record
 instead of clarifying a sentence. Fenced blocks are code. And the guides under
-`docs/`, the README, and the tracker's own items are outside it: they are
-operator-facing too, but no sweep has been run over them and holding a document
-to an inventory nobody took over it would fail on words nobody was asked about.
+`docs/`, the README, the tracker's own items, and the Go source outside the
+packages named above are outside it: they are operator-facing too, but no sweep
+has been run over them and holding a document to an inventory nobody took over
+it would fail on words nobody was asked about.
 
 What no check can do is recognize a word coined this morning. That is the
 reviewer's, and it is written into the reviewer persona as a finding class: a

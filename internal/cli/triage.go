@@ -828,7 +828,7 @@ The development manager crosses a cap too, and narrowly: far enough for the one
 decision that was refused and no further, at most five times per item, and only
 with a justification, which lands on the item and
 reaches you in the channel as the crossing happens. That is a veto by reading
-rather than a request -- the crossing is in force the moment it is recorded, and
+rather than a request -- the crossing applies the moment it is recorded, and
 what you do about one you disagree with is undo the work it bought. A sixth
 crossing of the same item is refused naming this command, and so is any ceiling
 beyond that; "yoyo status <beads-id>" says how many of an item's

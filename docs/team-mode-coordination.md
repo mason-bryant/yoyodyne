@@ -222,7 +222,7 @@ rather than negotiated.
 **The protocol**, which is the sketch plus one step:
 
 1. Pull.
-2. Read the intake hold from the pulled replica; a hold that is in force stops
+2. Read the intake hold from the pulled replica; a hold that is active stops
    selection here, and the reason the item was chosen is recorded with the run,
    as the intake invariant requires.
 3. Claim the item locally.
@@ -495,7 +495,7 @@ So the resolution is the one the rest of the document uses:
 **The residual cost, stated rather than argued away.** Two sinks whose
 confirming pulls race can each acknowledge before either sees the other, so an
 operator can see two acknowledgements for one reply. What they cannot see is two
-directives in force: the superseded record binds nothing, and the run pipeline
+active directives: the superseded record binds nothing, and the run pipeline
 reads the one that won. A duplicated acknowledgement is a cosmetic cost inside
 the same sync window every other race here has; it is not exactly-once delivery,
 and this design does not claim it.

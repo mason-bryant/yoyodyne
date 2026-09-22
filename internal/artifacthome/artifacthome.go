@@ -190,7 +190,7 @@ func invariantsHome(directory string) Home {
 			"into the developer's context and the reviewer's evidence, so a constraint holds " +
 			"even where the work item never mentions it.",
 		Ownership: "The architect, and no other role at all. A developer or a reviewer that " +
-			"believes an invariant is wrong leaves it in force and proposes the amendment in " +
+			"believes an invariant is wrong leaves it as it stands and proposes the amendment in " +
 			"what it reports, for the architect to decide.",
 		HandEdit: "You may, and nothing refuses it. What `yoyo invariant` does that an editor " +
 			"does not is record who changed the constraint and why, so an edit made by hand " +

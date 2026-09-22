@@ -12,20 +12,26 @@ import (
 // document lists the words that were replaced rather than registered, and a
 // parser that took every table in the file would permit exactly those.
 func register(rows ...string) string {
-	return strings.Join(append([]string{
+	return registerReplacing([]string{"| `tranche` | stage |"}, rows...)
+}
+
+// registerReplacing is register with the replaced table's rows given too, for
+// the tests about what a replaced row excuses.
+func registerReplacing(replaced []string, rows ...string) string {
+	return strings.Join(append(append(append([]string{
 		"# Terms",
 		"",
-		"## Replaced rather than registered",
+		ReplacedHeading,
 		"",
-		"| Term | Replaced with |",
-		"| --- | --- |",
-		"| `tranche` | stage |",
+		"| Term | Write instead | Still written in |",
+		"| --- | --- | --- |",
+	}, replaced...), []string{
 		"",
 		RegisterHeading,
 		"",
 		"| Term | In plain words | Where it is used |",
 		"| --- | --- | --- |",
-	}, rows...), "\n") + "\n"
+	}...), rows...), "\n") + "\n"
 }
 
 // root writes a fixture repository: the register, and each named document under
@@ -457,6 +463,160 @@ func TestDocumentsToleratesAHomeThatIsNotThere(t *testing.T) {
 	}
 	if len(documents) != 1 {
 		t.Fatalf("Documents() = %v, want the one document in the one home that exists", documents)
+	}
+}
+
+// A source string is read as a document is: the help text below is a raw
+// literal, and the term is reported on the physical line it is written on
+// rather than the line the literal opens on.
+func TestCheckReportsACoinageInASourceString(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"internal/cli/one.go": strings.Join([]string{
+			"package cli", "",
+			"const usage = `usage: yoyo one", "",
+			"Naming no item prints the list with whose move each one is.",
+			"`", "",
+		}, "\n"),
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Path != "internal/cli/one.go" || problems[0].Line != 5 || problems[0].Term != "whose-move" {
+		t.Fatalf("Check() reported %v, want whose-move at internal/cli/one.go:5", problems)
+	}
+	if !strings.Contains(problems[0].Reason, "waiting on you") {
+		t.Errorf("Check() reason = %q, want the plain wording in it", problems[0].Reason)
+	}
+}
+
+// An interpreted literal is one physical line whatever it escapes, so a term
+// on either side of a `\n` in one is reported on the line the literal starts —
+// and wrapped across the escape it is still one term.
+func TestCheckReportsACoinageInAnInterpretedStringOnItsOwnLine(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"internal/notify/one.go": strings.Join([]string{
+			"package notify", "",
+			"func line() string {",
+			"\treturn \"the pause is in\\nforce; nothing runs\\nuntil it lifts\"",
+			"}", "",
+		}, "\n"),
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 1 || problems[0].Line != 4 || problems[0].Term != "in force" {
+		t.Fatalf("Check() reported %v, want in force at line 4", problems)
+	}
+}
+
+// What the source scan does not read: a comment, which is written for whoever
+// reads the code; a test, which names the wording it refuses as often as the
+// wording it wants; and a package outside the surfaces.
+func TestCheckReadsOnlyTheStringsOfTheSurfaces(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"internal/cli/one.go":        "package cli\n\n// A wedged check is one that never finishes.\nconst usage = \"plain\"\n",
+		"internal/cli/one_test.go":   "package cli\n\nconst refused = \"a wedged check\"\n",
+		"internal/orchestrator/a.go": "package orchestrator\n\nconst said = \"a wedged check\"\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() reported %v, want nothing: none of these is a string an operator is shown", problems)
+	}
+}
+
+// The dashboard's script is read whole, comments and all.
+func TestCheckReadsTheDashboardAssetsWhole(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"internal/dashboard/assets/dashboard.js": "// each says whose move it is\nvar label = \"whose move: \" + whose;\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 2 || problems[0].Line != 1 || problems[1].Line != 2 {
+		t.Fatalf("Check() reported %v, want the comment and the string both", problems)
+	}
+}
+
+// `in forced-colours mode` is not `in force`: the term is held to a whole word.
+func TestCheckDoesNotReportInForcedAsInForce(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"internal/dashboard/assets/dashboard.css": "/* the page reads the same in forced-colours mode */\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() reported %v, want nothing", problems)
+	}
+}
+
+// A replaced row can name the governed documents that still carry its term
+// while their owner amends them. The term is excused there and nowhere else:
+// not in another document, and not in a source string.
+func TestAReplacedRowExcusesOnlyTheDocumentsItNames(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, registerReplacing([]string{
+		"| `in force` | active | `docs/decisions/invariants/README.md` |",
+	}), map[string]string{
+		"docs/decisions/invariants/README.md": "# Invariants\n\nA reviewer leaves it in force and proposes the amendment.\n",
+		"docs/designs/one.md":                 "# One\n\nThe directive is in force.\n",
+		"internal/cli/one.go":                 "package cli\n\nconst said = \"no directives are in force\"\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 2 {
+		t.Fatalf("Check() reported %d problems, want 2: %v", len(problems), problems)
+	}
+	if problems[0].Path != "docs/designs/one.md" || problems[1].Path != "internal/cli/one.go" {
+		t.Errorf("Check() reported %v, want the unexcused document and the source string, and not the excused document", problems)
+	}
+}
+
+// The excuse ends with the amendment: a row naming a document that no longer
+// carries the term is reported, at the row, so the document comes off it.
+func TestAReplacedRowExcusingADocumentThatNoLongerCarriesTheTermIsReported(t *testing.T) {
+	t.Parallel()
+
+	registerBody := registerReplacing([]string{
+		"| `in force` | active | `docs/decisions/invariants/README.md`, `docs/designs/gone.md` |",
+	})
+	directory := root(t, registerBody, map[string]string{
+		"docs/decisions/invariants/README.md": "# Invariants\n\nA reviewer leaves it as it stands and proposes the amendment.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(problems) != 2 {
+		t.Fatalf("Check() reported %d problems, want one per document the row names: %v", len(problems), problems)
+	}
+	for _, problem := range problems {
+		if problem.Path != RegisterPath || problem.Term != "in force" || !strings.Contains(problem.Reason, "take the document off the row") {
+			t.Errorf("Check() reported %+v, want the row itself refused", problem)
+		}
+	}
+	if problems[0].Line != problems[1].Line || problems[0].Line != strings.Count(registerBody[:strings.Index(registerBody, "| `in force`")], "\n")+1 {
+		t.Errorf("Check() reported lines %d and %d, want both at the row", problems[0].Line, problems[1].Line)
 	}
 }
 

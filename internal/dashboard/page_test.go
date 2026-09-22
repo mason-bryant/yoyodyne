@@ -394,7 +394,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 		// change preserved, said as `yoyo status` says it.
 		"grouping-card": {
 			`<h2 id="grouping-heading" class="popup-title">Held back: held for a person (2 items)</h2>`,
-			"whose move: the development manager's", `data-item="yoyodyne-ifd.150"`,
+			"waiting on: the development manager", `data-item="yoyodyne-ifd.150"`,
 			`<h2 id="card-heading" class="popup-title">Triage names the phase a run stopped in</h2>`,
 			`<p class="card-run-preserved">preserved: stopped, reviewing — work preserved</p>`,
 			"reason: the reviewer asked for repair 3 times",

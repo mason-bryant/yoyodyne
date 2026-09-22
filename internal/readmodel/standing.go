@@ -583,7 +583,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	if standing.Reports.OldestAge > maxUndecidedReportAge {
 		needs = append(needs, Attention{
 			What:  standing.Reports.Describe(),
-			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the cadence that works it is not keeping up",
+			Whose: "the product manager's — reports are decided in conversation, and a pile this old says the schedule that works it is not keeping up",
 		})
 	}
 	// A stall that is holding admitted work back and is nobody else's line to

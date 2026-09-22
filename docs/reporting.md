@@ -258,8 +258,8 @@ and every round of an inter-role exchange.
 
 Each line carries the role and the configured agent that spent it, the phase, the
 amount and its classification, the account alias and the configuration revision
-in force, the revision the harness binary that made the call was built from, the
-one thing the invocation belonged to — and the work item, where the invocation was
+that applied, the revision the harness binary that made the call was built from,
+the one thing the invocation belonged to — and the work item, where the invocation was
 made for one — the backend, the adapter version that reached it, the requested and
 resolved models, and when it happened.
 
@@ -900,7 +900,7 @@ every `--heartbeat` while the stall stands**, to the operators directly and
 tagged to them by member id every time; it is a **`warning` while the stall is
 young and `critical` once nothing has started for two hours** — two heartbeats,
 so the warning is said and said once more before it is raised — and each
-repetition re-reads the cause and whose move it is, so a louder message is also a
+repetition re-reads the cause and who it is waiting on, so a louder message is also a
 more current one. Four silent hours replayed produce a rising sequence rather
 than one message:
 
@@ -1145,13 +1145,13 @@ that refuses it costs the direct messages and nothing else: the stale build, the
 provider's hold, the improvement, and the released claim are in the channel
 either way, and the stall is in the durable record `yoyo status` reads back.
 
-Every message ends by saying whose move follows it. A thread is a narrative and a
+Every message ends by saying who it waits on next. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
 work routed to a role waits on somebody opening a conversation — and the silence
 after the last message reads the same whether somebody is working, somebody is
 waiting to be asked, or nobody at all holds the ball. So each message closes on
 one clause: `Next: the reviewer's — a verdict on the change.` It is the same
-clause whoever is speaking, because whose move follows a promotion is a fact about
+clause whoever is speaking, because who a promotion waits on next is a fact about
 the state of the work rather than an opinion a persona has about it, and it is on
 every message rather than only the ones that look final — which message turns out
 to be a thread's last is not knowable when it is written.

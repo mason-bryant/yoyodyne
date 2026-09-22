@@ -753,7 +753,7 @@ The document itself, unchanged by any of the above.
 | `kind` | `brief`, `goals`, `non-goals`, `design`, `specification`, or `decision`. |
 | `title` | One line naming what the document is. |
 | `supports` | The artifacts upstream of this one, by id: the goal a design serves, the brief a goal serves. Optional — the brief is the root and supports nothing. |
-| `status` | `draft` (written, not yet in force), `active` (what the product currently intends), `superseded` (replaced by a later artifact), or `retired` (stopped applying, not replaced). |
+| `status` | `draft` (written, not yet active), `active` (what the product currently intends), `superseded` (replaced by a later artifact), or `retired` (stopped applying, not replaced). |
 | `revisions` | Append-only: what changed (`created`, `amended`, `superseded`, `retired`), the role it was recorded under, when, and why. At least the creation is required, and the role must be the one that [owns the kind](#who-may-change-an-artifact). |
 | `approvals` | Append-only, and optional: [your approval of the document](#approving-a-document), each entry naming the revision it was given for. |
 
@@ -765,7 +765,7 @@ separately.
 
 Status and revisions have to agree, the same way an invariant's retirement does.
 A `superseded` or `retired` artifact must record the revision that ended it, and
-one that is still in force cannot record one — an artifact whose status says it
+one that still applies cannot record one — an artifact whose status says it
 was replaced while nothing says when or why records no decision at all. Which
 artifact superseded it is not part of the schema yet; the revision's reason says
 so in prose.
@@ -929,7 +929,7 @@ for. A change to the goals themselves is yours and reaches the queue through
 nothing at all — the product manager argues for one in prose and cannot make one.
 
 **Nothing is admitted without asking until a goal is actually approved.** The
-attribution has to resolve to a goal a document in force states, and that
+attribution has to resolve to a goal an active document states, and that
 document has to be approved as it now stands. A goals document nobody approved,
 one amended since you approved it, and a repository with no goals to check
 against all put the work to you instead, with the reason on the proposal. So
@@ -977,7 +977,7 @@ doing something else is an item whose description says what it does, under a goa
 that had to resolve, in a queue you read.
 
 **An exemption moves who is asked and never whether the work is for anything.**
-Work admitted under one names a goal that *resolves* — one an in-force goals
+Work admitted under one names a goal that *resolves* — one an active goals
 document actually states — and nothing weaker. Anything short of that is put to
 you exactly as it would be for work claiming no class: a goal the documents do
 not state is `unresolved` and refused, and a goal nothing could check against is
@@ -1416,7 +1416,7 @@ identity: the words are the whole of what it gave, and they match nothing.
 says which work items still match that way, and `yoyo goals reattribute` moves
 those items onto the identity where the goal has one.
 
-**An identity two goals in force carry picks out neither.** It is reported by
+**An identity two active goals carry picks out neither.** It is reported by
 `yoyo goals list` on stderr, carried into `yoyo release`'s goals check, and work
 naming it is refused until one of the documents is corrected — choosing between
 them would be exactly the guess identity exists to remove.
@@ -1466,19 +1466,19 @@ match exist only once the wrap is put back together, and an indent, or a wrapped
 line that reads as the `Supports:` trailer, changes the recorded goal without
 changing a word of it. A goal written on one physical line cannot be changed that
 way, which is why the convention is worth holding rather than merely tolerating
-the wrap. Only a goal in a document still in force is reported, for the same
+the wrap. Only a goal in a document that still applies is reported, for the same
 reason a broken link upstream is only reported for one: a goal in a superseded
 document is not one work can name.
 
 | Reported as | What it is | What it means for the work |
 | --- | --- | --- |
-| `attributed` | Names a goal an in-force goals artifact states. | The chain holds. |
-| `unresolved` | Names something no in-force goals artifact states. | A claim that is wrong. Admission is refused, and an item already carrying one is reported for correction. |
+| `attributed` | Names a goal an active goals artifact states. | The chain holds. |
+| `unresolved` | Names something no active goals artifact states. | A claim that is wrong. Admission is refused, and an item already carrying one is reported for correction. |
 | `unattributed` | Names no goal at all, and the tracker witnesses none was ever written. | Work admitted before this check existed. Grandfathered: reported, never refused, and nothing stops it running. |
 | `lost` | Names no goal, on an item the tracker witnesses one was written onto. | A record that was destroyed rather than never made. Reported and failed. Where the witness kept the words, they are quoted and putting them back is a restoration rather than a fresh judgement; where it kept only that a goal was written, the words have to be recovered from outside the tracker. |
-| `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. Admitting work without asking is refused here, because an attribution nobody could check is not one the operator agreed to; the work is proposed instead and they decide, which is how a repository with no goals yet files the work of writing them. |
+| `uncheckable` | The repository records no active goal, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. Admitting work without asking is refused here, because an attribution nobody could check is not one the operator agreed to; the work is proposed instead and they decide, which is how a repository with no goals yet files the work of writing them. |
 
-An identity that no goal in force carries is `unresolved` and says so about the
+An identity that no active goal carries is `unresolved` and says so about the
 identity, rather than falling back to the wording beside it: an item names one
 goal, and reading its words as a second opinion would be the prose key coming
 back in through the failure path. Where the match is on wording, nothing beyond
@@ -2316,7 +2316,7 @@ nothing landing between them, which is the configured brake at 3" rather than a
 hold attributed to you — and, for the brake's, what is deciding it and when the
 probe starts if nobody does. It matters because what you do about a stopped
 line depends entirely on which of the two stopped it, and a brake that trips
-over a hold you already placed leaves yours in force, still yours, and summons
+over a hold you already placed leaves yours standing, still yours, and summons
 nobody over it.
 
 And the session says what it is doing, because an idle session and a dead one are
@@ -2506,7 +2506,7 @@ execution:
 
 That is the whole of it. It reaches new runs only: everything already in flight
 finishes on whatever it started on, in both directions, which is the section
-below. `yoyo config show --effective` prints the value in force and
+below. `yoyo config show --effective` prints the value that applies and
 `--origins` names the file it came from, so a rollback is something you can
 confirm rather than assume.
 
@@ -4326,7 +4326,7 @@ overrides are a monotonic account of who gave it more room and why. Lowering a c
 is a judgement about the project's pace rather than a decision about one item, and
 `review_rounds_cap` above is where that is made.
 
-That holds after the configuration moves, too. The ceiling in force for an item is
+That holds after the configuration moves, too. The ceiling that applies to an item is
 the larger of the configured cap and its override, not the override — so raising
 `review_rounds_cap` from 4 to 10 over an item carrying an override to 8 gives that
 item 10 like every other, rather than pinning it to the 8 somebody once gave it. An
@@ -4422,7 +4422,7 @@ named:
   The reason is recorded on the item beside the cap and the crossing number, and
   it is reported to the operator in the channel at the moment of the crossing.
 
-**The channel message is the veto.** A crossing is in force from the moment it is
+**The channel message is the veto.** A crossing applies from the moment it is
 recorded, so nothing waits for the operator's answer — what keeps their say is
 that they are told at once, at `warning` severity, with the item, the cap, which
 crossing of the five it was, and the reason. Disagreeing means undoing the work it
@@ -5452,7 +5452,7 @@ Personas move to `.yoyodyne/personas/` and are referenced relative to the
 
 ```sh
 yoyo config validate                      # validate the discovered configuration
-yoyo config show --effective              # the values actually in force
+yoyo config show --effective              # the values that actually apply
 yoyo config show --origins                # where each value came from
 yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable

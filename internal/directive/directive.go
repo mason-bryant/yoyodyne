@@ -471,7 +471,7 @@ func (d Directive) Withdraw(by string, role domain.AgentRole, reason string, at 
 		// A pausing directive somebody resolved is already out of force, and
 		// withdrawing it would be taking back something that has already ended —
 		// after the work it held has resumed on the strength of the answer.
-		return Directive{}, fmt.Errorf("%s was already %s at %s and is no longer in force; there is nothing left to withdraw",
+		return Directive{}, fmt.Errorf("%s was already %s at %s and no longer applies; there is nothing left to withdraw",
 			d.ID, d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339))
 	}
 	if strings.TrimSpace(by) == "" {
@@ -518,7 +518,7 @@ func (d Directive) alreadySettled() error {
 // any more, and withdrawing it twice would overwrite the account of who ended it
 // and why.
 func (d Directive) alreadyWithdrawn() error {
-	return fmt.Errorf("%s was withdrawn at %s by %s and is no longer in force",
+	return fmt.Errorf("%s was withdrawn at %s by %s and no longer applies",
 		d.ID, d.WithdrawnAt.UTC().Format(time.RFC3339), d.WithdrawnBy)
 }
 
@@ -593,7 +593,7 @@ func (d Directive) Render() string {
 		if d.WithdrawnRole != "" {
 			by += " (as the " + d.WithdrawnRole.Title() + ")"
 		}
-		fmt.Fprintf(&rendered, "  withdrawn %s by %s, and no longer in force: %s\n",
+		fmt.Fprintf(&rendered, "  withdrawn %s by %s, and no longer applies: %s\n",
 			d.WithdrawnAt.UTC().Format(time.RFC3339), by, indented(d.Withdrawal))
 	}
 	return rendered.String()

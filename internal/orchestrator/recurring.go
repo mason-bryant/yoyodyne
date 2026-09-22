@@ -859,7 +859,7 @@ func (s RecurringSweep) Render() string {
 				fired.Task, fired.Role, fired.Findings, fired.Turns)
 		}
 		if fired.Summoned != "" {
-			fmt.Fprintf(&rendered, "  summoned out of its cadence by %s\n", fired.Summoned)
+			fmt.Fprintf(&rendered, "  summoned ahead of its schedule by %s\n", fired.Summoned)
 		}
 		if fired.SilentRepairs > 0 {
 			fmt.Fprintf(&rendered, "  %d of its fixes filed nothing for their root cause\n", fired.SilentRepairs)

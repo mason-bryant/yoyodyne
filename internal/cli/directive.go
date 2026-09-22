@@ -55,7 +55,7 @@ func runDirective(args []string, stdout, stderr io.Writer) int {
 
 func listDirectives(args []string, stdout, stderr io.Writer) int {
 	flags := newDirectiveFlags("directive list", stderr)
-	all := flags.set.Bool("all", false, "include directives that are no longer in force")
+	all := flags.set.Bool("all", false, "include directives that no longer apply")
 	if code, ok := flags.parse(args, 0); !ok {
 		return code
 	}
@@ -93,7 +93,7 @@ func listDirectives(args []string, stdout, stderr io.Writer) int {
 		if *all {
 			fmt.Fprintln(stdout, "no directives are recorded for this product")
 		} else {
-			fmt.Fprintln(stdout, "no directives are in force for this product")
+			fmt.Fprintln(stdout, "no directives are active for this product")
 		}
 		return 0
 	}
@@ -226,7 +226,7 @@ func withdrawDirective(args []string, stdout, stderr io.Writer) int {
 	// something else is somebody reading it as the record being cleaned up. It is
 	// not: the directive is still there, still says what the operator said, and is
 	// listed by `directive list --all` as withdrawn.
-	fmt.Fprintln(stdout, "this directive is no longer in force; nothing is enforced against it and no run is held by it from now.")
+	fmt.Fprintln(stdout, "this directive no longer applies; nothing is enforced against it and no run is held by it from now.")
 	fmt.Fprintln(stdout, "nothing was deleted: what it said is kept, and `yoyo directive list --all` shows it as withdrawn.")
 	if withdrawn.Kind.Pauses() && !withdrawn.Resolved() {
 		fmt.Fprintln(stdout, "the work it paused can carry on, without what it was waiting for having been answered.")
@@ -335,14 +335,14 @@ be done against intent that is being rewritten or was never settled:
 A paused run is not cancelled. It keeps its claim, its branch, and its worktree,
 and it continues from where it stopped once the directive is resolved.
 
-  list [--all]                         the directives in force, or every one
+  list [--all]                         the active directives, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
   withdraw --by <who> [--as <role>] --reason <why> <id>
-                                       take one back; it stops being in force
+                                       take one back; it stops applying
 
-A directive that pauses work stops being in force when it is resolved. An
-operational one is in force from the moment it is recorded and stays there:
+A directive that pauses work stops applying when it is resolved. An
+operational one applies from the moment it is recorded and stays there:
 recording what came of it says what it produced, and does not withdraw it.
 
 Withdrawing is what ends a directive of any kind, and it is the only thing that

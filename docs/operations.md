@@ -53,7 +53,7 @@ part every few seconds. A part that dies is started again after a backoff that
 doubles from a second and is capped at thirty; a part that dies within two
 minutes of a start five times in a row is, on the sixth, left down and shown as
 **degraded** — on `yoyo status`'s "Needs a human" line, with the reason the
-supervisor recorded and whose move it is, and in the channel's hourly lines,
+supervisor recorded and who it is waiting on, and in the channel's hourly lines,
 which read the same model:
 
 ```text
@@ -371,8 +371,8 @@ dirty checkout or a transport that did not answer, is a verdict on nothing and
 counts toward nothing, and neither does a provider answering nobody.
 
 The hold's own record says where it stands, and every surface reads it from
-there: `yoyo status` names the hold on its "Needs a human" line with whose move
-it is — the development manager's while she decides, with when the probe
+there: `yoyo status` names the hold on its "Needs a human" line with who it is
+waiting on — the development manager's while she decides, with when the probe
 starts if she has not; the harness's while a probe runs, naming the probe; and
 yours only once she has escalated it — the watch log and the channel say the
 same, `yoyo sweeps` shows the summoned pass as summoned, and the run the probe
@@ -725,7 +725,7 @@ a conversation turn — and cleared by the first thing the provider serves again
 a developer attempt, a review, a conversation turn, or the watch's own login
 check finding the machine signed in.
 It is what `yoyo status` names the wait from: the banner above the four lines,
-and an entry on the attention line that says whose move it is.
+and an entry on the attention line that says who it is waiting on.
 
 ```text
 The provider is not authenticated; the operator must log in: every role is waiting on it, and the harness asks again on its own until it answers; 3 turns refused since 2026-09-17T15:17:00Z (claude-code, account default)
@@ -1512,7 +1512,7 @@ Needs a human (3):
   a status that only asked the tracker showed the epic as work about to be
   started and merely stalled, which sent whoever read it after a stall that was
   not one. That last one comes from a closed set of named reasons, each
-  of which says whose move it is: the operator's hold, a held intake, every
+  of which says who it is waiting on: the operator's hold, a held intake, every
   developer slot taken, a session waiting out the provider's usage window, a live
   watch session that has found nothing it can start, no watch session running any
   more, and a product no session has ever watched. An idle session and no session
@@ -1559,8 +1559,8 @@ Needs a human (3):
   months ago — and reading that word as a refusal is what hid two-thirds of the
   backlog on 2026-09-04.
 - **Needs a human** is always present, and says either `nothing` or the list with
-  whose move each one is: the operator's two switches — a held intake with whose
-  it is, which for [a hold the brake placed](#pausing-everything-and-resuming-it)
+  who each one is waiting on: the operator's two switches — a held intake with who
+  it waits on, which for [a hold the brake placed](#pausing-everything-and-resuming-it)
   is the development manager's or the harness's rather than yours until she
   escalates it, and names the probe run while one is in flight — an unresolved
   directive, a
@@ -1577,7 +1577,7 @@ Needs a human (3):
   on you, and neither is a report pile that is being worked through — what is
   listed is one that is not. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
-  derivation, and each says whose move it is: the forge's while it holds the
+  derivation, and each says who it is waiting on: the forge's while it holds the
   merge queued, the development manager's once it has dropped one, the
   operator's for a request nothing ever asked it to merge, and the harness's for
   a promotion whose record holds no request at all — the next
@@ -1982,7 +1982,7 @@ is what makes a rotation something you can see rather than infer. The revision i
 a digest of the effective configuration, so two
 runs carrying the same one were configured identically and a run whose
 configuration was edited under it is distinguishable from one that was not;
-`yoyo config show` prints the revision in force. A run recorded before any of the
+`yoyo config show` prints the active revision. A run recorded before any of the
 three was carried says so, in those words, rather than showing a blank.
 
 The `harness` on the end is a Git object name, shortened here and carried whole
@@ -2170,7 +2170,7 @@ dropped request.
    directive, pullable with nothing choosing, parked, waiting on other work,
    covered by its own unfinished children,
    carried by a conversation rather than a run, and not offered for a reason
-   nothing here can read — each with whose move it is, and the largest marked
+   nothing here can read — each with who it is waiting on, and the largest marked
    `(most)`; how many are startable and next to be pulled — or, while a stall
    holds every pullable item, that the harness is choosing nothing and why;
    how many are running, by stage; and how many landed today and this week.
