@@ -2134,6 +2134,16 @@ not be zero, it may not be more than 200, and no value turns the measurement,
 the re-read, or the statement off. A picture within it is answered from as it
 stands, with nothing said and the age still on the record.
 
+It is not a cost control, and tuning it as one is a mistake this project has
+already made once. Measured over the seven days to 2026-09-22, a refresh happens
+on about one management turn in forty and costs roughly $7.80 in re-delivered
+bundle, against the 88 per cent of real conversation spend that goes on turns
+whose prompt cache had expired before they began —
+[the measurement](diagnoses/yoyodyne-ifd-430-1-where-the-conversation-spend-goes.md)
+says what a turn actually costs and which knob moves it. Set the threshold for
+how old you are willing for the advice to be, and look at the recurring-task
+intervals for the money.
+
 It was never frozen entirely. Every turn carries what you did through the
 harness since the last reply — the runs you started, stopped, and redirected —
 so `/work`, `/stop`, and `/redirect` reach a resumed conversation, and reading an
