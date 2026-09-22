@@ -1652,27 +1652,35 @@ Needs a human (3):
   worktree checked and there` or only one of them — because the record's removal
   flags are what a sweep remembered to write, and on 2026-09-19 a hold read off
   them released yoyodyne-ifd.372 as no longer preserved. A look that could not
-  be made holds the item as preserved and says why.
+  be made holds the item as preserved and says why. The last of those four
+  accounts is not a stoppage at all and is held for the opposite reason: the
+  change is on the target branch already, so there is nothing left to implement
+  and a run started against it can only find that out again — which is what
+  yoyodyne-ifd.295 cost, three developer runs and three reviews deep. It says
+  whether the forge merged the publication or not, and never guesses: the two
+  are different things to settle. Every one of the four names the run and what
+  has to be decided rather than leaving the item to its `blocked` status, because
+  a status says the same word about a stoppage nobody has answered and about work
+  whose every blocker closed months ago — and reading that word as a refusal is
+  what hid two-thirds of the backlog on 2026-09-04.
 
   A held item says which of two waits it is in, because they are two different
   people to go to. **Awaiting a decision** is a stoppage the development manager
-  has still to settle. **Awaiting carry-out** is one she has settled — the
-  decision is recorded — and the harness has not yet acted on. The counts are in
+  has still to settle. **Awaiting carry-out** is one she has settled into
+  something the harness then has to do — a repair handed back, a re-run, a merge
+  re-armed — and has not yet acted on. The other three decisions she can make
+  settle the stoppage and leave the harness nothing: an item told to wait, to be
+  re-scoped, or escalated is held by what she decided rather than by anything
+  outstanding, so it is not in the carry-out wait and nobody is watching for a
+  run that is not coming. One rule answers that for every surface — the status
+  head, the attention line, the alarm, and the next mover on the development
+  manager's own docket — so one piece of work cannot be given two next movers.
+  The counts are in
   the head of the line as well as against each item, so the hourly channel
   message, which prints the heads and drops the entries, still says which of the
   two the queue is full of. Reporting both as one thing is what cost 2026-09-07:
   thirty-three items read as a decision backlog for days while the development
-  manager had decided every one of them and the gap was the carry-out. The last one is not a stoppage at all and
-  is held for the opposite reason: the change is on the target branch already, so
-  there is nothing left to implement and a run started against it can only find
-  that out again — which is what yoyodyne-ifd.295 cost, three developer runs and
-  three reviews deep. It says whether the forge merged the publication or not,
-  and never guesses: the two are different things to settle.
-  It names the run and what has to be decided rather than
-  leaving the item to its `blocked` status, because a status says the same word
-  about a stoppage nobody has answered and about work whose every blocker closed
-  months ago — and reading that word as a refusal is what hid two-thirds of the
-  backlog on 2026-09-04.
+  manager had decided every one of them and the gap was the carry-out.
 - **Needs a human** is always present, and says either `nothing` or the list with
   who each one is waiting on: the operator's two switches — a held intake with who
   it waits on, which for [a hold the brake placed](#pausing-everything-and-resuming-it)

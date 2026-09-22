@@ -213,40 +213,12 @@ func standingDecisions(decisions Decisions) standing {
 			}
 			read[workItemID], counters = opened, opened
 		}
-		return awaitingCarryOut(counters, runID), ""
+		// The rule itself is triage.AwaitingCarryOut, which the development
+		// manager's docket reads too: one item given two answers to whether a
+		// carry-out is outstanding is one item given two next movers, which is a
+		// disagreement only the operator could adjudicate.
+		return counters.AwaitingCarryOut(runID), ""
 	}
-}
-
-// awaitingCarryOut reports a decision standing about one stoppage that the
-// harness has still to act on.
-//
-// Only the three decisions that buy another attempt are ones the harness
-// carries out. A wait, a re-scope and an escalation are decided and leave the
-// harness nothing to do, so an item still held under one of them is held by
-// what the development manager decided rather than by anything outstanding, and
-// naming the harness as its next mover would send an operator to watch for a run
-// nothing is going to start.
-//
-// A granted repair is asked of the grant rather than of the decision, because a
-// repair continues the run it was granted for: the same run stops again carrying
-// the same decision, so the decision alone would go on claiming a carry-out that
-// has already happened. The grant standing unspent is what actually says it has
-// not.
-//
-// A re-run and a merge re-arm are answered from the decision itself, which is
-// sufficient because carrying either one out changes what this reading is about.
-// A re-run produces a fresh run, and once that run stops it is the latest one the
-// item has, so the hold names it instead and nothing stands recorded about it. A
-// re-arm the forge then honours settles the publication and lifts the hold.
-func awaitingCarryOut(counters runstate.TriageCounters, runID string) bool {
-	decision, decided := counters.DecisionOf(runID)
-	if !decided || !decision.Spends() {
-		return false
-	}
-	if decision.Decision == runstate.TriageDecisionRepair {
-		return counters.GrantOutstanding()
-	}
-	return true
 }
 
 // The clause each hold closes on: whose move follows it. They are two sentences

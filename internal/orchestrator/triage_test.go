@@ -1888,17 +1888,39 @@ func TestADocketEntrySaysWhetherItWaitsOnHerOrOnTheHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: you — nothing is recorded as decided about this item") {
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: you — nothing the harness has still to carry out is recorded about this stoppage") {
 		t.Fatalf("an undecided stoppage does not name her as the next mover:\n%s", rendered)
 	}
 
-	decided := &recordedDecisions{counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 1}}}
+	// A re-run recorded against this stoppage and not yet claimed. The decision is
+	// named rather than only the counter, because the counter is the item's total
+	// and a total cannot say which of an item's runs was decided about.
+	decided := &recordedDecisions{counters: map[string]runstate.TriageCounters{docketedItem: {
+		Reruns:    1,
+		Decisions: []runstate.TriageDecision{triageDecided(runstate.TriageDecisionRerun, stopped.RunID)},
+	}}}
 	built, err = docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, decided, decided).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: the harness — a decision about this item is already recorded and has not been carried out") {
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: the harness — a decision about this stoppage is already recorded and has not been carried out") {
 		t.Fatalf("a decided stoppage does not name the harness as the next mover:\n%s", rendered)
+	}
+
+	// And a decision recorded about some other run of the same item is not this
+	// stoppage's. The item's re-run counter says a decision was made; the docket
+	// entry is about a run nobody decided anything about, and naming the harness
+	// over it sends an operator to watch for a run nothing is going to start.
+	elsewhere := &recordedDecisions{counters: map[string]runstate.TriageCounters{docketedItem: {
+		Reruns:    1,
+		Decisions: []runstate.TriageDecision{triageDecided(runstate.TriageDecisionRerun, "run-fedcba9876543210fedcba9876543210")},
+	}}}
+	built, err = docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, elsewhere, elsewhere).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if rendered := built.Entries[0].Render(); !strings.Contains(rendered, "Next mover: you — nothing the harness has still to carry out is recorded about this stoppage") {
+		t.Fatalf("a decision about another run of the item was read as this stoppage's:\n%s", rendered)
 	}
 
 	// And a record nobody could open says that rather than guessing, for the
@@ -1921,15 +1943,25 @@ func TestADocketEntrySaysWhetherItWaitsOnHerOrOnTheHarness(t *testing.T) {
 }
 
 // A repair grant recorded and unspent is the other decision the harness has
-// still to carry out, and the counters say so without a re-run among them.
+// still to carry out, and the counters say so without a re-run among them. It is
+// the grant that answers rather than the decision, because a repair continues the
+// run it was granted for: the same run stops again carrying the same decision, so
+// the decision alone would go on claiming a carry-out that has already happened.
 func TestAnOutstandingGrantIsADecisionTheHarnessHasStillToCarryOut(t *testing.T) {
 	t.Parallel()
 
-	outstanding := triage.Counters{RepairGrants: 1, CommittedRounds: 3, ReviewRounds: 2}
+	granted := runstate.TriageCounters{
+		RepairGrants:    1,
+		CommittedRounds: 3,
+		ReviewRounds:    2,
+		Decisions:       []runstate.TriageDecision{triageDecided(runstate.TriageDecisionRepair, docketedRunID)},
+	}
+	outstanding := triage.Counters{Standing: granted.Standing(docketedRunID)}
 	if !outstanding.AwaitingCarryOut() {
 		t.Fatalf("counters = %#v, want the unspent grant read as a carry-out outstanding", outstanding)
 	}
-	spent := triage.Counters{RepairGrants: 1, CommittedRounds: 3, ReviewRounds: 3}
+	granted.ReviewRounds = 3
+	spent := triage.Counters{Standing: granted.Standing(docketedRunID)}
 	if spent.AwaitingCarryOut() {
 		t.Fatalf("counters = %#v, want a grant whose rounds are spent read as carried out", spent)
 	}

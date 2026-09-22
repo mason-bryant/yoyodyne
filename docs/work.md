@@ -736,7 +736,8 @@ decided about, or a publication that did not finish over work already integrated
 in the sense the hold paragraph above gives it — is
 passed over with the hold named. A stoppage nobody has decided about is, like
 the parking, not a wait for anything and will not clear on its own; one she has
-decided is a wait on the pass carrying the decision out, which the next pull
+decided into something for the harness to do — a repair handed back, a re-run, a
+merge re-armed — is a wait on the pass carrying that decision out, which the next pull
 does unless a gate stops it — and a gate that stops it is written onto the item
 and her docket rather than left silent. An unfinished publication is the other
 hold that is a wait: the next `yoyo reconcile` re-asks the remote, and a merge
@@ -745,8 +746,11 @@ by hand after a drop — settles on that sweep with nobody acting, while a merge
 the forge dropped and nobody has made stays a person's. A stoppage is passed over
 as one of two things rather than one, because the two have different next
 movers: an item **awaiting a decision** is the development manager's to settle,
-and one **awaiting carry-out of a decision** is one she has settled and the
-harness has not yet acted on.
+and one **awaiting carry-out of a decision** is one she has settled into one of
+the three decisions that buy another attempt — a repair, a re-run, a merge
+re-arm — which the harness has not yet acted on. A stoppage she settled by
+waiting, re-scoping or escalating leaves the harness nothing to carry out, so it
+is not in that wait.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
