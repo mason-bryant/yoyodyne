@@ -112,8 +112,13 @@ type WorktreeSweep struct {
 // reason one unremovable branch does not: what could not be done is reported
 // beside everything that could.
 type RegistrationSweep struct {
-	Pruned  []string `json:"pruned"`
-	Failure string   `json:"failure,omitempty"`
+	Pruned []string `json:"pruned"`
+	// Unfinished is every registration a `git worktree add` never finished
+	// filling in, cleared or kept with the reason. One of these used to stop
+	// every later run on the repository at its own creation, so each is said
+	// rather than counted.
+	Unfinished []gitworktree.UnfinishedRegistration `json:"unfinished"`
+	Failure    string                               `json:"failure,omitempty"`
 }
 
 // BranchSweep is one settled run's leftover branch and what became of it. The
@@ -165,7 +170,7 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 		Targets:       make([]gitworktree.Catchup, 0),
 		Worktrees:     make([]WorktreeSweep, 0),
 		Branches:      make([]BranchSweep, 0),
-		Registrations: RegistrationSweep{Pruned: make([]string, 0)},
+		Registrations: RegistrationSweep{Pruned: make([]string, 0), Unfinished: make([]gitworktree.UnfinishedRegistration, 0)},
 	}
 	for _, target := range recordedTargets(recorded) {
 		convergence.Targets = append(convergence.Targets, r.catchUp(ctx, target))
@@ -379,16 +384,21 @@ func renderPreservedWorkNotes(state runstate.State, preservedWork string) string
 }
 
 // pruneRegistrations removes the registrations of checkouts that are no longer
-// on disk, whichever run or person left them behind. It is what covers the ones
-// no run record names any more — a checkout somebody deleted by hand, one whose
-// run record is itself gone, one from a product this harness no longer holds —
-// which a sweep driven from run state cannot see and which cost every later
-// command a deny path in its sandbox profile all the same.
+// on disk, whichever run or person left them behind, and the registrations a
+// `git worktree add` never finished. It is what covers the ones no run record
+// names any more — a checkout somebody deleted by hand, one whose run record is
+// itself gone, one from a product this harness no longer holds, one left by an
+// add that was killed while registering — which a sweep driven from run state
+// cannot see and which cost every later command a deny path in its sandbox
+// profile all the same, and the last of which cost every later creation.
 func (r Reconciler) pruneRegistrations(ctx context.Context) RegistrationSweep {
 	prune, err := r.Worktrees.PruneRegistrations(ctx)
-	sweep := RegistrationSweep{Pruned: prune.Pruned}
+	sweep := RegistrationSweep{Pruned: prune.Pruned, Unfinished: prune.Unfinished}
 	if sweep.Pruned == nil {
 		sweep.Pruned = make([]string, 0)
+	}
+	if sweep.Unfinished == nil {
+		sweep.Unfinished = make([]gitworktree.UnfinishedRegistration, 0)
 	}
 	if err != nil {
 		sweep.Failure = fmt.Errorf("prune the registrations of worktrees that are already gone: %w", err).Error()

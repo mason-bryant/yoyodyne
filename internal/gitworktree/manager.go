@@ -39,30 +39,45 @@ const (
 	// another machine. It is still bounded: a hung network must not hold a run
 	// open indefinitely.
 	pushTimeout = 5 * time.Minute
-	// worktreeListAttempts and worktreeListRetryWait bound re-reading the shared
-	// worktree bookkeeping when a listing crosses a creation. `git worktree add`
-	// registers the new entry under worktrees/ before it fills the entry in, and
-	// a listing that reads the entry in between fails the whole command rather
-	// than skipping the one entry, so a run can be lost to nothing but another
-	// run starting beside it.
+	// registrationWalkAttempts and registrationWalkRetryWait bound running a Git
+	// command again when it crossed a creation. `git worktree add` registers the
+	// new entry under worktrees/ before it fills the entry in, and any command
+	// that walks the registrations in between — the listing, but equally a
+	// rebase, a checkout, or a branch deletion checking that a branch is not
+	// checked out elsewhere — reads a file that has been created and not yet
+	// written and fails the whole command rather than skipping the one entry, so
+	// a run can be lost to nothing but another run starting beside it.
 	//
 	// The creation lease is not what a reader can take here. A creation holds it
 	// while it verifies what it just made, which is itself a listing, so a
 	// listing that waited for the lease would wait for itself. What a reader can
-	// do is read again: the half-written instant is the time Git takes to write a
-	// handful of small files, and it never comes back for the same entry.
+	// do is run again: the half-written instant is the time Git takes to write a
+	// handful of small files, and it never comes back for the same entry. The
+	// retry lives under every command rather than around the listing, because
+	// Git walks the registrations from more commands than the one that describes
+	// them — see runBounded, and crossedRegistration for the one refusal that is
+	// run again.
 	//
-	// Reading again is not the whole answer, because the entry is not always
+	// Running again is not the whole answer, because the entry is not always
 	// half-written for an instant. An add whose process died between creating a
 	// registration file and filling it in leaves the entry half-written for good,
 	// and no prune clears it: `git worktree prune` judges an entry by its gitdir
-	// file, which such an entry has. That one entry would otherwise fail every
-	// listing on the repository from then on. So a refusal that survives the
-	// attempts is checked against the bookkeeping rather than believed — see
-	// listWorktrees.
-	worktreeListAttempts  = 3
-	worktreeListRetryWait = 50 * time.Millisecond
+	// file, which such an entry has, and skips one still marked as initializing.
+	// That one entry would otherwise fail every registration walk on the
+	// repository from then on. So such an entry is cleared where nothing can still
+	// be writing it — see settleRegistrations — and a listing refusal that
+	// survives the attempts is checked against the bookkeeping rather than
+	// believed — see listWorktrees.
+	registrationWalkAttempts  = 3
+	registrationWalkRetryWait = 50 * time.Millisecond
 )
+
+// crossedRegistration is the one refusal a Git command is run again over: Git
+// walking the worktree registrations and dying on the entry it could not read.
+// It is Git's own wording, from the one place Git reads a registration's
+// commondir, and it names the entry, which is what lets a listing that keeps
+// failing be checked against the bookkeeping rather than believed.
+var crossedRegistration = regexp.MustCompile(`failed to read (?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\]commondir`)
 
 // maintenanceOptions stop a Git command from handing this repository to Git's
 // automatic maintenance, and every command the harness runs carries them.
@@ -873,7 +888,7 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	// worktree bookkeeping. Creation queues from here so a run is never lost to
 	// another one's half-written registration; the lease is held through the
 	// verification below, which reads that same bookkeeping.
-	lease, err := m.leaseRegistry(ctx)
+	ctx, lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return Worktree{}, err
 	}
@@ -882,11 +897,44 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	// says nothing about the worktree below, which either exists or does not.
 	defer func() { _ = lease.release() }()
 
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", "-b", branch, path, baseCommit)
+	// A registration a killed add left half-written fails every creation on the
+	// repository, and under the lease it cannot be a creation of ours in flight,
+	// so it is cleared here rather than failed over — see settleRegistrations.
+	// An entry that stays is said so, and the add below then fails over it
+	// exactly as it would have.
+	settled, err := m.settleRegistrations(ctx, true)
+	if err != nil {
+		return Worktree{}, fmt.Errorf("settle the worktree registrations before creating: %w", err)
+	}
+	for _, entry := range settled {
+		m.recordNote("%s", entry.Describe())
+	}
+
+	// The branch is made first and the checkout added on it, rather than both in
+	// one `worktree add -b`. That flag makes the branch before the add walks the
+	// registrations, so an add that crossed a creation there and was run again
+	// would meet its own branch and refuse over that instead. Made apart, the add
+	// has done nothing before the walk, and running it again is running it.
+	created, err := m.run(ctx, "-C", m.repositoryRoot, "branch", branch, baseCommit)
 	if err != nil {
 		return Worktree{}, err
 	}
+	if created.Status != execution.ProcessSucceeded {
+		return Worktree{}, fmt.Errorf("create branch %s failed with exit code %d: %s", branch, created.ExitCode, strings.TrimSpace(created.Stderr))
+	}
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", path, branch)
+	if err != nil {
+		// Splitting the two is what leaves a branch to take back: `worktree add
+		// -b` made the branch and the checkout as one thing, and an add that
+		// fails here has made a branch nothing will ever check out. It is removed
+		// with the commit it was proven to be at a moment ago, so a branch
+		// something else moved in between is kept rather than discarded, and
+		// whatever came of that is said without displacing what actually failed.
+		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
+		return Worktree{}, err
+	}
 	if result.Status != execution.ProcessSucceeded {
+		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
 		return Worktree{}, fmt.Errorf("create worktree failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	worktree := Worktree{
@@ -2388,7 +2436,7 @@ func (m *Manager) removeIntegratedWorktree(ctx context.Context, worktree Worktre
 	// entry would exit rather than create anything, which is the run this lease
 	// exists to stop losing. It is held through the verification below, which
 	// reads the bookkeeping the removal just wrote.
-	lease, err := m.leaseRegistry(ctx)
+	ctx, lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return Cleanup{}, err
 	}
@@ -2479,6 +2527,30 @@ func (m *Manager) deleteIntegratedBranch(ctx context.Context, branch, sourceComm
 	return true, nil
 }
 
+// discardUncheckedOutBranch takes back the branch a creation made just before
+// an add that then failed, so a creation that made nothing leaves nothing.
+//
+// It reports nothing, deliberately. The caller is already returning the failure
+// that matters, and the branch is inert either way: nothing has it checked out,
+// because the add that was going to is what failed, and the next run for the
+// same item gets a name of its own. So what this can go wrong with — a ref
+// something else moved in between, a repository that stopped answering — is
+// noted and never put in front of the real failure. The deletion is a
+// compare-and-swap on the commit the branch was made at, which is what makes
+// leaving such a branch alone the safe outcome rather than a guess.
+func (m *Manager) discardUncheckedOutBranch(ctx context.Context, branch, commit string) {
+	deleted, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+		"-c", "core.hooksPath="+os.DevNull,
+		"update-ref", "-d", "refs/heads/"+branch, commit)
+	if err != nil {
+		m.recordNote("the branch %s was made for a worktree that could not be added, and could not be removed: %v", branch, err)
+		return
+	}
+	if deleted.Status != execution.ProcessSucceeded {
+		m.recordNote("the branch %s was made for a worktree that could not be added, and is left at %s: %s", branch, commit, strings.TrimSpace(deleted.Stderr))
+	}
+}
+
 func (m *Manager) validateRepository(ctx context.Context) error {
 	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -2513,15 +2585,14 @@ type worktreeEntry struct {
 	branch string
 }
 
-// listWorktrees reads the shared worktree bookkeeping. A refusal is re-read
-// rather than believed the first time, because the one refusal this command has
-// on a repository with parallel development is a registration another run is
-// still writing — see worktreeListAttempts. A refusal that survives the re-reads
-// is checked against that bookkeeping rather than believed either: where an
-// entry is registered and not filled in, the listing is answered from the
-// registrations with that entry left out and a note saying so. A refusal nothing
-// in the bookkeeping accounts for is reported with what Git said, exactly as one
-// failing once used to be.
+// listWorktrees reads the shared worktree bookkeeping. A refusal over a
+// registration another run is still writing has already been re-read below the
+// command — see registrationWalkAttempts — so a refusal that reaches here
+// survived the re-reads, and it is checked against that bookkeeping rather than
+// believed: where an entry is registered and not filled in, the listing is
+// answered from the registrations with that entry left out and a note saying
+// so. A refusal nothing in the bookkeeping accounts for is reported with what
+// Git said, exactly as one failing once used to be.
 func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 	result, err := m.readWorktreeListing(ctx)
 	if err != nil {
@@ -2558,33 +2629,23 @@ func parseWorktreeListing(listing string) []worktreeEntry {
 	return entries
 }
 
-// readWorktreeListing runs the listing until Git answers or the attempts are
-// spent. Only a Git that ran and refused is read again, because that is the one
-// failure the passing instant produces. A Git that could not be run at all is
-// the harness failing to execute a command; one that timed out or stalled has
-// already spent the command's whole budget, and spending it twice more would
-// turn a slow repository into a run three times slower to fail.
+// readWorktreeListing runs the listing, which runBounded has already run again
+// for the passing instant. A Git that ran and refused is reported as a refusal
+// worth checking against the bookkeeping; a Git that could not be run at all is
+// the harness failing to execute a command, and one that timed out or stalled
+// has spent the command's whole budget and is reported as it always was.
 func (m *Manager) readWorktreeListing(ctx context.Context) (execution.ProcessResult, error) {
-	for attempt := 1; ; attempt++ {
-		result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "list", "--porcelain")
-		if err != nil {
-			return execution.ProcessResult{}, err
-		}
-		if result.Status == execution.ProcessSucceeded {
-			return result, nil
-		}
-		if result.Status != execution.ProcessFailed {
-			return execution.ProcessResult{}, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
-		}
-		if attempt >= worktreeListAttempts {
-			return execution.ProcessResult{}, listingRefused{exitCode: result.ExitCode, stderr: strings.TrimSpace(result.Stderr)}
-		}
-		select {
-		case <-ctx.Done():
-			return execution.ProcessResult{}, ctx.Err()
-		case <-time.After(worktreeListRetryWait):
-		}
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return execution.ProcessResult{}, err
 	}
+	if result.Status == execution.ProcessSucceeded {
+		return result, nil
+	}
+	if result.Status != execution.ProcessFailed {
+		return execution.ProcessResult{}, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return execution.ProcessResult{}, listingRefused{exitCode: result.ExitCode, stderr: strings.TrimSpace(result.Stderr)}
 }
 
 // listingRefused is a Git that ran, refused the listing, and went on refusing it
@@ -2610,16 +2671,18 @@ const worktreeRegistrations = "worktrees"
 // it refused, leaving out every entry that is registered and not filled in.
 //
 // This is the other half of tolerating a creation happening beside this run. The
-// re-read above covers the instant: `git worktree add` writes an entry's files
-// one after another, and a listing crossing that instant reads a file that has
-// been created and not yet written, which Git treats as a repository it cannot
-// describe at all rather than as one entry to skip. What a re-read cannot cover
-// is the entry that stays that way — an add whose process was killed between the
-// two writes leaves one, `git worktree prune` judges an entry by its gitdir file
-// and so leaves it alone, and from then on every listing on the repository fails
-// over it.
+// re-run under every command covers the instant: `git worktree add` writes an
+// entry's files one after another, and a command crossing that instant reads a
+// file that has been created and not yet written, which Git treats as a
+// repository it cannot describe at all rather than as one entry to skip. What a
+// re-run cannot cover is the entry that stays that way — an add whose process
+// was killed between the two writes leaves one, `git worktree prune` judges an
+// entry by its gitdir file and so leaves it alone, and from then on every
+// listing on the repository fails over it. settleRegistrations clears such an
+// entry once nothing can still be writing it; this is for a listing that meets
+// one before that has happened, or meets the one shape that is not cleared.
 //
-// So a refusal that survived the re-reads is checked rather than believed. Where
+// So a refusal that survived the re-runs is checked rather than believed. Where
 // the bookkeeping holds at least one entry that is demonstrably unfinished, that
 // entry is what Git refused over and the listing is answered without it. Where it
 // holds none, nothing here accounts for what Git said and the refusal is returned
@@ -2829,17 +2892,97 @@ func (m *Manager) remoteTimeout() time.Duration {
 	return pushTimeout
 }
 
+// runBounded runs one Git command, and runs it again where it crossed a
+// creation: a Git that ran and refused over a registration it could not read —
+// see crossedRegistration — is the one failure the passing instant produces, and
+// it is produced by every command that walks the registrations rather than only
+// by the listing. Git walks them while checking what it is about to do, before
+// it does it, so a command run again after that refusal starts over rather than
+// carrying on from something half-done. Only a Git that ran and refused that way
+// is run again: a Git that could not be run at all is the harness failing to
+// execute a command, any other refusal is an answer, and one that timed out or
+// stalled has already spent the command's whole budget — spending it twice more
+// would turn a slow repository into a run three times slower to fail.
 func (m *Manager) runBounded(ctx context.Context, environment []string, timeout time.Duration, args ...string) (execution.ProcessResult, error) {
-	result, err := m.runner.Run(ctx, execution.Command{
-		Name:    m.gitBinary,
-		Args:    append(append([]string(nil), maintenanceOptions...), args...),
-		Env:     environment,
-		Timeout: timeout,
-	}, nil)
-	if err != nil {
-		return execution.ProcessResult{}, fmt.Errorf("run Git command: %w", err)
+	// A command that walks the registrations reads them under the lease, so it
+	// queues behind a creation rather than crossing one — see
+	// leaseRegistryShared. The re-run below is what is left for the crossings the
+	// lease cannot stop: another harness on an older binary, a Git command
+	// somebody ran by hand, and a platform with no advisory lock at all.
+	if walksRegistrations(args) {
+		lease, err := m.leaseRegistryShared(ctx)
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		defer func() { _ = lease.release() }()
 	}
-	return result, nil
+	for attempt := 1; ; attempt++ {
+		result, err := m.runner.Run(ctx, execution.Command{
+			Name:    m.gitBinary,
+			Args:    append(append([]string(nil), maintenanceOptions...), args...),
+			Env:     environment,
+			Timeout: timeout,
+		}, nil)
+		if err != nil {
+			return execution.ProcessResult{}, fmt.Errorf("run Git command: %w", err)
+		}
+		if result.Status != execution.ProcessFailed || !crossedRegistration.MatchString(result.Stderr) || attempt >= registrationWalkAttempts {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return execution.ProcessResult{}, ctx.Err()
+		case <-time.After(registrationWalkRetryWait):
+		}
+	}
+}
+
+// registrationWalkers are the Git subcommands that read the worktree
+// bookkeeping while doing whatever else they do, and so meet an entry a
+// creation beside them has not finished writing.
+//
+// `worktree` is the obvious one and is not the interesting one. The rest are
+// here because Git checks that a branch is not checked out in another worktree
+// before it moves one: a rebase does it for the branch it replays, a checkout
+// and a switch for the branch they leave and take, and a branch deletion or
+// rename for the branch it is about to change. Every one of them walks
+// worktrees/ to find out, and every one of them fails outright rather than
+// skipping an entry it cannot read — which is how a rebase came to fail a
+// concurrent-runs test with `failed to read .git/worktrees/<other>/commondir`
+// while the listing beside it was tolerating the same entry.
+//
+// Nothing else the manager runs is here, and the two kinds left out are left
+// out for different reasons. A command that only reads history or a working
+// tree — rev-parse, diff, log, status, show-ref, merge-base — never opens the
+// registrations. And `gc` and `maintenance`, which do, are never asked for:
+// they are fenced off by maintenanceOptions rather than queued, because a prune
+// deletes a registration being written rather than merely failing over it.
+var registrationWalkers = map[string]struct{}{
+	"worktree": {},
+	"rebase":   {},
+	"checkout": {},
+	"switch":   {},
+	"branch":   {},
+}
+
+// walksRegistrations says whether this Git command reads the worktree
+// bookkeeping, and so should take the shared registry lease before it runs. The
+// subcommand is the first argument that is not a global option, because the
+// manager passes `-C <path>` and `-c <setting>` ahead of it.
+func walksRegistrations(args []string) bool {
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace":
+			index++
+		default:
+			if strings.HasPrefix(args[index], "-") {
+				continue
+			}
+			_, walks := registrationWalkers[args[index]]
+			return walks
+		}
+	}
+	return false
 }
 
 func validateCreateRequest(request CreateRequest) error {

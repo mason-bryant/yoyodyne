@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -249,6 +250,75 @@ func TestPruningRemovesRegistrationsWhoseCheckoutIsGone(t *testing.T) {
 	repeated, err := manager.PruneRegistrations(context.Background())
 	if err != nil || len(repeated.Pruned) != 0 {
 		t.Fatalf("second PruneRegistrations() = %#v, error = %v", repeated, err)
+	}
+}
+
+// A registration a killed add left behind is the one Git's own prune never
+// reaches: the entry is still locked as initializing, and where it died holding
+// an empty commondir every command that walks the registrations dies over it,
+// creation included. The sweep clears it, under the same lease a creation
+// holds, and says so one entry at a time. It clears the killed-during-checkout
+// shape too — every file written, the lock still standing, no index — which
+// stops nothing but holds a branch and a sandbox deny path for good. What it
+// leaves alone is an entry that may still be being written, and a worktree
+// somebody added with --no-checkout, which has no index and is not a killed
+// add.
+func TestPruningClearsTheRegistrationsAKilledAddLeftBehind(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	// The real adds go first, because the hand-made entries below are exactly
+	// what a real add then fails over.
+	unchecked := killAddMidCheckout(t, repository, "yoyodyne-unchecked-5e6f7a8b", 2*unfinishedRegistrationGrace)
+	bare := filepath.Join(t.TempDir(), "added-without-a-checkout")
+	runGit(t, repository, "worktree", "add", "--quiet", "--no-checkout", "--detach", bare, "HEAD")
+	dead := killAddMidRegistration(t, repository, "yoyodyne-dead-1a2b3c4d", 2*unfinishedRegistrationGrace)
+	young := killAddMidRegistration(t, repository, "yoyodyne-young-9c0d1e2f", 0)
+
+	prune, err := manager.PruneRegistrations(context.Background())
+	if err != nil {
+		t.Fatalf("PruneRegistrations() error = %v", err)
+	}
+	outcomes := make(map[string]UnfinishedRegistration, len(prune.Unfinished))
+	for _, entry := range prune.Unfinished {
+		outcomes[entry.Name] = entry
+	}
+	for _, killed := range []killedAdd{dead, unchecked} {
+		name := filepath.Base(killed.registration)
+		entry, met := outcomes[name]
+		if !met || !entry.Cleared || entry.Kept != "" || !strings.Contains(entry.Reason, killed.reason) {
+			t.Fatalf("unfinished[%s] = %#v, want it cleared for %q", name, entry, killed.reason)
+		}
+		if entry.Path != killed.path {
+			t.Errorf("unfinished[%s].Path = %q, want the directory the add named, %q", name, entry.Path, killed.path)
+		}
+		if _, err := os.Lstat(killed.registration); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Lstat(%s) error = %v, want the registration gone", killed.registration, err)
+		}
+		if _, err := attemptGit(repository, "show-ref", "--verify", "--quiet", "refs/heads/"+killed.branch); err != nil {
+			t.Fatalf("the killed add's branch %s is gone; clearing a registration must not delete a branch", killed.branch)
+		}
+	}
+	youngName := filepath.Base(young.registration)
+	if entry, met := outcomes[youngName]; !met || entry.Cleared || !strings.Contains(entry.Kept, "may still be being filled in") {
+		t.Fatalf("unfinished[%s] = %#v, want it kept as possibly still being written", youngName, entry)
+	}
+	if _, err := os.Lstat(young.registration); err != nil {
+		t.Fatalf("Lstat(%s) error = %v, want the young registration left where it is", young.registration, err)
+	}
+	if len(prune.Unfinished) != 3 {
+		t.Fatalf("unfinished = %#v, want the --no-checkout worktree not mentioned at all", prune.Unfinished)
+	}
+	// Read off the bookkeeping rather than asked of Git, because the young entry
+	// still standing is exactly what Git will not describe the repository over.
+	if _, err := os.Stat(filepath.Join(repository, ".git", "worktrees", filepath.Base(bare), "gitdir")); err != nil {
+		t.Fatalf("Stat() error = %v, want the --no-checkout worktree at %s still registered", err, bare)
+	}
+	// The young entry is what the listing steps over meanwhile, so nothing else
+	// in the sweep failed over it.
+	if len(prune.Pruned) != 0 {
+		t.Fatalf("pruned = %#v, want nothing stale", prune.Pruned)
 	}
 }
 

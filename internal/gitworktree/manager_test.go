@@ -99,16 +99,18 @@ func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	var worktreeBase string
+	// The run branch is what the worktree is cut on, so the commit it starts
+	// from is the commit the worktree starts from.
+	var branchBase string
 	for _, command := range runner.commands {
-		for index := 0; index+3 < len(command); index++ {
-			if command[index] == "worktree" && command[index+1] == "add" {
-				worktreeBase = command[len(command)-1]
+		for index := 0; index+2 < len(command); index++ {
+			if command[index] == "branch" && command[index+1] == worktree.Branch {
+				branchBase = command[len(command)-1]
 			}
 		}
 	}
-	if worktreeBase != worktree.BaseCommit {
-		t.Fatalf("git worktree base = %q, want resolved commit %q", worktreeBase, worktree.BaseCommit)
+	if branchBase != worktree.BaseCommit {
+		t.Fatalf("git branch base = %q, want resolved commit %q", branchBase, worktree.BaseCommit)
 	}
 }
 
@@ -512,15 +514,19 @@ func TestManagerReadsTheWorktreeListingAgainWhenItCrossesACreation(t *testing.T)
 	}
 }
 
-// The re-read covers the instant a creation is half-written and nothing else.
+// The re-run covers the instant a creation is half-written and nothing else.
 // An add whose process died between creating one of the entry's files and
 // writing it leaves the entry that way for good — which is what the run-scoped
 // reaping produces when it kills the group an agent's own `git worktree add` is
 // in — and `git worktree prune` judges an entry by its gitdir file, so it leaves
 // that one alone. Every listing on the repository then fails over it, and every
-// run on the repository is lost to a neighbour that started and died. So the
-// entry is stepped over instead: the listing describes the repository without
-// it, and says so.
+// run on the repository is lost to a neighbour that started and died. A killed
+// add is cleared where nothing can still be writing it — see
+// TestManagerCreatesAcrossARegistrationAKilledAddLeftBehind — and what this
+// covers is a listing that meets an unfinished entry before that has happened,
+// or the one shape that is never cleared: an entry that has an index, and so
+// was checked out by an add that did finish. That entry is stepped over
+// instead: the listing describes the repository without it, and says so.
 func TestManagerListsAroundARegistrationAnotherRunNeverFinishedWriting(t *testing.T) {
 	t.Parallel()
 
@@ -620,7 +626,7 @@ func TestManagerReportsAWorktreeListingThatKeepsFailing(t *testing.T) {
 	t.Parallel()
 
 	repository := newRepository(t)
-	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: worktreeListAttempts}
+	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: registrationWalkAttempts}
 	manager, err := New(Options{
 		Runner:         runner,
 		RepositoryRoot: repository,
@@ -640,8 +646,8 @@ func TestManagerReportsAWorktreeListingThatKeepsFailing(t *testing.T) {
 	if !strings.Contains(err.Error(), "list worktrees failed with exit code 128") || !strings.Contains(err.Error(), "commondir") {
 		t.Fatalf("Create() error = %v, want it to carry what Git said", err)
 	}
-	if listings, _ := runner.observed(); listings != worktreeListAttempts {
-		t.Fatalf("listings = %d, want %d attempts and no more", listings, worktreeListAttempts)
+	if listings, _ := runner.observed(); listings != registrationWalkAttempts {
+		t.Fatalf("listings = %d, want %d attempts and no more", listings, registrationWalkAttempts)
 	}
 }
 
@@ -678,12 +684,16 @@ func TestManagerDoesNotReadAWorktreeListingAgainAfterATimeout(t *testing.T) {
 // listRefusingRunner fails the first refusals listings the way Git fails one
 // that crossed a creation: the whole command exits 128 over a single entry it
 // could not read. status is what the refusal is reported as, so a refusal and a
-// listing that never answered can be told apart. Everything else runs for real,
-// so what is being tested is the manager's own reading of the bookkeeping rather
-// than a simulation of Git.
+// listing that never answered can be told apart; stderr is what Git is made to
+// say, and defaults to the crossing. command names the Git command refused, and
+// defaults to the listing. Everything else runs for real, so what is being
+// tested is the manager's own reading of the bookkeeping rather than a
+// simulation of Git.
 type listRefusingRunner struct {
 	delegate execution.ProcessRunner
 	status   execution.ProcessStatus
+	stderr   string
+	command  []string
 	mu       sync.Mutex
 	refusals int
 	refused  int
@@ -691,7 +701,11 @@ type listRefusingRunner struct {
 }
 
 func (r *listRefusingRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
-	if !containsArguments(command.Args, "worktree", "list") {
+	refusable := r.command
+	if refusable == nil {
+		refusable = []string{"worktree", "list"}
+	}
+	if !containsArguments(command.Args, refusable[0], refusable[1]) {
 		return r.delegate.Run(ctx, command, observer)
 	}
 	r.mu.Lock()
@@ -706,10 +720,14 @@ func (r *listRefusingRunner) Run(ctx context.Context, command execution.Command,
 		if status == "" {
 			status = execution.ProcessFailed
 		}
+		stderr := r.stderr
+		if stderr == "" {
+			stderr = "fatal: failed to read .git/worktrees/yoyodyne-other-2113a23c/commondir: Result too large\n"
+		}
 		return execution.ProcessResult{
 			Status:   status,
 			ExitCode: 128,
-			Stderr:   "fatal: failed to read .git/worktrees/yoyodyne-other-2113a23c/commondir: Result too large\n",
+			Stderr:   stderr,
 		}, nil
 	}
 	return r.delegate.Run(ctx, command, observer)
@@ -719,6 +737,263 @@ func (r *listRefusingRunner) observed() (listings, refused int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.listings, r.refused
+}
+
+// The listing is not the only command Git walks the registrations from. A
+// rebase, a checkout, and a branch deletion each check that a branch is not
+// checked out elsewhere, and each of them dies over a half-written entry with
+// the same words the listing does — a rebase was seen failing that way in a
+// concurrent-runs test. So the tolerance lives under every Git command the
+// manager runs rather than around the one that describes the repository.
+func TestManagerRunsAnyGitCommandAgainWhenItCrossesACreation(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: 1, command: []string{"rev-parse", "--verify"}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-crossed-elsewhere",
+		BaseRef:    "HEAD",
+	}); err != nil {
+		t.Fatalf("Create() error = %v, want the command that crossed a creation to have been run again", err)
+	}
+	if runs, refused := runner.observed(); refused != 1 || runs < 2 {
+		t.Fatalf("runs = %d after %d refusal(s), want the refusal to have been followed by another run", runs, refused)
+	}
+}
+
+// Only the crossing is run again. Every other refusal is Git's answer, and
+// asking the same question three times would turn each of those into a slower
+// version of itself — and a command with an effect into one made twice.
+func TestManagerBelievesAGitRefusalThatIsNotACrossing(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{
+		delegate: execution.OSProcessRunner{},
+		refusals: registrationWalkAttempts,
+		command:  []string{"rev-parse", "--verify"},
+		stderr:   "fatal: Needed a single revision\n",
+	}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-refused",
+		BaseRef:    "HEAD",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Needed a single revision") {
+		t.Fatalf("Create() error = %v, want Git's own refusal", err)
+	}
+	if runs, _ := runner.observed(); runs != 1 {
+		t.Fatalf("runs = %d, want the refusal to have been believed the first time", runs)
+	}
+}
+
+// A registration a killed add left half-written used to stop every later run on
+// the repository at its own creation, until a person removed the directory by
+// hand: `git worktree add` walks the registrations before it writes one, and
+// walking that entry is what fails. So a creation clears such an entry first.
+// The lease it already holds is what says the entry is not a creation of the
+// harness's own still writing, and its age is what says it is not somebody
+// else's; the branch the dead add made is left, being a branch like any other,
+// and so is whatever directory it left on disk.
+func TestManagerCreatesAcrossARegistrationAKilledAddLeftBehind(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	var notes []string
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	killed := killAddMidRegistration(t, repository, "yoyodyne-killed-4f2a9c1b", 2*unfinishedRegistrationGrace)
+
+	// The failure being cleared is Git's own rather than a described one: if a
+	// later Git creates across this entry, this test is asserting nothing and must
+	// be told so rather than passing quietly.
+	if output, err := attemptGit(repository, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "probe"), "HEAD"); err == nil {
+		t.Fatalf("git created a worktree with a killed add's registration present, so the failure this clears is gone:\n%s", output)
+	}
+
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-after-a-killed-add",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want the killed add's registration to have been cleared first", err)
+	}
+	if _, err := os.Lstat(killed.registration); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat(%s) error = %v, want the registration gone", killed.registration, err)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "cleared the worktree registration "+filepath.Base(killed.registration)) || !strings.Contains(notes[0], killed.reason) {
+		t.Fatalf("notes = %v, want one saying the registration was cleared and why", notes)
+	}
+	// Git describes the repository again, with the new checkout and without the
+	// dead one — which is the whole of what the next run needed.
+	if _, err := manager.Inspect(context.Background(), worktree); err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	// What the dead add made before it died is not this package's to remove: the
+	// branch is a branch, and the directory is one Git is not managing.
+	if _, err := attemptGit(repository, "show-ref", "--verify", "--quiet", "refs/heads/"+killed.branch); err != nil {
+		t.Fatalf("the killed add's branch %s is gone; clearing a registration must not delete a branch", killed.branch)
+	}
+	if _, err := os.Stat(killed.path); err != nil {
+		t.Fatalf("Stat(%s) error = %v, want the directory the killed add left where it was", killed.path, err)
+	}
+	if !strings.Contains(notes[0], killed.path) {
+		t.Fatalf("notes = %v, want the note to name the directory that is not a worktree any more", notes)
+	}
+}
+
+// An add the harness did not make holds no lease, so an unfinished entry young
+// enough to be one still working is not cleared on sight. A creation waits the
+// grace out rather than failing over it, because the grace is short and a run
+// lost at creation is not; the entry is judged again afterwards, and one that
+// has stopped moving is cleared then.
+func TestManagerWaitsOutTheGraceBeforeClearingAYoungRegistration(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	var notes []string
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	killed := killAddMidRegistration(t, repository, "yoyodyne-young-7e05c3d1", unfinishedRegistrationGrace-2*time.Second)
+
+	started := time.Now()
+	if _, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-after-a-young-kill",
+		BaseRef:    "HEAD",
+	}); err != nil {
+		t.Fatalf("Create() error = %v, want the grace waited out and the registration cleared", err)
+	}
+	if waited := time.Since(started); waited < time.Second {
+		t.Fatalf("Create() took %s, want the rest of the grace waited out before the entry was judged", waited)
+	}
+	if _, err := os.Lstat(killed.registration); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat(%s) error = %v, want the registration cleared once the grace had passed", killed.registration, err)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "cleared the worktree registration") {
+		t.Fatalf("notes = %v, want one saying the registration was cleared", notes)
+	}
+}
+
+// killedAdd is what a `git worktree add` that died leaves, as a test made it.
+type killedAdd struct {
+	registration string
+	path         string
+	branch       string
+	reason       string
+}
+
+// killAddMidRegistration leaves the repository holding exactly what a `git
+// worktree add` killed while registering leaves: the branch it made first, a
+// directory on disk holding only its .git file, and under worktrees/ an entry
+// still locked as initializing, with gitdir written, commondir created and
+// empty — the file every registration walk then dies over — and no HEAD and no
+// index, because it never reached the checkout. age is how long ago the kill
+// is made to look, so a test can stand on either side of the grace.
+func killAddMidRegistration(t *testing.T, repository, name string, age time.Duration) killedAdd {
+	t.Helper()
+	runGit(t, repository, "branch", name, "HEAD")
+	path := filepath.Join(t.TempDir(), name)
+	registration := filepath.Join(repository, ".git", "worktrees", name)
+	for _, directory := range []string{path, registration} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", directory, err)
+		}
+	}
+	writeFile(t, path, ".git", "gitdir: "+registration+"\n")
+	writeFile(t, registration, "locked", "initializing")
+	writeFile(t, registration, "gitdir", filepath.Join(path, ".git")+"\n")
+	writeFile(t, registration, "commondir", "")
+	then := time.Now().Add(-age)
+	for _, file := range []string{"locked", "gitdir", "commondir", ""} {
+		if err := os.Chtimes(filepath.Join(registration, file), then, then); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", file, err)
+		}
+	}
+	// The entry is cleared before the test's own cleanup lists the repository,
+	// in case the code under test did not: that cleanup lists the worktrees too.
+	t.Cleanup(func() { _ = os.RemoveAll(registration) })
+	return killedAdd{
+		registration: registration,
+		path:         path,
+		branch:       name,
+		reason:       "its lock still says initializing",
+	}
+}
+
+// killAddMidCheckout leaves what a `git worktree add` killed during its checkout
+// leaves: every bookkeeping file written, the entry still locked as
+// initializing, and no index, because the checkout is what writes it. Git
+// describes a repository holding one, so it stops nothing — what it does is hold
+// its branch and a sandbox deny path for good, since a locked entry is never
+// pruned.
+func killAddMidCheckout(t *testing.T, repository, name string, age time.Duration) killedAdd {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	runGit(t, repository, "worktree", "add", "--quiet", "-b", name, path)
+	registration := filepath.Join(repository, ".git", "worktrees", name)
+	if err := os.Remove(filepath.Join(registration, "index")); err != nil {
+		t.Fatalf("Remove(index) error = %v", err)
+	}
+	writeFile(t, registration, "locked", "initializing")
+	then := time.Now().Add(-age)
+	entries, err := os.ReadDir(registration)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", registration, err)
+	}
+	for _, entry := range entries {
+		if err := os.Chtimes(filepath.Join(registration, entry.Name()), then, then); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", entry.Name(), err)
+		}
+	}
+	if err := os.Chtimes(registration, then, then); err != nil {
+		t.Fatalf("Chtimes(%s) error = %v", registration, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(registration) })
+	// Git recorded the checkout by the path it resolved rather than the one the
+	// test named, and that is the path a reader of the entry reports.
+	gitdir, err := os.ReadFile(filepath.Join(registration, "gitdir"))
+	if err != nil {
+		t.Fatalf("ReadFile(gitdir) error = %v", err)
+	}
+	return killedAdd{
+		registration: registration,
+		path:         filepath.Dir(strings.TrimSpace(string(gitdir))),
+		branch:       name,
+		reason:       "its lock still says initializing",
+	}
 }
 
 // Git prunes worktree registrations during automatic maintenance, and it judges
@@ -812,7 +1087,7 @@ func TestManagerRemovalQueuesOnTheWorktreeRegistryLease(t *testing.T) {
 		t.Fatalf("Integrate() error = %v", err)
 	}
 
-	lease, err := manager.leaseRegistry(context.Background())
+	_, lease, err := manager.leaseRegistry(context.Background())
 	if err != nil {
 		t.Fatalf("leaseRegistry() error = %v", err)
 	}
@@ -846,6 +1121,248 @@ func TestManagerRemovalQueuesOnTheWorktreeRegistryLease(t *testing.T) {
 	if registrations := gitOutput(t, repository, "worktree", "list", "--porcelain"); strings.Contains(registrations, worktree.Path) {
 		t.Fatalf("worktree registration survived cleanup: %q", registrations)
 	}
+}
+
+// The branch is made apart from the add so that an add run again meets a
+// repository it has not already changed. That leaves a branch to take back when
+// the add fails for its own reasons, where `git worktree add -b` making both as
+// one thing left nothing behind — so a creation that could not add its checkout
+// removes the branch it had just made, and a failed creation leaves the
+// repository as it found it.
+func TestManagerRemovesTheBranchOfAWorktreeItCouldNotAdd(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{
+		delegate: execution.OSProcessRunner{},
+		refusals: 1,
+		command:  []string{"worktree", "add"},
+		stderr:   "fatal: could not create leading directories of '/nowhere'\n",
+	}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-add-refused",
+		BaseRef:    "HEAD",
+	}); err == nil {
+		t.Fatal("Create() succeeded although the add was refused")
+	}
+	branch := branchName("yoyodyne-add-refused", testRunID)
+	if output, err := attemptGit(repository, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		t.Fatalf("branch %s survived a creation that added no worktree: %s", branch, output)
+	}
+}
+
+// Running a command again is what covers a crossing that happened. Not
+// crossing at all is the other half, and it is the lease: a command that walks
+// the registrations reads them in a shared mode every other reader may hold at
+// once and no write may hold beside, so it queues behind a creation rather than
+// meeting the entry that creation has not filled in yet.
+func TestManagerQueuesARegistrationWalkingCommandBehindAWrite(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &commandWitness{delegate: execution.OSProcessRunner{}, first: "worktree", second: "list", ran: make(chan struct{}, 1)}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-read-queue",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// The creation above verified itself with a listing of its own, so what it
+	// announced is forgotten before the one this is about.
+	select {
+	case <-runner.ran:
+	default:
+	}
+
+	// The lease is taken here rather than by a creation, so what this observes
+	// is the reader waiting for a write rather than two commands that happened
+	// not to overlap.
+	_, lease, err := manager.leaseRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("leaseRegistry() error = %v", err)
+	}
+	inspected := make(chan error, 1)
+	go func() {
+		_, err := manager.Inspect(context.Background(), worktree)
+		inspected <- err
+	}()
+
+	// Nothing here waits for the listing to be run, because the assertion is
+	// that it is not. A machine slow enough to make this window uninformative
+	// still cannot fail it wrongly: only a listing that actually ran does that.
+	select {
+	case <-runner.ran:
+		t.Fatal("the registrations were walked while the registry lease was held elsewhere")
+	case err := <-inspected:
+		t.Fatalf("Inspect() finished without waiting for the lease: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if err := lease.release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+	if err := <-inspected; err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+}
+
+// A holder reads what it is writing: a creation verifies the checkout it just
+// added, which walks the same registrations it holds the lease over. Queueing
+// there would be the creation waiting for itself, so a read under the context
+// the lease handed back takes nothing at all. Every creation in this package
+// proves it by finishing; this says so in one place, because what would break
+// it is a caller threading the wrong context rather than anything visible in a
+// result.
+func TestManagerReadsTheRegistrationsUnderItsOwnWrite(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-read-under-write",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	held, lease, err := manager.leaseRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("leaseRegistry() error = %v", err)
+	}
+	defer func() { _ = lease.release() }()
+
+	inspected := make(chan error, 1)
+	go func() {
+		_, err := manager.Inspect(held, worktree)
+		inspected <- err
+	}()
+	select {
+	case err := <-inspected:
+		if err != nil {
+			t.Fatalf("Inspect() error = %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a read under the lease this process holds waited for the lease it is holding")
+	}
+}
+
+// The lease is not a queue over every Git command. A command that never opens
+// the registrations — the overwhelming majority of what the manager runs — is
+// not held back by a creation, because serializing those would turn parallel
+// development into one run at a time for no gain.
+func TestManagerDoesNotQueueACommandThatWalksNoRegistrations(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager, err := New(Options{
+		Runner:         execution.OSProcessRunner{},
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, lease, err := manager.leaseRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("leaseRegistry() error = %v", err)
+	}
+	defer func() { _ = lease.release() }()
+
+	answered := make(chan error, 1)
+	go func() {
+		_, err := manager.CurrentBranch(context.Background())
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("CurrentBranch() error = %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a command that walks no registrations waited for the registry lease")
+	}
+}
+
+// Which commands take the lease is a judgement about what Git reads, so it is
+// stated as a table rather than left to be inferred from the one command a test
+// happens to drive. The global options in front of a subcommand are stepped
+// over, because the manager puts them there on every command it runs.
+func TestGitCommandsThatWalkTheRegistrationsAreTheOnesThatTakeTheLease(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		args  []string
+		walks bool
+	}{
+		{name: "the listing", args: []string{"-C", "/repository", "worktree", "list", "--porcelain"}, walks: true},
+		{name: "an add", args: []string{"-C", "/repository", "worktree", "add", "/path", "branch"}, walks: true},
+		{name: "a rebase", args: []string{"-C", "/worktree", "rebase", "--onto", "main", "base"}, walks: true},
+		{name: "a checkout", args: []string{"-C", "/worktree", "-c", "core.hooksPath=/dev/null", "checkout", "HEAD", "--", "file"}, walks: true},
+		{name: "a branch", args: []string{"-C", "/repository", "branch", "feature", "HEAD"}, walks: true},
+		{name: "a switch", args: []string{"-C", "/worktree", "switch", "main"}, walks: true},
+		{name: "resolving a commit", args: []string{"-C", "/repository", "rev-parse", "--verify", "HEAD^{commit}"}, walks: false},
+		{name: "a diff", args: []string{"-C", "/worktree", "diff", "--name-only", "HEAD"}, walks: false},
+		{name: "a status", args: []string{"-C", "/worktree", "status", "--porcelain"}, walks: false},
+		{name: "a push", args: []string{"-C", "/repository", "push", "origin", "branch"}, walks: false},
+		// The subcommand is what decides, and a path that happens to be named
+		// like one is not it.
+		{name: "a path named like a subcommand", args: []string{"-C", "/repository", "diff", "--", "branch"}, walks: false},
+		{name: "nothing at all", args: nil, walks: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if walks := walksRegistrations(testCase.args); walks != testCase.walks {
+				t.Fatalf("walksRegistrations(%q) = %v, want %v", testCase.args, walks, testCase.walks)
+			}
+		})
+	}
+}
+
+// commandWitness announces the moment one named Git command is actually run,
+// which is what says a lease held it back rather than that it ran and answered.
+type commandWitness struct {
+	delegate      execution.ProcessRunner
+	first, second string
+	ran           chan struct{}
+}
+
+func (w *commandWitness) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if containsArguments(command.Args, w.first, w.second) {
+		select {
+		case w.ran <- struct{}{}:
+		default:
+		}
+	}
+	return w.delegate.Run(ctx, command, observer)
 }
 
 // removalWitness announces the moment the harness unregisters a worktree, which

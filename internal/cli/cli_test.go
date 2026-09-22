@@ -473,6 +473,36 @@ func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
 	}
 }
 
+// A registration a killed add left behind is said one entry at a time: until
+// it was cleared it was stopping every new run on the repository at creation,
+// and one that was kept still is — which is why the kept one goes to stderr,
+// where the things somebody has to read go, and is not a failure.
+func TestReconcileSaysWhichUnfinishedRegistrationsItClearedAndWhichItKept(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	sweep := reconcileSweep{Convergence: orchestrator.Convergence{
+		Registrations: orchestrator.RegistrationSweep{Unfinished: []gitworktree.UnfinishedRegistration{
+			{Name: "yoyodyne-ifd-1-dead", Path: "/tmp/dead", Reason: "its lock still says initializing", Cleared: true},
+			{Name: "yoyodyne-ifd-2-young", Reason: "its commondir was created and never written", Kept: "it was last written 3s ago and may still be being filled in"},
+		}},
+	}}
+	code := reportReconcileResult(&stdout, &stderr, false, sweep, nil)
+	if code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "cleared the worktree registration yoyodyne-ifd-1-dead, left by a git worktree add that never finished: its lock still says initializing; the directory it named at /tmp/dead is not a worktree any more") {
+		t.Errorf("stdout = %q, want the cleared registration, why, and the directory it left", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "yoyodyne-ifd-2-young") {
+		t.Errorf("stdout = %q, want the kept registration off stdout", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "left the worktree registration yoyodyne-ifd-2-young, which a git worktree add has not finished (its commondir was created and never written): it was last written 3s ago and may still be being filled in") {
+		t.Errorf("stderr = %q, want the kept registration and why", stderr.String())
+	}
+}
+
 // The sweep's own verdict and what became of the run are two different facts,
 // and a recovery view that printed only the first told an operator a run was
 // settled and nothing about whether their change survived it. Both words come
