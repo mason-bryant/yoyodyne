@@ -135,7 +135,7 @@
     {
       "work_item_id": "yoyodyne-ifd.188",
       "title": "The goals document gains a legibility clause",
-      "reason": "its executor is \"product-manager-conversation\" rather than a developer run, so no run carries it out; the item says which conversation does",
+      "reason": "its executor is \"conversation:product-manager\" rather than a developer run, so no run carries it out; the item says which conversation does",
       "kind": "conversation"
     },
     {
@@ -261,6 +261,15 @@
       },
       "what": "2 of 14 collected report(s) are unhandled, the oldest filed 8d ago, worst warning",
       "whose": "the product manager's — reports are decided in conversation, and a pile this old says the schedule that works it is not keeping up"
+    },
+    {
+      "kind": "conversation-carried-item",
+      "id": "yoyodyne-ifd.188",
+      "mover": "product-manager",
+      "work_item_id": "yoyodyne-ifd.188",
+      "executor": "conversation:product-manager",
+      "what": "yoyodyne-ifd.188 is admitted for \"conversation:product-manager\" rather than a developer run",
+      "whose": "the product manager's — in conversation; no run will ever be started for it"
     }
   ],
   "reports": {

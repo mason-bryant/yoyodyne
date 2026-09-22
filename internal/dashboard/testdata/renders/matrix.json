@@ -362,5 +362,145 @@
       "grouping": "closed",
       "card": "closed"
     }
+  },
+  "attention": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "closed"
+    }
+  },
+  "attention-empty": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "empty"
+    },
+    "popups": {
+      "grouping": "empty",
+      "card": "closed"
+    }
+  },
+  "attention-error": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "error",
+      "card": "closed"
+    }
+  },
+  "attention-amendment": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "ready"
+    }
+  },
+  "attention-owed-step": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "ready"
+    }
+  },
+  "attention-carried-item": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "ready"
+    }
+  },
+  "attention-carried-item-card": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "ready"
+    }
+  },
+  "attention-settled": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "empty"
+    },
+    "popups": {
+      "grouping": "empty",
+      "card": "empty"
+    }
+  },
+  "attention-unreadable": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "error",
+      "card": "error"
+    }
+  },
+  "attention-closed": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
+    }
   }
 }

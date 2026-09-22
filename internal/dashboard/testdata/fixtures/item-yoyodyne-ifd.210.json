@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "id": "yoyodyne-ifd.210",
+  "title": "Configuration selects sequence and never grants authority",
+  "status": "closed",
+  "priority": 1,
+  "labels": [
+    "architecture"
+  ],
+  "parent": "",
+  "description": "Capability primitives live in trusted Go code; configuration selects among registered actions and never widens an agent's authority.",
+  "design": "",
+  "acceptance_criteria": "",
+  "notes": "Goal served: the harness's boundaries hold whatever a project's configuration says."
+}

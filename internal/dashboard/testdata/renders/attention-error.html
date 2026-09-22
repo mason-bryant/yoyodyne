@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the degraded render, which is not repeated here.</p>
+    <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="error">
+      <div id="grouping-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="grouping-heading" class="popup-title">Needs a human</h2>
+            <p id="grouping-note" class="popup-note">what waits on a person, the operator's first, each with its kind and who it is waiting on; each opens its card</p>
+          </div>
+          <button type="button" id="grouping-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-error" role="alert">
+          <p id="grouping-problem" class="problem">Could not be read: the recorded directives could not be read: open directives: permission denied</p>
+          <p id="grouping-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
