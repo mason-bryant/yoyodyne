@@ -260,22 +260,15 @@ func lastWritten(directory string) time.Time {
 }
 
 // clearRegistration removes one registration directory, and nothing that is not
-// one. The name came from reading worktrees/ itself, the path is resolved
-// against the common Git directory the way every confined write is, and what is
-// removed has to be a directory rather than a link to one: a registration is
-// Git's own bookkeeping, and the one thing this may take out of the repository
-// is an entry Git itself would have removed had the add reached its end.
+// one. The name came from reading worktrees/ itself, and the removal goes
+// through the one primitive that decides confinement against the filesystem —
+// so the path is resolved against the common Git directory immediately before
+// it is removed, a component pointing out of that directory is refused rather
+// than followed, and a final component that is a link or is not a directory is
+// refused too. A registration is Git's own bookkeeping, and the one thing this
+// may take out of the repository is an entry Git itself would have removed had
+// the add reached its end.
 func clearRegistration(root repowrite.Root, name string) error {
-	resolved, err := root.Resolve(worktreeRegistrations + "/" + name)
-	if err != nil {
-		return err
-	}
-	info, err := os.Lstat(resolved)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("%s is not a registration directory", resolved)
-	}
-	return os.RemoveAll(resolved)
+	_, err := root.RemoveDirectory(worktreeRegistrations + "/" + name)
+	return err
 }

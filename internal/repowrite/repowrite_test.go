@@ -334,6 +334,94 @@ func TestMakingADirectoryRefusesAPathThatNamesNothingInside(t *testing.T) {
 	}
 }
 
+// Removing is the one operation here that destroys what was already there, so
+// it is idempotent in the direction that matters: a sweep that runs twice meets
+// a directory that has already gone and reports a removal rather than a failure.
+func TestRemovingADirectoryTakesItAndWhatIsInItAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	made, err := root.MakeDirectory("worktrees/yoyodyne-killed", 0o700)
+	if err != nil {
+		t.Fatalf("MakeDirectory() error = %v", err)
+	}
+	writeFile(t, filepath.Join(made, "gitdir"), "what the killed add wrote")
+
+	removed, err := root.RemoveDirectory("worktrees/yoyodyne-killed")
+	if err != nil {
+		t.Fatalf("RemoveDirectory() error = %v", err)
+	}
+	if removed != made {
+		t.Fatalf("RemoveDirectory() = %q, want %q", removed, made)
+	}
+	if _, err := os.Lstat(made); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat() error = %v, want the directory gone", err)
+	}
+	if again, err := root.RemoveDirectory("worktrees/yoyodyne-killed"); err != nil || again != made {
+		t.Fatalf("RemoveDirectory() again = %q, error = %v, want the same path and no failure", again, err)
+	}
+}
+
+// The refusal the entry point exists for, in the direction that costs most: a
+// link along the way pointing out of the root is refused rather than followed,
+// so nothing outside the repository is removed.
+func TestRemovingADirectoryThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "worktrees", "yoyodyne-killed", "gitdir"), "somebody else's")
+	link(t, outside, filepath.Join(root.Path(), "worktrees"))
+
+	removed, err := root.RemoveDirectory("worktrees/yoyodyne-killed")
+	var refused *EscapeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("RemoveDirectory() = %q, error = %v, want an EscapeError", removed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "worktrees", "yoyodyne-killed")); err != nil {
+		t.Fatalf("Lstat() error = %v, want what is outside the repository untouched", err)
+	}
+}
+
+// A link standing at the target itself is refused rather than unlinked: taking
+// the link and leaving what it points at is a removal that did not remove what
+// the caller named.
+func TestRemovingRefusesALinkStandingAtTheTargetItself(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "held", "gitdir"), "somebody else's")
+	link(t, filepath.Join(outside, "held"), filepath.Join(root.Path(), "worktrees", "yoyodyne-killed"))
+
+	if removed, err := root.RemoveDirectory("worktrees/yoyodyne-killed"); err == nil {
+		t.Fatalf("RemoveDirectory() = %q, want a refusal of a link standing where the directory should be", removed)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "held", "gitdir")); err != nil {
+		t.Fatalf("Lstat() error = %v, want what the link pointed at untouched", err)
+	}
+}
+
+// And a file standing where the directory was is refused: every caller for this
+// asks for a directory by name, and removing whatever happens to be there
+// instead is not what any of them meant.
+func TestRemovingRefusesSomethingThatIsNotADirectory(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	writeFile(t, filepath.Join(root.Path(), "worktrees", "yoyodyne-killed"), "a file where an entry was")
+
+	if removed, err := root.RemoveDirectory("worktrees/yoyodyne-killed"); err == nil {
+		t.Fatalf("RemoveDirectory() = %q, want a refusal of something that is not a directory", removed)
+	}
+	if content := readFile(t, filepath.Join(root.Path(), "worktrees", "yoyodyne-killed")); content != "a file where an entry was" {
+		t.Fatalf("the refused removal changed the file: %q", content)
+	}
+	for _, value := range []string{"", "   ", "..", "../elsewhere", ".", "/absolute"} {
+		if removed, err := root.RemoveDirectory(value); err == nil {
+			t.Errorf("RemoveDirectory(%q) = %q, want a refusal", value, removed)
+		}
+	}
+}
+
 func TestARootThatIsNotAUsableRepositoryIsRefused(t *testing.T) {
 	t.Parallel()
 
