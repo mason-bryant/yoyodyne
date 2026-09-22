@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,46 +389,33 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
-	// Neither continuation proceeds until both have been entered, so a sweep
-	// that hosted them one after the other would wait at the gate rather than
-	// pass on the fakes being quick. The gate is abandoned on a timer for the
-	// reason the promotion test's is: a continuation that never arrives should
-	// fail this test rather than hang the binary.
+	// Neither continuation proceeds until both have been entered, so the gate is
+	// the whole of the claim: reaching the other side of it is what says the two
+	// were in flight at once, and a sweep that hosted them one after the other
+	// has no second arrival to open it with.
 	//
-	// The first arrival starts that timer rather than this line arming it, so
-	// what it bounds is how long the second continuation takes to join the
-	// first — which is the claim — rather than everything the sweep does before
-	// either is entered. A sweep that hosts them one after the other has no
-	// second arrival at all, so it spends the whole window however quick the
-	// machine is; a machine slow enough to spend the window reaching the first
-	// arrival used to fail this on its own, which is a verdict about the load
-	// rather than about the sweep.
+	// So the gate is never abandoned on a clock, which is what this waited on
+	// before. A thirty-second bound on the second arrival was reached with the
+	// sweep working — 110s and 51s on two loaded runs of `make race`, against
+	// 1.6s idle — and failed changes that never touched this package. That is
+	// the bound-that-fails-on-load this repository has ruled out; see "A test
+	// never bounds a wait in wall-clock time" in docs/developing-yoyo.md.
+	//
+	// What the bound bought was a failure instead of a hang, and `go test` buys
+	// that already: a serialized sweep waits here until the binary's own
+	// -timeout, which reports it with a dump of every goroutine naming this
+	// gate. That is a verdict about the sweep, which a clock could not give.
 	gate := newArrivalGate(len(items))
-	var abandoned atomic.Bool
 	var (
 		mu      sync.Mutex
 		entered int
-		abandon *time.Timer
 	)
 	arrive := func() {
 		mu.Lock()
 		entered++
-		if abandon == nil {
-			abandon = time.AfterFunc(30*time.Second, func() {
-				abandoned.Store(true)
-				gate.abandon()
-			})
-		}
 		mu.Unlock()
 		gate.arrive()
 	}
-	defer func() {
-		mu.Lock()
-		defer mu.Unlock()
-		if abandon != nil {
-			abandon.Stop()
-		}
-	}()
 	reconciler := Reconciler{
 		Tracker:   &fakeTracker{item: beads.WorkItem{ID: items[0], Title: "Task", Status: "in_progress"}},
 		Worktrees: newObserver(t, repository, worktreeRoot),
@@ -473,11 +459,10 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 			t.Fatalf("landed run for %s = %#v, want a succeeded run whose record says the sweep continued it once", continuation.WorkItemID, landed)
 		}
 	}
-	// Both passed the gate, so both were in flight at once: the second was not
-	// made to wait for the first to land.
-	if abandoned.Load() {
-		t.Fatal("the two continuations were hosted one after the other, want both at once")
-	}
+	// Reaching here is the claim: ContinueWaits returned, so both continuations
+	// passed a gate that only opens once both have arrived, so the second was
+	// never made to wait for the first to land. There is nothing left to assert
+	// about it — a sweep that hosted them one after the other never gets here.
 }
 
 // exitedPipeline builds one of the concurrent pipelines a two-run sweep drives:
