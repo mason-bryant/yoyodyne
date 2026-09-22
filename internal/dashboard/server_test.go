@@ -239,6 +239,51 @@ func TestRefusesAMissingToken(t *testing.T) {
 	}
 }
 
+// A server handed a token — one read from the keychain or the file the
+// configuration names — requires exactly that token, from the bearer header
+// alone, and refuses everything a generated one refuses. A server handed
+// nothing is not made: it would be a dashboard requiring no credential at all.
+func TestASuppliedTokenIsRequiredFromTheBearerHeaderAlone(t *testing.T) {
+	t.Parallel()
+	server, err := NewWithToken("yoyodyne", stubReader{standing: standingWith("secret title")}, "stored-token\n")
+	if err != nil {
+		t.Fatalf("NewWithToken: %v", err)
+	}
+	server.bound(45123)
+	w := &world{t: t, server: server, handler: server.Handler()}
+	if w.server.Token() != "stored-token" {
+		t.Fatalf("Token() = %q, want the supplied token without the newline a store leaves on it", w.server.Token())
+	}
+
+	response, body := w.get("/api/standing", bearer("stored-token"))
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "secret title") {
+		t.Fatalf("the supplied token as a bearer: %d %s", response.StatusCode, body)
+	}
+	if response, _ := w.get("/api/standing", nil); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token: %d", response.StatusCode)
+	}
+	if response, _ := w.get("/api/standing", bearer(strings.Repeat("0", len("stored-token")))); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a wrong token of the same length: %d", response.StatusCode)
+	}
+	if response, _ := w.get("/api/standing?token=stored-token", nil); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("the token in the URL: %d", response.StatusCode)
+	}
+	if response, _ := w.get("/api/standing", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: "yoyo-dashboard-token", Value: "stored-token"})
+	}); response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("the token in a cookie: %d", response.StatusCode)
+	}
+
+	for _, empty := range []string{"", "  \n"} {
+		if _, err := NewWithToken("yoyodyne", stubReader{}, empty); err == nil {
+			t.Fatalf("NewWithToken(%q) made a server requiring nothing", empty)
+		}
+	}
+	if _, err := NewWithToken("yoyodyne", nil, "stored-token"); err == nil {
+		t.Fatal("NewWithToken with no read model made a server")
+	}
+}
+
 // The token is never a cookie, in either direction: no response sets one, and
 // a cookie carrying the token is no credential. A cookie on 127.0.0.1 is sent
 // to every port of 127.0.0.1, so a cookie would hand the credential to every

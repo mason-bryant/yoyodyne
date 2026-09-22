@@ -538,14 +538,16 @@ func renderScaffoldServices(builder *strings.Builder, services Services) {
 # what it holds when started by hand.
 #
 # The dashboard binds loopback and generates its token at each start, printed
-# once where you can read it. Binding an interface address instead lets another
-# device on your network open the page, and is an opt-in with a condition: a
-# token printed to one terminal is unusable from another device, so a bind
-# outside loopback has to name where its token is stored -- "keychain" or
-# "file", the two stores the Slack tokens use, under names that carry the
-# product -- and is refused at load until it does. allowed_hosts are the names,
-# beyond the bound address, a request may carry as its Host; write them without
-# a port. The token itself is never written in this file.
+# once where you can read it; set token to "keychain" or "file" and it reads
+# the stored one instead, which outlives a restart and is never printed.
+# Binding an interface address instead lets another device on your network
+# open the page, and is an opt-in with a condition: a token printed to one
+# terminal is unusable from another device, so a bind outside loopback has to
+# name where its token is stored -- "keychain" or "file", the two stores the
+# Slack tokens use, under names that carry the product -- and is refused at
+# load until it does. allowed_hosts are the names, beyond the bound address, a
+# request may carry as its Host; write them without a port. The token itself
+# is never written in this file.
 services:
   slack:
     enabled: %t
