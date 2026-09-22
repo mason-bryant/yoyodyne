@@ -53,12 +53,21 @@ build: cachecheck
 # from a pass. So its own run line is printed here, `--- PASS` or `--- SKIP`
 # with the declaration quoted, and a check runner's log says on every run
 # whether the renders were compared on that machine (docs/developing-yoyo.md).
+#
+# Its output is captured rather than piped, and the verdict is the test's own
+# exit status rather than the grep's: a pipeline exits as its last command, so
+# a grep that matched `--- FAIL` would report success and leave this target
+# green. `-count=1` for the same reason the bump instructions give -- the test
+# cache is keyed on this repository's inputs, so a cached line could be a run
+# from before Node was uninstalled rather than a statement about this machine.
 test: cachecheck
 	$(GO) test ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
-	@$(GO) test -v -run '^TestThePageRendersEverySectionInEveryState$$' ./internal/dashboard \
-		| grep -E '^--- (PASS|SKIP|FAIL): TestThePageRendersEverySectionInEveryState|node is not installed'
+	@render=$$($(GO) test -v -count=1 -run '^TestThePageRendersEverySectionInEveryState$$' ./internal/dashboard); \
+	status=$$?; \
+	printf '%s\n' "$$render" | grep -E '^--- (PASS|SKIP|FAIL): TestThePageRendersEverySectionInEveryState|node is not installed' || true; \
+	exit $$status
 
 race: cachecheck
 	$(GO) test -race ./...
