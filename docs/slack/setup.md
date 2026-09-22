@@ -129,9 +129,12 @@ the hold is sent when it is first seen and again with each heartbeat once it has
 stood past six hours, because it is the one state a person ends early; and the
 stall is sent again with every heartbeat it stands, tagged to those members by
 id in the channel as well, because a line that has stopped for reasons nobody
-can name is the one state that gets louder rather than quieter. A brake hold the
-development manager has handed to you is tagged the same way each hour, and
-sent directly once it has stood two hours. Removing the scope costs those direct
+can name is the one state that gets louder rather than quieter. A brake hold
+handed to you — by the development manager, or by the harness once its
+summons-and-probe loop has gone round its configured number of times — is
+tagged the same way each hour, and sent directly once it has stood two hours;
+the harness's own escalation is also sent directly the once, the moment it is
+recorded. Removing the scope costs those direct
 messages and nothing else: the stale-build message, the hold, the released
 claim, and the improvement are in the channel either way, the stall and the
 brake hold are still tagged there, and the stall is in the durable record `yoyo
@@ -615,13 +618,14 @@ Four states count: the operator holding all harness activity, a held intake
 watch session running at all. Each closes on who it is waiting on, in the words
 `yoyo status` puts on its attention line — for a held intake, the hold's own:
 yours for one you placed, the development manager's or the harness's for one
-the brake is working, and yours once she has escalated it. That last one is the
-one state here that gets louder as it stands: a brake hold that waits on you is
-tagged to you by member id every hour, a `warning` while it is young and
-`critical` and sent to you directly once it has stood two hours, until intake is
-released. It stops the moment the state clears, and says nothing about the
-clearing — the release, the session opening, or the run it starts says that
-itself.
+the brake is working — naming which summons-and-probe cycle it is on and at
+what cycle the harness stops asking — and yours once it is escalated, by her or
+by the harness at that bound. That last one is the one state here that gets
+louder as it stands: a brake hold that waits on you is tagged to you by member
+id every hour, a `warning` while it is young and `critical` and sent to you
+directly once it has stood two hours, until intake is released. It stops the
+moment the state clears, and says nothing about the clearing — the release, the
+session opening, or the run it starts says that itself.
 
 The count of promotions is the second thing that makes it speak, and it is there
 because a **dropped merge** is said once, as it happens. A reader who was away
@@ -1370,7 +1374,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
 | `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
-| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the ones that report the harness itself degraded — a stale session build, the harness having started nothing at all, the provider holding every role, a brake hold that has waited on you for two hours, and a claim the harness gave back — and all of them are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
+| `a direct conversation with <member> could not be opened` | Usually `conversations.open: missing_scope` on an app installed before the manifest asked for `im:write`, or a member id that is not in this workspace. The messages this affects are the ones that report the harness itself degraded — a stale session build, the harness having started nothing at all, the provider holding every role, a brake hold the harness escalated to you at the bound on its summons-and-probe loop, a brake hold that has waited on you for two hours, and a claim the harness gave back — and all of them are recorded either way; reinstall from *OAuth & Permissions* and the next one reaches them. |
 | `the watch session's build <sha> is not a revision this product's repository holds` | Said once per build, and not a fault. How old a `yoyo work --watch` session is is measured by counting what has landed in the repository since its binary was built, and that only means anything where the product this sink reports on is Yoyodyne's own source. For any other product the comparison is not this sink's to make, so it says so once and stays quiet. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |

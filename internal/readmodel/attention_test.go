@@ -224,6 +224,18 @@ func TestTheIntakeHoldsMoverMatchesTheHoldsOwnWording(t *testing.T) {
 		"probing":            {HeldAt: moment, HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{Blocked: blocked, Probe: &runstate.IntakeProbe{WorkItemID: "yoyodyne-ifd.300", StartedAt: moment}}},
 		"probed and blocked": {HeldAt: moment, HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{Blocked: blocked, CooldownEndsAt: moment.Add(time.Hour), Probe: &runstate.IntakeProbe{WorkItemID: "yoyodyne-ifd.300", StartedAt: moment, EndedAt: &ended, Blocked: true}}},
 		"escalated":          {HeldAt: moment, HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{Blocked: blocked, Decision: runstate.BrakeDecisionEscalate}},
+		// The harness's own escalation at the bound on its loop, and the one state
+		// where a decision of hers stands on top of it: a hold it escalated is
+		// still hers to release, and the mover has to follow the release rather
+		// than the escalation, because the release is what the session acts on.
+		"escalated by the harness": {HeldAt: moment, HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{
+			Blocked: blocked, Cycles: 4, CycleBound: 4,
+			Escalation: &runstate.BrakeEscalation{At: moment, Cycles: 4, Probe: "yoyodyne-ifd.300", Reason: "checks failed"},
+		}},
+		"escalated by the harness and released by her": {HeldAt: moment, HeldBy: runstate.IntakeHolderBrake, Brake: &runstate.IntakeBrake{
+			Blocked: blocked, Cycles: 4, CycleBound: 4, Decision: runstate.BrakeDecisionRelease,
+			Escalation: &runstate.BrakeEscalation{At: moment, Cycles: 4, Probe: "yoyodyne-ifd.300", Reason: "checks failed"},
+		}},
 	} {
 		entry := intakeHoldAttention(hold)
 		if entry.Whose() != hold.Whose() {

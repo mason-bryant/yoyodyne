@@ -930,13 +930,41 @@ The brake's hold is the same shape one layer over, and is said the same way.
 A hold [the brake placed](operations.md#pausing-everything-and-resuming-it) asks a
 person for nothing while the development manager is deciding about it or a
 probe is running under it, and the hourly line says so at note severity, naming
-her move. Once it waits on the operator — she escalated it, or it was written
-before the brake summoned anybody, which is the hold that stood for two hours
-on 2026-09-19 with a free slot idle — the hourly line is **tagged to the
+her move and where the summons-and-probe loop stands — which cycle it is, and
+at what cycle the harness stops asking — so a note repeated through a night
+says how much longer the loop goes on. Once it waits on the operator — she
+escalated it, the harness escalated it at that bound, or it was written before
+the brake summoned anybody, which is the hold that stood for two hours on
+2026-09-19 with a free slot idle — the hourly line is **tagged to the
 operators every time it is said, a `warning` while it is young, and `critical`
 and sent to them directly once it has stood two hours**, until intake is
 released. The operator's own intake hold is a state they chose to sit with and
 stays the hourly note it was.
+
+### A brake hold the harness escalates
+
+The one message about a brake hold that asks a person for something. On a
+machine that stays broken the brake's loop goes round — each blocked probe
+summons her again and restarts the cooldown — and nothing about it got louder
+unless she escalated it. After
+[`execution.brake_escalation_cycles`](configuration.md#watching-instead-of-draining)
+of those cycles with no escalation of hers, the harness escalates the hold to
+the operators itself and says so **once, the moment the record shows it, sent
+to them directly and tagged to them by member id**, at `warning` severity:
+
+> :warning: Warning — The brake's hold on intake is escalated to the operator
+> by the harness: the harness's own brake placed it after 3 run(s) blocked in a
+> row with nothing landing between them, which is the configured brake at 3,
+> and the harness escalated it to the operator after 4 summons-and-probe cycles
+> with the development manager not escalating it (the last probe run, of
+> yoyodyne-ifd.405, blocked: the checks failed on main), so it stays held until
+> somebody releases it. Next: the operator's — the harness has stopped probing,
+> and nothing new is chosen until `yoyo release` lifts it.
+
+It is never said again on a later pass: the hourly line above carries the hold
+from there, tagged as any hold that waits on a person is, and the release says
+the hold lifted. `yoyo status` reads the same record and names the hold on its
+"Needs a human" line as the operator's by the harness's escalation.
 
 ### The provider holding every role
 
@@ -1098,10 +1126,12 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The four shipped states are the ones
+  work: something only a person fixes. The five shipped states are the ones
   above — a session running a build the harness has moved well past, the
   harness having started nothing at all while work was ready, the provider
-  holding every role with nothing configured to fail over to, and an item that
+  holding every role with nothing configured to fail over to, the brake's own
+  hold handed to them by the harness at the bound on its summons-and-probe
+  loop, and an item that
   sat claimed with nothing working on it until the harness gave it back. The
   last of those is a fix rather than a request, and it is still in this class:
   the line was quietly degraded for as long as it stood, and a second run for an

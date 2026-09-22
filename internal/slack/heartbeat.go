@@ -184,15 +184,18 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 	// the one state the heartbeat says louder as it stands rather than at the
 	// same pitch. A hold the operator placed is a state they may have to sit
 	// with, and an hourly note is right for it; a hold the harness is working
-	// itself is the development manager's, and she is summoned about it. A brake
-	// hold that waits on the operator — escalated by her, or written before the
-	// brake summoned anybody — is a stopped line nobody has told him about
-	// except by a message that is getting older, which on 2026-09-19 stood for
-	// two hours with a free slot idle. So it is tagged to the operators by
-	// member id every time it is said, a warning while it is young, and critical
-	// and taken to them directly once it has stood past the bar the stall alarm
-	// uses, for the reason the alarm uses it: it is a person's now, and nothing
-	// else ends it.
+	// itself is the development manager's, and she is summoned about it — and
+	// the line names where that summons-and-probe loop stands, in the hold's
+	// own words, so an hourly note about a loop that is going round says which
+	// cycle it is on and when the harness stops asking. A brake hold that waits
+	// on the operator — escalated by her, escalated by the harness at that
+	// loop's bound, or written before the brake summoned anybody — is a stopped
+	// line nobody has told him about except by a message that is getting older,
+	// which on 2026-09-19 stood for two hours with a free slot idle. So it is
+	// tagged to the operators by member id every time it is said, a warning
+	// while it is young, and critical and taken to them directly once it has
+	// stood past the bar the stall alarm uses, for the reason the alarm uses it:
+	// it is a person's now, and nothing else ends it.
 	severity := report.SeverityNote
 	tag, direct := false, false
 	if state.Reason == readmodel.ReasonIntakeHold && held.intake.HeldBy == runstate.IntakeHolderBrake && held.intake.WaitsOnAPerson() {

@@ -123,8 +123,10 @@ surface lifts it, the hold is gone for both.
 A hold the brake placed does not need this. The brake summons the development
 manager the moment it trips and releases the hold on her decision, or on a
 probe run that lands once the configured cooldown has passed with no decision
-recorded; the only brake hold that waits on a person is one she escalated to
-you. This lifts it sooner, and says what the harness was in the middle of.
+recorded. A brake hold waits on a person only once it is escalated to you: by
+her, or by the harness itself after execution.brake_escalation_cycles of those
+summons-and-probe cycles have gone round with her not escalating it. This
+lifts it sooner, and says what the harness was in the middle of.
 
 Nothing else changes. Runs already going were never stopped by the hold, an item
 you named with `+"`yoyo run`"+` was never subject to it, and releasing what is

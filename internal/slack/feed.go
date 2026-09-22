@@ -95,6 +95,12 @@ func conversationLog(conversation runstate.Conversation) string {
 const (
 	intakeMark = "intake:"
 	holdMark   = "hold:"
+	// brakeEscalationMark records having told the operators that the harness
+	// escalated the brake's hold to them at its cycle bound. It is marked with
+	// the moment of the escalation rather than of the hold, so a hold that is
+	// released and a later one escalated afresh is a second thing to say, and
+	// it is forgotten with the hold's own mark when the hold lifts.
+	brakeEscalationMark = "brake-escalated:"
 	// outcomeMark records having said what became of one directive somebody
 	// asked for in a thread. It names the directive, because a directive is
 	// settled once and what settled it is said once.
@@ -1074,13 +1080,49 @@ func (f *HarnessFeed) holdDeliveries(cursor Cursor, read switches) []Delivery {
 				Notification: notify.FromIntakeHold(intake),
 			})
 		}
-	} else if mark, said := advanced.Marked(intakeMark); said {
-		advanced = advanced.Without(mark)
-		deliveries = append(deliveries, Delivery{
-			Stream:       productStream,
-			Cursor:       advanced,
-			Notification: notify.IntakeReleased(f.now()),
-		})
+		// The brake's hold handed to the operators by the harness, at the bound on
+		// its summons-and-probe loop. It is said once, when the record first shows
+		// it, and it is the one message about a brake hold that goes to them
+		// directly and by name: the hold asked nobody for anything while the
+		// harness was working it, and this is the moment it became theirs — after
+		// a loop that on a broken machine would otherwise have gone round all
+		// night, spending a turn and a run per cooldown, with nothing here getting
+		// louder than the hourly note.
+		if intake.Braked() && intake.Brake.EscalatedByHarness() {
+			if mark := brakeEscalationMark + stamp(intake.Brake.Escalation.At); !advanced.Has(mark) {
+				if notification, err := notify.FromIntakeEscalation(intake); err == nil {
+					advanced = advanced.With(mark)
+					deliveries = append(deliveries, Delivery{
+						Stream:       productStream,
+						Cursor:       advanced,
+						Direct:       true,
+						Tag:          true,
+						Notification: notification,
+					})
+				}
+			}
+		}
+	} else {
+		// The escalation is forgotten with the hold, and said nowhere: the release
+		// is what says the hold lifted, whichever way it was standing.
+		// The two marks are named apart because the second reading shadows the
+		// first's `said`: an escalation mark forgotten with no intake mark beside
+		// it still has to move the reading on, and a branch testing the inner
+		// answer would never run.
+		escalated, escalationSaid := advanced.Marked(brakeEscalationMark)
+		if escalationSaid {
+			advanced = advanced.Without(escalated)
+		}
+		if mark, said := advanced.Marked(intakeMark); said {
+			advanced = advanced.Without(mark)
+			deliveries = append(deliveries, Delivery{
+				Stream:       productStream,
+				Cursor:       advanced,
+				Notification: notify.IntakeReleased(f.now()),
+			})
+		} else if escalationSaid {
+			deliveries = append(deliveries, Delivery{Stream: productStream, Cursor: advanced})
+		}
 	}
 
 	operator, held := read.operator, read.operatorHeld

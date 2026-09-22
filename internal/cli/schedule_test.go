@@ -114,7 +114,12 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		// does instead: an operator reading "stays held until yoyo release lifts
 		// it" would go and lift a hold the harness was already deciding.
 		"execution.brake_cooldown",
-		"only brake hold that waits on a person is one she escalated",
+		// And the loop the cooldown makes has a bound, which the usage has to
+		// name: an operator reading "summons her again" would otherwise expect
+		// the loop to go round until she stops it, which is what it used to do.
+		"execution.brake_escalation_cycles",
+		"escalates it to\nyou itself",
+		"only brake hold that waits\non a person is one she escalated or one the harness escalated",
 		"--budget",
 		// A bound that can stop the session has to say so where the flag is
 		// documented: an operator who reads "caps what one session spends" and

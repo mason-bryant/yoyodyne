@@ -330,6 +330,19 @@ type Execution struct {
 	// records ends the wait wherever the cooldown stands. Zero waits for her
 	// summoned turn and no longer.
 	BrakeCooldown Duration `yaml:"brake_cooldown" json:"brake_cooldown"`
+	// BrakeEscalationCycles bounds the loop the cooldown makes. A probe that
+	// blocks summons her again and restarts the cooldown, so on a machine that
+	// stays broken the brake goes round — one of her turns and one probe run
+	// per cooldown — for as long as nobody happens to look, and nothing about
+	// it gets louder unless she escalates. After this many such cycles with no
+	// escalation of hers, the harness escalates the hold to the operator itself:
+	// one direct message naming the cycles spent and what stopped the last
+	// probe, and no further probe until somebody releases it. It is a count of
+	// cycles rather than a length of time because the loop is what it bounds,
+	// and what a count of cycles comes to in hours is the cooldown times it.
+	// Zero never escalates on its own, which is the loop as it stood before the
+	// bound existed.
+	BrakeEscalationCycles int `yaml:"brake_escalation_cycles" json:"brake_escalation_cycles"`
 	// DeveloperSlots is what each developer slot prefers, one entry per slot in
 	// slot order, and empty for a project whose every slot pulls in the product
 	// manager's order. A slot is one unit of MaxConcurrentDevelopers, so the list
@@ -424,6 +437,13 @@ const (
 	// a conversation nothing could open, costs the line half an hour rather than
 	// the two hours the 2026-09-19 trip cost it.
 	defaultBrakeCooldown = Duration(30 * time.Minute)
+	// defaultBrakeEscalationCycles is four, which at the default cooldown is two
+	// hours: the same bar the stall alarm and the heartbeat raise a stopped line
+	// to critical at, and the length of the 2026-09-19 hold that nobody knew
+	// about. Four cycles is four of her turns and four probe runs spent finding
+	// out the same thing, which is enough evidence that the machine is broken
+	// and that she is not going to say so.
+	defaultBrakeEscalationCycles = 4
 )
 
 // Triage is what the triage workflow measures against: when work that has
@@ -860,6 +880,11 @@ func (c Config) Validate() error {
 	// describes no wait anybody could take, is refused.
 	if c.Execution.BrakeCooldown < 0 {
 		problems = append(problems, "execution.brake_cooldown cannot be negative")
+	}
+	// Zero is a choice — never escalate the loop on its own — so only a negative
+	// bound, which describes no number of cycles anybody could count, is refused.
+	if c.Execution.BrakeEscalationCycles < 0 {
+		problems = append(problems, "execution.brake_escalation_cycles cannot be negative")
 	}
 	// An age of zero is not the choice the pauses above make with theirs: it
 	// dockets every approved publication the instant it is made, which is not a

@@ -72,8 +72,14 @@ execution:
   # How long a tripped brake waits for her decision before it probes the line by
   # itself: one run under the hold, whose landing reopens intake and whose
   # blocking keeps it held and asks her again. A hold she escalates to the
-  # operator is the only one that waits on a person.
+  # operator waits on a person; so does one the harness escalates itself, below.
   brake_cooldown: 30m
+  # How many of those summons-and-probe cycles the harness goes round before it
+  # escalates the hold to the operator itself -- one direct message naming the
+  # cycles spent and what stopped the last probe, and no further probe until
+  # somebody releases it. Four cycles is two hours at the cooldown above. 0 never
+  # escalates on its own, and the loop stands until she does or the line mends.
+  brake_escalation_cycles: 4
 
 # What the operator approves, and what runs without asking.
 #
