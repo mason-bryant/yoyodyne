@@ -1,11 +1,25 @@
 <!--
 Landed by yoyodyne-ifd.117.3, tranche 3 of the configuration.md split, with
-docs/configuration.md left intact. The link below into ../configuration.md
-resolves today and points at a section no tranche has a home for:
+docs/configuration.md left intact. The links below into ../configuration.md
+resolve today, and each points at a section this tranche did not move:
 
   #recurring-tasks                    -> no row in docs/docs-map.md; it stays
                                          in configuration.md until the map
                                          gives it a home
+  #a-developer-slot-that-prefers-a-label
+                                      -> this guide's own section, linked back
+                                         deliberately (117.4): the replay test
+                                         const configurationGuide in
+                                         internal/orchestrator/scheduleslots_test.go
+                                         reads the developer-slot yaml out of
+                                         configuration.md, which still carries
+                                         the section, so the sentence under
+                                         that heading names that copy rather
+                                         than this one. The tranche that
+                                         reduces configuration.md to an index
+                                         takes the block with it and must
+                                         repoint the test at this file, or the
+                                         test fails on a heading that is gone.
 
 117.3 retargeted setup.md's #what-init-proposes-for-checks to this guide when
 it landed.
@@ -24,7 +38,7 @@ never seen. Running a work item against the workflow definition, which follows
 Scheduling ready work in configuration.md, has no row and is nobody's child,
 so it stays there.
 
-Size: 653 lines against the map's 343-line budget; the sections themselves
+Size: 671 lines against the map's 343-line budget; the sections themselves
 grew after the map's counts were taken.
 -->
 # Configuring checks, scheduling, and what a run may spend
@@ -414,10 +428,14 @@ Three things follow from a preference, in the order a pull applies them:
   slot with no preference, and its recorded reason says it fell back. The next
   reliability item admitted is pulled the next time slot 1 is free.
 
-A replay test in `internal/orchestrator` reads the block above out of this
-document, loads it as a configuration, and drives the scheduler over it, so the
-example is held to doing what these three points say rather than described as
-doing it.
+A replay test in `internal/orchestrator` reads that block, loads it as a
+configuration, and drives the scheduler over it, so the example is held to doing
+what these three points say rather than described as doing it. The copy it reads
+is the one in
+[`docs/configuration.md`](../configuration.md#a-developer-slot-that-prefers-a-label)
+and not the one above, because the split has not reduced that document to an
+index yet and both still carry the section; the two blocks are identical, and
+the tranche that makes it an index points the test here.
 
 Which slot a run is in is not written down; it is read off what is in flight
 against what the slots prefer, the same way every time, by the scheduler and by
