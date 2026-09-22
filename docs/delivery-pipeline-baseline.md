@@ -182,9 +182,9 @@ harness.
 | Phase | What it does | What it writes |
 | --- | --- | --- |
 | `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first | `provider_session_id`, `provider_model`, `provider_resolved_model`, `changes`, `last_sequence` |
-| `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes |
+| `checking` | The protected-path gate first, then every configured check in order | `path_refusal` or `check_failure` while one is outstanding, and clears the other two when a gate passes; `checks_passed` when every check passes, bound to the content of the change as the worktree holds it, the attempt, and the harness commit where the run has made one |
 | `reviewing` | One independent review invocation, its own session, no tools, shown the branch's whole diff against the run's recorded base | `review_session_id`, `review_model`, `review_resolved_model`, `review_base_commit`, `review_head_commit`, `review_decision`, `review_approves`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
-| `integrating` | Under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
+| `integrating` | Reads the gate off the record first — `checks_passed` for exactly this attempt and commit, and for the content the worktree holds now, no `check_failure` or `path_refusal` standing, an approving verdict — and refuses without it, before the lease is taken; then, under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
 | `completing` | Record the outcome on the item, settle it — closed when the change discharges the item, back in the backlog parked or waiting on a named impediment when it does not — price it | the tracker's record and settlement |
 | `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
 | `complete` | Nothing outstanding | `completed_at` |
@@ -594,6 +594,17 @@ them.
 
 - The independence check that refuses to integrate on a reused or missing
   provider session.
+- **The integrate door refusing a change the record does not show passed its
+  gate.** Every recorded scenario that reaches the promotion earned it — the
+  repair loop re-earns the whole gate before every promotion — so no trace
+  holds `candidate.integrate` reading `checks_passed` off the record and
+  refusing: a standing `check_failure` or `path_refusal`, no passing checks at
+  all, passing checks for another attempt, another commit, or other content
+  than the worktree holds, or no approving verdict. Each refusal, and that it
+  leaves the run in `reviewing` with no lease taken and no phase written, is
+  asserted through the registered door in `internal/orchestrator/actions_test.go`
+  (`TestPerformingIntegrateRefusesAChangeTheRecordDoesNotShowPassedItsGate`)
+  and held by no trace here.
 - A replay that conflicts, which blocks with both sides intact.
 - A reviewer's reply that cannot be read as a verdict, which is asked for once
   more and fails the run on the second.

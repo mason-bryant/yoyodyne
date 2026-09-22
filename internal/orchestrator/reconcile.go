@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -217,6 +218,13 @@ type Reconciliation struct {
 	// it is idempotent and owned by no run, so a held one is a fact to read
 	// rather than a debt to carry.
 	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
+	// PullRequest and FailingChecks are what the forge said about a merge it is
+	// still holding: the request's number, and the checks it reports failing on
+	// it where that is why the merge is held. Both are empty on every result but
+	// a queued one, and the checks are empty on a queued merge the forge is
+	// simply about to perform.
+	PullRequest   int      `json:"pull_request,omitempty"`
+	FailingChecks []string `json:"failing_checks,omitempty"`
 }
 
 // Artifacts is what this sweep says survives of the run's change, assembled
@@ -539,14 +547,12 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("ask the forge about the queued merge for run %s: %w", state.RunID, err)
 	}
 	if !observed.Merged && observed.AutoMerge {
-		result := reconciliationOf(state, ActionQueued)
-		result.Detail = fmt.Sprintf("the forge still has the merge of pull request %d into %s queued",
-			published.Number, state.Integration.TargetBranch)
-		return result, nil
+		return r.reportQueuedMerge(state, published, observed)
 	}
 	published.State = observed.State
 	published.Merged = observed.Merged
 	published.MergeQueued = false
+	published.FailingChecks = nil
 	state.PullRequest = &published
 
 	if !observed.Merged {
@@ -624,6 +630,99 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 		}
 	}
 	return result, err
+}
+
+// reportQueuedMerge leaves a run whose merge the forge still holds outstanding,
+// and says why it is still held where the forge says so.
+//
+// A queued merge the forge is about to perform and one it is holding on a red
+// check are the same observation — open, unmerged, merge armed — unless the
+// checks are read, and until yoyodyne-ifd.362 they were not: every sweep for
+// six days answered "queued" over eight requests a required check was failing on,
+// which is the answer it gives a request that merges a minute later. So the
+// failing checks the forge names are written onto the run's record, and cleared
+// from it the sweep they stop failing. The write is what makes it reach anybody:
+// a sink comparing two readings of the record finds the checks appear, and says
+// so once, the way it says a drop. A record already saying what the forge says
+// is left alone, so a long hold writes once rather than once a sweep.
+func (r Reconciler) reportQueuedMerge(state runstate.State, published runstate.PullRequest, observed publish.PullRequest) (Reconciliation, error) {
+	result := reconciliationOf(state, ActionQueued)
+	result.PullRequest = published.Number
+	result.Detail = fmt.Sprintf("the forge still has the merge of pull request %d into %s queued",
+		published.Number, state.Integration.TargetBranch)
+	var held []string
+	if observed.HeldByChecks() {
+		held = slices.Clone(observed.FailingChecks)
+	}
+	if !slices.Equal(published.FailingChecks, held) {
+		published.FailingChecks = held
+		state.PullRequest = &published
+		state.UpdatedAt = r.clock().Now()
+		if err := r.Store.Save(state); err != nil {
+			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record what the forge says about the checks on pull request %d of run %s: %w",
+				published.Number, state.RunID, err)
+		}
+	}
+	if len(held) > 0 {
+		result.FailingChecks = held
+		result.Detail = fmt.Sprintf("the forge is holding the queued merge of pull request %d into %s: %s failed on it, and the forge merges nothing past a failing required check; the fix lands on %s, and the forge performs the merge once the check passes there",
+			published.Number, state.Integration.TargetBranch, describeChecks(held), state.Integration.TargetBranch)
+	}
+	return result, nil
+}
+
+// describeChecks names one or several checks in a sentence.
+func describeChecks(checks []string) string {
+	if len(checks) == 1 {
+		return "its check " + strconv.Quote(checks[0])
+	}
+	quoted := make([]string, 0, len(checks))
+	for _, check := range checks {
+		quoted = append(quoted, strconv.Quote(check))
+	}
+	return "its checks " + strings.Join(quoted, ", ")
+}
+
+// CheckHold is one check the forge reports failing across the queued merges a
+// sweep found, with every merge it is holding. It is the sweep's answer to
+// "is the forge refusing everything, and on what": one failing check on one
+// request is that request's problem, and the same check failing on every
+// request in the queue is the forge's — nothing will merge until somebody fixes
+// it on the base branch, and no run's own record says so.
+type CheckHold struct {
+	Check        string   `json:"check"`
+	PullRequests []int    `json:"pull_requests"`
+	WorkItems    []string `json:"work_items"`
+}
+
+// HeldMerges derives, from what one sweep found, the checks the forge is holding
+// queued merges on, each with the merges it holds. It reads the sweep's own
+// results rather than the forge again, so what it says is exactly what the
+// results above say, grouped the other way round. Every surface that reports a
+// sweep is meant to read it from here rather than derive its own.
+func HeldMerges(results []Reconciliation) []CheckHold {
+	byCheck := map[string]*CheckHold{}
+	var order []string
+	for _, result := range results {
+		if result.Action != ActionQueued {
+			continue
+		}
+		for _, check := range result.FailingChecks {
+			hold, seen := byCheck[check]
+			if !seen {
+				hold = &CheckHold{Check: check}
+				byCheck[check] = hold
+				order = append(order, check)
+			}
+			hold.PullRequests = append(hold.PullRequests, result.PullRequest)
+			hold.WorkItems = append(hold.WorkItems, result.WorkItemID)
+		}
+	}
+	holds := make([]CheckHold, 0, len(order))
+	for _, check := range order {
+		holds = append(holds, *byCheck[check])
+	}
+	return holds
 }
 
 // closeSettledMerge settles the item of a run whose queued merge the forge has
