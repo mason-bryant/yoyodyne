@@ -2253,9 +2253,16 @@ dropped request.
    developer runs, conversations with a turn in flight, admitted items nothing
    will pull (out of how many are admitted, and how many await a decision or
    the carrying out of one), and what waits on a person, which says `nothing`
-   in words when it is nothing. Two more tiles carry what landed today and in
-   the last seven days, and what it cost, the latter prefixed `≥` or `at least`
-   where a record that should be in it could not be read.
+   in words when it is nothing. That last tile counts per mover, in the read
+   model's own vocabulary for who each entry is waiting on: its figure is what
+   waits on the operator, and beside it, out of the line's whole count — the
+   figure the terminal prints — what waits on the product manager, the
+   architect, the development manager, and the harness, in the model's order
+   and each named only where it is not zero. The tile asks for attention when
+   something waits on the operator, not when sixty things wait on a role. Two
+   more tiles carry what landed today and in the last seven days, and what it
+   cost, the latter prefixed `≥` or `at least` where a record that should be
+   in it could not be read.
 2. **Running now** — a card for each developer run and each conversation with a
    turn in flight: the work item's title and id, the phase (or `approved,
    resuming integration` where that is what the run is doing), how long it has
@@ -2274,7 +2281,8 @@ dropped request.
    `(most)`; how many are startable and next to be pulled — or, while a stall
    holds every pullable item, that the harness is choosing nothing and why;
    how many are running, by stage; and how many landed today and this week.
-   Under it, in words, how many things wait on a person. Every stage's label
+   Under it, in words, how many things wait on a person, and then how many of
+   them wait on each mover, the operator's first. Every stage's label
    and every pile's label is a button that opens [the list of the items in it](#opening-a-work-item).
 4. **Throughput and cost** — two columns, today and the last seven days, each
    labeled with the local days it covers: how many runs landed their work on

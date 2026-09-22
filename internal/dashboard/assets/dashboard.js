@@ -234,6 +234,53 @@
     { list: "needs_human", problem: "needs_human_problem", noun: "thing", suffix: " waiting on a person", label: "Needs a human" }
   ];
 
+  // movers is the read model's own vocabulary for who each thing waiting on a
+  // person is waiting on, in the model's order and the model's words: the
+  // operator first, because the page is read by the operator and what is his
+  // is what the figure has to say, then the roles, then the movers that are
+  // not people. Each entry arrives carrying its mover; nothing here reads it
+  // off the sentence beside it. A test holds this list to the model's, token
+  // and wording alike. On 2026-09-20 the tile said sixty-four things needed a
+  // human, and three of them were the human's.
+  var movers = [
+    { mover: "operator", label: "the operator's" },
+    { mover: "product-manager", label: "the product manager's" },
+    { mover: "architect", label: "the architect's" },
+    { mover: "development-manager", label: "the development manager's" },
+    { mover: "developer", label: "the developer's" },
+    { mover: "reviewer", label: "the reviewer's" },
+    { mover: "harness", label: "the harness's" },
+    { mover: "forge", label: "the forge's" },
+    { mover: "nobody", label: "nobody's" },
+    { mover: "unnamed-role", label: "the role it names" }
+  ];
+
+  // byMover counts the entries waiting on each mover, in the vocabulary's
+  // order, with the operator's count always present — a zero there is the
+  // fact the operator most wants — and every other mover's only where it is
+  // not zero. The model refuses an entry carrying a mover outside its
+  // vocabulary, so every entry lands under one of the names above.
+  function byMover(entries) {
+    var counted = {};
+    entries.forEach(function (entry) {
+      counted[entry.mover] = (counted[entry.mover] || 0) + 1;
+    });
+    var counts = [];
+    movers.forEach(function (named) {
+      var number = counted[named.mover] || 0;
+      if (number > 0 || named.mover === "operator") {
+        counts.push({ mover: named.mover, label: named.label, number: number });
+      }
+    });
+    return counts;
+  }
+
+  // moverCounts says the counts as a clause: "the operator's: 3, the
+  // architect's: 44, the harness's: 1".
+  function moverCounts(counts) {
+    return counts.map(function (each) { return each.label + ": " + each.number; }).join(", ");
+  }
+
   function renderHeader() {
     var standing = model.standing;
     if (standing) {
@@ -326,16 +373,33 @@
           detail += "; awaiting a decision: " + standing.awaiting_decision + ", awaiting carry-out: " + standing.awaiting_carry_out;
         }
       }
-      if (line.list === "needs_human" && items === 0) {
-        tiles.appendChild(tile(line.label, "nothing", "waiting on a person", null, "tile-quiet"));
+      if (line.list === "needs_human") {
+        tiles.appendChild(needsHumanTile(line.label, standing.needs_human));
         return;
       }
-      tiles.appendChild(tile(line.label, String(items), plural(items, line.noun) + line.suffix, detail, items > 0 && line.list === "needs_human" ? "tile-attention" : null));
+      tiles.appendChild(tile(line.label, String(items), plural(items, line.noun) + line.suffix, detail));
     });
     tiles.appendChild(landedTile());
     tiles.appendChild(costTile());
     listProblems("band-problems", unreadable.map(function (line) { return standing[line.problem]; }));
     section("band", "ready");
+  }
+
+  // needsHumanTile is the attention line counted per mover. The figure is what
+  // waits on the operator, because the tile is read by the operator and a
+  // figure that counted the roles' waits in with his said the wrong thing on
+  // the page's most important line; the detail is the line's whole count, which
+  // is the figure the terminal prints, and then each role's and the harness's
+  // beside it. It asks for attention when something waits on the operator.
+  function needsHumanTile(label, entries) {
+    if (entries.length === 0) {
+      return tile(label, "nothing", "waiting on a person", null, "tile-quiet");
+    }
+    var counts = byMover(entries);
+    var operator = counts[0];
+    var others = counts.slice(1);
+    var detail = others.length ? "of " + count(entries.length, "thing") + " waiting in all; " + moverCounts(others) : null;
+    return tile(label, String(operator.number), plural(operator.number, "thing") + " waiting on the operator", detail, operator.number > 0 ? "tile-attention" : null);
   }
 
   function landedTile() {
@@ -553,7 +617,16 @@
 
     listProblems("pipeline-problems", [standing.not_startable_problem, standing.running_problem, throughput ? throughput.runs_problem : ""]);
     var note = document.getElementById("pipeline-note");
-    var attention = standing.needs_human_problem ? "what waits on a person could not be read: " + standing.needs_human_problem : (standing.needs_human.length === 0 ? "nothing" : count(standing.needs_human.length, "thing")) + " waiting on a person";
+    // The line under the pipeline is the terminal's Needs-a-human head, with
+    // the count said per mover after it, the operator's first.
+    var attention;
+    if (standing.needs_human_problem) {
+      attention = "what waits on a person could not be read: " + standing.needs_human_problem;
+    } else if (standing.needs_human.length === 0) {
+      attention = "nothing waiting on a person";
+    } else {
+      attention = count(standing.needs_human.length, "thing") + " waiting on a person — " + moverCounts(byMover(standing.needs_human));
+    }
     note.textContent = "Needs a human: " + attention + ".";
     section("pipeline", "ready");
   }
