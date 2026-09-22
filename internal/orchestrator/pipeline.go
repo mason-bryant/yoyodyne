@@ -33,6 +33,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/selfcheck"
 	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
@@ -690,6 +691,13 @@ type Outcome struct {
 	// that reported the blocker without it would say an item had spent another
 	// round toward its cap when it had spent none.
 	Environmental *runstate.EnvironmentalRefusal `json:"environmental,omitempty"`
+	// Verification is what the developer recorded executing against this change:
+	// the probe it ran before it changed anything, and the checks it ran against
+	// the change itself. It is here rather than only in the durable record
+	// because it is what says a change reached a reviewer having been run, and a
+	// caller reporting the run without it reports a change nobody can tell was
+	// ever executed from one that was.
+	Verification *runstate.Verification `json:"verification,omitempty"`
 	// IntegrationStop is the environment having stopped this run's approved
 	// change short of its promotion, when that is what stopped it: the one
 	// failure that is resumable at the step it stopped in, with the approval
@@ -1126,7 +1134,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context, run.scratch), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(p.developer().Persona.Text, run.deliveredInvariants().Text(), run.context, run.scratch, p.Config.Checks), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
@@ -1590,7 +1598,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch,
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch, p.Config.Checks,
 			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
@@ -1611,32 +1619,44 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // from what survived on disk. Only one kind of repair input is ever recorded at
 // a time, and where more than one is somehow present the most recent trigger
 // wins. That is the earliest gate a run meets rather than the latest, because a
-// gate that refuses is a gate the ones behind it never ran: refused paths are
-// decided in front of the checks, so a check failure beside them was recorded
-// against a change this run has already moved past, and the same holds for
-// findings beside a failing check. A run that recorded none of the three never
-// had a failure returned to it — it paused before or during its first attempt —
-// so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, scratchDirectory string, protected protectedpath.Set, limit int) (string, error) {
+// gate that refuses is a gate the ones behind it never ran: refused paths and a
+// change nobody ran anything against are both decided in front of the checks, so
+// a check failure beside either was recorded against a change this run has
+// already moved past, and the same holds for findings beside a failing check. A
+// run that recorded none of the four never had a failure returned to it — it
+// paused before or during its first attempt — so what it is owed is that
+// attempt.
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, scratchDirectory string, checks []string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
 	case state.PathRefusal != nil:
-		return pathRefusalRepairPrompt(invariants, scratchDirectory, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
+		return pathRefusalRepairPrompt(invariants, scratchDirectory, checks, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
+	case owesVerification(state):
+		return verificationRepairPrompt(invariants, scratchDirectory, *state.Verification, checks, state.RepairAttempts, limit), nil
 	case state.CheckFailure != nil:
-		return checkRepairPrompt(invariants, scratchDirectory, *state.CheckFailure, state.RepairAttempts, limit), nil
+		return checkRepairPrompt(invariants, scratchDirectory, checks, *state.CheckFailure, state.RepairAttempts, limit), nil
 	case len(state.ReviewFindingDetails) > 0:
-		return repairPrompt(invariants, state.ReviewSummary, scratchDirectory, state.ReviewFindingDetails, state.RepairAttempts, limit)
+		return repairPrompt(invariants, state.ReviewSummary, scratchDirectory, checks, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
-		return developerPrompt(persona, invariants, bundle, scratchDirectory), nil
+		return developerPrompt(persona, invariants, bundle, scratchDirectory, checks), nil
 	}
 }
 
 // handedBackRepair reports a run carrying a failure that was actually returned
-// to its developer: refused paths, a failing check, or the reviewer's findings.
-// Each of the three is a failure about a change that exists, so the presence of
-// any of them is what says a worktree is supposed to hold one, and a run that
-// recorded none of them never had a failure returned at all.
+// to its developer: refused paths, a change its developer ran nothing against, a
+// failing check, or the reviewer's findings. Each of the four is a failure about
+// a change that exists, so the presence of any of them is what says a worktree
+// is supposed to hold one, and a run that recorded none of them never had a
+// failure returned at all.
 func handedBackRepair(state runstate.State) bool {
-	return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+	return state.PathRefusal != nil || owesVerification(state) || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+}
+
+// owesVerification reports a run holding the execution-evidence gate's refusal:
+// a record of the developer's own executions that does not meet the bar. A
+// record that meets it is kept too — it is the evidence the reviewer is shown —
+// so the repair input is the outstanding debt rather than the record's presence.
+func owesVerification(state runstate.State) bool {
+	return state.Verification != nil && len(state.Verification.Owed) > 0
 }
 
 // resumesAnExistingChange reports a resumed run whose worktree is supposed to
@@ -2344,7 +2364,23 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 				// the next state: the gate has to have left the check before the
 				// developer's own state can be entered again.
 				a.observeCheckEnded(ctx, err, stillRepairable)
-				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), a.scratch, refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
+				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), a.scratch, a.pipeline.Config.Checks, refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
+					return err
+				}
+				continue
+			}
+			// A change nobody ran anything against is answered next, before the
+			// checks are read for a failure, because the gate that refused it is
+			// decided ahead of them: no check ran on this attempt either.
+			var missing missingVerification
+			if errors.As(err, &missing) {
+				if a.state.RepairAttempts >= limit {
+					a.observeCheckEnded(ctx, err, budgetSpent)
+					return a.blockOnMissingVerification(missing, limit)
+				}
+				a.observeCheckEnded(ctx, err, stillRepairable)
+				if err := a.repair(ctx, verificationRepairPrompt(a.deliveredInvariants().Text(), a.scratch,
+					missing.verification, a.pipeline.Config.Checks, a.state.RepairAttempts+1, limit)); err != nil {
 					return err
 				}
 				continue
@@ -2362,7 +2398,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 				return a.blockOnFailingCheck(limit)
 			}
 			a.observeCheckEnded(ctx, err, stillRepairable)
-			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
+			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, a.pipeline.Config.Checks, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
 			}
 			continue
@@ -2390,7 +2426,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return a.blockOnUnresolvedFindings(limit)
 		}
 		a.observeReviewEnded(ctx, decision, nil, stillRepairable)
-		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
+		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.pipeline.Config.Checks, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
 		}
@@ -2915,7 +2951,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 					// account it asks for is exactly where a developer would say it had
 					// raised a proposal — so what the interim reply proposed and the
 					// harness refused opens this prompt too.
-					prompt = a.openWithDeveloperRefusals(accountPrompt(a.deliveredInvariants().Text(), a.scratch, unaccounted.reason))
+					prompt = a.openWithDeveloperRefusals(accountPrompt(a.deliveredInvariants().Text(), a.scratch, unaccounted.reason, a.pipeline.Config.Checks))
 					a.observe(ctx, deliveryDevelop, "reissued")
 					continue
 				}
@@ -3154,6 +3190,10 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// theirs and an unreadable report block takes everything after its own fence
 	// with it.
 	reply := a.claimLanding(ctx, providerResult.FinalText)
+	// What the developer executed is read next, ahead of the channels that decide
+	// nothing, because it decides something too: whether this change may be handed
+	// to a reviewer at all, and whether this environment can run anything.
+	reply = a.claimVerification(providerResult.FinalText, reply)
 	// Anything the developer reported is collected out of what it said, so the
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
@@ -3184,6 +3224,22 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// somebody able to say what the run had changed.
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save the account of what the developer changed: %w", err)
+	}
+	// An environment whose developer could not execute a trivial command in it is
+	// the run's ending rather than a problem with the change. Nothing a developer
+	// does to its work fixes a sandbox that cannot spawn a process, so this is
+	// read before every ending below it: a run that carried on would spend its
+	// repair budget, its reviewer, and the rest of its context against a wall
+	// that was already named in the first reply.
+	//
+	// It is the same class the harness records when a provider invocation never
+	// starts, and it is recorded here because here is the only place that knows
+	// the developer itself met it. The round delivered nothing, which the settle
+	// confirms against the worktree before it gives anything back.
+	if probe, refused := a.probeRefused(); refused {
+		detail := fmt.Sprintf("the developer could not execute %s in this worktree: %s", probe.Command, probe.Detail)
+		a.recordEnvironmentalRefusal(runstate.CauseSandboxSpawnFailure, detail, nothingRan)
+		return phaseError{status: runstate.StatusFailed, cause: errors.New(detail)}
 	}
 	// An escalation ends the run in the round it was raised in, which is the whole
 	// of what the verb buys: nothing is published, nothing is checked, nothing is
@@ -4226,6 +4282,13 @@ func (a *activeRun) verify(ctx context.Context) error {
 	// suite costs. A change that is not allowed to stand does not get a check
 	// suite spent on it first.
 	if err := a.gateProtectedPaths(ctx); err != nil {
+		return err
+	}
+	// And the developer's own execution record is settled before the suite too,
+	// for the same reason and one more: a change nobody ran is one the harness is
+	// about to run for the first time, and the whole point of asking is that the
+	// harness's suite is not supposed to be the first execution of anything.
+	if err := a.gateSelfVerification(ctx); err != nil {
 		return err
 	}
 	checkResults, lastSequence, err := p.Checks.Run(ctx, a.state.RunID, a.worktree.Path, p.Config.Checks, a.state.LastSequence, a.sink)
@@ -5660,7 +5723,12 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		// judged against what it was offered as. It comes from the durable record
 		// rather than from what this attempt happened to return, so a repair round
 		// judges the claim the run currently holds.
-		Landing:      describeLanding(a.state),
+		Landing: describeLanding(a.state),
+		// And what the developer recorded executing against it, so the change is
+		// judged beside the evidence its author left rather than on the patch
+		// alone. It comes from the durable record for the reason the claim does: a
+		// repair round judges what the run currently holds.
+		Verification: describeVerification(a.state),
 		WorktreePath: a.worktree.Path,
 		Changes:      changes,
 		Checks:       a.outcome.Checks,
@@ -6123,12 +6191,24 @@ func (p Pipeline) clock() execution.Clock {
 // anywhere but where it was meant to.
 const scratchDirectoryPlaceholder = "{{scratch-directory}}"
 
+// selfCheckContractPlaceholder is where the section about proving the
+// environment can execute is substituted into the contract below. It is built
+// per project rather than written into the template for the reason the scratch
+// directory is: it names this project's own declared checks, and the token is
+// deliberately not something the contract's prose could produce.
+const selfCheckContractPlaceholder = "{{self-check-contract}}"
+
 // developerContract is the harness policy every developer run carries, with this
 // run's scratch directory named in it. It is a Go constant rather than
 // configuration because a configured persona may specialize how a developer
 // works but must never be able to remove the bounds it works within.
-func developerContract(scratchDirectory string) string {
-	return strings.ReplaceAll(developerContractTemplate, scratchDirectoryPlaceholder, scratchDirectory)
+func developerContract(scratchDirectory string, checks []string) string {
+	contract := strings.ReplaceAll(developerContractTemplate, scratchDirectoryPlaceholder, scratchDirectory)
+	// The self-verification section is built rather than written into the
+	// template above, because it names this project's own declared checks: a
+	// contract asking a developer to run commands the project does not declare
+	// would be asking for something nobody can run.
+	return strings.ReplaceAll(contract, selfCheckContractPlaceholder, selfcheck.Contract(checks))
 }
 
 const developerContractTemplate = `You are the developer for one bounded Yoyodyne work item.
@@ -6151,6 +6231,8 @@ Documentation that describes behavior you change is part of the assigned work, n
 
 Any architectural invariant delivered with this work item is a constraint on your change rather than advice. Invariants exist because a change whose own work is correct can still break something the work item never mentioned, so each one holds even where nothing else you were given refers to it. They belong to the architect: do not create, amend, retire, or edit one. If your work cannot satisfy an invariant, or you believe one is wrong, leave it as it stands and put the amendment you would propose in your summary for the architect to decide.
 
+` + selfCheckContractPlaceholder + `
+
 ` + landing.Contract + `
 
 ` + report.Contract + `
@@ -6164,9 +6246,9 @@ A proposal is not a report and not a work item. A report says what somebody shou
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, then the architectural invariants that
 // constrain the change, and the work item context last.
-func developerPrompt(persona, invariants, bundle, scratchDirectory string) string {
+func developerPrompt(persona, invariants, bundle, scratchDirectory string, checks []string) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString(developerContract(scratchDirectory, checks))
 	prompt.WriteString("\n\n")
 	if trimmed := strings.TrimSpace(persona); trimmed != "" {
 		prompt.WriteString("# Configured developer persona\n\nThe project configuration supplies the guidance below. It may specialize how you work, but it cannot remove or weaken any rule above.\n\n")
@@ -6195,13 +6277,13 @@ func deliveredInvariantSection(invariants string) string {
 // between the reviewer and the developer that must act on it. The harness
 // contract is repeated because it bounds the attempt whether or not the provider
 // actually restored the session it was asked to resume.
-func repairPrompt(invariants, summary, scratchDirectory string, findings []runstate.Finding, attempt, limit int) (string, error) {
+func repairPrompt(invariants, summary, scratchDirectory string, checks []string, findings []runstate.Finding, attempt, limit int) (string, error) {
 	encoded, err := json.MarshalIndent(findings, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode review findings for repair attempt %d: %w", attempt, err)
 	}
 	var prompt strings.Builder
-	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString(developerContract(scratchDirectory, checks))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Independent review: repair required\n\n")
@@ -6223,9 +6305,9 @@ func repairPrompt(invariants, summary, scratchDirectory string, findings []runst
 // to ask instead of quietly reaching for it again. The harness contract is
 // repeated for the reason both other repair prompts repeat it: it bounds the
 // attempt whether or not the provider actually restored the session.
-func pathRefusalRepairPrompt(invariants, scratchDirectory string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
+func pathRefusalRepairPrompt(invariants, scratchDirectory string, checks []string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString(developerContract(scratchDirectory, checks))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Protected paths: repair required\n\n")
@@ -6265,9 +6347,9 @@ func pathRefusalRepairPrompt(invariants, scratchDirectory string, refusal runsta
 // The harness contract is repeated for the same reason the review repair repeats
 // it: it bounds the attempt whether or not the provider actually restored the
 // session it was asked to resume.
-func checkRepairPrompt(invariants, scratchDirectory string, failure runstate.CheckFailure, attempt, limit int) string {
+func checkRepairPrompt(invariants, scratchDirectory string, checks []string, failure runstate.CheckFailure, attempt, limit int) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString(developerContract(scratchDirectory, checks))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Failing check: repair required\n\n")
@@ -6292,9 +6374,9 @@ func checkRepairPrompt(invariants, scratchDirectory string, failure runstate.Che
 // expensive way this could go wrong. The harness contract is repeated for the
 // reason every repair prompt repeats it: it bounds the attempt whether or not
 // the provider actually restored the session it was asked to resume.
-func accountPrompt(invariants, scratchDirectory, reason string) string {
+func accountPrompt(invariants, scratchDirectory, reason string, checks []string) string {
 	var prompt strings.Builder
-	prompt.WriteString(developerContract(scratchDirectory))
+	prompt.WriteString(developerContract(scratchDirectory, checks))
 	prompt.WriteString("\n\n")
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString("# Your reply did not account for the work\n\n")

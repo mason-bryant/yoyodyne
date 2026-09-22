@@ -102,7 +102,7 @@ func deliverySteps() []deliveryStep {
 				// different parameters — and parameters are the runtime's, so this door
 				// opens onto the first attempt and the pipeline still makes the rest.
 				Perform: func(ctx context.Context, a *activeRun) error {
-					return a.develop(ctx, developerPrompt(a.pipeline.developer().Persona.Text, a.deliveredInvariants().Text(), a.context, a.scratch), "")
+					return a.develop(ctx, developerPrompt(a.pipeline.developer().Persona.Text, a.deliveredInvariants().Text(), a.context, a.scratch, a.pipeline.Config.Checks), "")
 				},
 			},
 			phases: []runstate.Phase{runstate.PhaseDeveloping},
@@ -127,7 +127,7 @@ func deliverySteps() []deliveryStep {
 		{
 			action: action.Action[*activeRun]{
 				Name:    "candidate.check",
-				Summary: "refuse a change that touched paths this work item does not grant, then run the project's configured checks over it",
+				Summary: "refuse a change that touched paths this work item does not grant or that its developer ran nothing against, then run the project's configured checks over it",
 				Wraps:   "(*activeRun).verify",
 				Capabilities: []capability.Capability{
 					capability.RepositoryRead,

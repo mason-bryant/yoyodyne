@@ -75,8 +75,10 @@ states:
     on:
       passed: review
       # The two repair inputs this state decides, each with the outcome it has
-      # when the shared repair budget is gone. The refusal is decided in front of
-      # the checks, so a change refused for what it touched never ran them.
+      # when the shared repair budget is gone. Both refusals -- the paths a change
+      # touched, and the executions its developer recorded against it -- are
+      # decided in front of the checks, so a change either one refuses never ran
+      # them.
       failed: develop
       failed-unrepaired: blocked
       refused: develop

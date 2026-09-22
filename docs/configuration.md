@@ -1878,6 +1878,37 @@ Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
 
+### What a developer has to have run
+
+The checks above are what the harness runs. What a developer has to have run
+itself is decided from them, and it is asked for rather than assumed: every
+developer's reply records the commands it executed, and the harness refuses a
+change that records none before it spends a suite on it.
+
+Two things are asked, and only the first is universal.
+
+- **The probe.** One execution of a declared check, or of the build step
+  underneath it, made in the worktree before anything is changed. Every run is
+  asked for it whatever the work turns out to be. A probe the developer records
+  as having failed ends the run naming what refused, because nothing a developer
+  does to its change fixes an environment that cannot start a process.
+- **The check run.** The developer's own record of running a check against the
+  change it is handing over. This is asked only of a change the declared checks
+  would actually read: a change to content nothing here checks submits on the
+  probe alone. Demanding a suite run for a change the suite never reads teaches
+  padding rather than verification, which is why the line is drawn rather than
+  the bar raised.
+
+Which files the checks read is a mechanical question rather than a developer's
+judgement, and the answer comes from the checks themselves. This repository
+keeps a ledger of what it is made of — every content class, and for each one
+either the declared checks that exercise it or why nothing does — and the bar is
+read off that, so a class that gains or loses coverage moves what is asked of a
+developer without anything else being edited. The ledger is consulted only for a
+project that declares the checks it was written against; a project with checks
+of its own is asked for the record on every change, which is the stricter of the
+two answers and the one that costs nothing to be wrong about.
+
 ### What a check leaves running
 
 Every command the harness runs is the leader of a process group of its own, and

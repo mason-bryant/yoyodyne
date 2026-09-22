@@ -167,7 +167,7 @@ func (c *scriptedCodexCLI) Run(_ context.Context, command execution.Command, obs
 			return execution.ProcessResult{}, err
 		}
 	}
-	for _, line := range codexStream("implemented the work item") {
+	for _, line := range codexStream(withVerification("implemented the work item")) {
 		if observer != nil {
 			observer(execution.Output{Stream: execution.StreamStdout, Text: line})
 		}
