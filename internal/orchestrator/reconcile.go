@@ -100,11 +100,14 @@ type ReconcileStore interface {
 // show, and then either finishes the run's own remaining step or records a
 // durable blocker naming what a person has to decide.
 //
-// It has no backend and never invokes a provider. A lost process handle says
-// nothing about what a developer did, so recovering from one is a question
-// about recorded evidence and observable artifacts — never a reason to start a
-// second developer for an item. A run the pipeline can still continue on its
-// own is therefore left exactly as it is rather than resumed from here.
+// It has no backend, and settling never invokes a provider. A lost process
+// handle says nothing about what a developer did, so recovering from one is a
+// question about recorded evidence and observable artifacts — never a reason to
+// start a second developer for an item. A run the pipeline can still continue
+// on its own is therefore left exactly as it is by the settle. The one
+// continuation the sweep makes itself is ContinueWaits, and it keeps that rule:
+// what it continues is the run's own attempt in the run's own session, through
+// the Continue the sweep verb wires, and never a second developer.
 type Reconciler struct {
 	Tracker   WorkTracker
 	Worktrees ReconcileWorktrees
@@ -127,6 +130,16 @@ type Reconciler struct {
 	// may sit in flight with nothing continuing it before the sweep settles it
 	// rather than reporting it resumable. Zero takes DefaultVanishedGrace.
 	VanishedGrace time.Duration
+	// Continue is how ContinueWaits continues a run that exited on its
+	// in-process usage-limit bound: the run's own pipeline re-entering the run
+	// named, in the worktree and developer session it already has, which is
+	// Pipeline.Continue. It is the one provider invocation the sweep makes, and
+	// it is optional for the reason the docket is: a reconciler wired without
+	// one settles and reports exactly as it would have and continues nothing.
+	// Only the sweep verb wires it, because whatever wires it hosts the
+	// continued run for as long as the run takes — a conversation's settle must
+	// not, and does not.
+	Continue func(ctx context.Context, workItemID, runID string) (Outcome, error)
 }
 
 // DefaultVanishedGrace is how long a run the harness stopped on time is left
@@ -306,6 +319,38 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 	if stoppedProviderIsResumable(state) && r.vanished(state) {
 		return r.settleVanished(ctx, state)
 	}
+	// A run waiting out a provider that refused it is not an interrupted run at
+	// all: it recorded a deadline and is owed the attempt it was refused.
+	// Settling it here would throw away a claimed item and a preserved worktree
+	// over a wait that has not finished yet. It is read ahead of the repair loop
+	// because a limit refuses a repair attempt as readily as a first one, and
+	// the deadline is the more specific fact about such a run: what it is owed
+	// next is the wait being served, and only then the attempt.
+	//
+	// The wait has two halves, and the reading says which the run is in. Inside
+	// the deadline it is the wait it is, whether a process is asleep on it or
+	// exited on the in-process bound and left it recorded. Past the deadline with
+	// no process holding it — which the lease this sweep holds is the evidence
+	// of — it is a wait nothing is serving, and `yoyo reconcile` continues it
+	// itself (ContinueWaits) rather than leaving it to hold a developer slot
+	// until somebody types `yoyo run`.
+	if pausedForUsageLimit(state) {
+		result := reconciliationOf(state, ActionResumable)
+		waited := runstate.DescribePause(state.PauseCause, state.UsageLimitKind)
+		deadline := state.UsageLimitResetsAt.UTC().Format(time.RFC3339)
+		switch {
+		case exitedWait(state, r.clock().Now()):
+			result.Detail = fmt.Sprintf("the run is paused for %s and its recorded deadline %s has passed with no process serving the wait; `yoyo reconcile` continues it in its own worktree and developer session, as `yoyo run %s` would",
+				waited, deadline, state.WorkItemID)
+		case pausedForProviderOutage(state):
+			result.Detail = fmt.Sprintf("the run is paused for %s and can continue once it asks again, by %s at the latest",
+				waited, deadline)
+		default:
+			result.Detail = fmt.Sprintf("the run is paused for %s and can continue once it asks again, by %s at the latest; a sweep after that deadline with no process serving the wait continues it",
+				waited, deadline)
+		}
+		return result, nil
+	}
 	// A run its own pipeline can still continue is left alone. Ending it here
 	// would discard a change that can still be finished, and finishing it here
 	// would mean starting the developer reconciliation must never start.
@@ -318,16 +363,6 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			result.Detail += fmt.Sprintf("; its provider was stopped because %s, and a sweep after %s of nothing continuing it settles it as a stopped run",
 				describeProviderStop(state.ProviderStop), r.vanishedGrace())
 		}
-		return result, nil
-	}
-	// A run waiting out a provider that refused it is not an interrupted run at
-	// all: it recorded a deadline and is owed the attempt it was refused.
-	// Settling it here would throw away a claimed item and a preserved worktree
-	// over a wait that has not finished yet.
-	if pausedForUsageLimit(state) {
-		result := reconciliationOf(state, ActionResumable)
-		result.Detail = fmt.Sprintf("the run is paused for %s and can continue once it asks again, by %s at the latest",
-			runstate.DescribePause(state.PauseCause, state.UsageLimitKind), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 		return result, nil
 	}
 	// A run held up by an unresolved user directive is not an interrupted run
