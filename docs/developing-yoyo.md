@@ -52,6 +52,42 @@ last recorded walk, kept from the README split as a readable record of what the
 walkthrough actually prints; CI is what re-runs it now, so the file is a
 snapshot rather than the evidence anything rests on.
 
+## What a checkout needs besides Go
+
+**Node**, for the dashboard. The page is drawn by its own script, which a Go
+test cannot run, so its only behavioural evidence is
+`internal/dashboard/testdata/render.js` running that script under Node against
+the fixtures and the result being held to the renders under
+`internal/dashboard/testdata/renders`. A machine without Node produces none of
+that, so `make test` **fails** there rather than skipping:
+
+```text
+--- FAIL: TestThePageRendersEverySectionInEveryState
+    node is not on the PATH, so the page's script was never run and the renders
+    under testdata/renders were never compared …
+```
+
+Install it — `brew install node` on macOS, your package manager elsewhere — and
+`yoyo doctor` says so too, under `node`, before a check has to.
+
+**An environment that deliberately has no Node declares it**, in
+`YOYODYNE_NODE_UNAVAILABLE`, whose value says which environment that is; the
+render test then skips, quoting the declaration, and the fixture-shape and route
+tests hold as they always did. Nothing in the harness sets it, and nothing here
+sets it today — the machine the checks run on has Node — so it is there for a
+container or a sandbox somebody builds without one, and setting it is that
+person saying so. Nothing else skips, because the whole point is that a machine
+that simply never installed Node stops reading as a green run — which is what
+`make test` printing the render test's own line, after the suite, is there to
+make visible either way:
+
+```text
+--- PASS: TestThePageRendersEverySectionInEveryState (3.36s)
+```
+
+Go and Git are the rest of it, and `bd` for the tracker; `make check` and
+`yoyo doctor` between them name anything missing.
+
 ## The tracker version CI pins
 
 The `adoption` job installs `bd` from a prebuilt upstream release at a pinned
@@ -352,7 +388,7 @@ Go check has ever run a line of bash.
 | A shell file a shell will not parse — every `.sh` here, the tools in `bin`, and the hooks the tracker installs | `internal/composition` | Fix the syntax. Parsing is `bash -n`, which reads a script and runs none of it, so it is safe to point at the release verb and the adoption walkthrough. It is the floor rather than the gate: shell with a suite gets executed as well. |
 | A YAML or JSON file that does not decode | `internal/composition` | Fix the file. What each one means belongs to whatever reads it — Claude Code, Codex, the tracker, the harness — but one that nothing can parse is this repository's defect whoever owns the schema, and it is not a defect a reviewer reading a diff reliably sees. |
 | A workflow that is not shaped like one — no trigger, no jobs, or a job with no runner or no steps | `internal/composition` | Fix the workflow. Decoding is not enough for these: the release workflow is triggered by a tag push, so what is wrong with it would otherwise first misbehave during a real publication. |
-| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and skips without, saying so: a machine without Node holds the fixtures' shape and the routes and not the renders. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
+| A page the dashboard's script draws from the fixtures under `internal/dashboard/testdata/fixtures` differing from the render recorded under `internal/dashboard/testdata/renders`, a section of the page that reaches none of its four states in any scenario, or a fixture that is not the read model's own shape | `internal/dashboard` (`page_test.go`) | Look at the diff, and if the change to the page was meant, rerun with `-update-renders` and commit the renders with the change. The renders are the evidence a reviewer is handed for each section in each state, so they change when the page does and not otherwise. The script is run by `node`, which this check looks for on the `PATH` and fails without, naming it: a machine without Node compares no renders at all, so passing there would say nothing about the page. The one environment that skips instead is one declaring its own absence of Node in `YOYODYNE_NODE_UNAVAILABLE`, which nothing here sets — see [what a checkout needs besides Go](#what-a-checkout-needs-besides-go). Either way the fixtures' shape and the routes are held. The fixtures are decoded refusing unknown fields, so a field the read model stops carrying fails here rather than leaving the renders showing a page nothing can produce. |
 | A file no content class recognizes, a class that recognizes nothing, or a class crediting its coverage to a check the project no longer declares | `internal/composition` | Write the class, retire it, or say what covers it now. This is the audit rather than a gate: it holds what this repository is made of against what its declared checks actually exercise, so a new kind of content cannot arrive covered by nothing and unnoticed — which is how shell got here. |
 
 Fixtures written to be malformed on purpose are not walked: anything under a

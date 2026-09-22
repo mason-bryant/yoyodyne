@@ -6,6 +6,7 @@ package doctor
 // checks are about actually live.
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/dashboard"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
 )
 
@@ -44,6 +46,28 @@ func TestThisRepositoryReportsItsOwnArtifactHomesDocumented(t *testing.T) {
 		if !strings.Contains(finding.Detail, home+"/"+artifacthome.FileName) {
 			t.Errorf("detail = %q, want %s among the homes it read", finding.Detail, home)
 		}
+	}
+}
+
+// The Node finding is asked only of a product carrying the dashboard page's
+// render script, so a script that moved or was renamed would stand the finding
+// down without a word: the one product that ships the dashboard would stop being
+// asked whether it can draw it. The path is a constant three things share, and
+// this is what holds that constant against the checkout it is about.
+func TestThisRepositoryIsAskedAboutTheNodeItsDashboardNeeds(t *testing.T) {
+	t.Parallel()
+
+	root, _ := thisRepository(t)
+	script := filepath.Join(root, filepath.FromSlash(dashboard.RenderScript))
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		t.Fatalf("%s is not a file in this checkout (%v), so nothing here is asked about node and the page's renders go uncompared with nothing saying so", dashboard.RenderScript, err)
+	}
+	// The real machine, because what is being held is the gate rather than the
+	// answer: this checkout produces a node finding whether or not the machine
+	// running the suite has Node.
+	findings := (&diagnosis{}).checkNode(root)
+	if len(findings) != 1 || findings[0].Check != "node" {
+		t.Fatalf("checkNode() = %+v, want the one node finding a product shipping the dashboard is given", findings)
 	}
 }
 
