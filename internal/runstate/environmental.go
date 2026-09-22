@@ -61,6 +61,20 @@ const (
 	// harness does not own, so the worktree a round needed could not be made from
 	// it. What the round was given is not the repository the work is against.
 	CauseDirtyPrimary EnvironmentalCause = "dirty-primary"
+	// CauseWorktreeCheckoutKilled is a run whose worktree could not be cut
+	// because the harness's own budget ended `git worktree add` while it was
+	// still writing the tree out. Nothing of the work was reached: no worktree
+	// exists, the item was claimed and given straight back, and no agent was ever
+	// invoked — so what the round delivered is the machine having been too busy
+	// for a local Git command rather than anything about the change.
+	//
+	// It killed three runs of yoyodyne-ifd.441 in three hours on 2026-09-22, one
+	// of them spending a recorded re-run on a run no developer ever saw, and each
+	// of them holding a developer slot until the claim audit gave the item back
+	// half an hour later. The budget is sized to the tree now (see
+	// gitworktree.checkoutFileBudget), so this is the class for a creation that
+	// dies anyway rather than the ordinary way one ends.
+	CauseWorktreeCheckoutKilled EnvironmentalCause = "worktree-checkout-killed"
 	// CauseSandboxSpawnFailure is a provider invocation that never ran: the
 	// sandbox the agent is confined to could not be entered, so no agent was ever
 	// asked the question the round exists to ask.
@@ -112,7 +126,7 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished:
 		return true
 	default:
 		return false
@@ -128,6 +142,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the worktree it was handed held none of the change it was to continue"
 	case CauseDirtyPrimary:
 		return "the primary checkout carried state the harness does not own"
+	case CauseWorktreeCheckoutKilled:
+		return "the checkout of the run's worktree was ended by the budget the harness gave it"
 	case CauseSandboxSpawnFailure:
 		return "the sandbox the agent runs in could not be entered"
 	case CauseStaleBinaryDispatch:

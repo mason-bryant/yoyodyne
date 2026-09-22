@@ -33,6 +33,46 @@ const (
 	// five-minute local budget, and a Git command that has hung is still ended
 	// rather than holding a run open for as long as the load lasts.
 	maxLoadFactor = 10
+	// checkoutFileBudget is what one file of a new worktree's checkout adds to
+	// the budget its `git worktree add` gets.
+	//
+	// The local figure above is for a command that reads a ref or writes a
+	// handful of small files, and an add does neither: it writes the whole tree,
+	// so a budget that does not grow with the tree bounds it by something it has
+	// nothing to do with. That is what killed three creations of yoyodyne-ifd.441
+	// in three hours on 2026-09-22, each with no Git error at all — the runner's
+	// own exit code, and a stderr holding nothing but the checkout's progress,
+	// one of them stopped at 87% of 1099 files — while the claim audit gave the
+	// item back half an hour later and the next pull started over.
+	//
+	// Fifty milliseconds a file is far above what a checkout costs on an idle
+	// machine, deliberately: the bound is here for an add that has hung, and an
+	// add merely crawling under three concurrent race suites is the case that has
+	// to survive it. The load scaling the local figure gets applies to the whole
+	// of it, so an oversubscribed machine grows this as well.
+	//
+	// The liveness bound a provider invocation gets is not the alternative, and
+	// not for want of output: `git worktree add` does report its checkout to a
+	// pipe, but it writes the whole progress stream as one carriage-return line
+	// and terminates it only at the end, so a runner that watches for the next
+	// line of output sees nothing at all until the add is over.
+	checkoutFileBudget = 50 * time.Millisecond
+	// uncountedCheckoutFiles is the tree a creation is budgeted for when the
+	// count could not be read. It is a figure rather than a refusal because the
+	// count only sizes a bound: a creation stopped for want of it would be a
+	// creation this budget cost somebody, which is a poor trade for a repository
+	// that would have checked out fine.
+	//
+	// Two thousand files is above anything this repository has held, so the
+	// ordinary tree still fits; it is not above every repository, and a very
+	// large one whose count failed can still be ended by this bound. That is the
+	// right way round — an uncounted tree that is genuinely too big is refused as
+	// the environmental death it is and charged nothing, where a budget large
+	// enough for any tree would hold a developer slot for the length of an add
+	// that has hung. It also keeps the worst case, this figure scaled by a fully
+	// oversubscribed machine, inside the thirty minutes a claim may have nothing
+	// alive behind it (readmodel.DefaultDeadClaimThreshold).
+	uncountedCheckoutFiles = 2000
 	// defaultRemote is the remote publishing pushes to when nothing names
 	// another.
 	defaultRemote = "origin"
@@ -327,6 +367,20 @@ var (
 	// round turned away by this delivered nothing because the environment was
 	// wrong, which is a different fact about the work than a change that failed.
 	ErrPrimaryNotReady = errors.New("the primary checkout is not as the harness left it")
+	// ErrCheckoutKilled reports a Git command a worktree checkout needed — the
+	// `git worktree add` itself, or the count that sizes its budget — which this
+	// harness ended while it was still running, rather than Git answering. It is
+	// a sentinel for the reason the one above is: nothing of the work was
+	// reached — no worktree exists and no agent was ever invoked — so a round
+	// turned away by it delivered nothing because the machine was too busy, which
+	// is a different fact about the work than a creation Git refused.
+	//
+	// It covers both commands rather than only the add because they are one
+	// failure: each is a local Git command of the same creation ended by a
+	// deadline under the same load, neither says anything about the change, and
+	// a class that held only one of them would charge the item a round and its
+	// re-run whenever the load happened to arrive a command earlier.
+	ErrCheckoutKilled = errors.New("a Git command the worktree checkout needed was ended by the budget the harness gave it")
 )
 
 type ChangeSummary struct {
@@ -993,6 +1047,20 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if branchResult.ExitCode != 1 {
 		return Worktree{}, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, branchResult.ExitCode, strings.TrimSpace(branchResult.Stderr))
 	}
+	// How much tree the add below has to write, which is what its budget is sized
+	// by. It is asked here rather than under the lease because it reads history
+	// and touches no bookkeeping, and the lease is held for the creation rather
+	// than for everything a creation happens to need.
+	//
+	// A count that could not be read is not a creation that fails: the add is
+	// budgeted as an uncounted tree and runs. The one count that does stop the
+	// creation is one the harness itself ended, which is the same machine-too-busy
+	// death the add's own budget exists for and is refused in the same class —
+	// see checkoutFiles.
+	files, counted, err := m.checkoutFiles(ctx, baseCommit)
+	if err != nil {
+		return Worktree{}, err
+	}
 
 	// Development is parallel, and every run on this repository writes the same
 	// worktree bookkeeping. Creation queues from here so a run is never lost to
@@ -1032,7 +1100,8 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if created.Status != execution.ProcessSucceeded {
 		return Worktree{}, fmt.Errorf("create branch %s failed with exit code %d: %s", branch, created.ExitCode, strings.TrimSpace(created.Stderr))
 	}
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", path, branch)
+	budget := m.checkoutTimeout(files, counted)
+	result, err := m.runBounded(ctx, nil, budget, "-C", m.repositoryRoot, "worktree", "add", path, branch)
 	if err != nil {
 		// Splitting the two is what leaves a branch to take back: `worktree add
 		// -b` made the branch and the checkout as one thing, and an add that
@@ -1042,6 +1111,17 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		// whatever came of that is said without displacing what actually failed.
 		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
 		return Worktree{}, err
+	}
+	// An add the harness ended is said as the one thing a reader can act on, and
+	// deliberately without the process output: what Git leaves on a killed
+	// checkout is its own progress meter, which says how far it got and nothing
+	// about why it stopped, and a failure carrying that is a failure nobody can
+	// read. The budget and the size of the tree are what a reader needs, because
+	// together they say whether the machine was too busy or the add was stuck.
+	if killedCheckout(result) {
+		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
+		return Worktree{}, fmt.Errorf("%w: %s was still running after %s, so no worktree was made and no agent of this run was invoked",
+			ErrCheckoutKilled, describeCheckout(files, counted), budget)
 	}
 	if result.Status != execution.ProcessSucceeded {
 		m.discardUncheckedOutBranch(ctx, branch, baseCommit)
@@ -3060,6 +3140,112 @@ func (m *Manager) localTimeout() time.Duration {
 		return defaultTimeout
 	}
 	return scaledTimeout(defaultTimeout, load, runtime.NumCPU())
+}
+
+// checkoutTimeout is the budget one creation's `git worktree add` gets: the
+// budget a local Git command gets, plus an allowance for every file the add has
+// to write.
+//
+// The allowance is added to a caller's named Timeout rather than replacing it,
+// and this is the one place a named budget is not taken as the whole answer. A
+// caller naming a figure is saying what a Git command is worth, and it cannot
+// have meant the same figure for the one command that writes the tree out —
+// leaving it to replace the allowance would make this fix inert for any manager
+// built with a Timeout, which is the same silent regression as never having
+// made it. What the caller named is honoured exactly for every other command,
+// and for this one it is the floor.
+//
+// The default figure is scaled by the load as localTimeout scales its own, and
+// a named one is not, for the reason localTimeout does not scale one: the load
+// is what the idle figure has to be corrected for, and a caller who named a
+// budget has already said what it means.
+func (m *Manager) checkoutTimeout(files int, counted bool) time.Duration {
+	allowance := time.Duration(checkoutAllowanceFiles(files, counted)) * checkoutFileBudget
+	if m.timeout > 0 {
+		return m.timeout + allowance
+	}
+	base := defaultTimeout + allowance
+	load, ok := loadAverage()
+	if !ok {
+		return base
+	}
+	return scaledTimeout(base, load, runtime.NumCPU())
+}
+
+// checkoutAllowanceFiles is how many files the budget is bought for. A tree
+// nobody could count is bought for uncountedCheckoutFiles rather than for
+// nothing, which is the difference between a creation that runs on a budget it
+// did not earn and one held to a figure the checkout was never going to fit in.
+func checkoutAllowanceFiles(files int, counted bool) int {
+	if !counted {
+		return uncountedCheckoutFiles
+	}
+	if files < 0 {
+		return 0
+	}
+	return files
+}
+
+// describeCheckout names the tree an add was writing, for a failure that has to
+// say what its budget was bought for. A tree nobody could count says so, rather
+// than reading as an empty one.
+func describeCheckout(files int, counted bool) string {
+	if !counted {
+		return "the checkout of a tree that could not be counted"
+	}
+	return fmt.Sprintf("the checkout of %d file(s)", files)
+}
+
+// checkoutFiles counts what a worktree cut from this commit has to check out,
+// and says whether the count was read at all.
+//
+// It reads the commit rather than any working tree, because the tree the add
+// writes is the commit's, and it is the same figure Git counts down as it goes —
+// so the budget and the progress a killed add left are about one thing. Output
+// the runner cut at its own bound leaves a count that is low rather than wrong,
+// which costs a creation some of its allowance and never gives it one the tree
+// did not earn.
+//
+// Counting is a Git command the creation did not used to run, so it is a way
+// for a creation to die that this budget introduced, and it is kept from being
+// one. A count that failed for its own reasons is not fatal: the creation goes
+// on, budgeted as an uncounted tree, and says so — refusing there would fail
+// creations that would have succeeded, for want of a figure that only sizes a
+// bound. The single failure that does stop the creation is a count the harness
+// itself ended, and it stops it as ErrCheckoutKilled: a count killed by the
+// load is the same machine-too-busy death as an add killed by it, and refusing
+// it in any other class would charge the item a round and its re-run for
+// exactly the failure this item exists to stop charging for.
+func (m *Manager) checkoutFiles(ctx context.Context, commit string) (int, bool, error) {
+	// Bounded by the figure this reads rather than by the one runWithEnvironment
+	// would read for itself, which is the same budget and not the same number:
+	// the load is read per command, so a refusal naming a figure it read a second
+	// time would name a budget the count did not actually run under.
+	budget := m.localTimeout()
+	result, err := m.runBounded(ctx, nil, budget, "-C", m.repositoryRoot, "ls-tree", "-r", "--name-only", commit)
+	if err != nil {
+		m.recordNote("the tree under %s could not be counted, so its checkout is bounded as an uncounted tree: %v", commit, err)
+		return 0, false, nil
+	}
+	if killedCheckout(result) {
+		return 0, false, fmt.Errorf("%w: counting the tree to be checked out was still running after %s, so the checkout never started and no agent of this run was invoked",
+			ErrCheckoutKilled, budget)
+	}
+	if result.Status != execution.ProcessSucceeded {
+		m.recordNote("counting the tree under %s failed with exit code %d, so its checkout is bounded as an uncounted tree: %s",
+			commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+		return 0, false, nil
+	}
+	return strings.Count(result.Stdout, "\n"), true, nil
+}
+
+// killedCheckout reports an add this harness ended rather than Git answering:
+// a total budget that ran out, or a process that produced nothing for longer
+// than a liveness bound allowed. Neither leaves a Git exit code or a Git error,
+// which is what made the field cases read as a creation that failed for reasons
+// nobody could find in their own message.
+func killedCheckout(result execution.ProcessResult) bool {
+	return result.Status == execution.ProcessTimedOut || result.Status == execution.ProcessStalled
 }
 
 // scaledTimeout is base multiplied by how oversubscribed the machine is: a load

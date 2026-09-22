@@ -286,7 +286,12 @@ type RerunResult struct {
 	// reserved and no run exists, so the claim taken for it was given back and the
 	// stoppage keeps its re-run.
 	PausedBeforeStarting *Outcome `json:"paused_before_starting,omitempty"`
-	Outcome              Outcome  `json:"outcome"`
+	// ClaimGivenBack says the fresh run was reserved and then refused by the
+	// environment before any agent of it ran, so the claim taken for it was given
+	// back and the stoppage keeps its re-run. The run itself happened and is
+	// reported below; what did not happen is anything the claim was spent on.
+	ClaimGivenBack bool    `json:"claim_given_back,omitempty"`
+	Outcome        Outcome `json:"outcome"`
 	// Preserved is what the stopped run left behind and what became of it.
 	Preserved runstate.PreservedArtifacts `json:"preserved"`
 	// RecordProblem names a durable record this action could not update after the
@@ -429,6 +434,15 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// reserved, so the claim goes back and the refusal is reported saying so.
 	if refusedBeforeStarting(outcome, runErr) {
 		return r.withdrawRefused(ctx, entry, runErr, result)
+	}
+	// A fresh run that was reserved and then refused by the environment before any
+	// agent of it ran is the same nothing one step later: its record exists and
+	// says what stopped it, and no developer was invoked and no change delivered.
+	// The claim was spent on the machine having been too busy rather than on the
+	// work, so it goes back and the stoppage keeps the re-run its decision
+	// authorized. Everything else is settled, whatever the run came to.
+	if refusedBeforeAnythingRan(outcome) {
+		return r.withdrawEnvironmental(ctx, entry, outcome, result), runErr
 	}
 	result.Outcome = outcome
 	result.Preserved = r.settle(ctx, entry, prior, outcome, &result)
@@ -698,6 +712,37 @@ func pausedBeforeStarting(outcome Outcome) bool {
 // claim taken for it is a claim nothing was done on.
 func refusedBeforeStarting(outcome Outcome, err error) bool {
 	return err != nil && outcome.RunID == ""
+}
+
+// refusedBeforeAnythingRan reports the fresh run having been refused by the
+// environment before any agent of it was invoked. Both halves are the condition
+// and the run's own record carries both: the refusing site writes "nothing ran"
+// because it is the only thing that can know, and the settle marks the round
+// refused only once it has proved the round delivered nothing. A run refused
+// after an agent had been asked something is settled like any other, and so is
+// one whose round the settle could not classify — which is the direction this
+// has to fail in, since a claim given back twice is one decision starting two
+// runs.
+func refusedBeforeAnythingRan(outcome Outcome) bool {
+	return outcome.Environmental != nil && outcome.Environmental.NothingRan && outcome.Environmental.Refused
+}
+
+// withdrawEnvironmental gives back the claim taken for a fresh run the
+// environment refused before any agent of it ran, and reports the run all the
+// same. The run existed and its record says what stopped it; what did not
+// happen is anything the claim bought, so the stoppage keeps its re-run and
+// asking again once the machine is not what stops it carries out the same
+// decision.
+//
+// A claim that could not be given back leaves the flag false, because the
+// sentence it prints is an accounting claim: a stoppage told it kept its re-run
+// when the record still holds the claim is exactly the disagreement the
+// give-back exists to prevent. What stopped it is reported beside the run.
+func (r Rerunner) withdrawEnvironmental(ctx context.Context, entry triage.Entry, outcome Outcome, result RerunResult) RerunResult {
+	result.Outcome = outcome
+	result.ClaimGivenBack = r.giveBack(ctx, entry, fmt.Sprintf(
+		"the fresh run of %s was refused by the environment before any agent of it ran", entry.WorkItemID), &result) == ""
+	return result
 }
 
 // withdraw gives back the claim taken for a fresh run a full harness refused to
@@ -1086,6 +1131,10 @@ func (result RerunResult) Render() string {
 	fmt.Fprintf(&rendered, "chosen because %s\n", result.Reason)
 	if result.Outcome.RunID != "" {
 		fmt.Fprintf(&rendered, "fresh run: %s\n", result.Outcome.RunID)
+	}
+	if result.ClaimGivenBack {
+		fmt.Fprintf(&rendered, "the environment refused that run before any agent of it ran, so the claim was given back and the stoppage of run %s keeps its one re-run; asking again once the machine is not what stops it carries out the same decision\n",
+			result.PriorRunID)
 	}
 	rendered.WriteString(result.Preserved.Render())
 	if result.RecordProblem != "" {

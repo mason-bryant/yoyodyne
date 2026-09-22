@@ -588,6 +588,19 @@ func (dirtyPrimaryWorktrees) Create(context.Context, gitworktree.CreateRequest) 
 	return gitworktree.Worktree{}, fmt.Errorf("%w: primary repository has uncommitted changes: notes.txt", gitworktree.ErrPrimaryNotReady)
 }
 
+// killedCheckoutWorktrees is a `git worktree add` the harness's own budget ended
+// while it was still writing the tree out, which is what the gitworktree manager
+// returns for one — see TestAWorktreeCheckoutKilledByItsBudgetIsSaidInOneSentence
+// for the real deadline killing a real add. Nothing was made, so nothing is
+// recorded and the run has nowhere it could have delivered to.
+type killedCheckoutWorktrees struct {
+	WorktreeManager
+}
+
+func (killedCheckoutWorktrees) Create(context.Context, gitworktree.CreateRequest) (gitworktree.Worktree, error) {
+	return gitworktree.Worktree{}, fmt.Errorf("%w: the checkout of 1099 file(s) was still running after 5m0s, so no worktree was made and no agent of this run was invoked", gitworktree.ErrCheckoutKilled)
+}
+
 // unreadyPrimaryWorktrees refuses the readiness gate itself, which is where a
 // resumed run is turned back: the dispatch never reaches the run, and the run
 // stays exactly as the process that stopped it left it.
@@ -630,5 +643,67 @@ func continueOnGrant(t *testing.T, store *runstate.Store, tracker *fakeTracker, 
 	}
 	if _, _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
 		t.Fatalf("Claim() error = %v", err)
+	}
+}
+
+// A creation the harness's own deadline killed is the environment refusing the
+// round before the round could begin: no worktree exists, no agent was invoked,
+// and what stopped it is the machine having been too busy for a local Git
+// command. It spent three runs of yoyodyne-ifd.441 in three hours, one of them a
+// recorded re-run, so what this asserts is the accounting rather than only the
+// classification — the item stands exactly where it did.
+func TestARoundTurnedAwayByAKilledWorktreeCheckoutIsRefusedEnvironmentally(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a developer was invoked in %s, and no worktree was ever cut for this run", request.WorkingDirectory)
+		return nil
+	}, approveVerdict)
+	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+	starting.NewRunID = runstate.NewRunID
+	starting.Worktrees = killedCheckoutWorktrees{starting.Worktrees}
+
+	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() started work with no worktree to do it in")
+	}
+	if outcome.Environmental == nil {
+		t.Fatalf("outcome = %#v, want the round classified by the cause its creation names", outcome)
+	}
+	if outcome.Environmental.Cause != runstate.CauseWorktreeCheckoutKilled {
+		t.Fatalf("environmental cause = %q, want %q", outcome.Environmental.Cause, runstate.CauseWorktreeCheckoutKilled)
+	}
+	// The refusing site says nothing of this round ran, because it is the only
+	// place that knows: the developer is invoked past the creation, so a creation
+	// that did not return has invoked nobody.
+	if !outcome.Environmental.NothingRan {
+		t.Fatalf("environmental = %#v, want the refusal recorded as one nothing of the round ran under", outcome.Environmental)
+	}
+	if !outcome.Environmental.Settled || !outcome.Environmental.Refused {
+		t.Fatalf("environmental = %#v, want the round settled and refused", outcome.Environmental)
+	}
+	if outcome.Environmental.Problem != "" {
+		t.Fatalf("the settle reported a problem it did not have: %s", outcome.Environmental.Problem)
+	}
+	// What the record says about it is the one sentence the creation gave it,
+	// rather than the progress meter Git leaves on a killed checkout.
+	if !strings.Contains(outcome.Environmental.Detail, "1099 file(s)") {
+		t.Fatalf("detail = %q, want the cause named in the words the creation refused in", outcome.Environmental.Detail)
+	}
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(recorded.Failure, "1099 file(s)") || strings.Contains(recorded.Failure, "Updating files") {
+		t.Fatalf("failure = %q, want the cause rather than the checkout's progress", recorded.Failure)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 || counters.RepairGrants != 0 || counters.Reruns != 0 {
+		t.Fatalf("counters = %#v, want an item charged nothing for a round the machine turned away", counters)
 	}
 }

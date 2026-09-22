@@ -3891,8 +3891,20 @@ and lifting it and asking again carries out the same decision — rather than
 meeting the once-only guard for a run nobody ever made. Two of the four are read
 before the claim as well, which is not the same question twice: that reading
 keeps a harness already held from spending anything, and this covers one that
-arrives while the claim is being taken. A claim carrying a run is never given
-back, whatever became of that run.
+arrives while the claim is being taken.
+
+**A fresh run the environment refused before any agent of it ran gives the claim
+back as well**, and it is the one give-back on the far side of the reservation. A
+worktree whose checkout the harness's own budget ended is the case it was built
+for: the run was reserved and its record says what stopped it, but no developer
+was invoked and no change was delivered, so the claim bought nothing. Both halves
+come off the run's own record rather than from anybody's word for it — the
+refusing site writes that nothing of the round ran, because it is the only thing
+that can know, and the run's settle marks the round refused only once it has
+proved the round delivered nothing. Every other claim carrying a run stands and
+is settled like any other, whatever became of that run, including one whose round
+the settle could not classify: a claim given back twice is one decision starting
+two runs.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
@@ -3903,8 +3915,9 @@ not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
 deletes the record, for the reason nothing deletes a counter file — save the
-withdrawals above, which remove a claim whose fresh run the pipeline answered
-before it reserved anything, and which therefore never existed.
+withdrawals above, which remove a claim that provably bought nothing: one whose
+fresh run the pipeline answered before it reserved anything, and one whose fresh
+run the environment refused before any agent of it ran.
 
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say

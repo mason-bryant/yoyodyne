@@ -358,6 +358,15 @@ func (s *RerunStore) Settle(ctx context.Context, docketKey, runID string, preser
 // whatever became of that run, something happened on this claim, and a second
 // re-run of it is the thing the claim exists to prevent.
 //
+// One case is on the far side of the reservation and belongs here all the same:
+// a fresh run the environment refused before any agent of it ran. That run's
+// record exists and says what stopped it, but the claim bought nothing — no
+// developer was invoked and no change was delivered — and the run's own settle
+// is what proves it rather than this store taking anybody's word. The same
+// refusal is what keeps it sound: the fresh run's identifier is written here by
+// Settle, which a run refused that way never reaches, so the record this finds
+// still carries no run and the check below is still the whole of the condition.
+//
 // A stoppage nothing has claimed is already what this would leave behind, so
 // withdrawing one is not an error.
 func (s *RerunStore) Withdraw(ctx context.Context, docketKey string) error {
