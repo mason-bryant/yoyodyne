@@ -257,15 +257,12 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	var patch strings.Builder
 	remaining := maxTotalBytes
 	omit := func(candidate patchCandidate, reason OmissionReason, bound int64) error {
-		size, err := m.blobSize(ctx, headCommit, candidate.path)
-		if err != nil {
-			return err
-		}
-		// The digest is of the same blob the size was read from, so what the
-		// listing says a reader can open at the tip is bound to exact content
-		// rather than to a path and a byte count. A range that deleted the file
-		// leaves nothing at the tip to digest, which is the empty answer.
-		digest, err := m.blobDigest(ctx, headCommit, candidate.path)
+		// The size and the digest come from one read of the tree entry, so what
+		// the listing says a reader can open at the tip is bound to exact content
+		// rather than to a path and a byte count — and bound to the same blob the
+		// size was measured from rather than to a second read that could see a
+		// different one.
+		size, digest, err := m.blobEntry(ctx, headCommit, candidate.path)
 		if err != nil {
 			return err
 		}
@@ -297,70 +294,62 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	return changes, nil
 }
 
-// blobSize measures one path as it is at a commit. A path the commit does not
-// carry — one the range deleted — measures zero rather than failing, because a
-// deletion is an ordinary thing for a range to hold and zero is its size at
-// that tip. `ls-tree` is asked rather than `cat-file -s` because it tells the
-// two apart: it succeeds with no entry for a path the commit lacks, where
-// `cat-file` fails the same way for that and for a repository that cannot be
-// read. A submodule is not a blob and has no size to report, so it measures
-// zero too.
-func (m *Manager) blobSize(ctx context.Context, commit, path string) (int64, error) {
+// blobEntry measures one path as it is at a commit and names the object its
+// content is, as `git-blob:<object-id>`. A path the commit does not carry — one
+// the range deleted — answers zero and nothing rather than failing, because a
+// deletion is an ordinary thing for a range to hold: zero is its size at that
+// tip, and nothing at the tip is the whole of its content there. `ls-tree` is
+// asked rather than `cat-file -s` because it tells the two apart: it succeeds
+// with no entry for a path the commit lacks, where `cat-file` fails the same way
+// for that and for a repository that cannot be read. A submodule is not a blob
+// and has no size to report, so it measures zero too.
+//
+// Both facts come from the one entry rather than from a read each. That is a
+// Git process per omission instead of two, on a path a large accumulated change
+// walks once per file the bound kept out; and it is the stronger answer as well,
+// because a size and a digest read separately are two reads that could see
+// different objects, where one entry cannot disagree with itself.
+//
+// The digest is the object id rather than a hash this process computed, because
+// the content would have to come back through a line-oriented, byte-bounded
+// process runner to be hashed here — which would silently corrupt a binary
+// fixture and silently truncate a large one, and a digest that is quietly wrong
+// is worse evidence than none. The id is what Git itself digests the content to,
+// and it is what `git rev-parse <commit>:<path>` answers, so the person the
+// evidence sends to the tip can check it there with one command and open the
+// blob with another. A worktree's own omission carries a `sha256:` digest
+// instead, which is what somebody holding the file rather than the commit can
+// check.
+func (m *Manager) blobEntry(ctx context.Context, commit, path string) (int64, string, error) {
 	result, err := m.run(ctx, "-C", m.repositoryRoot, "ls-tree", "-l", "-z", commit, "--", path)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if result.Status != execution.ProcessSucceeded {
-		return 0, fmt.Errorf("measure %s at %s failed with exit code %d: %s", path, commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+		return 0, "", fmt.Errorf("measure %s at %s failed with exit code %d: %s", path, commit, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	entry, _, _ := strings.Cut(result.Stdout, "\x00")
 	if entry == "" {
-		return 0, nil
+		return 0, "", nil
 	}
 	// The entry is "<mode> <type> <object> <size>\t<path>", with the size
 	// right-aligned and "-" for anything that is not a blob.
 	meta, _, _ := strings.Cut(entry, "\t")
 	fields := strings.Fields(meta)
 	if len(fields) != 4 {
-		return 0, fmt.Errorf("measure %s at %s returned an unreadable entry %q", path, commit, entry)
+		return 0, "", fmt.Errorf("measure %s at %s returned an unreadable entry %q", path, commit, entry)
 	}
+	// Anything that is not a blob has no size and nothing a reader could open at
+	// the tip, so it answers as the absent path above does rather than naming an
+	// object that is not the content.
 	if fields[3] == "-" {
-		return 0, nil
+		return 0, "", nil
 	}
 	size, err := strconv.ParseInt(fields[3], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse size of %s at %s: %w", path, commit, err)
+		return 0, "", fmt.Errorf("parse size of %s at %s: %w", path, commit, err)
 	}
-	return size, nil
-}
-
-// blobDigest is the content digest of one path as it is at a commit, as
-// `git-blob:<object-id>`. A path the commit does not carry — one the range
-// deleted — digests to nothing rather than failing, for the reason blobSize
-// measures it as zero: a deletion is an ordinary thing for a range to hold, and
-// nothing at the tip is the whole of its content there.
-//
-// It is the object id rather than a hash this process computed, because the
-// content would have to come back through a line-oriented, byte-bounded process
-// runner to be hashed here — which would silently corrupt a binary fixture and
-// silently truncate a large one, and a digest that is quietly wrong is worse
-// evidence than none. The id is what Git itself digests the content to, and it
-// is what `git rev-parse <commit>:<path>` answers, so the person the evidence
-// sends to the tip can check it there with one command and open the blob with
-// another. A worktree's own omission carries a `sha256:` digest instead, which
-// is what somebody holding the file rather than the commit can check.
-func (m *Manager) blobDigest(ctx context.Context, commit, path string) (string, error) {
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-parse", "--verify", "--quiet", commit+":"+path)
-	if err != nil {
-		return "", err
-	}
-	// `rev-parse --quiet` exits non-zero with no output for a path the commit
-	// does not carry, which is the deletion above rather than a failure.
-	object := strings.TrimSpace(result.Stdout)
-	if result.Status != execution.ProcessSucceeded || object == "" {
-		return "", nil
-	}
-	return "git-blob:" + object, nil
+	return size, "git-blob:" + fields[2], nil
 }
 
 func validateBranchRequest(request BranchRequest) error {

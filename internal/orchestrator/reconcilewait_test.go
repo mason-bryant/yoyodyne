@@ -404,6 +404,17 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 	// machine is; a machine slow enough to spend the window reaching the first
 	// arrival used to fail this on its own, which is a verdict about the load
 	// rather than about the sweep.
+	//
+	// The window is minutes rather than seconds for the remainder of that same
+	// problem. What it now measures is the gap between two goroutines the sweep
+	// launches in one loop and then waits on together, each of which arrives as
+	// its first statement — so the only thing that can widen the gap is the Go
+	// scheduler not running the second one, and under `go test ./...` on a
+	// saturated machine that starvation reached thirty seconds three times in a
+	// row while the same test passed ten for ten on a quiet one. Lengthening it
+	// weakens nothing: a sweep that really did serialize never produces a second
+	// arrival, so it abandons on any window whatever, and all a longer one costs
+	// is how long that genuine failure takes to report.
 	gate := newArrivalGate(len(items))
 	var abandoned atomic.Bool
 	var (
@@ -415,7 +426,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		mu.Lock()
 		entered++
 		if abandon == nil {
-			abandon = time.AfterFunc(30*time.Second, func() {
+			abandon = time.AfterFunc(3*time.Minute, func() {
 				abandoned.Store(true)
 				gate.abandon()
 			})
