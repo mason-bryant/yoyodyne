@@ -2899,8 +2899,12 @@ sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
 default every probe the harness will take is taken here and the run continues on
 its own once the limit resets. Lowering it — say to `1h` — makes the process
 sleep probes until it has spent that hour on the run and then exit, with the run
-still in flight and its deadline recorded; running `yoyo run` on the same item
-continues that same run, and that process gets the whole bound again.
+still in flight and its deadline recorded. Two things continue that same run,
+and either process gets the whole bound again: running `yoyo run` on the same
+item, or [`yoyo reconcile`](operations.md#waiting-out-a-provider-usage-limit),
+which continues it itself once the recorded deadline has passed and no process
+is serving the wait, so a run left this way does not hold a developer slot
+until somebody types the verb.
 
 It is also what bounds a run parked on an operator pause — `yoyo pause`, which
 holds everything the harness would spend at every provider-call boundary. That

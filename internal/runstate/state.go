@@ -1490,6 +1490,13 @@ type State struct {
 	// its approval standing and no attempt, round, or grant charged. Absent is
 	// every run nothing resumed, which is nearly all of them.
 	IntegrationResumptions []IntegrationResumption `json:"integration_resumptions,omitempty"`
+	// SweepContinuations are the times the reconcile sweep continued this run
+	// after the process serving its usage-limit wait had exited on the
+	// in-process bound: the wait served by the sweep rather than by a person
+	// typing `yoyo run`, with no attempt, round, or grant charged. Absent is
+	// every run the sweep never continued, which is nearly all of them. See
+	// sweepcontinue.go.
+	SweepContinuations []SweepContinuation `json:"sweep_continuations,omitempty"`
 	// IntegrationRetries counts the promotions this run has re-prepared after
 	// losing a race for its target branch: the change replayed onto where the
 	// target went, re-checked, and re-reviewed. It is recorded before the retry
@@ -1980,6 +1987,7 @@ func (s State) Validate() error {
 		}
 	}
 	problems = append(problems, s.validateIntegrationResume()...)
+	problems = append(problems, s.validateSweepContinuations()...)
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
 	}

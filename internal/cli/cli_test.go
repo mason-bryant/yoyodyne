@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -317,6 +318,93 @@ func TestReconcileReportsWhatItRecoveredRatherThanWhatItDeclinedToDeliver(t *tes
 	}
 	if len(result.Supervision) != len(sweep.Supervision) {
 		t.Fatalf("Supervision = %#v, want the whole pass carried", result.Supervision)
+	}
+}
+
+// A run the sweep continued out of a usage-limit wait its process had exited
+// on is reported with what it was waiting out, that this sweep continued it,
+// and what the continued run came to; one the pipeline refused fails the
+// command, because it is still a run holding a slot with nothing serving it;
+// and one a live process holds is said to be held and fails nothing. `--json`
+// carries all three whole.
+func TestReconcileReportsTheWaitsItContinued(t *testing.T) {
+	t.Parallel()
+
+	deadline := time.Date(2026, 9, 21, 13, 43, 0, 0, time.UTC)
+	continuations := []orchestrator.WaitContinuation{
+		{
+			RunID:      "run-00000000000000000000000000000001",
+			WorkItemID: "yoyodyne-ifd.1",
+			Waited:     "an exhausted five_hour usage limit",
+			Deadline:   deadline,
+			Continued:  true,
+			Outcome: &orchestrator.Outcome{
+				RunID:       "run-00000000000000000000000000000001",
+				Status:      runstate.StatusSucceeded,
+				Phase:       runstate.PhaseComplete,
+				Integration: &gitworktree.Integration{TargetBranch: "main", SourceCommit: "abc123"},
+			},
+		},
+		{
+			RunID:      "run-00000000000000000000000000000002",
+			WorkItemID: "yoyodyne-ifd.2",
+			Waited:     "a transient provider server overload",
+			Deadline:   deadline,
+			Detail:     "a live process holds this run, so it is serving the wait itself",
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	if code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Continuations: continuations}, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"run-00000000000000000000000000000001 (yoyodyne-ifd.1): paused for an exhausted five_hour usage limit past its deadline 2026-09-21T13:43:00Z",
+		"continued by this sweep in its own worktree and developer session",
+		"ended succeeded: integrated into main at abc123",
+		"run-00000000000000000000000000000002 (yoyodyne-ifd.2): paused for a transient provider server overload",
+		"a live process holds this run, so it is serving the wait itself",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+
+	refused := append(continuations, orchestrator.WaitContinuation{
+		RunID:      "run-00000000000000000000000000000003",
+		WorkItemID: "yoyodyne-ifd.3",
+		Waited:     "an exhausted five_hour usage limit",
+		Deadline:   deadline,
+		Continued:  true,
+		Failure:    "the claude-code backend is not installed",
+	})
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportReconcileResult(&stdout, &stderr, false, reconcileSweep{Continuations: refused}, nil); code != 1 {
+		t.Fatalf("reportReconcileResult() code = %d, want 1 for a continuation the pipeline refused", code)
+	}
+	if !strings.Contains(stderr.String(), "not continued: the claude-code backend is not installed") {
+		t.Errorf("stderr = %q, want the refusal named", stderr.String())
+	}
+
+	var jsonOut bytes.Buffer
+	if code := reportReconcileResult(&jsonOut, &stderr, true, reconcileSweep{Continuations: refused}, nil); code != 1 {
+		t.Fatalf("reportReconcileResult() --json code = %d, want 1", code)
+	}
+	var result reconcileOutput
+	if err := json.Unmarshal(jsonOut.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Continuations) != 3 || result.Continuations[0].Outcome == nil || result.Continuations[2].Failure == "" {
+		t.Fatalf("Continuations = %#v, want all three carried whole", result.Continuations)
+	}
+	// A sweep that continued nothing says so as an empty list rather than an
+	// absent field, as every other list here does.
+	jsonOut.Reset()
+	if code := reportReconcileResult(&jsonOut, &stderr, true, reconcileSweep{}, nil); code != 0 {
+		t.Fatalf("reportReconcileResult() --json code = %d, want 0", code)
+	}
+	if !strings.Contains(jsonOut.String(), `"continuations":[]`) {
+		t.Errorf("json = %s, want an empty continuations list", jsonOut.String())
 	}
 }
 
