@@ -116,8 +116,21 @@ type Verdict struct {
 	// work item to discharge. An approval that has to carry it and does not is
 	// refused where the scope is known rather than here, because this type is the
 	// same at both scopes.
-	Approves Approval  `json:"approves,omitempty"`
-	Summary  string    `json:"summary"`
+	Approves Approval `json:"approves,omitempty"`
+	Summary  string   `json:"summary"`
+	// Fixtures are the test-data files the evidence named as kept out of the
+	// patch that this verdict accounts for, by the path the evidence named. A
+	// change whose fixtures alone outgrow the patch bound is approvable — the
+	// code is presented whole and the fixtures are listed with their size and
+	// digest and delivered beside the patch — and this is what makes that
+	// approval say what it covered: a verdict that names them has read the
+	// listing and judged the delivery, where one that does not is an approval
+	// over evidence nobody can tell it saw.
+	//
+	// It is empty where the evidence named no omitted fixture, which is nearly
+	// every change. An approval of a change that named some and does not list
+	// them is asked for once more rather than settled.
+	Fixtures []string  `json:"fixtures,omitempty"`
 	Findings []Finding `json:"findings,omitempty"`
 }
 
@@ -184,7 +197,7 @@ func Decode(data []byte) (Verdict, []string, error) {
 // The closed schema, named once so the decoder and the drift walk below cannot
 // disagree about what the contract defines.
 var (
-	verdictFields  = []string{"decision", "approves", "summary", "findings"}
+	verdictFields  = []string{"decision", "approves", "summary", "fixtures", "findings"}
 	findingFields  = []string{"severity", "message", "location"}
 	locationFields = []string{"file", "line"}
 )
@@ -392,6 +405,28 @@ type IncompleteApprovalError struct{}
 
 func (IncompleteApprovalError) Error() string {
 	return "the reviewer approved without saying whether it approves the implementation or evidence"
+}
+
+// UnaccountedFixturesError reports an approval of a change whose test data the
+// patch bound kept out, where the verdict did not say which of those fixtures it
+// accounted for. It is the third refusal that asks for the verdict again rather
+// than ending the run, and for the same reason the two above it do: the reviewer
+// answered about the change and left out the one thing that says what the
+// approval covered, and a built, checked, approved change is not worth losing
+// over a list the reviewer can write in one more turn.
+//
+// It exists because narrowing the refusal on omissions — a change whose fixtures
+// alone outgrow the bound is approvable — takes away the crude guarantee that an
+// approval covered everything. What replaces it is the reviewer saying so.
+type UnaccountedFixturesError struct {
+	// Fixtures are the omitted fixtures the verdict did not name, in the order
+	// the evidence listed them.
+	Fixtures []string
+}
+
+func (e UnaccountedFixturesError) Error() string {
+	return fmt.Sprintf("the reviewer approved a change whose test data the patch bound kept out without saying it accounted for %s",
+		strings.Join(e.Fixtures, ", "))
 }
 
 // MisplacedEscalationError reports an escalation raised by a review that has no

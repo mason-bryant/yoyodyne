@@ -138,12 +138,48 @@ told it is missing code, and a source or test file among the omissions means
 the change outgrew the bound before its test data was reached. Each omission
 is also delivered whole outside the patch, and the evidence says where: the
 run's worktree, and for a committed file the tip commit as `git show
-<tip>:<path>`. The reviewer has no tools and cannot open one — it judges an
-omitted file as unreviewed, and a truncated change still cannot be approved —
-so what the location is for is the person following the review, who can open
-the fixture the reviewer did not see; the run's `review.started` event names
-the omitted files too, so what a verdict could not have covered is read back
-from the record rather than reconstructed from the prompt.
+<tip>:<path>`. The reviewer has no tools and cannot open one, so it judges an
+omitted file as unreviewed; what the location is for is the person following the
+review, who can open the fixture the reviewer did not see. The run's
+`review.started` event names the omitted files too, so what a verdict could not
+have covered is read back from the record rather than reconstructed from the
+prompt.
+
+**A change whose test data alone outgrows the bound is approvable.** Ordering
+the bound in class order made such a change reviewable; on its own it left the
+change unclosable, because an approval used to be refused over any omission at
+all — so a change of 5,500 lines of golden HTML beside 850 lines of Go could be
+read in full and never approved. The refusal is now narrowed to the omissions
+that really leave a change unjudged, and three things hold the approval
+together:
+
+- **Every file that is not test data is in the patch whole.** A source or a test
+  file among the omissions still refuses the approval: the change outgrew the
+  bound before its test data was reached, and what was not shown was not
+  reviewed.
+- **Every omitted fixture is listed with its path, its size, and a content
+  digest**, and delivered whole where a person can open it — `sha256:` of the
+  file for a change read out of a worktree, and `git-blob:` of the blob at the
+  tip for a branch's accumulated change, each being what a reader checks where
+  the evidence sends them. A fixture named with nothing anybody could open — a
+  symlink, or a listing carrying no digest of a file that is there — refuses the
+  approval exactly as cut code does, because a name is not evidence. A fixture
+  the change *deletes* carries no digest and is not refused: there is nothing at
+  the tip to digest, which its zero size says, and that absence is the whole of
+  its content there. The digests are recorded on the run's `review.started`
+  event beside the names, so what an approval covered is bound to exact content
+  rather than to a path.
+- **The verdict says which fixtures it accounted for.** An approving reviewer
+  lists every omitted fixture in its verdict's `fixtures` field, by the path the
+  evidence gave. An approval that does not is asked for once more on the same
+  budget, as an approval that never said what it approves is: the change is
+  sound and the answer is one turn away. A repair is never asked for the list,
+  because it approves nothing.
+
+A truncation the evidence cannot explain at all — a branch whose history the
+bound clipped, which reports itself cut and names no file — still refuses the
+approval, for the original reason: a reviewer shown part of a sequence cannot
+say what the whole of it did.
 
 Above the patch is also a listing of every file
 the change touches, with Git's status, the file's size at the tip, whether it is
@@ -1276,9 +1312,13 @@ It describes every commit the branch carries over that base and diffs the whole
 range as one patch, under the same bounds a single change is described within: a
 range too large to show in full is clipped whole file by whole file and in the
 same class order — source, then tests, then test data — with each file the
-bound kept out named above the patch with the size of its diff and where it can
-be opened at the branch's tip, it is reported as truncated, and a truncated
-change cannot be approved, because what was not shown was not reviewed. The base must
+bound kept out named above the patch with the size of its diff, its content
+digest, and where it can be opened at the branch's tip, and it is reported as
+truncated. What that truncation does to the verdict is the rule above: a range
+whose test data alone outgrew the bound is approvable and its approval names
+those fixtures, and a range that kept out a source or test file, that named a
+fixture nobody could open, or whose own history the bound clipped is not,
+because what was not shown was not reviewed. The base must
 be an ancestor of the branch — a base that has moved on is a reconciliation
 rather than an accumulated change, and the command says so instead of quietly
 reviewing a range you did not name.

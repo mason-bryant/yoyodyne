@@ -43,6 +43,19 @@ func TestDecodeAcceptsValidVerdicts(t *testing.T) {
 			want:  Verdict{Decision: DecisionApprove, Approves: ApprovesEvidence, Summary: "A diagnosis rather than the work."},
 		},
 		{
+			// The fixtures an approval accounted for are part of the closed schema
+			// too, so a verdict naming the test data the bound kept out decodes
+			// rather than being reported as drift.
+			name:  "approval that says which omitted fixtures it covered",
+			input: `{"decision":"approve","approves":"implementation","summary":"The read model is whole.","fixtures":["internal/dashboard/testdata/renders/busy.html"]}`,
+			want: Verdict{
+				Decision: DecisionApprove,
+				Approves: ApprovesImplementation,
+				Summary:  "The read model is whole.",
+				Fixtures: []string{"internal/dashboard/testdata/renders/busy.html"},
+			},
+		},
+		{
 			// A repair approves nothing, so it is not refused for naming a kind — it
 			// is a verbose verdict, and the decision it carries closes nothing either
 			// way.

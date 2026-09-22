@@ -260,8 +260,17 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 		if err != nil {
 			return err
 		}
+		// The digest is of the same blob the size was read from, so what the
+		// listing says a reader can open at the tip is bound to exact content
+		// rather than to a path and a byte count. A range that deleted the file
+		// leaves nothing at the tip to digest, which is the empty answer.
+		digest, err := m.blobDigest(ctx, headCommit, candidate.path)
+		if err != nil {
+			return err
+		}
 		changes.OmittedFiles = append(changes.OmittedFiles, OmittedFile{
-			Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class, Bound: bound, DiffBytes: int64(len(candidate.patch)),
+			Path: candidate.path, Bytes: size, Reason: reason, Class: candidate.class,
+			Bound: bound, DiffBytes: int64(len(candidate.patch)), Digest: digest,
 		})
 		changes.Truncated = true
 		return nil
@@ -322,6 +331,35 @@ func (m *Manager) blobSize(ctx context.Context, commit, path string) (int64, err
 		return 0, fmt.Errorf("parse size of %s at %s: %w", path, commit, err)
 	}
 	return size, nil
+}
+
+// blobDigest is the content digest of one path as it is at a commit, as
+// `git-blob:<object-id>`. A path the commit does not carry — one the range
+// deleted — digests to nothing rather than failing, for the reason blobSize
+// measures it as zero: a deletion is an ordinary thing for a range to hold, and
+// nothing at the tip is the whole of its content there.
+//
+// It is the object id rather than a hash this process computed, because the
+// content would have to come back through a line-oriented, byte-bounded process
+// runner to be hashed here — which would silently corrupt a binary fixture and
+// silently truncate a large one, and a digest that is quietly wrong is worse
+// evidence than none. The id is what Git itself digests the content to, and it
+// is what `git rev-parse <commit>:<path>` answers, so the person the evidence
+// sends to the tip can check it there with one command and open the blob with
+// another. A worktree's own omission carries a `sha256:` digest instead, which
+// is what somebody holding the file rather than the commit can check.
+func (m *Manager) blobDigest(ctx context.Context, commit, path string) (string, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-parse", "--verify", "--quiet", commit+":"+path)
+	if err != nil {
+		return "", err
+	}
+	// `rev-parse --quiet` exits non-zero with no output for a path the commit
+	// does not carry, which is the deletion above rather than a failure.
+	object := strings.TrimSpace(result.Stdout)
+	if result.Status != execution.ProcessSucceeded || object == "" {
+		return "", nil
+	}
+	return "git-blob:" + object, nil
 }
 
 func validateBranchRequest(request BranchRequest) error {
