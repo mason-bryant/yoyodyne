@@ -3274,8 +3274,9 @@ func (h *realScheduleHarness) Show(_ context.Context, id string) (beads.WorkItem
 	return beads.WorkItem{}, fmt.Errorf("no work item %s", id)
 }
 
-func (h *realScheduleHarness) Claim(_ context.Context, id string) (beads.WorkItem, error) {
-	return h.setStatus(id, "in_progress")
+func (h *realScheduleHarness) Claim(_ context.Context, id string) (beads.WorkItem, *beads.StaleBlockClear, error) {
+	item, err := h.setStatus(id, "in_progress")
+	return item, nil, err
 }
 
 func (h *realScheduleHarness) RecordOutcome(_ context.Context, id, _ string) (beads.WorkItem, error) {

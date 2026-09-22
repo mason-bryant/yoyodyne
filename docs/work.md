@@ -649,11 +649,23 @@ selectable and unclaimable at once: one of them was dispatched twenty-nine times
 between 2026-09-06 and 2026-09-07, each run dying at the claim before it took
 anything. So a claim the tracker refuses for the status re-reads the item, asks
 what it actually waits on, and — where that is nothing unfinished — clears the
-stale status and takes the item, recording in the item's notes that it did and
-what was refused. An item that really does wait on unfinished work is refused
-with that work named, so the run's record says which of the two it was. Re-reading
-under the claim also settles the case where the item's state genuinely moved after
-it was selected: what is judged is the state that is then claimed.
+stale status, recording in the item's notes what it is doing and what was
+refused. An item that really does wait on unfinished work is refused with that
+work named, so the run's record says which of the two it was. Re-reading under
+the claim also settles the case where the item's state genuinely moved after it
+was selected: what is judged is the state that is then claimed.
+
+The write is not the clear; the read that returns `open` is. After the write the
+claim reads the status back, up to five times a second apart, and takes the item
+only on a read that returns `open`. On 2026-09-20 the claim on yoyodyne-ifd.415
+recorded its clear as made and the tracker refused the claim that followed on the
+same status, so the re-run tripped on its own correction. A clear no read confirms
+within that bound is reported as unconfirmed, with the status the tracker
+returned and never as cleared; a note saying so is appended to the item, and the
+item is left for the next pull rather than claimed. Either way the run's record
+says which of the three endings the clear had — confirmed on the first read,
+confirmed on a later one, or never confirmed — and `yoyo status` prints it on
+the run.
 
 What still holds a blocked item back is a **hold**, which is the harness's own
 durable record rather than a field: a run that stopped on the item and whose

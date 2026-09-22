@@ -381,6 +381,40 @@ func TestStatusNamesWhatARunCouldNotKeepOfItsReportsAndProposals(t *testing.T) {
 	}
 }
 
+// A stale blocked status the claim cleared is said on the run whichever way the
+// clear ended, in the read model's own words, because the ending that matters
+// is the one the reason line alone reads as a run that died at the claim: no
+// read confirmed the clear and the item was left for the next pull.
+func TestStatusSaysWhichEndingAStaleBlockClearHad(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  1,
+		Recorded: 1,
+		Runs: []runstate.RunSummary{{
+			RunID:           "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:      "yoyodyne-ifd.415",
+			Status:          runstate.StatusFailed,
+			Outcome:         runstate.OutcomeFailed,
+			StartedAt:       completedAt,
+			CompletedAt:     &completedAt,
+			Failure:         "claim work item: the clear of the stale blocked status on yoyodyne-ifd.415 was never confirmed",
+			StaleBlockClear: &runstate.StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed, Reads: 5, Status: "blocked"},
+		}},
+	}, "", false)
+	rendered := out.String()
+	if !strings.Contains(rendered, `stale blocked status at the claim: no read confirmed the clear: 5 read(s) returned status "blocked" rather than open, and the item was left for the next pull`) {
+		t.Fatalf("rendered = %q, want the unconfirmed clear said with what the tracker returned", rendered)
+	}
+	// Never as cleared: the line's label must not assert the clear the tracker
+	// never confirmed.
+	if strings.Contains(rendered, "cleared") {
+		t.Fatalf("rendered = %q, reports an unconfirmed clear as cleared", rendered)
+	}
+}
+
 // A run marked outstanding with nothing under it is the "go and read the run's
 // JSON" case this verb exists to remove, and the marker has two causes worth
 // telling apart: cleanup that never finished, and a merge the forge queued and

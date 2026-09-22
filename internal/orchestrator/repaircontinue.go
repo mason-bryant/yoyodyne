@@ -112,7 +112,7 @@ type RepairRuns interface {
 type RepairItems interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
 	RecordOutcome(ctx context.Context, id, notes string) (beads.WorkItem, error)
-	Claim(ctx context.Context, id string) (beads.WorkItem, error)
+	Claim(ctx context.Context, id string) (beads.WorkItem, *beads.StaleBlockClear, error)
 }
 
 // RepairWorktrees proves the stopped run's worktree is still the one the harness
@@ -618,7 +618,11 @@ func (c RepairContinuer) supersedeOnItem(ctx context.Context, workItemID, reason
 	if _, err := c.Items.RecordOutcome(ctx, workItemID, reason); err != nil {
 		return fmt.Errorf("record the repair decision on %s: %w", workItemID, err)
 	}
-	item, err := c.Items.Claim(ctx, workItemID)
+	// The blocker this claim clears is the one the stopped run wrote, so the
+	// clear's account is read off the error where the read-back never confirmed
+	// it; a confirmed one is the item back at work, which the check below and the
+	// continuation record are the account of.
+	item, _, err := c.Items.Claim(ctx, workItemID)
 	if err != nil {
 		return fmt.Errorf("put %s back to work for the repair it was granted: %w", workItemID, err)
 	}
