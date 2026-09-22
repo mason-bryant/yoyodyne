@@ -337,7 +337,7 @@ func TestConcurrentCreationSurvivesAGitCommandTheHarnessDidNotCompose(t *testing
 				result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 					Name:    "git",
 					Args:    args,
-					Timeout: 30 * time.Second,
+					Timeout: loadScaledGitBudget(),
 				}, nil)
 				if err != nil || result.Status != execution.ProcessSucceeded {
 					t.Errorf("the neighbouring git %v in round %d = %v (%v): %s", args, round, result.Status, err, result.Stderr)
@@ -369,7 +369,7 @@ func neighbourGitConfig(t *testing.T, repository, setting string) string {
 	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "config", "--get", setting},
-		Timeout: 30 * time.Second,
+		Timeout: loadScaledGitBudget(),
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {
 		t.Fatalf("git config --get %s = %v (%v): %s", setting, result.Status, err, result.Stderr)

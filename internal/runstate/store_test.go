@@ -155,8 +155,7 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 	firstState := testState(t, StatusPending)
 	secondState := testState(t, StatusPending)
 	secondState.WorkItemID = "yoyodyne-other"
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	start := make(chan struct{})
 	errorsByCall := make(chan error, 2)
 	for _, reservation := range []struct {
@@ -1235,8 +1234,7 @@ func TestStoreLoadsStateWrittenBeforeTheRepairLoopExisted(t *testing.T) {
 	if _, err := store.Incomplete(); err != nil {
 		t.Fatalf("Incomplete() error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	lease, err := store.Reserve(ctx, testState(t, StatusPending), 1)
 	if err != nil {
 		t.Fatalf("Reserve() error = %v", err)
@@ -1264,8 +1262,7 @@ func TestStoreAdoptGivesOneHolderTheRunInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() second error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := testState(t, StatusPending)
 	reservation, err := first.Reserve(ctx, state, 1)
 	if err != nil {
@@ -1314,8 +1311,7 @@ func TestAdoptWaitsOutALeaseNobodyHoldsAnyMore(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := testState(t, StatusRunning)
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -1358,8 +1354,7 @@ func TestAdoptRefusesALeaseThatOutlastsTheGrace(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := testState(t, StatusRunning)
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -1448,8 +1443,7 @@ func TestAdoptRunHoldsATerminalRunThatStillOwesCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() second error = %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	state := integratedState(t, PhaseCleaningUp)
 	if err := first.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)

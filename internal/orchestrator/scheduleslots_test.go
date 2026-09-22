@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -51,14 +50,15 @@ func newSlotReplay(items ...beads.WorkItem) *slotReplay {
 // than from the harness's order of starts: two runs one pull starts are two
 // goroutines, and which of them reaches the harness first is nothing the
 // scheduler decides.
+//
+// The wait is on the harness's own announcement of a start and on nothing
+// else: a scheduler that never starts the run is reported by the binary's own
+// timeout with this goroutine named, rather than by a bound here that a loaded
+// machine reaches with the scheduler working.
 func (r *slotReplay) release(t *testing.T, id string, startedSoFar int) {
 	t.Helper()
-	deadline := time.Now().Add(scheduleRendezvous)
 	for len(r.harness.pullOrder()) < startedSoFar {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d run(s) started, want %d before releasing %s: %v", len(r.harness.pullOrder()), startedSoFar, id, r.harness.pullOrder())
-		}
-		time.Sleep(5 * time.Millisecond)
+		<-r.harness.started
 	}
 	close(r.releases[id])
 }

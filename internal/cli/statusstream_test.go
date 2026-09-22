@@ -497,28 +497,16 @@ func TestStatusFollowsAStreamAsItsEventsArrive(t *testing.T) {
 	// arrived, which is two goroutines on one buffer: they are separated here
 	// rather than in the command, because a command writing to whatever io.Writer
 	// it was handed is exactly what every other one does.
-	out, errs := &syncBuffer{}, &syncBuffer{}
+	out, errs := newSyncBuffer(), newSyncBuffer()
 	done := make(chan int, 1)
 	go func() {
 		done <- reportRunStatus(ctx, []string{"--follow", "--config", configPath}, out, errs)
 	}()
 	appendStreamEvent(t, store, runID, 3, execution.EventAgentMessage, streamStart, map[string]any{"text": "still working"})
-	deadline := time.After(10 * time.Second)
-	for !strings.Contains(out.String(), "still working") {
-		select {
-		case <-deadline:
-			t.Fatalf("the appended event never arrived; stdout = %q, stderr = %q", out.String(), errs.String())
-		case <-time.After(streamPollInterval):
-		}
-	}
+	waitForOutput(t, out, "still working", errs)
 	stop()
-	select {
-	case code := <-done:
-		if code != 0 {
-			t.Fatalf("an interrupted follow exited %d", code)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the follow did not stop when it was interrupted")
+	if code := <-done; code != 0 {
+		t.Fatalf("an interrupted follow exited %d", code)
 	}
 }
 
@@ -545,7 +533,7 @@ func TestStatusFollowLatestDrainsTheStreamItLeaves(t *testing.T) {
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	out, errs := &syncBuffer{}, &syncBuffer{}
+	out, errs := newSyncBuffer(), newSyncBuffer()
 	done := make(chan int, 1)
 	go func() {
 		done <- followStreams(ctx, streams, streamOptions{
@@ -590,13 +578,8 @@ func TestStatusFollowLatestDrainsTheStreamItLeaves(t *testing.T) {
 
 	waitForOutput(t, out, "the successor's first words", errs)
 	stop()
-	select {
-	case code := <-done:
-		if code != 0 {
-			t.Fatalf("an interrupted follow exited %d; stderr = %q", code, errs.String())
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the follow did not stop when it was interrupted")
+	if code := <-done; code != 0 {
+		t.Fatalf("an interrupted follow exited %d; stderr = %q", code, errs.String())
 	}
 	tail, successor := strings.Index(out.String(), "the tail before the switch"), strings.Index(out.String(), "the successor's first words")
 	if tail < 0 {
@@ -745,16 +728,15 @@ func TestStatusRefusesStreamOptionsItCannotHonor(t *testing.T) {
 }
 
 // waitForOutput blocks until what a still-running follow has written contains
-// the text, or fails with both streams once ten seconds have passed.
-func waitForOutput(t *testing.T, watched *syncBuffer, want string, other *syncBuffer) {
+// the text. It waits on the follow's own writes and on nothing else: the ten
+// seconds it used to allow was reached, under the race detector beside another
+// suite at a load average past twenty, with the follow working and the test
+// failing a change that never touched this package. The other stream is taken
+// so a caller reads as before; what it held was the failure message.
+func waitForOutput(t *testing.T, watched *syncBuffer, want string, _ *syncBuffer) {
 	t.Helper()
-	deadline := time.After(10 * time.Second)
 	for !strings.Contains(watched.String(), want) {
-		select {
-		case <-deadline:
-			t.Fatalf("%q never arrived; watched = %q, other = %q", want, watched.String(), other.String())
-		case <-time.After(10 * time.Millisecond):
-		}
+		<-watched.written
 	}
 }
 
@@ -766,21 +748,35 @@ var streamStart = time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 // what it has written so far. Nothing about following needs it — a command
 // writes to the io.Writer it was handed and never reads it back — but a test
 // that watches output arrive is by construction on a second goroutine.
+//
+// Every write is also announced on `written`, which holds one announcement
+// however many writes made it, so a reader that checked the buffer and found
+// nothing waits there for the next write rather than polling a clock.
 type syncBuffer struct {
 	mu      sync.Mutex
-	written bytes.Buffer
+	buffer  bytes.Buffer
+	written chan struct{}
+}
+
+func newSyncBuffer() *syncBuffer {
+	return &syncBuffer{written: make(chan struct{}, 1)}
 }
 
 func (b *syncBuffer) Write(data []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.written.Write(data)
+	n, err := b.buffer.Write(data)
+	select {
+	case b.written <- struct{}{}:
+	default:
+	}
+	return n, err
 }
 
 func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.written.String()
+	return b.buffer.String()
 }
 
 // The one cache-read share under the total is decided by whichever role reads

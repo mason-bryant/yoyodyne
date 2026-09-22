@@ -863,8 +863,14 @@ The reason is reported as what it was, a stall or an exhausted budget, and
 neither is ever described as the agent having reported a failure, because it
 reported nothing. Only a stop with nothing to continue from — no session, no
 worktree — ends the run, and it still says the harness stopped the provider.
-Short Git commands keep their flat deadlines, which is the right bound for a
-command whose duration is known.
+Short Git commands keep a deadline of their own rather than a liveness signal,
+which is the right bound for a command whose duration is known — known on an
+idle machine, that is. A local Git command is given thirty seconds, scaled by
+how far the machine's one-minute load average exceeds its cores, read for each
+command and capped at ten times: at a load average near forty, a flat thirty
+seconds was killing `git worktree list` under two race suites and the provider
+processes beside them, and the run that asked failed on the machine rather than
+on its work.
 
 **The run is left in flight for half an hour, and then it is settled.** Nothing
 in the harness continues a stopped run on its own — the scheduler chooses from

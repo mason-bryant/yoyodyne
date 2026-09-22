@@ -34,11 +34,6 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
-// scheduleRendezvous is how long a test will wait for the developers it expects
-// to overlap to actually overlap. It is generous because it bounds a failure
-// rather than a success: runs that do overlap release each other immediately.
-const scheduleRendezvous = 30 * time.Second
-
 // The acceptance criterion, against the real pipeline: three ready items, a
 // configured capacity of two, and every run in a worktree of its own. Two
 // developers are held in a rendezvous until both are inside, which is what makes
@@ -58,9 +53,6 @@ func TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn(t *testing
 	schedule, err := scheduler.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
-	}
-	if harness.rendezvousFailure != nil {
-		t.Fatalf("the developers never overlapped: %v", harness.rendezvousFailure)
 	}
 	if len(schedule.Started) != 3 {
 		t.Fatalf("started = %d run(s) (%s), want all three items pulled", len(schedule.Started), schedule.Render())
@@ -145,9 +137,6 @@ func TestSchedulerBlocksTheLoserOfAConflictRatherThanForcingIt(t *testing.T) {
 	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
-	}
-	if harness.rendezvousFailure != nil {
-		t.Fatalf("the developers never overlapped, so nothing contended: %v", harness.rendezvousFailure)
 	}
 	if len(schedule.Started) != 2 {
 		t.Fatalf("started = %d run(s), want both items pulled: %s", len(schedule.Started), schedule.Render())
@@ -235,9 +224,6 @@ func TestSchedulerRunsUpToTheConfiguredCapacity(t *testing.T) {
 	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
-	}
-	if harness.rendezvousFailure != nil {
-		t.Fatalf("three runs never overlapped: %v", harness.rendezvousFailure)
 	}
 	if len(schedule.Started) != 4 {
 		t.Fatalf("started = %d, want every item run: %s", len(schedule.Started), schedule.Render())
@@ -914,9 +900,6 @@ func TestSchedulerReadsTheConfigurationAtEveryPull(t *testing.T) {
 	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
-	}
-	if harness.rendezvousFailure != nil {
-		t.Fatalf("the raised capacity was never used: %v", harness.rendezvousFailure)
 	}
 	if harness.pulls < 2 {
 		t.Fatalf("pulls = %d, want the configuration read more than once", harness.pulls)
@@ -2245,9 +2228,6 @@ func TestARedeployWaitsOutTheRunsAlreadyGoing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
-	if harness.rendezvousFailure != nil {
-		t.Fatalf("the deploy never landed on two live runs: %v", harness.rendezvousFailure)
-	}
 	if schedule.Stopped != ScheduleRedeployed {
 		t.Fatalf("stopped = %q, want the session stopped to be restarted", schedule.Stopped)
 	}
@@ -2540,12 +2520,15 @@ type scheduleHarness struct {
 	selections map[string]runstate.Selection
 	running    int
 	peak       int
+	// started is announced on every start, and holds one announcement however
+	// many starts made it, so a test that read the order and found it short
+	// waits here for the next start rather than polling a clock.
+	started chan struct{}
 
 	// The rendezvous a test uses to require that runs actually overlap.
-	meet              int
-	arrived           int
-	gate              chan struct{}
-	rendezvousFailure error
+	meet    int
+	arrived int
+	gate    chan struct{}
 }
 
 func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
@@ -2559,6 +2542,7 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		capacity:   1,
 		cooldown:   30 * time.Minute,
 		gate:       make(chan struct{}),
+		started:    make(chan struct{}, 1),
 		// The morning the session that provoked the retry died, so a test reading
 		// its own timings reads the ones in the report.
 		now: time.Date(2026, 9, 1, 5, 40, 0, 0, time.UTC),
@@ -2582,7 +2566,9 @@ func readyItems(ids ...string) []beads.WorkItem {
 
 // developersMeet requires that many runs to be inside at once before any of them
 // is let out. A test that asks for more overlap than the capacity allows
-// deadlocks until the bound expires, which is reported as the failure it is.
+// deadlocks here, and is reported by the binary's own timeout with every run
+// named in the dump as parked in rendezvous -- rather than by a bound of this
+// test's own, which a loaded machine reaches with the scheduler working.
 func (h *scheduleHarness) developersMeet(count int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -2601,15 +2587,7 @@ func (h *scheduleHarness) rendezvous() {
 	}
 	gate := h.gate
 	h.mu.Unlock()
-	select {
-	case <-gate:
-	case <-time.After(scheduleRendezvous):
-		h.mu.Lock()
-		if h.rendezvousFailure == nil {
-			h.rendezvousFailure = fmt.Errorf("only %d of %d runs were ever inside at once", h.arrived, h.meet)
-		}
-		h.mu.Unlock()
-	}
+	<-gate
 }
 
 func (h *scheduleHarness) open(context.Context) (Pull, error) {
@@ -3108,6 +3086,10 @@ func (h *scheduleHarness) Stale(context.Context) ([]staleness.WorkItem, error) {
 func (h *scheduleHarness) start(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 	h.mu.Lock()
 	h.order = append(h.order, workItemID)
+	select {
+	case h.started <- struct{}{}:
+	default:
+	}
 	h.selections[workItemID] = selection
 	h.inFlight[workItemID] = runstate.State{RunID: "run-" + workItemID, WorkItemID: workItemID, Status: runstate.StatusRunning}
 	h.running++

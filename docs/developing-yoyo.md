@@ -143,6 +143,72 @@ alone: it defaults into `TMPDIR`, which every environment that runs these grants
 already, and the Go command refuses a `GOTMPDIR` that does not exist — naming
 one would add a way to fail rather than remove one.
 
+## A test never bounds a wait in wall-clock time
+
+A test here waits on a signal it controls — a lock the test releases, a channel
+something under test sends on, a budget or a clock the test advances itself —
+and never on a length of time it hopes is long enough. No `time.After` guarding
+a channel read, no deadline on a loop polling for a state, no sleep that gives a
+goroutine a chance to have done something.
+
+The reason is the machine these run on. The checks are applied to more than one
+change at a time — a minute-zero probe overlaps a repair round, concurrent
+seats run their race suites together — so load is the ordinary case rather than
+the exception, and under the race detector at a load average past twenty a
+five-second bound on a shutdown, a ten-second bound on a loop reaching a state,
+and a thirty-second bound on a queued lock have each been reached with the code
+working. Every one of those failed a change that never touched the package, and
+each cost a repair round or a triage round on it. A bound that fails on load
+rather than on the change is not a gate.
+
+What a bound bought was a failure instead of a hang when the code is wrong, and
+that is bought already: `go test` fails the whole binary at its own `-timeout`
+with a dump of every goroutine, which names what was waited on and where. So a
+test that would have hung waits instead, and a wait that never ends is reported
+by something that reads the stack rather than a clock.
+
+The shape that replaces a bound is one of three. Where the code under test
+already says when it has got somewhere, wait on that: a claim returns its hold, a
+process returns its result, and the test reads `<-done` with nothing beside it.
+Where it does not say, give it a way to — a seam the harness never sets, that a
+test fills with a channel or a step: the Slack sink's wait between passes, the
+conversation store's word that a claim has queued, and the process runner's
+total budget and idle bound are each one of those, and each is a test driving
+the thing it is about rather than polling at a millisecond and giving up at ten
+seconds. And
+where the claim is about promptness, read it off what happened rather than off
+how long it took: a sink that was stopped before it started asked the workspace
+nothing, and a descendant the group kill reached never wrote the marker it
+would have written after its sleep. What remains wall-clock in those tests is
+the code's own timer where it is the thing under test, which is not a bound the
+test set and not one load can turn into a failure.
+
+The same rule covers a test that launches a process and reads what it wrote,
+and a suite in shell run from Go: the wait is for the process, and the working
+directory is one the suite owns rather than a package directory beside a census
+that will list what the shell leaves there.
+
+One bound the rule does not reach is the harness's own on a local Git command,
+which the tests that exercise Git — the orchestrator's, the worktree manager's
+— run under as production does. It was a flat thirty seconds, and at a load
+average near forty that flat figure killed `git worktree list` and `git status`
+in the middle of a suite that was passing, a class of failure no test could
+convert to a signal because the bound is the code's. So the figure is the idle
+machine's, and the manager scales it by how far the one-minute load average
+exceeds the cores, per command and capped at ten times
+(`internal/gitworktree`); a test that runs Git beside the manager gives it the
+same scaled budget rather than a constant of its own. What a suite is held to
+in total is still [`execution.check_timeout`](configuration.md#how-long-a-check-may-take),
+which is the operator's to set against the concurrency they run.
+
+The rule was checked the way the failures arrived: `make race` ten times in a
+row with a second `make race` looping beside it on the same tree, at one-minute
+load averages from 13 to 59 on sixteen cores, twenty-one runs and no failure.
+[The record](diagnoses/yoyodyne-ifd-389-race-beside-race.md) has the numbers,
+and one thing worth knowing before repeating it: `make race` on an unchanged
+tree is served from Go's test cache, so a repetition that is meant to execute
+anything runs under `GOFLAGS=-count=1`.
+
 ## What a surface may do with emphasis
 
 This is the contract for anything that writes output an operator reads — a

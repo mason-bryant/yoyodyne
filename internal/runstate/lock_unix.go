@@ -25,7 +25,18 @@ func tryLockStateFile(file *os.File) (bool, error) {
 	return false, err
 }
 
+// lockStateFile takes an exclusive lock, waiting for whoever holds it.
 func lockStateFile(ctx context.Context, file *os.File) error {
+	return queueForStateFile(ctx, file, nil)
+}
+
+// queueForStateFile is lockStateFile with a way to say the wait has begun:
+// queued, when it is not nil, is called once, the first time the lock is found
+// held. Nothing in the harness passes one. It is a test's signal that a claim
+// has tried and is waiting, which is otherwise observable only by waiting a
+// while and seeing nothing come back -- and a while, on a loaded machine, is a
+// wait that passes for the wrong reason or fails for none.
+func queueForStateFile(ctx context.Context, file *os.File, queued func()) error {
 	for {
 		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -33,6 +44,10 @@ func lockStateFile(ctx context.Context, file *os.File) error {
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
 			return err
+		}
+		if queued != nil {
+			queued()
+			queued = nil
 		}
 		select {
 		case <-ctx.Done():

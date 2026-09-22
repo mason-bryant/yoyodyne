@@ -28,7 +28,7 @@ func TestTheHandshakeIsCheckedRatherThanAssumed(t *testing.T) {
 			t.Fatalf("dialWebSocket() error = %v", err)
 		}
 		defer socket.Close()
-		message, err := socket.ReadMessage(time.Now().Add(time.Second))
+		message, err := socket.ReadMessage(noReadDeadline)
 		if err != nil || string(message) != `{"type":"hello"}` {
 			t.Fatalf("ReadMessage() = %q, %v", message, err)
 		}
@@ -63,13 +63,12 @@ func TestTheHandshakeIsCheckedRatherThanAssumed(t *testing.T) {
 func TestAPingIsAnsweredWithoutTheCallerAsking(t *testing.T) {
 	t.Parallel()
 
-	answered := make(chan []byte, 1)
+	// Whatever came back after the ping is handed over, pong or not, so a wrong
+	// answer is judged here rather than waited for.
+	answered := make(chan frame, 1)
 	server := startWebSocketServer(t, func(peer *serverSocket) {
 		peer.writeFrame(opcodePing, []byte("alive"))
-		frame := peer.readFrame()
-		if frame.opcode == opcodePong {
-			answered <- frame.payload
-		}
+		answered <- peer.readFrame()
 		peer.writeText([]byte(`{"type":"hello"}`))
 	})
 
@@ -78,20 +77,18 @@ func TestAPingIsAnsweredWithoutTheCallerAsking(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	message, err := socket.ReadMessage(time.Now().Add(2 * time.Second))
+	message, err := socket.ReadMessage(noReadDeadline)
 	if err != nil {
 		t.Fatalf("ReadMessage() error = %v", err)
 	}
 	if string(message) != `{"type":"hello"}` {
 		t.Fatalf("ReadMessage() = %q, want the data message the ping preceded", message)
 	}
-	select {
-	case payload := <-answered:
-		if string(payload) != "alive" {
-			t.Fatalf("pong payload = %q, want the ping's own payload", payload)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("the ping went unanswered")
+	// The hello was read, so the peer has already read the frame after its
+	// ping; what it found there is a fact by now rather than something to wait
+	// a while for.
+	if answer := <-answered; answer.opcode != opcodePong || string(answer.payload) != "alive" {
+		t.Fatalf("the ping was answered with opcode %#x payload %q, want a pong carrying the ping's own payload", answer.opcode, answer.payload)
 	}
 }
 
@@ -109,7 +106,7 @@ func TestAFragmentedMessageArrivesWhole(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	message, err := socket.ReadMessage(time.Now().Add(time.Second))
+	message, err := socket.ReadMessage(noReadDeadline)
 	if err != nil || string(message) != `{"type":"hello"}` {
 		t.Fatalf("ReadMessage() = %q, %v, want the whole message", message, err)
 	}
@@ -132,7 +129,7 @@ func TestAnOrderlyCloseIsReportedAsTheConnectionEnding(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	if _, err := socket.ReadMessage(time.Now().Add(time.Second)); !errors.Is(err, errConnectionClosed) {
+	if _, err := socket.ReadMessage(noReadDeadline); !errors.Is(err, errConnectionClosed) {
 		t.Fatalf("ReadMessage() error = %v, want the connection reported as closed", err)
 	}
 }
@@ -154,6 +151,11 @@ func TestSilencePastTheDeadlineEndsTheRead(t *testing.T) {
 		t.Fatal("ReadMessage() = nil, want a silent connection to be given up on")
 	}
 }
+
+// noReadDeadline is the read deadline for a message the test's own peer is
+// certain to send: none, which is what a zero time means to a connection. The
+// one read here that is given a deadline is the one about the deadline.
+var noReadDeadline time.Time
 
 // testServer is the other end of one connection plus the dial function that
 // reaches it. It is an in-memory pipe rather than a listening socket, so the
@@ -250,9 +252,6 @@ func (s *serverSocket) writeFragment(opcode byte, payload []byte, fin bool) {
 
 func (s *serverSocket) readFrame() frame {
 	read := &websocketConn{conn: s.conn, reader: s.reader}
-	if err := s.conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		s.t.Errorf("SetReadDeadline() error = %v", err)
-	}
 	decoded, err := read.readFrame()
 	if err != nil {
 		s.t.Errorf("server readFrame() error = %v", err)

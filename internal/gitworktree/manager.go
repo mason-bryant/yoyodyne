@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -17,7 +18,20 @@ import (
 )
 
 const (
+	// defaultTimeout bounds one local Git command on an idle machine. It is the
+	// idle figure rather than the budget, because the budget is spent in wall
+	// clock and a local Git command's wall clock grows with what else the
+	// machine is doing: at a load average near forty, `git worktree list` and
+	// `git status` were killed at thirty seconds under two race suites and the
+	// provider processes beside them, which failed the run that asked and every
+	// test exercising Git under the suite. So a manager left to the default
+	// scales it by the load, per command, in localTimeout; a caller that names
+	// a Timeout has said what it means and is not scaled.
 	defaultTimeout = 30 * time.Second
+	// maxLoadFactor caps that scaling. A machine ten times oversubscribed gets a
+	// five-minute local budget, and a Git command that has hung is still ended
+	// rather than holding a run open for as long as the load lasts.
+	maxLoadFactor = 10
 	// defaultRemote is the remote publishing pushes to when nothing names
 	// another.
 	defaultRemote = "origin"
@@ -85,8 +99,10 @@ type Manager struct {
 	pushRemote            string
 	allowedPrimaryChanges map[string]struct{}
 	currentExports        []string
-	timeout               time.Duration
-	note                  func(format string, args ...any)
+	// timeout is the local Git budget a caller named, and zero where it left
+	// the budget to the default, which localTimeout then scales by the load.
+	timeout time.Duration
+	note    func(format string, args ...any)
 }
 
 type Options struct {
@@ -115,7 +131,11 @@ type Options struct {
 	// They are read by a run and never written by one, so each is held out of the
 	// change the run makes.
 	CurrentExports []string
-	Timeout        time.Duration
+	// Timeout bounds one local Git command, as named. Zero leaves it to the
+	// default, which is scaled by the machine's load per command: see
+	// defaultTimeout for why a fixed figure was killing Git under a loaded
+	// suite.
+	Timeout time.Duration
 	// Note is where the manager says what it worked around. There is one such
 	// thing and it is worth a line: a listing that described this repository
 	// without a worktree another run had not finished registering, which nothing
@@ -749,9 +769,8 @@ func New(options Options) (*Manager, error) {
 	if !remotePattern.MatchString(pushRemote) {
 		return nil, fmt.Errorf("push remote %q must be a plain Git remote name", options.PushRemote)
 	}
-	timeout := options.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
+	if options.Timeout < 0 {
+		return nil, fmt.Errorf("timeout %s must not be negative", options.Timeout)
 	}
 	allowedPrimaryChanges := make(map[string]struct{}, len(options.AllowedPrimaryChanges))
 	for _, path := range options.AllowedPrimaryChanges {
@@ -774,7 +793,7 @@ func New(options Options) (*Manager, error) {
 		pushRemote:            pushRemote,
 		allowedPrimaryChanges: allowedPrimaryChanges,
 		currentExports:        currentExports,
-		timeout:               timeout,
+		timeout:               options.Timeout,
 		note:                  options.Note,
 	}, nil
 }
@@ -2759,7 +2778,40 @@ func (m *Manager) run(ctx context.Context, args ...string) (execution.ProcessRes
 }
 
 func (m *Manager) runWithEnvironment(ctx context.Context, environment []string, args ...string) (execution.ProcessResult, error) {
-	return m.runBounded(ctx, environment, m.timeout, args...)
+	return m.runBounded(ctx, environment, m.localTimeout(), args...)
+}
+
+// localTimeout is the budget one local Git command gets now. A caller that
+// named one gets it as named. The default is the idle figure scaled by how far
+// the machine's one-minute load average exceeds its cores, read per command
+// rather than once, because a run lasts long enough for the load to change
+// under it. A load the platform cannot report leaves the idle figure alone.
+func (m *Manager) localTimeout() time.Duration {
+	if m.timeout > 0 {
+		return m.timeout
+	}
+	load, ok := loadAverage()
+	if !ok {
+		return defaultTimeout
+	}
+	return scaledTimeout(defaultTimeout, load, runtime.NumCPU())
+}
+
+// scaledTimeout is base multiplied by how oversubscribed the machine is: a load
+// average at or under the core count is an idle machine for this purpose and
+// gets base, and one at twice the cores gets twice base, up to maxLoadFactor.
+func scaledTimeout(base time.Duration, load float64, cores int) time.Duration {
+	if cores < 1 {
+		cores = 1
+	}
+	factor := load / float64(cores)
+	if factor <= 1 {
+		return base
+	}
+	if factor > maxLoadFactor {
+		factor = maxLoadFactor
+	}
+	return time.Duration(float64(base) * factor)
 }
 
 // runRemote runs a Git command that talks to the remote. It is bounded by its
@@ -2771,8 +2823,8 @@ func (m *Manager) runRemote(ctx context.Context, args ...string) (execution.Proc
 }
 
 func (m *Manager) remoteTimeout() time.Duration {
-	if m.timeout > pushTimeout {
-		return m.timeout
+	if local := m.localTimeout(); local > pushTimeout {
+		return local
 	}
 	return pushTimeout
 }

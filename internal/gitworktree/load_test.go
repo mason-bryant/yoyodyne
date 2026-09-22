@@ -1,0 +1,116 @@
+package gitworktree
+
+import (
+	"context"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+)
+
+// The local Git budget is the idle figure on an idle machine and grows with how
+// oversubscribed the machine is, up to the cap: a load average at the core
+// count is idle for this purpose, twice the cores is twice the budget, and
+// nothing about the load makes the budget shorter than the idle figure.
+func TestTheLocalGitBudgetScalesWithTheMachinesLoad(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		load  float64
+		cores int
+		want  time.Duration
+	}{
+		{name: "idle", load: 0.5, cores: 8, want: 30 * time.Second},
+		{name: "at the cores", load: 8, cores: 8, want: 30 * time.Second},
+		{name: "twice the cores", load: 16, cores: 8, want: 60 * time.Second},
+		{name: "the load this was written against", load: 37, cores: 16, want: 69375 * time.Millisecond},
+		{name: "capped", load: 400, cores: 8, want: 5 * time.Minute},
+		{name: "no cores reported", load: 2, cores: 0, want: 60 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := scaledTimeout(30*time.Second, tc.load, tc.cores); got != tc.want {
+				t.Fatalf("scaledTimeout(30s, %v, %d) = %s, want %s", tc.load, tc.cores, got, tc.want)
+			}
+		})
+	}
+}
+
+// A manager left to the default budget reads the load for every command, so a
+// budget on a loaded machine is at least the idle figure and never more than
+// the cap; one given a budget gets that budget whatever the machine is doing.
+func TestAManagerLeftToTheDefaultBudgetScalesItAndANamedBudgetIsKept(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	byDefault, err := New(Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := byDefault.localTimeout(); got < defaultTimeout || got > maxLoadFactor*defaultTimeout {
+		t.Fatalf("localTimeout() = %s, want at least the idle %s and at most %d times it", got, defaultTimeout, maxLoadFactor)
+	}
+	// The platforms the suite runs on report a load, and a load is what the
+	// budget above was read against; anywhere else the idle figure is the whole
+	// of it.
+	load, ok := loadAverage()
+	if !ok && (runtime.GOOS == "darwin" || runtime.GOOS == "linux") {
+		t.Fatalf("loadAverage() read nothing on %s, where the load is what scales the budget", runtime.GOOS)
+	}
+	if ok && load < 0 {
+		t.Fatalf("loadAverage() = %.2f, want a load average", load)
+	}
+	if got := byDefault.remoteTimeout(); got < pushTimeout {
+		t.Fatalf("remoteTimeout() = %s, want at least %s", got, pushTimeout)
+	}
+
+	named, err := New(Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: 7 * time.Second})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := named.localTimeout(); got != 7*time.Second {
+		t.Fatalf("localTimeout() = %s, want the 7s the caller named", got)
+	}
+	if got := named.remoteTimeout(); got != pushTimeout {
+		t.Fatalf("remoteTimeout() = %s, want %s for a named local budget under it", got, pushTimeout)
+	}
+
+	if _, err := New(Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: -time.Second}); err == nil {
+		t.Fatal("New() accepted a negative timeout")
+	}
+
+	// The budget reaches the command the runner is handed.
+	runner := &budgetRecordingRunner{delegate: execution.OSProcessRunner{}}
+	recorded, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := recorded.run(context.Background(), "-C", repository, "rev-parse", "HEAD"); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if runner.timeout < defaultTimeout {
+		t.Fatalf("the command's budget = %s, want at least the idle %s", runner.timeout, defaultTimeout)
+	}
+}
+
+// loadScaledGitBudget is the budget a test gives a Git command it runs itself,
+// beside the manager: the manager's own default, scaled by the load the same
+// way, so a suite run beside another does not kill its own Git at the idle
+// figure.
+func loadScaledGitBudget() time.Duration {
+	return (&Manager{}).localTimeout()
+}
+
+// budgetRecordingRunner keeps the budget of the last command it was handed.
+type budgetRecordingRunner struct {
+	delegate execution.ProcessRunner
+	timeout  time.Duration
+}
+
+func (r *budgetRecordingRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	r.timeout = command.Timeout
+	return r.delegate.Run(ctx, command, observer)
+}
