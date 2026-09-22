@@ -1124,6 +1124,12 @@ var (
 	// What a trace can state about it is that a run recorded one, which is the
 	// part that is behavior rather than machine.
 	baselineRevisionPattern = regexp.MustCompile(`\bcfg-[0-9a-f]{8,}\b`)
+	// The content identity the checks are bound to is a digest over the base
+	// commit and the change, so it moves with the temporary repository. What a
+	// trace can state about it is that the checks were bound to one; it is
+	// taken out ahead of the commit pattern, which its digest would otherwise
+	// match and be numbered as a commit it is not.
+	baselineContentPattern = regexp.MustCompile(regexp.QuoteMeta(gitworktree.ContentIdentityPrefix) + `[0-9a-f]{64}`)
 	// How long a check actually ran is the machine rather than the behavior. The
 	// budget it ran against is behavior and is left alone, which is why this
 	// matches the pair rather than any duration.
@@ -1213,6 +1219,7 @@ func (n *baselineNormalizer) text(value string) string {
 	}
 	value = baselineTimePattern.ReplaceAllString(value, "<time>")
 	value = baselineRevisionPattern.ReplaceAllString(value, "<config-revision>")
+	value = baselineContentPattern.ReplaceAllString(value, "<content>")
 	value = baselineElapsedPattern.ReplaceAllString(value, "${1}<elapsed>${2}")
 	return baselineCommitPattern.ReplaceAllStringFunc(value, n.commit)
 }

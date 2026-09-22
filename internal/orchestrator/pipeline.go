@@ -90,6 +90,12 @@ type WorktreeManager interface {
 	// patch above: those are bounded for a reader, and a gate that saw a bounded
 	// listing would pass whatever the bound had cut.
 	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
+	// ContentIdentity names the change as the worktree holds it, so evidence
+	// about the change can be bound to what it is rather than to when it was
+	// read. The check phase records it and the promotion reads it again: a
+	// project that does not publish has no commit to bind its checks to until
+	// the promotion itself, and this is what binds them.
+	ContentIdentity(ctx context.Context, worktree gitworktree.Worktree) (string, error)
 	// CurrentExports names the derived files the manager refreshes into a
 	// worktree and holds out of the change. The same gate refuses them, so the
 	// list is asked of the thing that holds them rather than restated here: an
@@ -2409,6 +2415,7 @@ func (a *activeRun) repair(ctx context.Context, prompt string) error {
 // rather than left to compete with the check for the next attempt.
 func (a *activeRun) recordCheckFailure(result checks.Result) {
 	a.clearReviewEvidence()
+	a.state.ChecksPassed = nil
 	a.state.CheckFailure = &runstate.CheckFailure{
 		Command:  result.Command,
 		ExitCode: result.Process.ExitCode,
@@ -2424,6 +2431,7 @@ func (a *activeRun) recordCheckFailure(result checks.Result) {
 func (a *activeRun) recordPathRefusal(refusal runstate.PathRefusal) {
 	a.clearReviewEvidence()
 	a.state.CheckFailure = nil
+	a.state.ChecksPassed = nil
 	recorded := refusal
 	a.state.PathRefusal = &recorded
 }
@@ -4235,8 +4243,78 @@ func (a *activeRun) verify(ctx context.Context) error {
 		return phaseError{status: statusForProcess(check.Process.Status), cause: cause}
 	}
 	// The change in the worktree now passes, so any failure an earlier attempt
-	// was handed is no longer this run's outstanding repair input.
+	// was handed is no longer this run's outstanding repair input. What replaces
+	// it is the evidence the promotion reads: these checks passed over this
+	// content, on this attempt, at this commit, and integrate refuses without
+	// exactly that. The content is read after the suite rather than before it,
+	// because what the promotion moves is the tree as the suite left it.
+	content, err := p.Worktrees.ContentIdentity(ctx, a.worktree)
+	if err != nil {
+		return fmt.Errorf("name the change the checks passed over: %w", err)
+	}
 	a.state.CheckFailure = nil
+	commands := make([]string, 0, len(checkResults))
+	for _, check := range checkResults {
+		commands = append(commands, check.Command)
+	}
+	a.state.ChecksPassed = &runstate.ChecksPassed{
+		Content:  content,
+		Attempt:  a.state.RepairAttempts,
+		Commit:   a.state.HarnessCommit,
+		Commands: commands,
+		At:       p.clock().Now().UTC(),
+	}
+	return nil
+}
+
+// ErrIntegrationUnearned is a promotion refused because the record does not
+// show the change earned it: no passing checks recorded for the attempt about
+// to be promoted, a check failure or path refusal still standing, or no
+// approving verdict. It never fires on the ordinary path, where the repair loop
+// re-earns the whole gate before every promotion; it is here for every other
+// route into the promotion, which is the code that will never mention it.
+var ErrIntegrationUnearned = errors.New("integration refused: the record does not show the change passed its gate")
+
+// integrationEarned is the promotion's own reading of the gate. It asks the
+// durable record rather than trusting that the caller ran the checks first,
+// because control flow is a property of one caller: a definition that routed
+// straight to `candidate.integrate`, or a resumed run that skipped the loop,
+// would otherwise promote on a green it never saw. What it requires is bound to
+// the exact candidate — the content of the change as the worktree holds it now,
+// the attempt count, and the harness commit where the run made one — so
+// evidence from an earlier attempt, or from a tree that has since moved, is not
+// evidence for this one. The content is the binding that holds on a project
+// that has committed nothing; it is read from the worktree again here rather
+// than off the record, because the record can only say what the checks ran
+// over, and the question is whether that is what is about to be promoted.
+func (a *activeRun) integrationEarned(ctx context.Context) error {
+	state := a.state
+	switch {
+	case state.PathRefusal != nil:
+		return fmt.Errorf("%w: a protected-path refusal is still recorded against the change", ErrIntegrationUnearned)
+	case state.CheckFailure != nil:
+		return fmt.Errorf("%w: %s exited with %d and nothing has passed the checks over the change since",
+			ErrIntegrationUnearned, state.CheckFailure.Command, state.CheckFailure.ExitCode)
+	case state.ChecksPassed == nil:
+		return fmt.Errorf("%w: no configured check is recorded as having passed over the change", ErrIntegrationUnearned)
+	case state.ChecksPassed.Attempt != state.RepairAttempts:
+		return fmt.Errorf("%w: the checks passed over attempt %d and the change being promoted is attempt %d",
+			ErrIntegrationUnearned, state.ChecksPassed.Attempt, state.RepairAttempts)
+	case state.ChecksPassed.Commit != state.HarnessCommit:
+		return fmt.Errorf("%w: the checks passed at commit %q and the change being promoted is at %q",
+			ErrIntegrationUnearned, state.ChecksPassed.Commit, state.HarnessCommit)
+	case state.ReviewDecision != runstate.ReviewApprove:
+		return fmt.Errorf("%w: the recorded review decision is %q rather than an approval",
+			ErrIntegrationUnearned, state.ReviewDecision)
+	}
+	content, err := a.pipeline.Worktrees.ContentIdentity(ctx, a.worktree)
+	if err != nil {
+		return fmt.Errorf("%w: the change about to be promoted could not be named: %v", ErrIntegrationUnearned, err)
+	}
+	if content != state.ChecksPassed.Content {
+		return fmt.Errorf("%w: the checks passed over content %s and the change being promoted is %s",
+			ErrIntegrationUnearned, state.ChecksPassed.Content, content)
+	}
 	return nil
 }
 
@@ -4334,6 +4412,12 @@ func (e checkFailure) Error() string {
 // cannot affect them.
 func (a *activeRun) integrate(ctx context.Context) error {
 	p := a.pipeline
+	// The gate is read off the record before anything here is written or taken:
+	// a refusal must leave the run exactly as the reviewer left it, holding no
+	// lease and standing in no phase it did not earn.
+	if err := a.integrationEarned(ctx); err != nil {
+		return err
+	}
 	a.state.Phase = runstate.PhaseIntegrating
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
