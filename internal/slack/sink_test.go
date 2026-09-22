@@ -1733,19 +1733,9 @@ func (r *refusingPosts) invite() {
 // waitFor spends real time rather than fake time, because what these tests are
 // about is a loop running repeatedly. The bound is generous and the condition is
 // reached in milliseconds when the code is right.
-//
-// It is generous in wall-clock terms because the sink's passes are not: every
-// record the store writes is synced to disk, which on macOS is a full flush of
-// the drive's cache, and under a full `go test ./...` the packages beside this
-// one are doing git and sync-heavy work of their own. On 2026-09-21 the two
-// refusal tests below missed a ten-second bound twice in a row on a machine at
-// load twenty-five, waiting on nothing but that flush, and passed every re-run
-// on their own. A sink that is genuinely stuck still fails here, just later.
-const waitForBound = 90 * time.Second
-
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(waitForBound)
+	deadline := time.Now().Add(10 * time.Second)
 	for !condition() {
 		if time.Now().After(deadline) {
 			t.Fatal("the sink never reached the state this test is about")
