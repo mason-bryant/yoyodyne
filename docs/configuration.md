@@ -1934,6 +1934,15 @@ ten minutes, a suite past forty packages with real Git integration tests, and tw
 concurrent runs — the tests were passing package by package when the bound
 stopped them.
 
+The same rule reaches inside a check. `go test` kills any one package at ten
+minutes unless told otherwise, which is a second ceiling under this one that
+nothing here sets, and this repository's `internal/orchestrator` suite runs for
+about seven minutes under `-race` on an idle machine. So `make test` and
+`make race` pass `-timeout` at the check bound (`TEST_TIMEOUT`, `30m` by
+default), and a suite of your own that a check runs should carry its bound the
+same way: a runner's own default is a bound chosen for a package, not for a
+machine running two suites at once.
+
 Every check reports what it spent against what it was allowed, whether it passed
 or not. The completion event carries `elapsed` and `timeout`, and the run's notes
 on the work item carry the same pair per check, so a suite growing toward its
