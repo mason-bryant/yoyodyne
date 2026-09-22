@@ -32,6 +32,13 @@ func TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
+	// Worktrees are registered and unregistered underneath these two runs for
+	// the whole test, by Git run outside the worktree manager and so outside its
+	// registry lease. This test was one of the two seen failing intermittently
+	// on a command that crossed another run's half-written registration, so the
+	// condition is part of what it judges rather than something that has to be
+	// turned on: see startCreationLoop.
+	startCreationLoop(t, repository)
 	// One state root and one worktree root for both pipelines: that is what two
 	// concurrent processes on one machine actually share.
 	stateRoot := t.TempDir()

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -726,6 +727,67 @@ func TestConvergePrunesARegistrationWhoseCheckoutIsGone(t *testing.T) {
 	repeated := fixture.converge(t)
 	if len(repeated.Registrations.Pruned) != 0 || repeated.Registrations.Failure != "" {
 		t.Fatalf("second prune = %#v, want nothing stale left", repeated.Registrations)
+	}
+}
+
+// A registration a killed `git worktree add` left half-written is the one that
+// used to stop every later run on the repository at its own creation, until a
+// person removed the directory by hand. The sweep clears it and says which
+// entry it was and why, so the next run creates its worktree with nobody
+// having noticed anything.
+func TestConvergeClearsARegistrationAKilledAddLeftBehind(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+	registration := filepath.Join(fixture.repository, ".git", "worktrees", "yoyodyne-killed-0a1b2c3d")
+	orphan := filepath.Join(t.TempDir(), "yoyodyne-killed-0a1b2c3d")
+	for _, directory := range []string{registration, orphan} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", directory, err)
+		}
+	}
+	// What an add killed while registering leaves: still locked as initializing,
+	// gitdir written, commondir created and never written — the file every
+	// registration walk then dies over — and no index, because it never reached
+	// the checkout. Aged so it cannot be an add somebody else is still running.
+	writeSweepFile(t, filepath.Join(registration, "locked"), "initializing")
+	writeSweepFile(t, filepath.Join(registration, "gitdir"), filepath.Join(orphan, ".git")+"\n")
+	writeSweepFile(t, filepath.Join(registration, "commondir"), "")
+	then := time.Now().Add(-10 * time.Minute)
+	for _, file := range []string{"locked", "gitdir", "commondir", ""} {
+		if err := os.Chtimes(filepath.Join(registration, file), then, then); err != nil {
+			t.Fatalf("Chtimes(%s) error = %v", file, err)
+		}
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(registration) })
+	if output, err := attemptPipelineGit(fixture.repository, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "probe"), "HEAD"); err == nil {
+		t.Fatalf("git created a worktree with a killed add's registration present, so the failure the sweep clears is gone:\n%s", output)
+	}
+
+	convergence := fixture.converge(t)
+	if convergence.Registrations.Failure != "" {
+		t.Fatalf("the prune failed: %s", convergence.Registrations.Failure)
+	}
+	if len(convergence.Registrations.Unfinished) != 1 {
+		t.Fatalf("unfinished = %#v, want the killed add's registration alone", convergence.Registrations.Unfinished)
+	}
+	cleared := convergence.Registrations.Unfinished[0]
+	if !cleared.Cleared || cleared.Name != filepath.Base(registration) || cleared.Path != orphan || !strings.Contains(cleared.Reason, "initializing") {
+		t.Fatalf("unfinished = %#v, want the entry cleared, named, and its directory named", cleared)
+	}
+	if _, err := os.Lstat(registration); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat(%s) error = %v, want the registration gone", registration, err)
+	}
+	// The whole point: the next run can create its worktree.
+	next := filepath.Join(t.TempDir(), "next")
+	runPipelineGit(t, fixture.repository, "worktree", "add", "--quiet", "--detach", next, "HEAD")
+	runPipelineGit(t, fixture.repository, "worktree", "remove", "--force", next)
+	// Sweeping again meets nothing, so a sweep on every pass does not repeat
+	// itself.
+	repeated := fixture.converge(t)
+	if len(repeated.Registrations.Unfinished) != 0 || repeated.Registrations.Failure != "" {
+		t.Fatalf("second sweep = %#v, want no unfinished registration left", repeated.Registrations)
 	}
 }
 

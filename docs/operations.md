@@ -1275,8 +1275,11 @@ spawns, so a machine that keeps them all eventually cannot spawn a command in it
 next worktree at all — no `make check`, no `go test`, nothing. Settled runs past
 the most recent few have their checkout unregistered, and registrations whose
 checkout is no longer on disk are pruned, whichever run or person left them
-behind. A run still in flight is never a candidate — that is a live developer's
-checkout. Each retirement is taken under the run's own lease and written onto its
+behind. A registration a killed `git worktree add` never finished filling in is
+cleared on the same pass, and named — see
+[a registration a run never finished writing](#a-registration-a-run-never-finished-writing)
+for what that shape is and why nothing else clears it. A run still in flight is
+never a candidate — that is a live developer's checkout. Each retirement is taken under the run's own lease and written onto its
 record, and so is a checkout the sweep finds already gone — removed by you, or by
 an external `git worktree prune` — so `yoyo status` and the triage docket stop
 advertising a directory that is not there rather than sending you after it.
@@ -1436,37 +1439,94 @@ packing and pruning objects becoming something you run by hand.
 ## A registration a run never finished writing
 
 `git worktree add` registers an entry under the common Git directory's
-`worktrees/` and then fills it in, one file at a time. Anything that reads the
-bookkeeping in between — which is every `git worktree list`, and so every
-inspection, cleanup and sweep the harness makes — reads a file that has been
-created and not yet written, and Git refuses to describe the repository at all
-rather than skipping the one entry:
+`worktrees/` and then fills it in, one file at a time: a `locked` file saying
+`initializing` first, then `gitdir`, `commondir` and `HEAD`, then the checkout
+that writes the `index`, and last of all it removes the lock. Anything that
+walks the bookkeeping in between reads a file that has been created and not yet
+written, and Git refuses the whole command rather than skipping the one entry:
 
 ```text
 fatal: failed to read .git/worktrees/yoyodyne-ifd-334-0db8dc56/commondir: Result too large
 ```
 
-The harness reads the listing again when that happens, because the instant
-passes in the time Git takes to write a handful of small files. What a re-read
-cannot cover is the entry that stays that way: an add whose process was killed
-between two of those writes leaves one, and `git worktree prune` judges an entry
-by its `gitdir` file, which such an entry has — so nothing clears it. So the
-harness checks a refusal against the bookkeeping instead of believing it, and
-where the entry really is unfinished it describes the repository without that
-one, saying so on standard error:
+The listing is the obvious walker — every inspection, cleanup and sweep the
+harness makes is one — but it is not the only one. A rebase, a checkout, a
+branch deletion and `git worktree add` itself each walk the registrations to
+check that a branch is not checked out somewhere else, and each dies over the
+same entry with the same words.
+
+**Within one harness, such a command does not cross that instant at all.** Every
+Git command the harness runs that walks the registrations takes the same lease
+its own creations take, in a shared mode every other reader may hold at once and
+no creation may hold beside — so a rebase, a checkout or a listing waits for a
+creation in flight instead of meeting the entry it has not filled in yet, and
+readers never queue behind each other. A creation reads what it is writing under
+the lease it already holds, so it never waits for itself. Commands that open no
+registrations — the great majority, every `diff`, `status`, `log` and `rev-parse`
+— take nothing and are not held back by a creation.
+
+What the lease cannot cover, the harness runs *any* Git command again over: a
+second harness on an older binary, a Git command somebody ran by hand, and a
+platform with no advisory lock to take at all. The instant passes in the time
+Git takes to write a handful of small files, so running the command again is
+usually enough. Only that one refusal is run again: every other answer Git gives
+is believed the first time.
+
+What neither can cover is the entry that stays that way. An add whose
+process was killed leaves the entry exactly as it stood, and nothing Git has
+clears it: `git worktree prune` skips an entry that is locked and judges an
+unlocked one by its `gitdir` file, which such an entry usually has, and
+`git worktree remove` finds its entry through the listing the entry breaks.
+Where the file it was killed writing was `commondir`, every walk on the
+repository then fails, creation included — which is how one killed add used to
+stop every later run on the repository until a person removed a directory by
+hand.
+
+**The harness clears such an entry itself now, and says so.** Two things do it:
+every worktree creation, just before its own `git worktree add`, and the
+convergence sweep [`yoyo reconcile`](#recovering-interrupted-runs) runs. Both
+hold the registry lease the harness's own creations take, so under it an
+unfinished entry cannot be a creation of the harness's own still writing; and
+both leave alone an entry younger than a minute, because an add somebody else
+started — a person's, or one an agent ran inside a checkout — takes no lease and
+is told from a dead one only by having stopped writing. A creation waits such an
+entry out rather than failing over it, and the minute is the bound on that wait
+rather than its length: what it is really waiting for is the other add getting
+past the one file a walk dies on, which takes milliseconds, so a creation that
+meets a live neighbour is held up for about as long as that neighbour takes to
+register. Only an add that has genuinely stopped costs the whole
+minute, once, and is then cleared. What is cleared is the
+registration alone: the branch the add made first is a branch like any other,
+and a directory it left on disk is left where it is, named in the line so you
+know it is not a worktree any more.
+
+```text
+cleared the worktree registration yoyodyne-ifd-334-0db8dc56, left by a git worktree add that never finished: its lock still says initializing, which the add removes only once it has checked the worktree out; the directory it named at /…/worktrees/yoyodyne-ifd-334-0db8dc56 is not a worktree any more, and is left where it is
+```
+
+A creation says it on standard error; the sweep prints it and carries it in
+`--json` under `convergence.registrations.unfinished`, with an entry it kept and
+why beside any it cleared. An entry is judged a killed add by two things
+together: it has no `index`, because the checkout is what writes one, and it
+either still carries Git's own `initializing` lock or is missing one of the
+files the add writes before the checkout. A worktree added with `--no-checkout`
+has no index either and is neither of those, so it is never touched.
+
+A listing that meets an unfinished entry before it has been cleared — inside
+the minute, or one Git refused over that was never a killed add — still
+describes the repository without it rather than failing, saying so on standard
+error:
 
 ```text
 the worktree listing left out yoyodyne-ifd-334-0db8dc56, registered and not yet filled in, which Git refused the whole listing over: list worktrees failed with exit code 128: fatal: failed to read .git/worktrees/yoyodyne-ifd-334-0db8dc56/commondir: Result too large
 ```
 
-That line means runs are no longer being lost to the entry, not that the entry
-has gone. It is still there, and `git worktree add` reads the same bookkeeping
-the listing does, so **no new worktree can be created in that repository until
-the entry is removed** — every run stops at its own creation with the message
-above. Nothing here removes it, because an entry that looks unfinished is also
-what an add still in flight looks like, and deleting one of those loses the
-worktree being created. Removing it is yours, when nothing is in flight —
-`yoyo status` says what is running:
+That line means runs are not being lost to the entry, not that it has gone. If
+it keeps appearing across sweeps, the entry is the one shape nothing clears: a
+registration that *does* have an index — a finished worktree whose `commondir`
+was emptied by something other than a killed add, a crash that zeroed the file,
+say — and that one is yours to look at, because the checkout it names may hold
+somebody's work. `yoyo status` says what is running; when nothing is:
 
 ```sh
 rm -r .git/worktrees/yoyodyne-ifd-334-0db8dc56

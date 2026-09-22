@@ -212,7 +212,7 @@ func (m *Manager) RemovePreservedWorktree(ctx context.Context, worktree Worktree
 	}
 	// A removal unregisters an entry in the same unguarded pieces an add writes
 	// one, so it queues on the same lease the creation does.
-	lease, err := m.leaseRegistry(ctx)
+	ctx, lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return removal, err
 	}
@@ -298,7 +298,7 @@ func (m *Manager) RestoreWorktree(ctx context.Context, worktree Worktree) (Workt
 	if err := os.MkdirAll(m.worktreeRoot, 0o700); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree root: %w", err)
 	}
-	lease, err := m.leaseRegistry(ctx)
+	ctx, lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return Worktree{}, err
 	}
@@ -425,36 +425,51 @@ func preservedWorkMessage(worktree Worktree) string {
 }
 
 // Prune is what one repository-wide prune removed: the registrations whose
-// checkout was no longer on disk, named by the path they used to point at.
+// checkout was no longer on disk, named by the path they used to point at, and
+// the registrations a `git worktree add` never finished, each with what became
+// of it.
 type Prune struct {
 	Pruned []string `json:"pruned,omitempty"`
+	// Unfinished is every registration met that an add never finished filling
+	// in, whether it was cleared or left. They are reported apart from Pruned
+	// because they are a different fact: a pruned registration named a
+	// checkout that had gone, and an unfinished one names a run that was killed
+	// while starting — the kind of thing that used to stop every later run.
+	Unfinished []UnfinishedRegistration `json:"unfinished,omitempty"`
 }
 
 // PruneRegistrations removes every registration in this repository whose
-// checkout is already gone, whichever run or person left it behind.
+// checkout is already gone, whichever run or person left it behind, and every
+// registration an add never finished filling in.
 //
-// It is the one removal here that is not derived from a recorded worktree, and
-// it is safe to be: Git prunes a registration only where the directory it points
-// at does not exist, so there is nothing on disk left for it to lose. That is
-// also why it covers what the recorded sweeps cannot — a checkout somebody
-// deleted by hand, one belonging to a run record that is itself gone, one from
-// a product this harness no longer holds. Every one of those is invisible to a
-// sweep driven from run state and still costs every later command the deny path
-// its registration puts in the sandbox profile.
+// The first is the one removal here that is not derived from a recorded
+// worktree, and it is safe to be: Git prunes a registration only where the
+// directory it points at does not exist, so there is nothing on disk left for
+// it to lose. That is also why it covers what the recorded sweeps cannot — a
+// checkout somebody deleted by hand, one belonging to a run record that is
+// itself gone, one from a product this harness no longer holds. Every one of
+// those is invisible to a sweep driven from run state and still costs every
+// later command the deny path its registration puts in the sandbox profile.
 //
-// The lease is what makes a prune safe to ask for at all. Git judges a
+// The second is what Git's prune cannot reach and what fails every creation on
+// the repository while it stands — see settleRegistrations. It goes first,
+// because a listing over such an entry is answered from the bookkeeping with a
+// note rather than by Git, and the prune's own listings should not have to be.
+//
+// The lease is what makes either safe to ask for at all. Git judges a
 // registration stale by whether its gitdir file is there, which is exactly what
 // a `git worktree add` has not written yet while it is filling the entry in, so
 // an unguarded prune deletes a registration out from under a run that is being
 // created beside it — the race maintenanceOptions exists to keep Git from
 // starting on its own. Taking the lease puts this prune in the same queue as
 // every creation and removal, which is the one place it cannot reach that
-// window.
+// window, and it is equally what says an unfinished entry is not a creation of
+// the harness's own still writing.
 //
 // What was pruned is derived from the bookkeeping before and after rather than
 // from what Git printed, so it does not depend on the wording of a message.
 func (m *Manager) PruneRegistrations(ctx context.Context) (Prune, error) {
-	lease, err := m.leaseRegistry(ctx)
+	ctx, lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return Prune{}, err
 	}
@@ -463,30 +478,34 @@ func (m *Manager) PruneRegistrations(ctx context.Context) (Prune, error) {
 	// nothing about the registrations below.
 	defer func() { _ = lease.release() }()
 
+	unfinished, err := m.settleRegistrations(ctx, false)
+	if err != nil {
+		return Prune{}, fmt.Errorf("settle the worktree registrations before pruning: %w", err)
+	}
+	prune := Prune{Unfinished: unfinished}
 	before, err := m.listWorktrees(ctx)
 	if err != nil {
-		return Prune{}, err
+		return prune, err
 	}
 	pruned, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "prune")
 	if err != nil {
-		return Prune{}, err
+		return prune, err
 	}
 	if pruned.Status != execution.ProcessSucceeded {
-		return Prune{}, fmt.Errorf("prune stale worktree registrations failed with exit code %d: %s", pruned.ExitCode, strings.TrimSpace(pruned.Stderr))
+		return prune, fmt.Errorf("prune stale worktree registrations failed with exit code %d: %s", pruned.ExitCode, strings.TrimSpace(pruned.Stderr))
 	}
 	after, err := m.listWorktrees(ctx)
 	if err != nil {
-		return Prune{}, fmt.Errorf("read the worktree registrations after pruning: %w", err)
+		return prune, fmt.Errorf("read the worktree registrations after pruning: %w", err)
 	}
 	remaining := make(map[string]struct{}, len(after))
 	for _, entry := range after {
 		remaining[entry.path] = struct{}{}
 	}
-	var gone []string
 	for _, entry := range before {
 		if _, still := remaining[entry.path]; !still {
-			gone = append(gone, entry.path)
+			prune.Pruned = append(prune.Pruned, entry.path)
 		}
 	}
-	return Prune{Pruned: gone}, nil
+	return prune, nil
 }

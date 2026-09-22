@@ -313,3 +313,51 @@ func (r Root) MakeDirectory(relative string, mode fs.FileMode) (string, error) {
 	}
 	return target, nil
 }
+
+// RemoveDirectory removes the directory a root-relative path names, and
+// everything in it, and returns where it removed from.
+//
+// It is here for the same reason MakeDirectory is: a caller reaching for
+// `os.RemoveAll` itself would be a repository-scoped mutation outside this
+// package deciding its own containment, and that has no exceptions. What needs
+// it is bookkeeping the harness has to take back out of a repository — a
+// worktree registration a killed `git worktree add` left half-written, which
+// Git's own prune does not reach and which fails every later command that walks
+// the registrations.
+//
+// Confinement is decided exactly as it is above, and two refusals are added on
+// top of it, because removal is the one operation here that destroys what was
+// already there. A final component that is a symlink is refused rather than
+// removed: the link would go and its target would stay, which is a removal that
+// did not remove what the caller named. And a final component that is not a
+// directory is refused, because every caller for this asks for a directory by
+// name and a file standing where one was is not the thing they meant. Removing
+// what is not there is not a refusal but a removal already made, so a sweep that
+// runs twice is not a sweep that fails the second time.
+func (r Root) RemoveDirectory(relative string) (string, error) {
+	clean, target, err := r.resolve(relative)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return target, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", clean, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("refusing to remove %s: it is a symlink rather than a directory", clean)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("refusing to remove %s: it is not a directory", clean)
+	}
+	// RemoveAll below this point removes each entry through its own parent
+	// directory rather than by re-walking the path, and never follows a link at
+	// the component it is removing, so what a link planted underneath it now
+	// points at is not removed with it.
+	if err := os.RemoveAll(target); err != nil {
+		return "", fmt.Errorf("remove %s: %w", clean, err)
+	}
+	return target, nil
+}

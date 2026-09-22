@@ -435,6 +435,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		if output.Convergence.Registrations.Pruned == nil {
 			output.Convergence.Registrations.Pruned = []string{}
 		}
+		if output.Convergence.Registrations.Unfinished == nil {
+			output.Convergence.Registrations.Unfinished = []gitworktree.UnfinishedRegistration{}
+		}
 		if err != nil {
 			output.Error = err.Error()
 		}
@@ -715,6 +718,16 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	if failure := convergence.Registrations.Failure; failure != "" {
 		fmt.Fprintf(stderr, "stale worktree registrations not pruned: %s\n", failure)
 	}
+	// A registration an add never finished is said one at a time rather than
+	// counted, because until it was cleared it was stopping every new run on the
+	// repository at creation, and one that was kept is still doing so.
+	for _, unfinished := range convergence.Registrations.Unfinished {
+		if unfinished.Cleared {
+			fmt.Fprintln(stdout, unfinished.Describe())
+		} else {
+			fmt.Fprintln(stderr, unfinished.Describe())
+		}
+	}
 	if pruned := len(convergence.Registrations.Pruned); pruned > 0 {
 		fmt.Fprintf(stdout, "%d stale worktree registration(s) pruned\n", pruned)
 	}
@@ -747,7 +760,10 @@ carries are live runs plus a bounded tail rather than growing with the harness's
 history until a command in the next worktree cannot spawn. Settled runs past the
 most recent few have their checkout unregistered, and registrations whose
 checkout is no longer on disk are pruned, whichever run or person left them
-behind. No branch is touched by either.
+behind. A registration a killed "git worktree add" never finished filling in is
+cleared too, and each one is named: Git's own prune never reaches one, and
+while it stands every new worktree creation in the repository fails over it.
+No branch is touched by any of these.
 
 A checkout holding uncommitted work is retired too, and nothing is lost doing it:
 the tree is recorded first on refs/yoyodyne/preserved-work/<run-id>, which the
