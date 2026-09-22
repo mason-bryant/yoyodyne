@@ -554,7 +554,7 @@ func TestNoSessionChoosingIsARefusal(t *testing.T) {
 	}
 	// It is also waiting on somebody. A queue nobody is pulling from will wait
 	// forever without a person, and the attention line is where a person looks.
-	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "`yoyo work --watch`") {
+	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose(), "`yoyo work --watch`") {
 		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
 }
@@ -631,7 +631,7 @@ func TestARunInFlightBesideWorkAConversationCarriesIsNotAStalledLine(t *testing.
 		t.Fatalf("needs a human = %+v, want only the conversations that carry the work", standing.NeedsHuman)
 	}
 	for _, attention := range standing.NeedsHuman {
-		if !strings.Contains(attention.Whose, "the architect's") {
+		if !strings.Contains(attention.Whose(), "the architect's") {
 			t.Fatalf("needs a human = %+v, want the architect named rather than the operator", standing.NeedsHuman)
 		}
 	}
@@ -877,7 +877,7 @@ func TestADirectivePauseIsTheItemsOwnRefusal(t *testing.T) {
 		t.Fatalf("refusal = %+v", standing.NotStartable[0])
 	}
 	// The same directive is a thing waiting on a person, with whose move it is.
-	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "the operator's") {
+	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose(), "the operator's") {
 		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
 }
@@ -946,8 +946,8 @@ func TestAnOutstandingRunNeedsAHuman(t *testing.T) {
 	if len(standing.NeedsHuman) != 1 {
 		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
-	if !strings.Contains(standing.NeedsHuman[0].Whose, "yoyo reconcile") {
-		t.Fatalf("whose = %q, want the command that settles it", standing.NeedsHuman[0].Whose)
+	if !strings.Contains(standing.NeedsHuman[0].Whose(), "yoyo reconcile") {
+		t.Fatalf("whose = %q, want the command that settles it", standing.NeedsHuman[0].Whose())
 	}
 }
 
@@ -1009,15 +1009,15 @@ func TestAPromotionAwaitingTheForgeNeedsAHuman(t *testing.T) {
 	} {
 		found := false
 		for _, attention := range standing.NeedsHuman {
-			if !strings.Contains(attention.What, want.run) {
+			if !strings.Contains(attention.What(), want.run) {
 				continue
 			}
 			found = true
-			if !strings.Contains(attention.What, want.what) {
-				t.Errorf("what = %q, want the unpublished promotion named with %q", attention.What, want.what)
+			if !strings.Contains(attention.What(), want.what) {
+				t.Errorf("what = %q, want the unpublished promotion named with %q", attention.What(), want.what)
 			}
-			if !strings.HasPrefix(attention.Whose, want.mover) || !strings.Contains(attention.Whose, "yoyo reconcile") {
-				t.Errorf("whose for %s = %q, want %s and the sweep that settles it", want.run, attention.Whose, want.mover)
+			if !strings.HasPrefix(attention.Whose(), want.mover) || !strings.Contains(attention.Whose(), "yoyo reconcile") {
+				t.Errorf("whose for %s = %q, want %s and the sweep that settles it", want.run, attention.Whose(), want.mover)
 			}
 		}
 		if !found {
@@ -1052,7 +1052,7 @@ func TestHandedOffWorkIsNamedOnBothLines(t *testing.T) {
 	if len(standing.NotStartable) != 1 || !strings.Contains(standing.NotStartable[0].Reason, "rather than a developer run") {
 		t.Fatalf("not startable = %+v", standing.NotStartable)
 	}
-	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose, "the architect's") {
+	if len(standing.NeedsHuman) != 1 || !strings.Contains(standing.NeedsHuman[0].Whose(), "the architect's") {
 		t.Fatalf("needs a human = %+v", standing.NeedsHuman)
 	}
 }

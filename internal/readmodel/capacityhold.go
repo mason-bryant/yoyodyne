@@ -396,20 +396,16 @@ func (h CapacityHold) Mark() string {
 	}
 }
 
-// Attention is the hold as one thing waiting on a person, in the shape the
-// attention line's other entries say it: what, since when, and whose move. It
-// is the short form rather than Says, because Says is the banner above the
-// lines and a reading that said the whole sentence twice would be repetition
-// rather than emphasis.
+// Attention is the hold as one thing waiting on a person, carried whole under
+// the hold's own entry. The sentence the line prints for it is the short form
+// rather than Says, because Says is the banner above the lines and a reading
+// that said the whole sentence twice would be repetition rather than emphasis;
+// Attention.What derives it from the record here.
 func (h CapacityHold) Attention() (Attention, bool) {
 	if !h.Holding {
 		return Attention{}, false
 	}
-	what := "every role is held by the provider's usage window, since " + h.Since.UTC().Format(time.RFC3339)
-	if !h.ResetsAt.IsZero() {
-		what += ", until " + h.ResetsAt.UTC().Format(time.RFC3339)
-	}
-	return Attention{What: what, Whose: h.Whose()}, true
+	return Attention{Kind: AttentionHold, ID: HoldCapacity, Mover: MoverOperator, CapacityHold: &h}, true
 }
 
 // CapacityHoldOf reads the hold from a set of sources, and says why it could

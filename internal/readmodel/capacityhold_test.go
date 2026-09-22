@@ -470,8 +470,8 @@ func TestAHoldIsTheBannerAndAnAttentionEntry(t *testing.T) {
 	}
 	found := false
 	for _, attention := range standing.NeedsHuman {
-		if strings.Contains(attention.What, "every role is held by the provider's usage window") &&
-			strings.Contains(attention.Whose, "the operator's") {
+		if strings.Contains(attention.What(), "every role is held by the provider's usage window") &&
+			strings.Contains(attention.Whose(), "the operator's") {
 			found = true
 		}
 	}
