@@ -735,6 +735,64 @@ func TestAMergeTheForgeWillNotMakeIsSaidAsAWarningWhenItIsDropped(t *testing.T) 
 	}
 }
 
+// The fifth fact about getting a change out: the merge is queued and the forge
+// is holding it on a failing check. It looks exactly like a merge about to
+// happen until the sweep writes the failing checks onto the record, and that
+// appearing is said once, as a warning, naming the check — and again only if
+// the checks change. A merge the forge is simply about to perform says nothing.
+func TestAQueuedMergeTheForgeIsHoldingOnACheckIsSaidOnceAsAWarning(t *testing.T) {
+	queued := running()
+	queued.PullRequest = &runstate.PullRequest{
+		Remote: "origin", Branch: "yoyodyne/ifd-362", Number: 487,
+		URL: "https://example.test/pull/487", HeadCommit: strings.Repeat("c", 40), MergeQueued: true,
+	}
+	held := queued
+	request := *queued.PullRequest
+	request.FailingChecks = []string{"build"}
+	held.PullRequest = &request
+
+	kinds, notifications := crossed(t, queued, held)
+	if len(kinds) != 1 || kinds[0] != KindMergeHeld {
+		t.Fatalf("a held merge crossed %v", kinds)
+	}
+	said := notifications[0]
+	if said.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a held merge is said at %q, want a warning", said.Event.Severity)
+	}
+	if !said.Speaker.IsHarness() {
+		t.Fatalf("a held merge is spoken by %q, want the harness", said.Speaker.Key())
+	}
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, fact := range []string{"#487", `"build"`, "holding"} {
+		if !strings.Contains(message.Body, fact) {
+			t.Fatalf("body %q does not carry %q", message.Body, fact)
+		}
+	}
+	if kinds, _ := crossed(t, held, held); len(kinds) != 0 {
+		t.Fatalf("the same hold crossed again as %v", kinds)
+	}
+	// A sink that first reads the record while the hold stands says it, as it
+	// says a drop: the fact is on the record rather than in a flag it saw move.
+	if kinds, _ := crossed(t, runstate.State{}, held); !slices.Contains(kinds, KindMergeHeld) {
+		t.Fatalf("a run first read while its merge was held crossed %v", kinds)
+	}
+	// The checks changing is news; the checks clearing is not said here — the
+	// merge that follows says it.
+	changed := held
+	again := request
+	again.FailingChecks = []string{"build", "adoption"}
+	changed.PullRequest = &again
+	if kinds, _ := crossed(t, held, changed); len(kinds) != 1 || kinds[0] != KindMergeHeld {
+		t.Fatalf("a hold whose checks changed crossed %v", kinds)
+	}
+	if kinds, _ := crossed(t, held, queued); slices.Contains(kinds, KindMergeHeld) {
+		t.Fatalf("a hold that cleared crossed %v", kinds)
+	}
+}
+
 // The drop is read from the moment the record holds rather than from the queued
 // flag going out, and this is why: a sink that first reads a run after the drop
 // has to say it, and comparing flags it never saw set would say nothing at all.

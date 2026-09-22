@@ -41,18 +41,26 @@ build: cachecheck
 	mkdir -p $(dir $(BINARY))
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/yoyo
 
+# go test kills a package at ten minutes by default, which is a second ceiling
+# under the harness's own check_timeout (30m) and one nobody set against it. The
+# orchestrator suite runs for about seven minutes under -race on an idle machine
+# and twice that beside another run's suite, so the default stopped a passing
+# suite mid-package. The package bound is set to the check bound, so the one
+# ceiling in force is the one the configuration states.
+TEST_TIMEOUT ?= 30m
+
 # The shipped-documentation gate warns for the length of a margin before it
 # fails, and `go test ./...` discards everything a passing test says -- so the
 # gate's size line and its warning are printed here, after the suite that
 # judges the set, where a person running the checks can read them. The grep
 # keeps the one or two lines that matter; the suite above is still the verdict.
 test: cachecheck
-	$(GO) test ./...
+	$(GO) test -timeout $(TEST_TIMEOUT) ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
 
 race: cachecheck
-	$(GO) test -race ./...
+	$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
 
 vet: cachecheck
 	$(GO) vet ./...

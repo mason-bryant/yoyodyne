@@ -92,6 +92,14 @@
     "changes": {
       "files": "?? feature.txt"
     },
+    "checks_passed": {
+      "at": "\u003ctime\u003e",
+      "attempt": 0,
+      "commands": [
+        "test -f feature.txt"
+      ],
+      "content": "\u003ccontent\u003e"
+    },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
     "integration": {
