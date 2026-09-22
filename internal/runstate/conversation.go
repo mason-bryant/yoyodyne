@@ -161,6 +161,20 @@ type Conversation struct {
 	// sees until the gate on it fails. It is zero on a conversation recorded
 	// before it was written down and on a project naming no documentation.
 	ContextShippedDocumentationBytes int `json:"context_shipped_documentation_bytes,omitempty"`
+	// PendingPicture is a re-read of the repository and the tracker that no turn
+	// has delivered yet: taken by a refresh, recorded before the turn that would
+	// carry it is asked, and cleared by the turn that carries it. It is durable
+	// for the reason the tracker results above are, in a sharper form. A re-read
+	// that lived only in the process that took it was thrown away whenever that
+	// process's turn failed, and the next process read the repository and the
+	// tracker again from the same old commit — which on 2026-09-20 turned one
+	// stuck picture into 21 completed re-reads, every one of them discarded.
+	//
+	// The picture's text is not in here. It is close to a megabyte and this
+	// record has a megabyte to live in altogether, so the text is written beside
+	// the record and this says which picture that text is; see
+	// SavePendingPictureText.
+	PendingPicture *PendingPicture `json:"pending_picture,omitempty"`
 	// LastRunWorkItemID is the work item of the run this conversation started
 	// most recently. It is durable for the same reason the rest of this is: the
 	// process that started the run is often not the one the operator comes back
@@ -404,6 +418,57 @@ type PendingConcern struct {
 // operator can be asked to answer from rather than about the state file.
 const MaxPendingConcerns = 10
 
+// PendingPicture is one re-read of the repository and the tracker that nothing
+// has delivered yet, as the record keeps it: when it was gathered, the commit it
+// was gathered against, what had moved when it was taken, and who took it. Like
+// PendingProposal it is declared in this package rather than shared with the
+// conversation code that builds it, because that code already depends on this
+// one and the dependency may not run both ways.
+//
+// What it is for is the process that was not there. A refresh is taken by one
+// process and may be delivered by another — the turn that would have carried it
+// can fail, and the next thing to say something to the agent is usually a fresh
+// process — so everything the delivery needs is here rather than in the memory
+// of whoever read the repository.
+type PendingPicture struct {
+	// GatheredAt is when the picture was taken and Commit the repository commit
+	// it was taken against. They are what the record adopts when the picture is
+	// finally delivered, so the conversation ends up recorded as working from the
+	// picture that was read rather than from one the delivering process measured
+	// for itself.
+	GatheredAt time.Time `json:"gathered_at"`
+	Commit     string    `json:"commit,omitempty"`
+	// ShippedDocumentationBytes is what the shipped documentation in this picture
+	// adds up to, kept with it for the same reason and adopted with it.
+	ShippedDocumentationBytes int `json:"shipped_documentation_bytes,omitempty"`
+	// Replaces is when the picture this one was measured against was gathered.
+	// The delivery tells the role how far apart the two are, and a process that
+	// never held the old picture has no other way to say.
+	Replaces time.Time `json:"replaces,omitempty"`
+	// What had moved when this picture was taken, which is what the role is told
+	// it is reconciling. It is kept rather than measured again at delivery: the
+	// two readings would be taken moments apart, and the second one would describe
+	// a drift this picture never had.
+	Commits           int    `json:"commits,omitempty"`
+	TrackerChanges    int    `json:"tracker_changes,omitempty"`
+	RepositoryProblem string `json:"repository_problem,omitempty"`
+	TrackerProblem    string `json:"tracker_problem,omitempty"`
+	// Trigger says who took it — the operator asking, or the harness because the
+	// picture had fallen past the threshold — and Threshold is the number it had
+	// fallen past. The role is framed differently by each, so a process that was
+	// not there frames it the way the process that took it would have.
+	Trigger   string `json:"trigger"`
+	Threshold int    `json:"threshold,omitempty"`
+}
+
+// MaxPendingPictureBytes bounds the undelivered picture's text kept beside a
+// conversation's record. It sits above what an assembled product context may be,
+// because a picture larger than that is one no turn could carry anyway, and it
+// is stated here rather than taken from the package that assembles the context:
+// this package is below that one and the dependency may not run the other way.
+// TestThePendingPictureBoundSitsAboveTheBundleItKeeps refuses any drift apart.
+const MaxPendingPictureBytes = 3 << 20
+
 // MaxPendingNotices bounds the account of harness activity one conversation
 // carries forward. It matches the bound the conversation itself keeps, so what
 // is written is always what was going to be delivered.
@@ -542,6 +607,18 @@ func (c Conversation) Validate() error {
 	// which would make every comparison against it read as fresher than it is.
 	if !c.ContextGatheredAt.IsZero() && !c.UpdatedAt.IsZero() && c.ContextGatheredAt.After(c.UpdatedAt) {
 		problems = append(problems, errors.New("context_gathered_at cannot be after updated_at"))
+	}
+	// A picture waiting to be delivered has to say when it was read and what read
+	// it: the first is what is adopted when it lands, and the second is how the
+	// role is told about it. A record carrying neither names a re-read nothing
+	// could deliver, which is worse than carrying no pending picture at all.
+	if c.PendingPicture != nil {
+		if c.PendingPicture.GatheredAt.IsZero() {
+			problems = append(problems, errors.New("a pending picture must say when it was gathered"))
+		}
+		if strings.TrimSpace(c.PendingPicture.Trigger) == "" {
+			problems = append(problems, errors.New("a pending picture must say what took it"))
+		}
 	}
 	if c.StartedAt.IsZero() || c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("started_at and updated_at are required"))
@@ -1114,6 +1191,97 @@ func (s *ConversationStore) Save(conversation Conversation) error {
 	return syncDirectory(s.root)
 }
 
+// SavePendingPictureText writes the text of the picture a refresh has taken and
+// no turn has delivered, beside the conversation it belongs to. It is replaced
+// by rename like every other record here, so a reader sees the whole of one
+// picture or none of it.
+//
+// It is a file of its own rather than a field because of its size: a record has
+// a megabyte to live in and the picture is nearly that by itself, so a record
+// carrying it would be one the store refused to save — which is the conversation
+// unable to record anything at all, in exchange for a re-read.
+//
+// The record beside it says which picture this is, and that record is what
+// decides whether it is read: text left behind by a conversation nothing is
+// pending for is never delivered, and is replaced by the next refresh.
+func (s *ConversationStore) SavePendingPictureText(identity ConversationIdentity, text string) error {
+	if len(text) > MaxPendingPictureBytes {
+		return fmt.Errorf("the picture waiting for the %s is %d bytes, limit is %d", identity, len(text), MaxPendingPictureBytes)
+	}
+	path, err := s.pendingPictureFile(identity)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create conversation directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(s.root, ".picture-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary pending picture: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		return errors.Join(fmt.Errorf("secure temporary pending picture: %w", err), temporary.Close())
+	}
+	if _, err := temporary.WriteString(text); err != nil {
+		return errors.Join(fmt.Errorf("write pending picture: %w", err), temporary.Close())
+	}
+	if err := temporary.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("sync pending picture: %w", err), temporary.Close())
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary pending picture: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace pending picture: %w", err)
+	}
+	return syncDirectory(s.root)
+}
+
+// PendingPictureText is the text of the picture waiting to be delivered to an
+// agent. A conversation with none recorded has nothing waiting, which is the
+// ordinary case and not a failure.
+func (s *ConversationStore) PendingPictureText(identity ConversationIdentity) (string, error) {
+	path, err := s.pendingPictureFile(identity)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("open the picture waiting for the %s: %w", identity, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat the picture waiting for the %s: %w", identity, err)
+	}
+	if info.Size() > MaxPendingPictureBytes {
+		return "", fmt.Errorf("the picture waiting for the %s is %d bytes, limit is %d", identity, info.Size(), MaxPendingPictureBytes)
+	}
+	text, err := io.ReadAll(io.LimitReader(file, MaxPendingPictureBytes))
+	if err != nil {
+		return "", fmt.Errorf("read the picture waiting for the %s: %w", identity, err)
+	}
+	return string(text), nil
+}
+
+// ClearPendingPictureText removes the text of a picture that has been delivered
+// or abandoned. A conversation with none is already clear.
+func (s *ConversationStore) ClearPendingPictureText(identity ConversationIdentity) error {
+	path, err := s.pendingPictureFile(identity)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove the picture waiting for the %s: %w", identity, err)
+	}
+	return nil
+}
+
 // AppendEvent persists one normalized event from a conversation. The log is
 // named for the conversation rather than the role, so starting a new
 // conversation never appends to the record of the one it replaced.
@@ -1269,4 +1437,14 @@ func (s *ConversationStore) holderFile(identity ConversationIdentity) (string, e
 		return "", err
 	}
 	return filepath.Join(s.root, identity.Agent+".holder"), nil
+}
+
+// pendingPictureFile names the undelivered picture's text beside an agent's
+// record. Like the holder above it is not a `.json` file, so what Recorded lists
+// stays the conversations themselves.
+func (s *ConversationStore) pendingPictureFile(identity ConversationIdentity) (string, error) {
+	if err := identity.validate(); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, identity.Agent+".picture"), nil
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // systemPromptAllowance is what this test reserves inside MaxTurnInputBytes for
@@ -29,5 +30,20 @@ func TestTheTurnBackstopSitsAboveWhatItBackstops(t *testing.T) {
 			"A conversation given a bundle at its bound would be refused every turn.",
 			MaxTurnInputBytes, contextbundle.MaxProductBytes, MaxOperatorMessageBytes,
 			systemPromptAllowance, needed-MaxTurnInputBytes)
+	}
+}
+
+// TestThePendingPictureBoundSitsAboveTheBundleItKeeps compares the same two
+// numbers at the other end. A re-read waits on disk between the turn that took
+// it and the turn that delivers it, and the bound on what may wait there is
+// stated in the state package, which sits below the one that assembles a
+// bundle and cannot read its bound. A bound that drifted under it would refuse
+// to keep an ordinary picture, which is the amplifier this was built to remove
+// coming back as a write that fails instead of a read that repeats.
+func TestThePendingPictureBoundSitsAboveTheBundleItKeeps(t *testing.T) {
+	if runstate.MaxPendingPictureBytes < contextbundle.MaxProductBytes {
+		t.Fatalf("a picture may wait as %d bytes beside the record, but an assembled product context may be %d: "+
+			"a refresh of an ordinary bundle would be refused, and the re-read taken for it discarded.",
+			runstate.MaxPendingPictureBytes, contextbundle.MaxProductBytes)
 	}
 }

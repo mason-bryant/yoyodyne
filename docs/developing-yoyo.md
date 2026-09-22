@@ -203,6 +203,28 @@ with a dump of every goroutine, which names what was waited on and where. So a
 test that would have hung waits instead, and a wait that never ends is reported
 by something that reads the stack rather than a clock.
 
+That `-timeout` is the one wall-clock bound this repository keeps, and it is
+stated rather than inherited: `TEST_TIMEOUT` in the Makefile, twenty minutes,
+which `make test` and `make race` both pass. Go's default is ten minutes per
+package, and the rule above applies to it exactly as it applies to a bound
+inside a test. `internal/orchestrator` runs whole pipelines against real git
+worktrees; it takes 6m24s under `-race` on its own and 9m04s with the rest of
+the suite beside it, and on 2026-09-22 it reached ten minutes twice on a machine
+carrying concurrent runs — once under `make test` and once under `make race` —
+with every test in it passing both times. The deadline is wall-clock and the
+processor was elsewhere.
+
+The number is chosen between two things rather than picked. Under it is what the
+longest package actually takes under contention, with about double that as
+headroom; over it is
+[`execution.check_timeout`](configuration.md#how-long-a-check-may-take), the
+total budget the harness gives one check, ten minutes further on. That gap is
+why stating a number is worth anything: past it the harness kills the check and
+can say only that it ran out of time, where this fails first with every
+goroutine's stack. It is a backstop against a test that has hung rather than a
+budget the suite is held to, so a package that reaches it is one to go and look
+at rather than a number to raise.
+
 The shape that replaces a bound is one of three. Where the code under test
 already says when it has got somewhere, wait on that: a claim returns its hold, a
 process returns its result, and the test reads `<-done` with nothing beside it.

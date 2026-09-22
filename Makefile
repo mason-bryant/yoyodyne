@@ -13,6 +13,28 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
+# How long one package's tests may run before the toolchain kills them and dumps
+# every goroutine. Go's default is ten minutes per package, measured in
+# wall-clock, and inheriting it is what `make race` failed on here.
+#
+# `internal/orchestrator` is this repository's longest package: it drives whole
+# pipelines against real git worktrees. It takes 6m24s under `-race` on its own
+# and 9m04s with the rest of the suite beside it, and on 2026-09-22 it reached
+# ten minutes twice on a machine also carrying concurrent developer runs -- once
+# under `make test` and once under `make race` -- with every test in it passing
+# both times. The deadline is wall-clock and the processor was elsewhere, which
+# is the same reason docs/developing-yoyo.md gives for no test here bounding a
+# wait in wall-clock time. That rule applies to this bound too.
+#
+# Twenty minutes is about twice what that package takes under contention here,
+# and it sits ten minutes under `execution.check_timeout`, which is the total
+# budget the harness gives one check. That gap is the point of stating a number
+# at all: past it the harness kills the check and says only that it ran out of
+# time, where this fails first with every goroutine's stack. It is a backstop
+# against a test that has hung rather than a budget the suite is held to, so a
+# package that reaches it is one to go and look at.
+TEST_TIMEOUT ?= 20m
+
 .PHONY: build test race vet fmt fmtcheck cachecheck check adoption dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
@@ -47,7 +69,7 @@ build: cachecheck
 # judges the set, where a person running the checks can read them. The grep
 # keeps the one or two lines that matter; the suite above is still the verdict.
 test: cachecheck
-	$(GO) test ./...
+	$(GO) test -timeout $(TEST_TIMEOUT) ./...
 	@$(GO) test -v -run '^TestShippedDocumentationNamesDocumentsThisRepositoryHas$$' ./internal/contextbundle \
 		| grep -E 'shipped documentation is|WARNING:'
 	@# The dashboard page's only behavioural evidence is its render comparison,
@@ -74,7 +96,7 @@ test: cachecheck
 	exit $$rendered
 
 race: cachecheck
-	$(GO) test -race ./...
+	$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
 
 vet: cachecheck
 	$(GO) vet ./...

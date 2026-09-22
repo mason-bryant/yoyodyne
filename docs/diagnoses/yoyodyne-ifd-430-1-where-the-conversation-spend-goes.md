@@ -205,3 +205,9 @@ Three pieces of work this measurement identifies and this item does not do:
    removed the cause of those failures rather than this amplifier, and making the
    pending picture durable means putting roughly a megabyte of briefing text in
    the conversation record, which is a design decision rather than a repair.
+
+   *Admitted as `yoyodyne-ifd.430.2` and landed on 2026-09-22.* The megabyte did
+   not go in the record — the record may be a megabyte altogether, so carrying
+   the text inside it would have been a conversation that could no longer save
+   itself. It waits in a file beside the record, which names which picture is
+   waiting and the commit it was read against; the delivery clears both.
