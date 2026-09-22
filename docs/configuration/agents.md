@@ -4,12 +4,13 @@ docs/configuration.md left intact. The links below into ../configuration.md
 resolve today and point at sections a later tranche moves; the tranche that
 moves a section retargets the link:
 
-  #protected-paths-in-a-developers-change -> configuration/artifacts.md (117.2)
-  #what-reaches-the-queue                 -> configuration/goals.md (117.2)
   #keeping-the-configuration-outside-the-repository
                                           -> no row in docs/docs-map.md; stays
                                              in configuration.md until the map
                                              gives it a home
+
+117.2 retargeted #protected-paths-in-a-developers-change to artifacts.md and
+#what-reaches-the-queue to goals.md when it landed those guides.
 
 "The configuration index ... lists the other guides" below is a forward claim:
 configuration.md becomes the index in 117.4.
@@ -118,10 +119,10 @@ mapping reads — rather than as a gate an act passes through.
 **What keeps an agent out of the goals is two enforcements that do not depend on
 the signature.** A conversation runs with no tools at all, so the roles that
 could argue for a goal cannot run a command; and a run's change is compared
-against the [protected paths](../configuration.md#protected-paths-in-a-developers-change) before any
+against the [protected paths](artifacts.md#protected-paths-in-a-developers-change) before any
 check runs and before any reviewer sees it, so an approval a developer wrote is
 refused with the rest of the diff and never reaches the repository the goals are
-read from. [What reaches the queue](../configuration.md#what-reaches-the-queue) rests on those two
+read from. [What reaches the queue](goals.md#what-reaches-the-queue) rests on those two
 rather than on who an approval says gave it, which is what
 `internal/chat/admission.go` says in its own words. If either is ever loosened,
 this is what was resting on them.
