@@ -39,6 +39,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/dashboard"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
@@ -241,6 +242,7 @@ func Diagnose(ctx context.Context, env Environment) Report {
 	report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, repository))
 	report.Findings = append(report.Findings, diagnosis.checkStateRoot())
 	report.Findings = append(report.Findings, diagnosis.checkChecks(resolved, repository)...)
+	report.Findings = append(report.Findings, diagnosis.checkNode(ctx, repository)...)
 	report.Findings = append(report.Findings, diagnosis.checkArtifactHomes(project, repository, resolved))
 	report.Findings = append(report.Findings, diagnosis.checkProviders(ctx, resolved)...)
 	report.Findings = append(report.Findings, diagnosis.checkFailover(resolved))
@@ -538,6 +540,62 @@ func (d *diagnosis) checkChecks(resolved config.Resolved, repository string) []F
 		Status:  StatusOK,
 		Summary: fmt.Sprintf("%s configured, and every command resolves here", countOf(len(resolved.Config.Checks), "check")),
 		Detail:  strings.Join(resolved.Config.Checks, "; "),
+	}}
+}
+
+// checkNode asks, for a product that ships the dashboard, whether the machine
+// the checks run on has the Node the dashboard's render test runs the page's
+// script under. A product ships the dashboard when its repository carries the
+// script; a product that merely serves the dashboard runs the script in a
+// browser and needs no Node, so it gets no finding at all rather than a
+// healthy one about a tool nothing here would use.
+//
+// Without Node the render test fails every run of the checks, after the
+// provider has been paid for, which is what makes an absent Node a problem
+// here rather than a warning. The one exception is a machine that declared
+// Node deliberately unavailable, where the test skips and a green run holds the
+// fixtures' shape and the routes and never the renders: that stops no run, and
+// is reported as the warning it is, because the renders are the page's only
+// behavioural evidence and an operator ought to know they go unverified.
+func (d *diagnosis) checkNode(ctx context.Context, repository string) []Finding {
+	const check = "node"
+	script := filepath.Join(repository, filepath.FromSlash(dashboard.RenderScript))
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		return nil
+	}
+	if _, err := d.lookPath("node"); err != nil {
+		if declared := strings.TrimSpace(d.getenv(dashboard.NodeUnavailableVariable)); declared != "" {
+			return []Finding{{
+				Check:   check,
+				Status:  StatusWarning,
+				Summary: fmt.Sprintf("node is not installed and %s says that is deliberate, so the dashboard's render test skips here and the renders go unverified", dashboard.NodeUnavailableVariable),
+				Detail:  fmt.Sprintf("%s=%s; %s runs %s under node and is the page's only behavioural evidence", dashboard.NodeUnavailableVariable, declared, dashboard.RenderTest, dashboard.RenderScript),
+				Remedy:  d.installCommand("node"),
+			}}
+		}
+		return []Finding{{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: "node is not installed, and this product's checks render the dashboard's page under it",
+			Detail:  fmt.Sprintf("%s; %s runs %s under node and fails without it", err.Error(), dashboard.RenderTest, dashboard.RenderScript),
+			Remedy:  d.installCommand("node"),
+		}}
+	}
+	result, err := d.run(ctx, "", "node", "--version")
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		return []Finding{{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: "node is on PATH but would not run, and this product's checks render the dashboard's page under it",
+			Detail:  describeFailure(result, err),
+			Remedy:  d.installCommand("node"),
+		}}
+	}
+	return []Finding{{
+		Check:   check,
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("node %s is installed, so the dashboard's render test runs the page's script here", firstLine(result.Stdout)),
+		Detail:  fmt.Sprintf("%s runs %s under it", dashboard.RenderTest, dashboard.RenderScript),
 	}}
 }
 

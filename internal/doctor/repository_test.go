@@ -6,6 +6,7 @@ package doctor
 // checks are about actually live.
 
 import (
+	"context"
 	"path"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,24 @@ func TestTheIndexesThisRepositoryCarriesAreNotReadAsGovernedDocuments(t *testing
 	// skipped rather than the whole directory going unread.
 	if len(invariants.Active) == 0 {
 		t.Fatal("no invariant loaded, so a clean problem list says nothing about the index")
+	}
+}
+
+// This repository ships the dashboard, so it is diagnosed as one whose checks
+// need Node. The assertion is against this checkout rather than a fixture
+// because what it holds is the path the diagnosis looks for: a render script
+// that moves would otherwise leave `yoyo doctor` silently asking nothing here.
+func TestThisRepositoryIsDiagnosedAsShippingTheDashboard(t *testing.T) {
+	t.Parallel()
+
+	root, _ := thisRepository(t)
+	world := newWorld(t)
+	findings := (&diagnosis{env: Environment{Runner: world.runner, LookPath: world.lookPath, Getenv: world.getenv, GOOS: "darwin"}}).checkNode(context.Background(), root)
+	if len(findings) != 1 || findings[0].Check != "node" {
+		t.Fatalf("checkNode() = %#v, want the one finding about node", findings)
+	}
+	if findings[0].Status != StatusOK {
+		t.Fatalf("node = %s: %s (%s)", findings[0].Status, findings[0].Summary, findings[0].Detail)
 	}
 }
 
