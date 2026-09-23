@@ -790,13 +790,16 @@ branch stands, asks the forge to merge, confirms the merge, deletes the merged
 branch, catches the local branch up, and makes every provider invocation over
 it. It ends by writing to the tracker, which is not a network but is a store
 other processes are writing to, and a `bd` too busy to run judges the work no
-more than a reset connection does. **It reads that same store at each of its gate
-boundaries**, to find out what its work item waits on: before it claims the item
-or resumes a run in flight, at the start of every repair round, and once more
-before the promotion. A `bd show` killed under load there is the same non-answer
-as the write, and it reaches the run at the moments it has most to lose —
-yoyodyne-ifd.436.4's change was already approved and yoyodyne-ifd.117.1's files
-already lifted when the read that ended each of them timed out.
+more than a reset connection does. **A run in flight reads that same store at
+each of its gate boundaries**, to find out what its work item waits on: at the
+start of every repair round, and once more before the promotion. A `bd show`
+killed under load there is the same non-answer as the write, and it reaches the
+run at the moments it has most to lose — yoyodyne-ifd.436.4's change was already
+approved and yoyodyne-ifd.117.1's files already lifted when the read that ended
+each of them timed out. One read sits before all of those and is
+[a different thing](#the-read-a-dispatch-makes-before-there-is-a-run): the one a
+dispatch makes to load the item at all, before it claims anything or adopts a
+run in flight.
 On 2026-09-03 four runs died at those boundaries in one day, each on a single
 connection reset the next attempt would have survived — completed and sometimes
 already reviewed work recorded as failed — and the intake brake then held the
@@ -825,9 +828,9 @@ one of the boundaries above.
   The full recoverable-versus-terminal taxonomy is the architect's, and this does
   not wait on it.
 
-**Every wait is recorded before it is taken**, on the run itself, with the
-boundary, which attempt it was, the interval, and the failure it waited out. Two
-things follow. A process that dies mid-wait comes back to the window it had
+**Every wait a run takes is recorded before it is taken**, on the run itself,
+with the boundary, which attempt it was, the interval, and the failure it waited
+out. Two things follow. A process that dies mid-wait comes back to the window it had
 already spent rather than to a fresh one. And a run that waited a network out and
 finished says so on the work item — `Waited out a recoverable failure while
 merging the pull request: 3 retr(ies) over 4s, waiting 1s, 1s, 2s` — which is the
@@ -857,6 +860,36 @@ rather than finding its window already spent. Before yoyodyne-ifd.428.6 this
 boundary ran under a flat deadline and ended the run on the first timeout, which
 in two days killed three runs — two of them holding an approved change and a
 lifted worktree.
+
+### The read a dispatch makes before there is a run
+
+Both of the reads above are a run's own, and everything this section says about
+recording and parking follows from there being a run to record on. **The read a
+dispatch makes before either — `yoyo run` and `yoyo triage`'s continuation
+loading the work item, before anything is claimed and before a run in flight is
+adopted — has neither.** It is waited out on the same series and the same
+two-hour window, because it is the same store contended by the same processes
+and a `bd` killed there turned away a dispatch that had nothing wrong with it.
+What it does not do is the other two halves:
+
+- **Nothing is recorded**, because there is no run to record it on. No run has
+  been reserved, and the run a resume is about belongs to whichever process holds
+  its lease rather than to the one asking. So a dispatch that dies mid-window
+  comes back to a whole window rather than to the one it had spent — the opposite
+  of the rule a run's own boundaries follow, and it costs nothing, because a
+  dispatch that died claimed nothing and left nothing behind.
+- **Nothing is parked**, for the same reason. A window that runs out there
+  refuses the dispatch with `load work item: the tracker kept failing on
+  something a later attempt could have survived`, naming the attempts and the
+  time, and writes nothing on the work item. Where the dispatch was a resume, the
+  run in flight is left exactly as it was — still claimed, still preserved, still
+  resumable — rather than given a park of its own.
+
+The practical difference is what you go and look at. A run parked on this says so
+on its item and on every surface; a dispatch refused by it says so to whoever
+typed the command, and to the
+[docket entry](#recovering-interrupted-runs) for an attempt that never became a
+run where the scheduler made it.
 
 **A conversation's tracker calls are under the same rule.** Every decision a
 role makes in conversation — a triage decision, an admission, a note, a closure
