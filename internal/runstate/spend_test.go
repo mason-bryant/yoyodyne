@@ -264,3 +264,162 @@ func testSpend(phase SpendPhase, amount float64) Spend {
 	}
 	return line
 }
+
+// The log outlived the defect, so it has to be readable across it. Lines
+// written before an amount was an invocation's own cost carry the figure the
+// provider reported, which on a resumed session is the session's running total;
+// they are re-derived on the way out by the rule a line is now written by, from
+// the session identifier every line has always carried, and the figure as
+// recorded is kept beside the correction so it can be checked.
+//
+// Nothing on disk changes. The file is the evidence of what was reported, and a
+// log whose lines were edited afterwards would be a worse record of the money
+// than one that was wrong in a way every reader corrects.
+func TestListRederivesLinesRecordedBeforeAnAmountWasAnInvocationsOwnCost(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSpendStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewSpendStore() error = %v", err)
+	}
+	// Three turns of one resumed session, recorded the way the harness recorded
+	// them before this: each line carrying what the provider reported.
+	for _, reported := range []float64{2.50, 6.25, 9.00} {
+		line := testSpend(SpendPhaseConversation, reported)
+		line.SessionID = "session-resumed"
+		line.RunID = ""
+		line.WorkItemID = ""
+		line.ConversationID = "chat-0123456789abcdef0123456789abcdef"
+		if err := store.Append(line); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+	// An invocation nobody was told the price of, in the same session. It must not
+	// advance the session: a zero standing for "nobody knows" read as a total
+	// would charge the next turn the whole session over again.
+	unknown := testSpend(SpendPhaseConversation, 0)
+	unknown.SessionID = "session-resumed"
+	unknown.RunID = ""
+	unknown.WorkItemID = ""
+	unknown.ConversationID = "chat-0123456789abcdef0123456789abcdef"
+	unknown.Classification = SpendUnknown
+	unknown.Unknown = "the provider ended the invocation without reporting what it cost"
+	if err := store.Append(unknown); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	final := testSpend(SpendPhaseConversation, 10.00)
+	final.SessionID = "session-resumed"
+	final.RunID = ""
+	final.WorkItemID = ""
+	final.ConversationID = "chat-0123456789abcdef0123456789abcdef"
+	if err := store.Append(final); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	lines, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(lines) != 5 {
+		t.Fatalf("read %d line(s), want every line recorded", len(lines))
+	}
+	var total float64
+	for _, line := range lines {
+		total += line.AmountUSD
+	}
+	if total != 10.00 {
+		t.Fatalf("the log reads as %v, want the session's final total of 10; "+
+			"summing what each line recorded would have made it 27.75", total)
+	}
+	for index, want := range []float64{2.50, 3.75, 2.75, 0, 1.00} {
+		if lines[index].AmountUSD != want {
+			t.Fatalf("line %d reads as %v, want %v", index, lines[index].AmountUSD, want)
+		}
+	}
+	// What was recorded is kept beside what it now reads as, on every line the
+	// correction touched.
+	if lines[1].ReportedTotalUSD != 6.25 || lines[2].ReportedTotalUSD != 9.00 || lines[4].ReportedTotalUSD != 10.00 {
+		t.Fatalf("the figures as recorded were not kept: %#v", lines)
+	}
+	if lines[0].ReportedTotalUSD != 0 || lines[3].ReportedTotalUSD != 0 {
+		t.Fatalf("a line nothing corrected reports a total it did not have: %#v", lines)
+	}
+	// And the file itself still says what was written, which is what makes the
+	// correction auditable rather than something a reader has to trust.
+	recorded, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(recorded), `"amount_usd":9`) {
+		t.Fatalf("the log on disk was rewritten rather than read through the correction:\n%s", recorded)
+	}
+}
+
+// A log written across the change is one log. A line corrected when it was
+// written says what the provider reported, and a line written before this did
+// not exist says it in its amount; the session's next invocation is priced
+// against whichever of the two the line carries, so the two halves compose
+// rather than each starting the session again.
+func TestASessionRecordedAcrossTheCorrectionIsPricedAsOneSession(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewSpendStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewSpendStore() error = %v", err)
+	}
+	before := testSpend(SpendPhaseDevelopment, 4.00)
+	before.SessionID = "session-developer"
+	if err := store.Append(before); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	// What the meter writes now: the increment, with the reported total beside it.
+	after := testSpend(SpendPhaseRepair, 2.50)
+	after.SessionID = "session-developer"
+	after.ReportedTotalUSD = 6.50
+	if err := store.Append(after); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	total, found, err := store.ReportedSessionTotal("session-developer")
+	if err != nil || !found || total != 6.50 {
+		t.Fatalf("ReportedSessionTotal() = %v, %v, %v; want the session last reported at 6.50", total, found, err)
+	}
+	unseen, found, err := store.ReportedSessionTotal("session-nothing-recorded")
+	if err != nil || found || unseen != 0 {
+		t.Fatalf("ReportedSessionTotal() = %v, %v, %v; want a session nothing has recorded", unseen, found, err)
+	}
+
+	lines, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if lines[0].AmountUSD != 4.00 || lines[1].AmountUSD != 2.50 {
+		t.Fatalf("the two halves did not compose: %#v", lines)
+	}
+}
+
+// The rule itself, stated over the cases the recorded history actually holds. A
+// figure that rose is a running total and the amount is what it moved by; a
+// figure that did not is a beginning, which is the session's first invocation
+// and also a provider whose total restarted or that reports each invocation's
+// own cost. Nothing it produces is ever negative.
+func TestOwnCostIsTheIncrementOverATotalThatRose(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		reported float64
+		previous float64
+		seen     bool
+		want     float64
+	}{
+		{"a session's first invocation records the whole", 2.5, 0, false, 2.5},
+		{"a resumed session records what the total moved by", 6.25, 2.5, true, 3.75},
+		{"a total that did not move records nothing", 6.25, 6.25, true, 0},
+		{"a figure below the one before it is a beginning", 0.6, 8.51, true, 0.6},
+	} {
+		if got := OwnCostUSD(tc.reported, tc.previous, tc.seen); got != tc.want {
+			t.Fatalf("%s: OwnCostUSD(%v, %v, %v) = %v, want %v", tc.name, tc.reported, tc.previous, tc.seen, got, tc.want)
+		}
+	}
+}

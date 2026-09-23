@@ -127,3 +127,15 @@ func (l *recordingSpendLog) Append(line runstate.Spend) error {
 	l.lines = append(l.lines, line)
 	return nil
 }
+
+// ReportedSessionTotal answers from the lines this log has already taken, the
+// way the durable store answers from the lines it has already written.
+func (l *recordingSpendLog) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	total, found := 0.0, false
+	for _, line := range l.lines {
+		if line.SessionID == sessionID && line.Known() {
+			total, found = line.ReportedTotal(), true
+		}
+	}
+	return total, found, nil
+}

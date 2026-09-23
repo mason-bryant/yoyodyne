@@ -27,6 +27,44 @@ Every figure is the provider's own report of what an invocation cost, read from
 the run's event log, never an estimate from a price table that drifts the moment
 a provider changes what it charges.
 
+**What an invocation cost is not always what the provider said it cost.** A
+provider asked to resume a session reports what that session has cost since it
+opened, so the second invocation of a session reports the first one's money over
+again. An invocation is therefore priced at what its own session's reported total
+moved by — and the first invocation of a session, which has no earlier total to
+have moved, at the whole of what was reported. A figure that did not rise is a
+beginning rather than an increment: that is a provider reporting each
+invocation's own cost, or one whose running total restarted, and both are
+recorded whole. Nothing asks the provider which of the two it does; the rule
+reads it off the figures, and it can never produce a negative one.
+
+That is a correction rather than a refinement, and it is the difference between
+this product's recorded spend and the operator's bill. Every figure on this page
+was wrong by it until yoyodyne-ifd.432.10. Management conversations resume one
+session across every turn, so the development manager's own conversation read at
+$24,659 against an actual $825; repair attempts resume the run's developer
+session, so repair read at $1,467 against $351. Taken across this machine's
+records as they stood, `yoyo status --spend` read the last seven days at $33,400
+where it now reads $3,108, and `yoyo cost` read every run ever made at $12,578
+where it now reads $10,668. What was never affected is a run of one development
+attempt and one review, since each of those opens a session of its own — which is
+why the overstatement hid in the repairs and the conversations rather than
+showing up in every total at once.
+
+Reading the rule off the figures is also its one limit, and the limit falls
+entirely on records written before a provider began reporting running totals.
+Claude Code began on 2026-09-19 — its schema now calls the field "cumulative
+estimated cost … for this query() call", and
+[`docs/diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md`](diagnoses/yoyodyne-ifd-424-one-shot-cache-reads.md)
+is where it was first caught — and before that each figure was the invocation's
+own. Two of those in a row that happen to rise are indistinguishable from a
+running total, so they are differenced and the later one reads as less than it
+cost. Over this product's recorded history that understates the five weeks before
+the change by $796 of $8,325, against the $30,000 the other direction was costing
+after it. Nothing tells the two apart from the money alone, and the alternative —
+a date in the code — would be this machine's upgrade hour written into every
+installation's ledger.
+
 A run finishing writes the item's total onto the item in the tracker, and that
 recorded total is what travels with the work: `/status`, the product manager's
 briefing, and `bd` itself all read the one number the tracker holds, rather than
@@ -36,7 +74,11 @@ what lets it answer for an item nothing has recorded a price for yet — anythin
 finished before this existed, or an item whose run could not write its price
 down — and it is why the two can differ. Where they do, `/show` is the current
 one and the tracker is what was last recorded; `yoyo cost --record` makes them
-agree.
+agree. It agrees them by writing over what the item carries rather than by
+filling in what it lacks: the price is re-derived from the run records every time
+and stored whichever way it moved, which is what carries the correction above
+onto every item priced before it — each of which is still carrying a total summed
+from session running totals until the backfill is run.
 
 Three things it deliberately will not do. A run whose event log no longer
 survives is priced as unknown rather than as nothing — it is counted, left out
@@ -290,6 +332,21 @@ than borrowing the run's: it is not a run and nothing ever made one for it, so a
 line that carried its identifier as a run id would hand anything joining these
 lines back to run records an id naming no run.
 
+**A line's amount is that invocation's own cost**, by the rule above, and never
+the session's running total. Where the two differ the figure the provider
+actually reported is kept beside it as `reported_total_usd`, so the correction
+can be checked rather than taken on trust and the session's next invocation has
+something to be priced against. A line with no such field is one the correction
+left alone: the invocation that opened its session, an invocation with no session
+at all, and every line written before any of this existed, whose `amount_usd` is
+the figure the provider reported. Those older lines are re-derived by the same
+rule when the log is read, from the session identifier every line has always
+carried — the file itself is left exactly as it was written, because it is the
+evidence of what the provider said, and a money record edited after the fact is a
+worse thing to hold than one every reader corrects. Adding up `amount_usd`
+straight out of the file therefore still overstates the part of it written before
+2026-09-22.
+
 Three things it does deliberately. An invocation the provider ended without
 pricing is classified `unknown` rather than recorded as zero or left out, because
 a zero meaning "nobody was told" understates every total it enters by however
@@ -305,7 +362,12 @@ report that the bookkeeping missed would cost you both.
 
 None of the prices above change with it. `yoyo cost` still reads a run's event
 log, which is what lets it answer for runs that finished long before this log
-existed; this is the record that does not have to be reassembled from one.
+existed; this is the record that does not have to be reassembled from one. Both
+work out an invocation's own cost by the same rule, from the sessions the
+terminals name, so the two records agree about what a resumed session cost. The
+one place they differ is their reach: this log follows a session across every
+process that resumed it, and a run's event log sees only that run's terminals, so
+a session a later run resumed begins again there.
 
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is

@@ -123,6 +123,35 @@ func TestLedgerBackfillsEveryItemAndKeepsGoingPastAFailure(t *testing.T) {
 	}
 }
 
+// A price already on the item is written over rather than left alone. That is
+// what makes the ledger a backfill for a correction and not only for a gap: every
+// item priced before yoyodyne-ifd.432.10 carries a total summed from session
+// running totals, and an item the tracker already holds a figure for is exactly
+// the item that needs the new one.
+func TestLedgerWritesACorrectedPriceOverOneTheItemAlreadyCarries(t *testing.T) {
+	t.Parallel()
+
+	prices := &fakePrices{price: runstate.ItemPrice{
+		WorkItemID: "yoyodyne-ifd.432.10",
+		Runs:       []runstate.RunPrice{{RunID: "run-1", CostUSD: 4}},
+		TotalUSD:   4,
+	}}
+	tracker := &fakeTracker{stored: map[string]beads.Cost{
+		"yoyodyne-ifd.432.10": {TotalUSD: 36, Runs: 1},
+	}}
+	recorded, err := Ledger{Prices: prices, Tracker: tracker}.Record(context.Background(), "yoyodyne-ifd.432.10")
+	if err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	want := beads.Cost{TotalUSD: 4, Runs: 1}
+	if recorded == nil || *recorded != want {
+		t.Fatalf("Record() = %#v, want %#v", recorded, want)
+	}
+	if got := tracker.stored["yoyodyne-ifd.432.10"]; got != want {
+		t.Fatalf("the item still carries %#v, want the corrected %#v", got, want)
+	}
+}
+
 func TestLedgerRefusesToWorkWithoutBothHalves(t *testing.T) {
 	t.Parallel()
 
@@ -153,8 +182,12 @@ func (f *fakePrices) Prices() ([]runstate.ItemPrice, error) { return f.all, f.er
 
 type fakeTracker struct {
 	recorded []recordedPrice
-	err      error
-	failFor  string
+	// stored is what each item carries, the way the tracker does: a write
+	// replaces whatever was there, so a test can seed a price and see what
+	// recording does to it.
+	stored  map[string]beads.Cost
+	err     error
+	failFor string
 }
 
 type recordedPrice struct {
@@ -169,6 +202,9 @@ func (f *fakeTracker) RecordCost(_ context.Context, id string, cost beads.Cost) 
 	}
 	if f.failFor == id {
 		return beads.WorkItem{}, errors.New("bd update failed for " + id)
+	}
+	if f.stored != nil {
+		f.stored[id] = cost
 	}
 	return beads.WorkItem{ID: id, Cost: &cost}, nil
 }

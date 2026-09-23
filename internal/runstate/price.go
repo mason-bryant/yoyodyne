@@ -659,6 +659,22 @@ func scanEventCost(path string) (float64, int, error) {
 // to that attempt. The first attempt is the development and every attempt after
 // it is a repair.
 //
+// What each terminal contributes is that invocation's own cost rather than the
+// figure it carries. A provider asked to resume a session reports what the
+// session has cost since it began, and a run's repair attempts resume the
+// developer's session, so the reported figures rise across the log and adding
+// them up charges the first attempt again to every attempt after it. Each is
+// therefore taken as the increment over what its own session was last reported
+// at, by the rule in OwnCostUSD, which leaves a log whose invocations each
+// opened a session -- a development attempt and the review beside it -- priced
+// exactly as it always was.
+//
+// The bound on that is the log: a session resumed by a later run is a beginning
+// again here, because this scan sees one run's terminals. That is the right
+// answer for what a run cost and the wrong one for what the session cost, and
+// the two are different questions; the cost log is where a session is followed
+// across the processes that resumed it.
+//
 // The token usage beside the money is read off the same terminals, and lands in
 // the phase the money did as well as in the run's total, so a share can be taken
 // over one phase or over all of them. A terminal that carried no usage object is
@@ -689,6 +705,14 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 	var (
 		spend  PhaseSpend
 		tokens TokenUsage
+		// costs turns each terminal's reported figure into what that invocation
+		// cost. A run's repair attempts resume the developer's session, so a log
+		// with three attempts in it carries the session's running total three
+		// times; summing those charged the first attempt to the item again on
+		// every later one. The developer's session and the reviewer's are
+		// separate sessions and are tracked apart, which falls out of keying on
+		// the session the terminal names.
+		costs SessionCosts
 		// reviewing is set by a review announcing itself and cleared by the single
 		// invocation it makes rather than by the review closing, because a review
 		// the provider never answered closes with nothing at all -- and a bracket
@@ -731,21 +755,22 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 		// made the one invocation it makes.
 		announced := reviewing
 		reviewing = false
+		cost := costs.Own(priced.Payload.SessionID, priced.Payload.TotalCostUSD)
 		switch priced.phase(announced) {
 		case phaseReview:
-			spend.Review.add(priced.Payload.TotalCostUSD, usage)
+			spend.Review.add(cost, usage)
 		case phaseDevelopment:
 			if ended {
 				attempt++
 			}
 			if attempt == 0 {
-				spend.Development.add(priced.Payload.TotalCostUSD, usage)
+				spend.Development.add(cost, usage)
 			} else {
-				spend.Repair.add(priced.Payload.TotalCostUSD, usage)
+				spend.Repair.add(cost, usage)
 			}
 			ended = priced.Type == execution.EventRunCompleted
 		default:
-			spend.Unattributed.add(priced.Payload.TotalCostUSD, usage)
+			spend.Unattributed.add(cost, usage)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -765,7 +790,13 @@ type pricedEvent struct {
 	// counted on by the readers that group spend by day.
 	Timestamp time.Time `json:"timestamp"`
 	Payload   struct {
-		Role         string  `json:"role"`
+		Role string `json:"role"`
+		// SessionID is the provider session the invocation ran in, and it is what
+		// says whether TotalCostUSD beside it is this invocation's cost or the
+		// session's running total: a provider asked to resume reports the latter.
+		// A terminal that named no session is priced at what it reported, which is
+		// what an invocation with no session to have resumed cost.
+		SessionID    string  `json:"session_id"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
 		// Usage is the provider's own usage object, recorded verbatim on every
 		// terminal. It is a pointer so that a terminal carrying no usage at all is

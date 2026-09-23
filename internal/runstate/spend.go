@@ -133,8 +133,29 @@ type Spend struct {
 	// encoded, including on an unknown line: a key left out reads to whatever
 	// consumes the log as an amount of nothing, which is the one thing an unknown
 	// spend must never be mistaken for.
+	//
+	// AmountUSD is this invocation's own cost and never the session's running
+	// total. The difference is the whole of yoyodyne-ifd.432.10: a provider asked
+	// to resume a session reports what that session has cost since it began, so a
+	// log recording the reported figure verbatim counts every earlier turn again
+	// on every later one -- which is how this product's last seven days came to be
+	// recorded at $30,841 against an actual $3,464. What the provider reported is
+	// kept beside it rather than thrown away, in ReportedTotalUSD.
 	Classification SpendClassification `json:"classification"`
 	AmountUSD      float64             `json:"amount_usd"`
+	// ReportedTotalUSD is what the provider itself said when this invocation
+	// ended, which on a resumed session is the session's running total rather
+	// than this invocation's cost. It is kept because the correction above has to
+	// be auditable: a reader holding both figures can see what was reported and
+	// what was made of it, and a later invocation of the same session is priced
+	// against it rather than against an amount that has already been corrected.
+	//
+	// It is absent where there was nothing to correct -- a line the provider
+	// priced at nothing, an unknown line, and every line written before this was
+	// carried, whose AmountUSD is the reported figure itself. SpendStore.List
+	// re-derives those on the way out, which is what lets a log written across the
+	// change be read as one thing.
+	ReportedTotalUSD float64 `json:"reported_total_usd,omitempty"`
 	// Unknown says why nobody knows what this invocation cost, and is empty on a
 	// line that names an amount.
 	Unknown string `json:"unknown,omitempty"`
@@ -205,6 +226,67 @@ type Spend struct {
 
 // Known reports a line carrying an amount somebody can add up.
 func (s Spend) Known() bool { return s.Classification == SpendKnown }
+
+// ReportedTotal is the provider's own figure for this invocation, which is what
+// a later invocation of the same session is priced against. It is the amount
+// itself on a line that carried no correction, which is both a line the
+// correction left alone and every line written before there was one.
+func (s Spend) ReportedTotal() float64 {
+	if s.ReportedTotalUSD != 0 {
+		return s.ReportedTotalUSD
+	}
+	return s.AmountUSD
+}
+
+// OwnCostUSD is one invocation's own cost, from what the provider reported for
+// it and what the provider had already reported for the same session.
+//
+// A provider resuming a session reports that session's running total, so what
+// this invocation cost is what the total moved by. Two cases record the whole
+// reported figure instead: a session's first invocation, which has no earlier
+// total to have moved, and a figure below the one before it, which is a provider
+// reporting this invocation's own cost rather than a running total -- or one
+// whose total restarted mid-session, where the first figure after the restart is
+// again a beginning. Both are the same rule stated once: a total that did not
+// rise is not a total this figure is an increment over.
+//
+// It is never negative, which is what makes it safe to apply to a log whose
+// provider changed its reporting partway through -- as this product's did on
+// 2026-09-19, mid-conversation.
+func OwnCostUSD(reported, previouslyReported float64, seen bool) float64 {
+	if !seen || reported < previouslyReported {
+		return reported
+	}
+	return reported - previouslyReported
+}
+
+// SessionCosts turns each invocation's reported figure into that invocation's
+// own cost, over a sequence of invocations read in the order they were recorded.
+// It is what a scan of one event log or one cost log keeps while it reads: the
+// rule above needs the session's previous figure, and the only thing that has it
+// is whatever is walking the record.
+//
+// An invocation that named no session is its own cost as reported. Nothing can
+// say otherwise about it, and a provider that reports no session is one whose
+// figures were never running totals to begin with.
+type SessionCosts struct {
+	reported map[string]float64
+}
+
+// Own is what this invocation cost, and records its reported figure as the one
+// the session's next invocation is priced against.
+func (c *SessionCosts) Own(sessionID string, reported float64) float64 {
+	session := strings.TrimSpace(sessionID)
+	if session == "" {
+		return reported
+	}
+	if c.reported == nil {
+		c.reported = make(map[string]float64)
+	}
+	previous, seen := c.reported[session]
+	c.reported[session] = reported
+	return OwnCostUSD(reported, previous, seen)
+}
 
 // Validate reports every contract violation in the line at once.
 func (s Spend) Validate() error {
@@ -294,8 +376,19 @@ func (s Spend) amountProblem() error {
 		if strings.TrimSpace(s.Unknown) != "" {
 			return errors.New("a known amount does not also say why it is unknown")
 		}
+		// The reported figure is the session's running total and the amount beside
+		// it is what this invocation added to it, so the amount can equal it and
+		// never exceed it. A line where it does is a correction applied backwards,
+		// which would understate the session it came from and overstate this
+		// invocation at once.
+		if s.ReportedTotalUSD != 0 && s.ReportedTotalUSD < s.AmountUSD {
+			return errors.New("a reported session total is not below the amount this invocation is recorded at")
+		}
 		return nil
 	default:
+		if s.ReportedTotalUSD != 0 {
+			return errors.New("an invocation nobody was told the cost of has no reported session total either")
+		}
 		if s.AmountUSD != 0 {
 			return errors.New("an unknown amount is not a number, so it is recorded as zero and read by its classification")
 		}
@@ -402,6 +495,16 @@ func (s *SpendStore) Append(line Spend) error {
 //
 // It returns the lines and nothing derived from them. What they add up to is the
 // operator's question and belongs to whoever asks it.
+//
+// One thing it does derive, and it is a correction rather than an aggregate: a
+// line written before an amount was an invocation's own cost carries the
+// provider's reported figure, which on a resumed session is the session's
+// running total. Those lines are re-derived here by the same rule a new one is
+// written by, from the session identifier every line already carries, with the
+// figure as recorded kept in ReportedTotalUSD -- so the file on disk stays what
+// was written and every reader of it sees one kind of amount. A line that
+// already carries a reported total was corrected when it was written and is
+// returned as it stands.
 func (s *SpendStore) List() ([]Spend, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
@@ -412,7 +515,10 @@ func (s *SpendStore) List() ([]Spend, error) {
 	}
 	defer file.Close()
 
-	var lines []Spend
+	var (
+		lines []Spend
+		costs SessionCosts
+	)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 8*1024), maxEncodedSpendBytes)
 	for scanner.Scan() {
@@ -427,12 +533,93 @@ func (s *SpendStore) List() ([]Spend, error) {
 		if err := s.validate(decoded); err != nil {
 			return nil, fmt.Errorf("decode spend log: %w", err)
 		}
-		lines = append(lines, decoded)
+		lines = append(lines, correctSpend(&costs, decoded))
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read spend log: %w", err)
 	}
 	return lines, nil
+}
+
+// correctSpend is one recorded line as its amount should now be read. A line
+// that already says what the provider reported was corrected when it was
+// written and only advances the session; a line that does not is corrected here
+// and keeps the figure it was recorded with.
+//
+// An unknown line advances nothing. Its amount is a zero standing for an
+// invocation nobody was told the price of, and treating that as a session total
+// would make the session's next invocation cost its whole running total again.
+func correctSpend(costs *SessionCosts, line Spend) Spend {
+	if !line.Known() {
+		return line
+	}
+	reported := line.ReportedTotal()
+	own := costs.Own(line.SessionID, reported)
+	if line.ReportedTotalUSD != 0 || own == reported {
+		return line
+	}
+	line.AmountUSD = own
+	line.ReportedTotalUSD = reported
+	return line
+}
+
+// ReportedSessionTotal is the last figure the provider reported for a session,
+// and whether this log has recorded one at all. It is what the meter prices the
+// session's next invocation against, and it is asked of the log rather than
+// carried in memory because a session outlives the process that opened it: a
+// management conversation resumes one session across days of separate
+// invocations, and a run's repair attempts resume the developer's across
+// processes.
+//
+// A session nothing has recorded is not an error and not a zero: the two are
+// opposite facts to the rule that prices the next invocation, so the answer says
+// which. Lines that could not be read fail rather than being skipped, for the
+// reason List fails on one -- a total taken over a log with a hole in it is a
+// figure nobody can attribute.
+func (s *SpendStore) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	session := strings.TrimSpace(sessionID)
+	if session == "" {
+		return 0, false, nil
+	}
+	file, err := os.Open(s.Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("open spend log: %w", err)
+	}
+	defer file.Close()
+
+	var (
+		total float64
+		found bool
+	)
+	needle := []byte(session)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 8*1024), maxEncodedSpendBytes)
+	for scanner.Scan() {
+		// The cheap test over-matches -- a session identifier could appear in any
+		// string on the line -- and the decoded line rejects the rest. What it must
+		// never do is skip a line that names the session, which is why it matches
+		// the identifier anywhere rather than in a key it assumes the shape of.
+		line := scanner.Bytes()
+		if !bytes.Contains(line, needle) {
+			continue
+		}
+		var decoded Spend
+		if err := json.Unmarshal(line, &decoded); err != nil {
+			return 0, false, fmt.Errorf("decode spend log: %w", err)
+		}
+		if decoded.SessionID != session || !decoded.Known() {
+			continue
+		}
+		total = decoded.ReportedTotal()
+		found = true
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, false, fmt.Errorf("read spend log: %w", err)
+	}
+	return total, found, nil
 }
 
 func encodeSpend(line Spend) ([]byte, error) {
