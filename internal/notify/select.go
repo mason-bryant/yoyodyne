@@ -1113,12 +1113,13 @@ func verdictGiven(state runstate.State) bool {
 
 // parked reports a run stopped short of finishing with an instruction to resume:
 // a provider that refused it, the operator holding everything, a directive
-// nobody has resolved, or work the item was made to wait on. All four keep the
-// run's claim and its worktree, which is what makes a park different from a
-// failure.
+// nobody has resolved, work the item was made to wait on, or a tracker that
+// would not answer the read a gate boundary makes. All five keep the run's claim
+// and its worktree, which is what makes a park different from a failure.
 func parked(state runstate.State) bool {
 	return state.UsageLimitResetsAt != nil || state.OperatorHeldSince != nil ||
-		state.DirectivePause != nil || state.DependencyPause != nil
+		state.DirectivePause != nil || state.DependencyPause != nil ||
+		state.TrackerPause != nil
 }
 
 // causeOf names what a parked run is waiting on, as the object of "waiting on".
@@ -1135,6 +1136,9 @@ func causeOf(state runstate.State) string {
 	}
 	if pause := state.DependencyPause; pause != nil {
 		return "unfinished work this item depends on: " + pause.Summary()
+	}
+	if pause := state.TrackerPause; pause != nil {
+		return "a tracker that would not answer: " + pause.Summary()
 	}
 	if state.OperatorHeldSince != nil {
 		return runstate.DescribePause(runstate.PauseOperatorHold, "")
@@ -1158,8 +1162,19 @@ func causeOf(state runstate.State) string {
 // exhausted limit is hours in which nothing will happen for a reason nobody
 // chose, and it must not weigh the same as checks passing. A transient overload
 // lifts in seconds and stays a note for exactly that reason.
+//
+// A tracker that went unanswered for a whole recovery window is a warning on the
+// same reasoning as the limit: nobody chose it, the store is the one every role
+// writes through, and a run parked on it is work that will not move until
+// somebody looks at the machine.
 func parkSeverity(state runstate.State) report.Severity {
-	if state.DirectivePause != nil || state.DependencyPause != nil || state.OperatorHeldSince != nil {
+	if state.DirectivePause != nil || state.DependencyPause != nil {
+		return report.SeverityNote
+	}
+	if state.TrackerPause != nil {
+		return report.SeverityWarning
+	}
+	if state.OperatorHeldSince != nil {
 		return report.SeverityNote
 	}
 	if state.PauseCause == runstate.PauseServerOverload {

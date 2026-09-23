@@ -1036,6 +1036,70 @@ func (d DependencyPause) Validate() error {
 	return nil
 }
 
+// TrackerPause is a run parked because the tracker would not answer the read it
+// makes at a gate boundary, for the whole of that boundary's recovery window. It
+// is recorded before the run returns, for the reason a dependency pause is: the
+// park has to survive the process, so a later invocation can tell a run that is
+// waiting from one that was interrupted, and resume it rather than start a
+// second attempt at the same item.
+//
+// It is a separate pause from the dependency one because what is being waited on
+// differs. A dependency pause knows what the item waits for and is lifted by that
+// work finishing; this is a run that could not find out, and is lifted by the
+// tracker answering. Failing the run instead is what ended three runs in two
+// days, two of them holding work a reviewer had already approved or a developer
+// had already written.
+type TrackerPause struct {
+	// Boundary is the RetryDependencyRead-style name of the read that went
+	// unanswered, so the record says which of a run's tracker reads this was.
+	Boundary string `json:"boundary"`
+	// Attempts and WaitedSeconds are what the window was spent on, carried here
+	// rather than derived from the retries so a reader of the park sees what it
+	// cost without walking the run's whole retry log.
+	Attempts      int   `json:"attempts"`
+	WaitedSeconds int64 `json:"waited_seconds"`
+	// Failure is the last thing the tracker said, bounded like every other
+	// recorded failure. It is what tells a person reading the park whether the
+	// store was contended or broken.
+	Failure string `json:"failure,omitempty"`
+}
+
+// Waited is how long the run spent asking before it parked.
+func (t TrackerPause) Waited() time.Duration {
+	return time.Duration(t.WaitedSeconds) * time.Second
+}
+
+// Summary names what the run is waiting for, in one line, for a reader who needs
+// to know what to look at rather than the whole retry log.
+func (t TrackerPause) Summary() string {
+	summary := fmt.Sprintf("the tracker did not answer while %s: %d attempt(s) over %s",
+		t.Boundary, t.Attempts, t.Waited().Round(time.Second))
+	if strings.TrimSpace(t.Failure) != "" {
+		summary += "; last failure: " + t.Failure
+	}
+	return summary
+}
+
+// Validate rejects a recorded park that cannot say what went unanswered. A park
+// nobody can name the boundary of is one nobody can tell from a run that simply
+// stopped, which is the whole thing this records against.
+func (t TrackerPause) Validate() error {
+	var problems []error
+	if strings.TrimSpace(t.Boundary) == "" {
+		problems = append(problems, errors.New("boundary is required"))
+	}
+	if t.Attempts <= 0 {
+		problems = append(problems, errors.New("attempts must name at least one attempt that was made"))
+	}
+	if t.WaitedSeconds < 0 {
+		problems = append(problems, errors.New("waited_seconds cannot be negative"))
+	}
+	if len(t.Failure) > MaxRetryFailureBytes {
+		problems = append(problems, fmt.Errorf("failure is %d bytes, which exceeds the %d byte bound", len(t.Failure), MaxRetryFailureBytes))
+	}
+	return errors.Join(problems...)
+}
+
 // MaxRepairContinuations bounds how many granted continuations one run's record
 // may carry. What actually bounds them is the item's per-item grant cap, which
 // refuses long before this; this is the record's own bound, so a budget somebody
@@ -1144,6 +1208,22 @@ const (
 	// conversation has no run, and it is named here so the record speaks one
 	// vocabulary wherever a wait was taken.
 	RetryTracker = "reaching the tracker"
+	// RetryDependencyRead is the tracker read a run makes at each of its gate
+	// boundaries to find out what its work item waits on: before the claim or the
+	// resume, at the start of every repair round, and once more before the
+	// promotion. It is a boundary of its own rather than part of the write above
+	// because it is met at a different moment and by a different kind of run — the
+	// writes are what a finishing run makes, and this is what a run that is still
+	// working asks before it may take another step.
+	//
+	// It is one boundary rather than three call sites for the reason the tracker
+	// writes are one: the same store reached the same way, where a `bd` that could
+	// not be run for the round's read could not be run for the promotion's either.
+	// Three runs died on it in two days — yoyodyne-ifd.436.4 with its change
+	// already approved, yoyodyne-ifd.117.1 with its files already lifted — each on
+	// one `bd show` that timed out under load and would have answered on the next
+	// attempt.
+	RetryDependencyRead = "reading what this item waits on"
 )
 
 // MaxRetries bounds how many recoverable failures one run records. The window
@@ -1783,6 +1863,18 @@ type State struct {
 	// one because what lifts them differs: a directive is settled by a person
 	// deciding, and this is lifted by other work finishing.
 	DependencyPause *DependencyPause `json:"dependency_pause,omitempty"`
+	// TrackerPause records that the tracker would not answer the read this run
+	// makes at a gate boundary, for the whole of that boundary's recovery window.
+	// Like a dependency pause it is an instruction to resume later rather than a
+	// failure, so a run carrying one keeps its claim, its worktree, its branch,
+	// and its developer session, and is picked up again once the store answers.
+	// It is cleared as the run resumes.
+	//
+	// It is a separate field from the dependency pause rather than a second kind
+	// of one for the reason that pause is separate from the directive's: what
+	// lifts them differs. That one is lifted by other work finishing, and this by
+	// a store that was contended becoming reachable again.
+	TrackerPause *TrackerPause `json:"tracker_pause,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -2239,6 +2331,17 @@ func (s State) Validate() error {
 		// continuation nothing will ever make.
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("dependency_pause requires a run that is still in flight"))
+		}
+	}
+	if s.TrackerPause != nil {
+		if err := s.TrackerPause.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("tracker_pause: %w", err))
+		}
+		// A tracker pause is the same kind of instruction as the ones above:
+		// resume this later. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("tracker_pause requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

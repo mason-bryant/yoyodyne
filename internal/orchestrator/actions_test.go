@@ -836,6 +836,7 @@ var notAStep = map[string]string{
 	"awaitRecordedUsageLimit":    "serves a usage-limit deadline an earlier process recorded",
 	"clearDirectivePause":        "consumes a directive pause the run recorded",
 	"clearDependencyPause":       "consumes a dependency pause the run recorded",
+	"clearTrackerPause":          "consumes a tracker park the run recorded, and gives its recovery window back",
 	"clearOperatorHold":          "consumes an operator hold the run recorded",
 	"recordProviderStop":         "records that the harness stopped the provider on time",
 	"recordRelaunch":             "spends one of the run's relaunches",

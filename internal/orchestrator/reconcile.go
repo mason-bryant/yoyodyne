@@ -388,6 +388,17 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			state.WorkItemID, state.DependencyPause.Summary())
 		return result, nil
 	}
+	// A run parked because the tracker would not answer the read a gate boundary
+	// makes is not an interrupted run either. It recorded what went unanswered and
+	// is owed the rest of the gate once the store answers, so settling it here
+	// would turn a busy store into a cancelled run — which is the whole failure
+	// parking exists to replace.
+	if pausedForTracker(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run is parked because %s, and can continue once the tracker answers",
+			state.TrackerPause.Summary())
+		return result, nil
+	}
 	// A run parked because the operator paused all harness activity is not an
 	// interrupted run either, and it is the one where settling it would be
 	// worst: the operator stopped it deliberately and expects to find it where

@@ -3234,6 +3234,14 @@ type fakeTracker struct {
 	blockReason string
 	calls       []string
 	onClaim     func() error
+	// showFailures and transientShowErr are how many reads are refused before one
+	// answers, and what they are refused with. They are the read's half of what
+	// completeFailures is for the write: a store that was busy rather than one
+	// that keeps answering the same way. showCalls counts every read, so a test
+	// can say which of a run's reads the refusals landed on.
+	showFailures     int
+	transientShowErr error
+	showCalls        int
 	// staleBlockClear is what the claim reports about a stale blocked status it
 	// cleared, returned beside the item and beside onClaim's error alike, as the
 	// real client returns it. Nil is a claim that met none.
@@ -3345,6 +3353,11 @@ func (partialWorktreeManager) CatchUpTarget(context.Context, string) (gitworktre
 // for every identifier would make "the tracker has no such work item" untestable,
 // which is the case a landing's impediment marker has to be resolved against.
 func (f *fakeTracker) Show(_ context.Context, id string) (beads.WorkItem, error) {
+	f.showCalls++
+	if f.showFailures > 0 {
+		f.showFailures--
+		return beads.WorkItem{}, f.transientShowErr
+	}
 	if id == f.item.ID {
 		return f.item, nil
 	}

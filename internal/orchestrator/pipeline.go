@@ -740,6 +740,16 @@ type Outcome struct {
 	// stopped before anything was claimed, and unlike the directive what lifts it
 	// is other work finishing rather than a person deciding.
 	PausedByDependency *runstate.DependencyPause `json:"paused_by_dependency,omitempty"`
+	// PausedByTracker is the unanswered tracker read this run parked on: the gate
+	// boundary whose read went unanswered for the whole of its recovery window,
+	// what the window was spent on, and what the store last said. It carries the
+	// park itself rather than only saying there is one, because whether the store
+	// was contended or broken is the whole of what somebody would act on.
+	//
+	// Unlike the two above it never appears with no run behind it: it is a run
+	// that got as far as a gate and could not find out whether it may take the
+	// next step.
+	PausedByTracker *runstate.TrackerPause `json:"paused_by_tracker,omitempty"`
 	// PausedByOperator is the operator's hold on all harness activity, present on
 	// a run parked at a provider-call boundary for it and on work this process
 	// declined to start while it was in force. It carries the hold itself rather
@@ -904,7 +914,10 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		return Outcome{}, err
 	}
 
-	item, err := p.Tracker.Show(ctx, workItemID)
+	// The read is waited out rather than taken once. It is the same store a gate
+	// boundary reads, contended by the same processes, and a `bd` killed under
+	// load here turned away a dispatch that had nothing wrong with it.
+	item, err := p.readWorkItem(ctx, workItemID)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
 	}
@@ -955,7 +968,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// making, and the rest are owed the rest of the step they stopped short of.
 		// Nothing reaches here while the hold or the dependency is still in force,
 		// so a run carrying one is a run whose reason to wait has gone.
-		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForDependency(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForDependency(inFlight) && !pausedForTracker(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -1296,8 +1309,10 @@ func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outco
 	}
 	// The provider is not asked here: a continuation that names a run nobody is
 	// holding, or the wrong one, is refused from durable state alone, and the
-	// resume below asks about the provider once there is a run to spend it on.
-	item, err := p.Tracker.Show(ctx, workItemID)
+	// resume below asks about the provider once there is a run to spend it on. The
+	// read is waited out exactly as a fresh dispatch's is: a continuation turned
+	// away by a contended store is a repair decision that has to be made again.
+	item, err := p.readWorkItem(ctx, workItemID)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
 	}
@@ -1552,6 +1567,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// freshly loaded item before the run was adopted.
 	if state.DependencyPause != nil {
 		if err := run.clearDependencyPause(); err != nil {
+			return run.fail(err, runstate.StatusFailed)
+		}
+	}
+	// A recorded tracker park is lifted on the same evidence: the read that went
+	// unanswered is the one the dispatch above has just made for itself, and
+	// nothing reaches this point without it having been answered. Its window goes
+	// with it, so the gate this run re-enters may ask again rather than finding
+	// its whole window already spent.
+	if state.TrackerPause != nil {
+		if err := run.clearTrackerPause(); err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
 	}
@@ -3950,9 +3975,32 @@ func pauseWorkItemForDependencies(workItemID string, blockers []string) Outcome 
 // is: a harness that cannot find out what an item waits on is indistinguishable
 // from one whose item waits on nothing, and spending another attempt on that
 // reading is the whole failure this exists to prevent.
+//
+// What "a failure to read" means is the part that had to change. The store is a
+// local database other processes write to, so a `bd show` killed under load is
+// the same class of non-answer a reset connection is — and until
+// yoyodyne-ifd.428.6 this boundary ran under a flat deadline and ended the run
+// on the first one. Three runs died that way in two days, two of them holding
+// finished work: an approved change stopped at its promotion, and a lifted
+// worktree stopped at the start of a round. So the read is waited out on the
+// same Fibonacci window every other recoverable boundary gets, and only a read
+// that spends the whole of it stops the run — as a park rather than a failure,
+// because a store that was busy for two hours says nothing about the change.
 func (a *activeRun) holdForDependency(ctx context.Context) error {
-	item, err := a.pipeline.Tracker.Show(ctx, a.state.WorkItemID)
+	var item beads.WorkItem
+	err := a.recovering(ctx, runstate.RetryDependencyRead, func(ctx context.Context) error {
+		var readErr error
+		item, readErr = a.pipeline.Tracker.Show(ctx, a.state.WorkItemID)
+		return readErr
+	})
 	if err != nil {
+		// A failure that is still recoverable-classed after the window is the
+		// window having run out rather than an answer: recovering returns anything
+		// else exactly as the read produced it. The run parks instead of failing,
+		// keeping its claim, its branch, its worktree, and its developer session.
+		if recovery.Recoverable(err) {
+			return a.recordTrackerPause(runstate.RetryDependencyRead, err)
+		}
 		return fmt.Errorf("read what %s waits on: %w", a.state.WorkItemID, err)
 	}
 	blockers := blockingDependencies(item)
@@ -3960,6 +4008,79 @@ func (a *activeRun) holdForDependency(ctx context.Context) error {
 		return nil
 	}
 	return a.recordDependencyPause(blockers)
+}
+
+// recordTrackerPause makes the park durable and then reports it, for the reason
+// recordDependencyPause does: a process that dies here must leave a run that can
+// be told from an interrupted one and picked up again.
+//
+// The phase is left exactly where the run reached, unlike the dependency pause
+// beside it. That pause is taken having decided the work must not proceed, so it
+// moves a developer's phase on; this is taken having decided nothing at all, and
+// a resumed run has to re-ask the question this one could not get an answer to.
+func (a *activeRun) recordTrackerPause(boundary string, cause error) error {
+	paused := runstate.TrackerPause{
+		Boundary:      boundary,
+		Attempts:      a.state.RetryAttempts(boundary),
+		WaitedSeconds: int64(a.state.RetryWaited(boundary) / time.Second),
+		Failure:       boundedFailureDetail(cause.Error()),
+	}
+	a.state.TrackerPause = &paused
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record the unanswered tracker read that parked this run: %w", err)
+	}
+	return trackerPause{paused: paused}
+}
+
+// clearTrackerPause records that the run is no longer waiting on the store,
+// before it carries on. A park left behind would make a running attempt look
+// like a waiting one to the next process that adopts the run.
+//
+// It clears the window with it. The park is the end of one boundary's window,
+// and a resumed run that found it already spent would park again on its first
+// read without ever asking twice — so a resume that got as far as re-entering
+// the gate is given the window back, which is the same rule every other spent
+// window follows: it bounds one stretch of asking rather than the run.
+func (a *activeRun) clearTrackerPause() error {
+	if a.state.TrackerPause == nil {
+		return nil
+	}
+	boundary := a.state.TrackerPause.Boundary
+	a.state.TrackerPause = nil
+	a.state.Retries = slices.DeleteFunc(a.state.Retries, func(retry runstate.Retry) bool {
+		return retry.Boundary == boundary
+	})
+	a.outcome.Retries = a.state.Retries
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("clear the tracker pause: %w", err)
+	}
+	return nil
+}
+
+// trackerPause reports a run that stopped short of finishing because the tracker
+// did not answer a read it makes at a gate boundary. Like the directive and
+// dependency pauses it is an error only so that it travels the path a stopped
+// step already travels; it is deliberately not a failure, and the run it leaves
+// behind is still in flight, still claimed, and still resumable.
+type trackerPause struct {
+	paused runstate.TrackerPause
+}
+
+func (e trackerPause) Error() string {
+	return "parked for a tracker read that went unanswered: " + e.paused.Summary()
+}
+
+// pausedForTracker reports a run parked on an unanswered tracker read. The
+// recorded park is what makes it a pause rather than an interruption, and the
+// worktree is what makes it resumable: the change every attempt shares is what
+// the run comes back to.
+func pausedForTracker(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.TrackerPause == nil {
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
 }
 
 // recordDependencyPause makes the pause durable and then reports it, for the
@@ -4766,6 +4887,10 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	if errors.As(cause, &waiting) {
 		return a.pauseForDependency(waiting)
 	}
+	var unanswered trackerPause
+	if errors.As(cause, &unanswered) {
+		return a.pauseForTracker(unanswered)
+	}
 	var operatorHeld operatorHoldPause
 	if errors.As(cause, &operatorHeld) {
 		return a.pauseForOperatorHold(operatorHeld)
@@ -5008,6 +5133,37 @@ func (a *activeRun) pauseForDependency(paused dependencyPause) (Outcome, error) 
 	return a.outcome, nil
 }
 
+// pauseForTracker reports a run parked because the tracker did not answer a read
+// it makes at a gate boundary. It behaves exactly as the dependency pause it
+// sits beside: the park was made durable before this point, nothing is cleaned
+// up, and nothing is made terminal, so the change the run has already produced
+// stays where the next attempt continues it. What differs is only what lifts it —
+// the store answering, rather than the work it waits on being closed.
+func (a *activeRun) pauseForTracker(paused trackerPause) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	unanswered := paused.paused
+	a.outcome.PausedByTracker = &unanswered
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderTrackerPauseNotes(a.outcome, unanswered)); err != nil {
+		// The park is already durable, so a note that could not be written costs
+		// the run nothing — and here it is the likeliest outcome of all, since what
+		// parked the run is the same store this note goes to. It is still reported,
+		// for the same reason the other pauses report it.
+		return a.outcome, fmt.Errorf("record the tracker pause on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // pauseForOperatorHold reports a run parked because the operator holds harness
 // activity. It is the fourth of the pauses and behaves exactly as the other
 // three: the park was made durable before this point, nothing is cleaned up, and
@@ -5081,7 +5237,7 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	message := runstate.RecordFailure(cause.Error())
 	completedAt := p.clock().Now()
 	// A recorded pause or stop is an instruction to resume later, and this run is
-	// ending now. Clearing all five keeps the terminal record coherent; what
+	// ending now. Clearing all six keeps the terminal record coherent; what
 	// stopped the run is still named by the recorded limit kind and by the
 	// failure, and what it spent waiting stays on the record either way.
 	a.state.UsageLimitResetsAt = nil
@@ -5091,6 +5247,7 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	a.state.ProviderStop = ""
 	a.state.DirectivePause = nil
 	a.state.DependencyPause = nil
+	a.state.TrackerPause = nil
 	a.state.OperatorHeldSince = nil
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
@@ -5213,6 +5370,7 @@ func (a *activeRun) recordEndingAfterRefusedSave(status runstate.Status, complet
 	durable.ProviderStop = ""
 	durable.DirectivePause = nil
 	durable.DependencyPause = nil
+	durable.TrackerPause = nil
 	durable.OperatorHeldSince = nil
 	durable.Status = status
 	durable.UpdatedAt = completedAt
@@ -6808,6 +6966,34 @@ func renderDependencyPauseNotes(outcome Outcome, waiting runstate.DependencyPaus
 	lines = append(lines,
 		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
 		"Closing the work above, or removing the dependency link, is what lifts the pause; running Yoyodyne on this item after that continues the same run.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// renderTrackerPauseNotes describes a run parked because the tracker did not
+// answer the read it makes at a gate boundary. It names the boundary and what
+// the window was spent on, because a store that was contended for two hours and
+// a store that is broken are different things to act on, and it says plainly
+// that the work was not abandoned: an operator reading a claimed item that has
+// gone quiet has to be able to tell waiting from stopped.
+func renderTrackerPauseNotes(outcome Outcome, unanswered runstate.TrackerPause) string {
+	lines := []string{
+		"Yoyodyne parked this run: the tracker did not answer a read the run makes before it may take its next step, for the whole of that boundary's recovery window, so the run is waiting rather than failing. Nothing about the change was judged.",
+		"Waiting on: " + unanswered.Summary(),
+		"Run: " + outcome.RunID,
+	}
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch: "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+outcome.WorktreePath)
+	}
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"The tracker answering is what lifts the park; running Yoyodyne on this item continues the same run from where it stopped.",
 	)
 	return strings.Join(lines, "\n")
 }
