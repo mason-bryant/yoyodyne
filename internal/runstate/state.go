@@ -2601,6 +2601,28 @@ func (s State) DiedBeforeClaiming() bool {
 		strings.TrimSpace(s.Failure) != ""
 }
 
+// DiedInItsOwnProcess reports a run that failed inside its own process, handing
+// nobody a blocker and integrating nothing, with an account of what killed it.
+//
+// It is the ending that leaves a stoppage nothing announces. A run whose process
+// was killed is settled by a sweep, which blocks the item when the change
+// survives; a run that fails inside its own process deliberately writes no
+// blocker, because the harness may yet resume it and a blocked item is one it
+// would refuse to resume. The item is left claimed, the change is left on its
+// branch, and every rule that decides whether a failure is worth somebody's
+// attention by reading a blocker reads this as nothing having happened.
+//
+// It says nothing about whether the change survived, which is a separate
+// question each caller asks its own way: the docket asks the run's own removal
+// flags at the moment of the death, and the hold the pull reads asks the
+// repository. It is here rather than beside either of them because both ask it,
+// and two derivations of one fact are two answers about the same run.
+func (s State) DiedInItsOwnProcess() bool {
+	return s.Status == StatusFailed &&
+		s.Integration == nil &&
+		strings.TrimSpace(s.Failure) != ""
+}
+
 // Escalated reports a run either role ended by saying the work item cannot be
 // met as it stands. Nothing is integrated on such a run, the item is parked, and
 // what the run produced is a decision for the development manager.

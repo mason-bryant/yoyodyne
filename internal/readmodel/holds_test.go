@@ -282,6 +282,76 @@ func TestABranchLeftBehindReadsAsThePublicationOnlyWhereTheMergeIsConfirmed(t *t
 	}
 }
 
+// The 2026-09-22 shape, and the ending the hold could not read. run-b0b6d18d's
+// change was approved and then stopped short of the target branch by a tracker
+// read that timed out, so it died inside its own process: no blocker, a record
+// ending `failed` rather than `stopped`, and its change sitting on a branch
+// exactly as any stoppage's does. The hold read the blocker and found none, the
+// item was pulled fresh, and a second developer run and a second review
+// re-derived the change that was already on the branch.
+func TestARunThatDiedHoldingItsChangeIsHeldExactlyAsOneThatStoppedIs(t *testing.T) {
+	t.Parallel()
+
+	stopped := time.Date(2026, 9, 22, 4, 4, 0, 0, time.UTC)
+	died := preservedRun("run-b0b6d18d", "yoyodyne-ifd.436.4", stopped)
+	// What makes it the ending nothing announced: the run failed in its own
+	// process and handed nobody a blocker, on purpose, because the harness may
+	// yet resume it.
+	died.Blocker = ""
+	died.Failure = "bd show failed with status timed_out and exit code -1: "
+	died.ReviewDecision = runstate.ReviewApprove
+	died.ReviewSessionID = "f4c1a0de-review"
+	died.Phase = runstate.PhaseReviewing
+	died.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseTransportFailure,
+		Detail:     died.Failure,
+		Phase:      runstate.PhaseReviewing,
+		RecordedAt: stopped,
+	}
+
+	held := heldForAPerson([]runstate.State{died}, nil, nothingDecided, asRecorded)
+	reason := heldReason(t, held, "yoyodyne-ifd.436.4")
+	if !strings.Contains(reason, "run-b0b6d18d") || !strings.Contains(reason, "branch and worktree") {
+		t.Fatalf("the hold says %q, want the run and what was found of its change named", reason)
+	}
+	// And whose move it is, which is neither of the two the other holds name: the
+	// reviewer decided and the environment got in the way, so the development
+	// manager owes nothing and the harness resumes the promotion.
+	if !held.Decided("yoyodyne-ifd.436.4") {
+		t.Fatalf("the hold says %q, want the harness named as the next mover", reason)
+	}
+	if !strings.Contains(reason, "`yoyo triage resume`") {
+		t.Fatalf("the hold says %q, want the verb that resumes the promotion named", reason)
+	}
+	if strings.Contains(reason, "the development manager") {
+		t.Fatalf("the hold says %q, which sends the operator to a role the docket tells owes nothing here", reason)
+	}
+	// And the verb survives the cut every surface that renders a hold on one line
+	// makes, because a reason cut before it says what to do says nothing anybody
+	// can act on.
+	if index := strings.Index(reason, "`yoyo triage resume`"); index < 0 || index > 200 {
+		t.Fatalf("the verb is %d bytes into %q, want it early enough to survive a one-line rendering", index, reason)
+	}
+}
+
+// The same ending with nothing left of it holds nothing. A run that died in its
+// own process and whose change was cleaned up afterwards leaves nothing for a
+// fresh run to strand, exactly as a blocked run's cleaned-up change does.
+func TestARunThatDiedWithItsChangeCleanedUpHoldsNothing(t *testing.T) {
+	t.Parallel()
+
+	swept := preservedRun("run-3f9a2c11", "yoyodyne-ifd.243", time.Date(2026, 9, 22, 4, 4, 0, 0, time.UTC))
+	swept.Blocker = ""
+	swept.Failure = "create isolated worktree: primary checkout is not ready for integration"
+	swept.BranchRemoved = true
+	swept.WorktreeRemoved = true
+
+	held := heldForAPerson([]runstate.State{swept}, nil, nothingDecided, asRecorded)
+	if reason, ok := held.Reason("yoyodyne-ifd.243"); ok {
+		t.Fatalf("yoyodyne-ifd.243 was held for %q, want nothing holding it", reason)
+	}
+}
+
 // publishedRun is a run that finished, integrated its change, and could not
 // finish publishing it: the forge merged, and deleting the branch that merge
 // consumed failed on a reset connection.

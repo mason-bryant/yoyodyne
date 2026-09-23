@@ -25,6 +25,7 @@ package readmodel
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -88,6 +89,11 @@ type DeadClaim struct {
 // holdsItsClaim, which is the whole of the safety of this. Being wrong in that
 // direction leaves an item stuck for somebody to notice, and being wrong in the
 // other puts a second developer on work the first is still holding.
+//
+// It is kept, too, wherever the run behind it ended holding its change — see
+// stillHeld. A claim there is not a claim nothing is working on: it is the one
+// thing saying an item whose change is on a branch is spoken for, and a release
+// buys a fresh run started over the top of it.
 func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold, within time.Duration) []DeadClaim {
 	if threshold <= 0 {
 		threshold = DefaultDeadClaimThreshold
@@ -119,6 +125,12 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 		if latest.Integration != nil {
 			continue
 		}
+		// And an item whose latest run ended holding its change is not work to be
+		// started again either. The claim is the one thing saying so, and the pull's
+		// hold reads the same endings: see stillHeld.
+		if stillHeld(latest) {
+			continue
+		}
 		dead = append(dead, DeadClaim{
 			WorkItemID: claim.WorkItemID,
 			Title:      claim.Title,
@@ -128,6 +140,49 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 		})
 	}
 	return dead
+}
+
+// stillHeld reports a run whose ending left its item held rather than free, so
+// that giving the claim back says something about the item that is not true.
+//
+// It is the same fact the pull's hold reads, asked here so that the two cannot
+// disagree about one run. A claim is the harness saying an item is spoken for,
+// and these endings are exactly the ones where it still is: the change is on a
+// branch, somebody or the harness owes it a move, and what a release buys is a
+// fresh run started over the top of it. That is what run-b0b6d18d cost on
+// 2026-09-22 — an approved change stopped at the promotion by a tracker read
+// that timed out, released as a dead claim half an hour later, and re-derived
+// by a fresh pull that spent a developer run and a review to reach the change
+// that was already sitting on the branch.
+//
+// Three endings qualify, and the first is the one that had no other marker at
+// all. An integration stop is an approved change the environment stopped short
+// of the target branch, which `yoyo triage resume` carries the rest of the way.
+// A recorded blocker is the harness having handed the item to somebody — a
+// replay that conflicted against a moved target first among them. And a run that
+// died inside its own process hands nobody a blocker on purpose, so its record
+// ends `failed` while its change sits on a branch exactly as a stoppage's does.
+//
+// All three ask whether the change survived, and none of them holds a claim
+// without it: a stoppage whose branch is gone leaves nothing for a fresh run to
+// strand, and an integration stop whose branch is gone is one nothing can resume
+// at all. It is asked of the record here where the pull's hold looks in the
+// repository, and that is the conservative direction for this reader and only
+// for this one: a record that says the branch is gone releases the claim exactly
+// as it did before, and a record that says it is there holds it — so a flag
+// nobody updated costs a claim left standing rather than a change run over.
+//
+// A run that has not ended is never one of these. Its record is what fills a
+// developer slot and its claim is what keeps the item out of every pull, and
+// leaving both standing on a process that is gone is the failure the audit
+// exists for.
+func stillHeld(run runstate.State) bool {
+	if !run.Status.Terminal() || !run.Artifacts().Preserved() {
+		return false
+	}
+	return run.IntegrationStop != nil ||
+		strings.TrimSpace(run.Blocker) != "" ||
+		run.DiedInItsOwnProcess()
 }
 
 // readClaim reads one item's runs: the most recent of them, the last moment that

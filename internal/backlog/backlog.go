@@ -63,11 +63,13 @@ const maxRenderedTitleBytes = 120
 type Hold struct {
 	// Reason is what is holding the item, in the harness's own words.
 	Reason string
-	// Decided reports a decision already recorded about the stoppage that holds
-	// this item, which the harness has still to carry out. It is false where
-	// nobody has decided anything, and false where what was decided could not be
-	// read — the reason says which, because a record nobody could open is not a
-	// decision nobody made.
+	// Decided reports the harness rather than the development manager being the
+	// next mover on the stoppage that holds this item: a decision already
+	// recorded and not yet carried out, or an approved change the environment
+	// stopped short of its promotion, which nobody has to decide anything about
+	// and the harness resumes. It is false where nobody has decided anything, and
+	// false where what was decided could not be read — the reason says which,
+	// because a record nobody could open is not a decision nobody made.
 	Decided bool
 }
 

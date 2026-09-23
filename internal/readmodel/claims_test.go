@@ -202,6 +202,91 @@ func TestAClaimOverWorkThatAlreadyLandedIsNotGivenBack(t *testing.T) {
 	}
 }
 
+// The 2026-09-22 shape, at the grain this reading works at. run-b0b6d18d's
+// change was approved and then stopped short of the target branch by a tracker
+// read that timed out, leaving a record that ends `failed` with the stop on it
+// and the change on its branch. The claim is the one thing saying the item is
+// spoken for: given back, the next pull started a fresh run that re-derived the
+// same change, spent a developer run and a review, and integrated it a second
+// time.
+func TestAClaimOverAnApprovedChangeTheEnvironmentStoppedIsNotGivenBack(t *testing.T) {
+	t.Parallel()
+
+	stopped := ended("run-b0b6d18d", "yoyodyne-ifd.436.4", runstate.StatusFailed, 9*time.Hour)
+	stopped.Phase = runstate.PhaseReviewing
+	stopped.Branch = "yoyodyne/yoyodyne-ifd-436-4/b0b6d18d"
+	stopped.WorktreePath = "/state/worktrees/yoyodyne-ifd-436-4-b0b6d18d"
+	stopped.Failure = "bd show failed with status timed_out and exit code -1: "
+	stopped.ReviewDecision = runstate.ReviewApprove
+	stopped.ReviewSessionID = "f4c1a0de-review"
+	stopped.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseTransportFailure,
+		Detail:     stopped.Failure,
+		Phase:      runstate.PhaseReviewing,
+		RecordedAt: auditNoon.Add(-9 * time.Hour),
+	}
+
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "The duplicated one")}, []runstate.State{stopped}, auditNoon, 0, 0)
+	if len(dead) != 0 {
+		t.Fatalf("DeadClaims() = %+v, want an approved change the environment stopped left for `yoyo triage resume`", dead)
+	}
+	// And a stop whose branch is gone is nothing anybody can resume, so the claim
+	// is the dead one it looks like: there is no change left to start over.
+	stopped.BranchRemoved, stopped.WorktreeRemoved = true, true
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "Swept")}, []runstate.State{stopped}, auditNoon, 0, 0); len(dead) != 1 {
+		t.Fatalf("DeadClaims() = %+v, want the claim given back once nothing is left to resume", dead)
+	}
+}
+
+// The wider rule under it, which the stop above is one case of: a run that ended
+// holding its change keeps its item's claim, whether what says so is a blocker
+// the harness handed somebody — a replay that conflicted against a moved target
+// — or a death inside the run's own process, which hands over nothing at all.
+// Both leave a change on a branch that a fresh run would start over the top of.
+func TestAClaimOverAChangeStillOnItsBranchIsNotGivenBack(t *testing.T) {
+	t.Parallel()
+
+	for name, ending := range map[string]func(*runstate.State){
+		"a replay that conflicted": func(s *runstate.State) {
+			s.Blocker = "Yoyodyne stopped this item: replaying the change onto main conflicted, and both sides are preserved."
+		},
+		"a death inside the run's own process": func(s *runstate.State) {
+			s.Failure = "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es)"
+		},
+	} {
+		run := ended("run-holding", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour)
+		run.Branch = "yoyodyne/yoyodyne-ifd-9/holding"
+		run.WorktreePath = "/state/worktrees/yoyodyne-ifd-9-holding"
+		ending(&run)
+		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Still on a branch")}, []runstate.State{run}, auditNoon, 0, 0); len(dead) != 0 {
+			t.Fatalf("%s: DeadClaims() = %+v, want the claim kept over a change still on its branch", name, dead)
+		}
+		// And the same ending with its change swept keeps nothing: there is no
+		// change left to start over, so the claim is the dead one it looks like.
+		run.BranchRemoved, run.WorktreeRemoved = true, true
+		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Swept")}, []runstate.State{run}, auditNoon, 0, 0); len(dead) != 1 {
+			t.Fatalf("%s: DeadClaims() = %+v, want the claim given back once nothing of the change survives", name, dead)
+		}
+	}
+}
+
+// And the case the rule above must not swallow, which is the one the whole audit
+// exists for: a killed process leaves a record still saying it is in flight, and
+// the branch and worktree it was halfway through are exactly as present as a
+// stoppage's. Nothing ended it and nothing owes it a move, so the claim is dead
+// and the record has to be settled before anything pulls the item again.
+func TestAKilledRunHoldingAHalfFinishedChangeIsStillADeadClaim(t *testing.T) {
+	t.Parallel()
+
+	killed := inFlight("run-killed", "yoyodyne-ifd.209.7", 9*time.Hour)
+	killed.Branch = "yoyodyne/yoyodyne-ifd-209-7/killed"
+	killed.WorktreePath = "/state/worktrees/yoyodyne-ifd-209-7-killed"
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.209.7", "Killed mid-change")}, []runstate.State{killed}, auditNoon, 0, 0)
+	if len(dead) != 1 {
+		t.Fatalf("DeadClaims() = %+v, want a killed process read as dead however much of its change is on disk", dead)
+	}
+}
+
 // A claim the harness never made is not the harness's to give back. The harness
 // reserves a run before it claims anything, so a claim with no run behind it is
 // a person's — and taking work back off somebody is not this reading's to do.

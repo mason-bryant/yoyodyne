@@ -130,3 +130,66 @@ func TestAnItemIsNeverGivenTwoNextMoversAcrossSurfaces(t *testing.T) {
 		})
 	}
 }
+
+// The stoppage that is in neither of the two waits, and which both readers
+// therefore have to answer the same way out of band: an approved change the
+// environment stopped short of its promotion. Nobody decided anything about it
+// and nobody has to — the reviewer already decided — so the docket names the
+// harness and the verb that resumes it, and the hold the pull reads has to say
+// the same rather than sending the operator to a development manager the docket
+// tells she owes nothing here.
+func TestAnApprovedChangeTheEnvironmentStoppedNamesTheHarnessOnBothSurfaces(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	// What the pipeline records on such a run: the approval standing with its
+	// reviewer session, nothing promoted, and the environmental cause of the stop.
+	// The blocker goes, because a run that fails inside its own process hands
+	// nobody one.
+	stopped.Blocker = ""
+	stopped.Failure = "bd show failed with status timed_out and exit code -1: "
+	stopped.ReviewDecision = runstate.ReviewApprove
+	stopped.ReviewSessionID = "f4c1a0de-review"
+	stopped.CheckFailure = nil
+	stopped.ReviewFindings, stopped.ReviewFindingDetails = 0, nil
+	stopped.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseTransportFailure,
+		Detail:     stopped.Failure,
+		Phase:      runstate.PhaseReviewing,
+		RecordedAt: stopped.UpdatedAt,
+	}
+	recorded := &recordedDecisions{counters: map[string]runstate.TriageCounters{docketedItem: {}}}
+
+	// Docketed as the run ends rather than by the scan that walks the recorded
+	// history, which is where a death that preserved its change reaches the
+	// development manager at all: the scan deliberately re-derives only the
+	// blockers, so that months of settled failures are not docketed in one build.
+	docket := &memoryDocket{}
+	docketer := docketerDeciding([]runstate.State{stopped}, docket, recorded, recorded)
+	if _, err := docketer.RecordStoppedRun(stopped); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	if len(docket.entries) != 1 {
+		t.Fatalf("docket = %#v, want the one stoppage docketed", docket.entries)
+	}
+	rendered := docket.entries[0].Render()
+	if !strings.Contains(rendered, "Next mover: the harness") || !strings.Contains(rendered, "yoyo triage resume") {
+		t.Fatalf("the docket entry does not name the harness and the resume:\n%s", rendered)
+	}
+
+	held, err := readmodel.HeldForAPerson(context.Background(),
+		nextMoverStoppages{states: []runstate.State{stopped}}, recorded, nil)
+	if err != nil {
+		t.Fatalf("HeldForAPerson() error = %v", err)
+	}
+	reason, holding := held.Reason(docketedItem)
+	if !holding {
+		t.Fatalf("held = %+v, want the stopped run to hold its item", held)
+	}
+	if !held.Decided(docketedItem) {
+		t.Fatalf("hold = %q, want the surfaces to name the harness as the docket does", reason)
+	}
+	if !strings.Contains(reason, "`yoyo triage resume`") {
+		t.Fatalf("hold = %q, want it to close on the verb that resumes the promotion", reason)
+	}
+}
