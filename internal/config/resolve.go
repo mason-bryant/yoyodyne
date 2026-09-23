@@ -349,6 +349,13 @@ func (r *resolution) apply(applied layer) error {
 			}
 			r.origins["execution.developer_slots"] = applied.origin
 		}
+		// And the label-to-model mapping, replaced and copied for the same two
+		// reasons: the order is the statement, and a layer's own slice must not
+		// become the resolved configuration's.
+		if execution.DeveloperModels != nil {
+			r.config.Execution.DeveloperModels = append([]DeveloperModelRule(nil), *execution.DeveloperModels...)
+			r.origins["execution.developer_models"] = applied.origin
+		}
 		// The declarative path carries a harness default like the values above it,
 		// because it is what a run does rather than something a project opts into.
 		// A layer that writes the key — `false` for the rollback to the legacy

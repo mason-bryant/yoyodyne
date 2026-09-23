@@ -139,7 +139,7 @@ func (m *Manager) CatchUpTarget(ctx context.Context, targetBranch string) (Catch
 		catchup.Held = held
 		return catchup, nil
 	}
-	merged, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	merged, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"merge", "--ff-only", published)
 	if err != nil {
@@ -165,7 +165,7 @@ func (m *Manager) CatchUpTarget(ctx context.Context, targetBranch string) (Catch
 // primary checkout is not sitting on: a branch that moved since it was resolved
 // loses the race rather than being overwritten.
 func (m *Manager) advanceRef(ctx context.Context, branch, commit, previous string) error {
-	updated, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	updated, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"update-ref", "refs/heads/"+branch, commit, previous)
 	if err != nil {
@@ -216,7 +216,7 @@ func (m *Manager) clearCatchUpPath(ctx context.Context, local, published string)
 	// project's own declared list rather than from anything observed, so the
 	// pathspec below can only ever name a control-plane export.
 	args := []string{"-C", m.repositoryRoot, "-c", "core.hooksPath=" + os.DevNull, "checkout", "HEAD", "--"}
-	restored, err := m.runWithEnvironment(ctx, os.Environ(), append(args, churn...)...)
+	restored, err := m.run(ctx, append(args, churn...)...)
 	if err != nil {
 		return nil, "", err
 	}

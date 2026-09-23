@@ -111,7 +111,9 @@ checks and whether this machine can run the programs they name, Node where the
 product ships the dashboard — whose page only Node can draw, so a machine
 without it fails the page's render check rather than passing quietly — each provider
 your agents name — installed always, and authenticated where the harness has an
-adapter that can ask, which today is Claude Code — whether every agent runs on
+adapter that can ask, which today is Claude Code — whether a provider key is
+exported in this shell, which is an authentication the harness no longer
+carries, whether every agent runs on
 one model with nothing to fail over to, forge access when the project publishes,
 when reporting is on, this project's own Slack secrets and the sink that is
 supposed to be using them, and each part the [`services`](configuration.md#services)
@@ -235,6 +237,51 @@ the supervisor's bounds — so on a product that has been started the finding
 clears itself. The verb is still there for a product nobody has started, and
 for a pass of your own. `yoyo doctor` only diagnoses — it changes nothing, and
 starting the sink is the other command's job.
+
+### Which provider authentication is supported
+
+**A provider authenticates by its own login, held in its provider home.** That
+is the one authentication an invocation the harness makes receives: `claude auth
+login`, `codex login`, or — for a pooled account, which has a home of its own —
+the same login with that home named, which is the command the `account:` finding
+hands you.
+
+**A key exported in a shell is not it.** `ANTHROPIC_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` each read as a credential, and
+every process the harness launches is given an environment built from an
+allowlist with credentials dropped from it — so none of the three reaches a
+provider invocation, a check, or a Git command. It used to: before
+`yoyodyne-ifd.408` an invocation inherited the harness's whole environment, so a
+key in a shell profile authenticated every one of them. An installation relying
+on that does not degrade when it stops working; the provider refuses its next
+run.
+
+So the state is named before that run happens, under `provider-authentication`:
+
+```text
+warning  provider-authentication  ANTHROPIC_API_KEY is exported here and reaches no invocation the harness makes
+                                  every invocation is built from an allowlist and a name that reads as a credential is dropped from it, so an installation authenticating a provider this way is refused by that provider rather than degrading; provider authentication is the provider's own login, held in its provider home
+                                  fix: claude auth login
+```
+
+It is a **warning** rather than a problem, by the question this command separates
+the two with. A key exported beside a provider that is signed in stops nothing —
+the login is what authenticates and the key is dead weight. A key exported
+*instead* of one stops everything, and that is already the `provider:` finding's
+problem; naming it twice would count one broken installation twice. Read the pair
+together: `provider:claude-code` saying the provider is not authenticated, with
+this beside it, is the whole story — you can run `claude` in your own shell, and
+the harness cannot.
+
+Two other surfaces say the same thing, so it is not only found by somebody who
+thought to run a diagnosis. `yoyo config validate` says it beside the validity
+answer, on standard error, without changing the exit code, and carries the
+variable names under `provider_keys` in its `--json`. And `yoyo slack` says it
+once when the sink starts — the shell that starts a sink is usually the shell the
+harness was started from, and that process is the one an operator leaves running.
+All three name the variables and never their values.
+[The environment a check runs in](configuration.md#the-environment-a-check-runs-in)
+is where the allowlist itself is stated.
 
 ## Pausing everything, and resuming it
 

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -665,7 +664,7 @@ func (g GitHub) Contains(ctx context.Context, base, commit string) (bool, error)
 		Name:     g.binary(),
 		Args:     []string{"api", "--method", "GET", "-F", "per_page=1", "repos/{owner}/{repo}/compare/" + base + "..." + commit},
 		Dir:      g.Dir,
-		Env:      append(os.Environ(), "GH_REPO="+repository),
+		Env:      append(execution.ForgeEnvironment(nil), "GH_REPO="+repository),
 		Timeout:  g.timeout(),
 		Redactor: execution.NewRedactor(g.RedactValues...),
 	}, nil)
@@ -816,9 +815,14 @@ func (g GitHub) remoteURL(ctx context.Context, remote string) (string, error) {
 	if err := validateArgument("remote", remote); err != nil {
 		return "", err
 	}
+	// Reading a remote's URL is a local Git command however much it is about the
+	// forge, so it gets the plain allowlisted environment: nothing here reaches
+	// the network, and a credential handed to it would be a credential handed to
+	// whatever hook the repository runs.
 	result, err := g.Runner.Run(ctx, execution.Command{
 		Name:     g.gitBinary(),
 		Args:     []string{"-C", g.Dir, "remote", "get-url", remote},
+		Env:      execution.GitEnvironment(nil),
 		Timeout:  g.timeout(),
 		Redactor: execution.NewRedactor(g.RedactValues...),
 	}, nil)
@@ -842,11 +846,16 @@ func (g GitHub) gitBinary() string {
 	return g.GitBinary
 }
 
+// exec runs one forge CLI invocation. It is given the forge environment — the
+// allowlist every harness-launched process gets, plus the forge's own
+// credential and addressing — because this is the command that needs one. No
+// other command the harness runs is given it.
 func (g GitHub) exec(ctx context.Context, args ...string) (execution.ProcessResult, error) {
 	return g.Runner.Run(ctx, execution.Command{
 		Name:     g.binary(),
 		Args:     args,
 		Dir:      g.Dir,
+		Env:      execution.ForgeEnvironment(nil),
 		Timeout:  g.timeout(),
 		Redactor: execution.NewRedactor(g.RedactValues...),
 	}, nil)

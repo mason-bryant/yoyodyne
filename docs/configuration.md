@@ -1999,6 +1999,57 @@ to refuse a shell an agent opened. A check the harness runs itself does not
 carry it: a check is the project's command, launched by the harness rather
 than by an agent.
 
+### The environment the harness's own Git and forge commands run in
+
+Every Git command the harness runs itself gets that same list, and for a reason
+of its own. Git runs hooks, and a hook is a program the repository supplies and
+the harness executes: `git worktree add` runs `post-checkout`, a ref update runs
+`reference-transaction`, and both of those live in `.git/hooks`, which every
+worktree the harness cuts shares. So a Git command that inherited the harness's
+environment handed whatever that environment carried to a program the harness
+never wrote — the Slack tokens included, by a path the run's own built
+environment says nothing about.
+
+**The forge credential is added to the forge commands and to nothing else.**
+Those are the `gh` invocations the harness makes and the Git commands that reach
+a remote — the push, the fetch, `ls-remote`, and the delete of a merged branch.
+They carry, on top of the list above, whichever of `GH_TOKEN`, `GITHUB_TOKEN`,
+`GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`,
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, and
+`GIT_TERMINAL_PROMPT` the harness's own environment holds. Every local Git
+command — a diff, a ref update, a checkout, a `worktree add` — gets none of
+them, so the hooks those run have no forge credential to hand out. Handing every
+Git command a token so that the push would have one is exactly the arrangement
+this replaces.
+
+`SSH_AUTH_SOCK` is not on that second list and does not need to be: it is on the
+standing one above, so **a project whose remote is SSH pushes through the agent
+exactly as it always did** — every process the harness starts carries the socket,
+and the keys stay with the agent holding them. It is worth saying because the
+absence reads like an omission, and the cost of it actually being one would be
+every run stopping at integration on every installation with an SSH remote.
+
+### Which provider authentication is supported
+
+**A provider authenticates by its own login, held in its provider home, and by
+nothing else.** That is what the accounts machinery names an account by, and it
+is the only authentication an invocation the harness makes receives.
+
+A key exported in a shell — `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`OPENAI_API_KEY` — reaches none of them. It reads as a credential, so the
+allowlist drops it from every process the harness launches, exactly as it drops
+the Slack tokens. An installation that had been authenticating that way does not
+degrade: the provider refuses its next run.
+
+Three things say so before that run happens, and none of them is a gate.
+[`yoyo doctor`](operations.md#which-provider-authentication-is-supported) reports
+it under `provider-authentication`, as a warning, with the login for this
+project's own provider as the remedy; `yoyo config validate` says it beside the
+validity answer, on standard error, and carries the variable names under
+`provider_keys` in its `--json`; and `yoyo slack` says it once when the sink
+starts, because the shell that starts a sink is usually the shell the harness
+was started from. All three name the variables and never their values.
+
 ### What `init` proposes for `checks`
 
 A project does not start from the empty list unless it has to. `yoyo init` reads
@@ -2286,6 +2337,82 @@ another developer slot** rather than as deferred, naming the slot and what it
 pulled ahead of the item: the item waits on nothing about itself, and what
 takes it is the next slot with no preference to come free, or slot 1 once its
 label's work is exhausted.
+
+### A developer model chosen by the item's label
+
+The slot preference above says which work a seat pulls first. This says what
+that work costs to do. **Model spend follows the work rather than the role**: a
+documentation item and a change to the scheduler are both developer runs, and
+only one of them needs the developer's own model. `execution.developer_models`
+is how a project says so — the tracker's own labels, the ones
+[a slot prefers](#a-developer-slot-that-prefers-a-label), mapped to the model a
+run over such an item asks for:
+
+```yaml
+execution:
+  developer_models:
+    - label: docs
+      model: sonnet
+    - label: config
+      model: sonnet
+    - label: tests
+      model: sonnet
+```
+
+With that block, a run over an item labelled `docs` asks for `sonnet`, and an
+item carrying none of the three labels asks for the developer agent's own
+`model` exactly as every run did before the mapping existed. It is the
+operator's direction of 2026-09-19, taken off a seven-day reading in which
+developer runs on Opus were 64% of $1,431: the largest spend line is developer
+runs that do not all need the developer's model, and the label already says
+which do. The block is the operator's to paste into the project's own
+configuration by hand, because `.yoyodyne/` is a
+[protected path](#protected-paths-in-a-developers-change) no run may write, so
+a project whose file does not yet carry it runs every item on the developer's
+configured model.
+
+**One label per entry, and the order is the answer.** An item can carry two
+labels the mapping names, and what it takes is **the first entry in the
+mapping's own order** — the file's order, not the item's — so moving an entry
+up the list is how a project says which of two labels wins. That is why an
+entry names one label rather than a list: an entry preferring several would
+make "the first match" a question about which of *that entry's* labels matched
+first, which the file does not answer.
+
+**It is read once, when the run starts, and written onto the run.** The labels
+it is read against are the ones the item carried when it was pulled, which the
+run already records; the model it chose and **why it chose that one** are
+recorded beside them. Every developer invocation the run goes on to make — the
+first attempt, each repair, and anything a later process resumes — reads the
+model back off that record rather than resolving the mapping again, for the
+reason [the account](#pooling-work-across-several-accounts) is read back: a run
+that resolved it per invocation would move mid-flight the first time the file
+was edited under it. The reason is recorded for an unmapped item too, because
+an item nothing mapped and a mapping nobody read are two accounts of one model
+and only the record tells them apart.
+
+`yoyo status` names the model each running run is on as it always did, and the
+[cost log](#provider-accounts) records it per invocation, so what a kind of work
+costs is read off the same surfaces as before — a mapped run simply says
+`sonnet` where it used to say `opus`.
+
+**The reviewer's model is not reachable from here.** There is no key in this
+block that could name it, deliberately: a reviewer's posture is a safety
+property rather than a spend decision, and an independent verdict bought more
+cheaply is the one saving that costs the gate its meaning. The
+[account pool and the failover rules](#serving-a-turn-from-a-permitted-alternate-model)
+apply to a mapped run unchanged, and so does everything else — a run on a
+mapped model is claimed, developed, checked, reviewed, and promoted exactly as
+any run is, under the same contract and the same authority table. Configuration
+selects the model and never widens what a role may do.
+
+**What the file refuses.** A label the tracker would not carry — anything but
+one identifier-shaped word, the same rule a slot's preference is held to. A
+`model` that cannot name a model, held to the rule every other configured
+selector is. And a label mapped twice, because the first match in the order is
+what an item takes, so a second entry for one label is a mapping the operator
+believes is active and that nothing will ever reach. All three are refused when
+the configuration loads, before anything is claimed.
 
 ### Watching instead of draining
 
@@ -3356,8 +3483,13 @@ refused a turn nobody asked it.
 
 A pin covers the same invocations failover does: the turns an agent takes as
 itself, its conversation and the rounds where another role asks it something. A
-run's developer and reviewer invocations ask for `model`. `yoyo agent list` says
-so for every pinned agent rather than leaving it to be assumed.
+run's invocations are not among them, and neither of them asks for the pin: the
+reviewer's asks for the reviewer agent's `model`, and the developer's asks for
+whichever selector the item's own labels chose under
+[`execution.developer_models`](#a-developer-model-chosen-by-the-items-label) —
+which is the developer agent's `model` for an item that mapping names no label
+of, and the mapped one otherwise. `yoyo agent list` says so for every pinned
+agent rather than leaving it to be assumed.
 
 ## Relaunching a run the provider killed
 
@@ -4669,6 +4801,10 @@ These are all errors, reported before any work is claimed:
   since a preference for a slot the capacity does not have is one nothing would
   act on; and a slot preferring a label the tracker would not carry — anything
   but one identifier-shaped word — or naming one label twice;
+- an `execution.developer_models` entry naming a label the tracker would not
+  carry, naming no usable model selector, or naming a label an earlier entry
+  already mapped — since the first match in the mapping's order is what an item
+  takes, so a second entry for one label is one nothing would ever reach;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;
@@ -5118,7 +5254,11 @@ prompt. That is what keeps the boundary structural rather than behavioral — on
 separate process posts, and the harness builds every run's environment from an
 allowlist rather than handing down its own, so no run process, and therefore no
 agent's subprocess tree, has a Slack token in its environment at all, even on a
-machine where the pair is exported in a shell profile. What such an export does
+machine where the pair is exported in a shell profile. The Git commands the
+harness runs itself are held to the same rule, and for a reason of their own —
+a Git hook is a program the repository supplies and the harness executes; see
+[the environment the harness's own Git and forge commands run
+in](#the-environment-the-harnesss-own-git-and-forge-commands-run-in). What such an export does
 still cost is the harness's own process and the sink: they are read from a
 store only the sink's own launch looks at, under names that carry the product —
 `yoyo-slack-bot.<product id>` and `yoyo-slack-app.<product id>`. The product is

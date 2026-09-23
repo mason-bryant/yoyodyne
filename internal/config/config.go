@@ -357,6 +357,18 @@ type Execution struct {
 	// preference runs what any slot runs, under the same contract, checks, and
 	// reviewer, so there is nothing here a persona or a role could be widened by.
 	DeveloperSlots []domain.DeveloperSlot `yaml:"developer_slots,omitempty" json:"developer_slots,omitempty"`
+	// DeveloperModels is the model a run takes for the work it is over, keyed by
+	// the item's labels and read in this list's own order: the first entry any of
+	// an item's labels matches is the model that item's developer invocations ask
+	// for, and an item carrying no label named here takes the developer's
+	// configured model. Empty is every run on the developer's own model, which is
+	// what every project did before the mapping existed.
+	//
+	// It selects a model and never anything else. A run on a mapped model is
+	// developed, checked, and reviewed exactly as any run is, and the reviewer's
+	// model is not nameable from here at all — its posture is a safety property
+	// rather than a spend decision, which is why the mapping has no key for it.
+	DeveloperModels []DeveloperModelRule `yaml:"developer_models,omitempty" json:"developer_models,omitempty"`
 	// DeclarativeDelivery is how a new run is executed, and it defaults on: each
 	// run compiles the built-in delivery definition, records a workflow instance
 	// of it, and steps that instance beside the run, so the sequence the
@@ -810,6 +822,7 @@ func (c Config) Validate() error {
 		problems = append(problems, "max_concurrent_developers must be at least 1")
 	}
 	problems = append(problems, developerSlotProblems(c.Execution)...)
+	problems = append(problems, developerModelProblems(c.Execution)...)
 	if c.Execution.RepairAttemptsBeforeReplan < 0 {
 		problems = append(problems, "repair_attempts_before_replan cannot be negative")
 	}

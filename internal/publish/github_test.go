@@ -1012,3 +1012,65 @@ func TestGitHubContainsAsksTheForgeHowFarAheadTheCommitIs(t *testing.T) {
 		t.Error("Contains() accepted a base that reads as an option")
 	}
 }
+
+// The forge CLI is the one command the harness runs that needs a forge
+// credential, and it is given one by name on top of the same allowlist every
+// other harness-launched process gets. Nothing else the harness's environment
+// happens to carry goes with it.
+//
+// The Git command this adapter runs beside it — resolving the remote's URL —
+// reaches no network, so it gets the allowlist and no credential at all.
+func TestTheForgeCLICarriesTheForgeCredentialAndNothingElseTheHarnessHolds(t *testing.T) {
+	t.Setenv("GH_TOKEN", "ghp-for-the-forge")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-forge")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-not-for-the-forge")
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]\n"})
+	runner.replyAfter("pr list", 1, execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":3,"url":"https://example.invalid/pull/3","state":"OPEN","mergedAt":""}]`,
+	})
+	runner.reply("pr create", execution.ProcessResult{Status: execution.ProcessSucceeded})
+
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+	if _, err := forge.Ensure(context.Background(), Request{Head: "yoyodyne/task/abcd1234", Base: "main", Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+
+	credentialed := 0
+	for index, command := range runner.commands {
+		environment := runner.environments[index]
+		if len(environment) == 0 {
+			t.Fatalf("%v was given no environment at all, so it inherited the harness's", command)
+		}
+		for _, name := range []string{"SLACK_BOT_TOKEN", "ANTHROPIC_API_KEY"} {
+			if environmentCarries(environment, name) {
+				t.Errorf("%v was given %s", command, name)
+			}
+		}
+		switch {
+		case contains(command, "remote"):
+			if environmentCarries(environment, "GH_TOKEN") {
+				t.Errorf("%v is a local Git command and was given the forge credential", command)
+			}
+		case environmentCarries(environment, "GH_TOKEN"):
+			credentialed++
+		default:
+			t.Errorf("%v is a forge command and was given no forge credential", command)
+		}
+	}
+	if credentialed == 0 {
+		t.Fatal("no forge command was given the forge credential")
+	}
+}
+
+func environmentCarries(environment []string, name string) bool {
+	for _, entry := range environment {
+		if carried, _, named := strings.Cut(entry, "="); named && carried == name {
+			return true
+		}
+	}
+	return false
+}

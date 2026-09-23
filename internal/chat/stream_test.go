@@ -73,7 +73,17 @@ func (b *replyingBackend) Run(_ context.Context, request backendapi.RunRequest) 
 	if b.fail != nil {
 		return backendapi.RunResult{LastEvent: sequence}, b.fail
 	}
-	return backendapi.RunResult{SessionID: "session-1", FinalText: b.reply, CostUSD: b.costUSD, LastEvent: sequence}, nil
+	// A provider that names a cost has reported one. The flag beside it is what
+	// separates an invocation priced at nothing from one nobody was told the
+	// price of, so a fixture that charges nothing leaves it unset rather than
+	// claiming the provider called the turn free.
+	return backendapi.RunResult{
+		SessionID:    "session-1",
+		FinalText:    b.reply,
+		CostUSD:      b.costUSD,
+		CostReported: b.costUSD > 0,
+		LastEvent:    sequence,
+	}, nil
 }
 
 // dressed is a conversation held over a stream that is dressed as a colour

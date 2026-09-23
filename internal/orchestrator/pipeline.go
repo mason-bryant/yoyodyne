@@ -478,6 +478,16 @@ func (p Pipeline) reserveRun(ctx context.Context, state runstate.State) (runstat
 		return state, nil, fmt.Errorf("choose the provider account for this run: %w", err)
 	}
 	state.AccountAlias = account.Alias
+	// Which model this run's developer invocations ask for is settled here too,
+	// and for the same reason the account is: the labels the item was pulled with
+	// are in hand, the mapping is configuration and configuration is edited, and
+	// every invocation this run goes on to make reads the answer back off the
+	// record rather than resolving it again. A project that configured no mapping
+	// chooses nothing and records nothing, and its runs ask for the developer's
+	// configured model exactly as they always did.
+	if choice := config.ResolveDeveloperModel(p.Config.Execution.DeveloperModels, state.WorkItemLabels, p.developer().Model); choice.Chosen() {
+		state.DeveloperModel, state.DeveloperModelReason = choice.Model, choice.Reason
+	}
 	lease, err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers)
 	if err != nil {
 		// The wrapping is the reservation's own, so that what a caller reports about
@@ -3170,6 +3180,20 @@ func (a *activeRun) account() config.AccountEndpoint {
 	return a.pipeline.accountFor(a.state.AccountAlias)
 }
 
+// developerModel is the selector this run's developer invocations ask for. It is
+// read off the run's own record for the reason the account is: the model was
+// chosen once, from the labels the item was pulled with, and a run that resolved
+// execution.developer_models again per invocation would move mid-flight the
+// first time the mapping was edited under it. A run whose record names none —
+// a project that configured no mapping, and every run written before the
+// mapping existed — asks for the developer's configured model.
+func (a *activeRun) developerModel() string {
+	if model := strings.TrimSpace(a.state.DeveloperModel); model != "" {
+		return model
+	}
+	return a.pipeline.developer().Model
+}
+
 // attemptDevelopment makes one developer invocation.
 //
 // It goes through the meter rather than straight at the backend, so that what
@@ -3178,10 +3202,10 @@ func (a *activeRun) account() config.AccountEndpoint {
 // that succeeded was, and the reissued invocation after it is charged again.
 func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID string) (backend.RunResult, error) {
 	p := a.pipeline
-	developer := p.developer()
 	account := a.account()
-	a.state.ProviderModel = developer.Model
-	a.outcome.ProviderModel = developer.Model
+	model := a.developerModel()
+	a.state.ProviderModel = model
+	a.outcome.ProviderModel = model
 	provider := spend.Metered{
 		Provider:    p.Backend,
 		Log:         p.Spend,
@@ -3194,7 +3218,7 @@ func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID st
 		WorkingDirectory: a.worktree.Path,
 		Prompt:           prompt,
 		SessionID:        sessionID,
-		Model:            developer.Model,
+		Model:            model,
 		LastSequence:     a.state.LastSequence,
 		RedactValues:     p.RedactValues,
 		EventSink:        a.sink,
@@ -3541,13 +3565,14 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 
 // refusedModel is the model selector the invocation this run is parked on asked
 // for: the reviewer's during a review, and the developer's otherwise, which are
-// the two invocations a run pauses for. It is read from the configuration the
-// attempt itself was made from, so it is the selector that attempt requested.
+// the two invocations a run pauses for. Each is read where that attempt read it
+// — the reviewer's from the configuration, the developer's off this run's own
+// record — so it is the selector that attempt actually requested.
 func (a *activeRun) refusedModel() string {
 	if a.state.Phase == runstate.PhaseReviewing {
 		return a.pipeline.reviewer().Model
 	}
-	return a.pipeline.developer().Model
+	return a.developerModel()
 }
 
 // recordPauseStart writes when the pause being recorded began, once per pause:

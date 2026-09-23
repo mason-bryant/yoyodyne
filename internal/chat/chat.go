@@ -556,11 +556,15 @@ type Session struct {
 	// spent doing that, so TurnCostUSD below hands this back. The session figure
 	// stays what it always was: nothing reads it but the screen.
 	//
-	// Summing treats each invocation's reported cost as that invocation's own.
-	// If a provider ever reported a running total for a resumed session instead,
-	// the session figure would over-count while the per-turn figure stayed
-	// right; that is the safer way round for a number nobody decides anything
-	// from, and it is the first thing to check against a real bill.
+	// What is summed is the amount on each invocation's cost line rather than the
+	// figure the provider reported for it, and the difference is not academic:
+	// this is the case the note here used to describe as the thing to check
+	// against a real bill, and checking found it. A conversation resumes one
+	// provider session across every turn, so what the provider reports is what
+	// the conversation has cost since it opened — summing that made the per-turn
+	// figure the whole conversation's total and the session figure a total of
+	// totals. The cost line is where an invocation's own cost is worked out, so
+	// these read it from there: the meter hands each line back as it records it.
 	turnCostUSD    float64
 	sessionCostUSD float64
 	// spendProblem is what went wrong recording the cost of the invocation just
@@ -1434,6 +1438,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		RecordFailure: func(err error) {
 			s.spendProblem = appendProblem(s.spendProblem, singleLine(err.Error(), maxTrackerFailureBytes))
 		},
+		// What the invocation cost, worked out where it is worked out. It is
+		// counted whichever way the invocation went, because an attempt the
+		// provider refused was charged for exactly as the one it served was, and
+		// it is counted as the line was recorded rather than as the provider
+		// reported it — the two differ on every turn that resumed a session.
+		Recorded: s.countSpend,
 	}
 	request := backend.RunRequest{
 		RunID:            s.state.ConversationID,
@@ -1523,14 +1533,6 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 			lastSequence = result.LastEvent
 		}
 		request.LastSequence = lastSequence
-		// What the provider charged for this invocation is what it reported for it.
-		// The harness works none of it out and records none of it: it is shown to an
-		// operator who is watching what a conversation costs them. It is counted
-		// before the invocation is judged, because an invocation that failed was
-		// charged for exactly as one that succeeded was.
-		s.lastInvocationCostUSD += result.CostUSD
-		s.turnCostUSD += result.CostUSD
-		s.sessionCostUSD += result.CostUSD
 		limit := refusedForUsageLimit(result, err)
 		if limit == nil {
 			break

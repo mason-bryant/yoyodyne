@@ -47,9 +47,12 @@ var explicitEnvironmentNames = map[string]struct{}{
 	// Locale.
 	"LANG":     {},
 	"LANGUAGE": {},
-	// A Git command over an SSH remote -- a private module a check fetches --
-	// asks the agent at this socket. It is a path to a socket rather than a
-	// credential, and the keys stay with the agent that holds them.
+	// A Git command over an SSH remote asks the agent at this socket -- a
+	// private module a check fetches, and the harness's own push, fetch,
+	// ls-remote and branch delete against a project whose remote is SSH. It is a
+	// path to a socket rather than a credential, and the keys stay with the
+	// agent that holds them, so it is on the standing list rather than added to
+	// the forge commands alone.
 	"SSH_AUTH_SOCK": {},
 	// Reaching the provider from behind a proxy, and trusting the certificates
 	// that proxy presents.
@@ -109,6 +112,149 @@ func ExplicitEnvironment(parent []string, providerPrefixes ...string) []string {
 		kept = append(kept, entry)
 	}
 	return kept
+}
+
+// GitEnvironment returns the environment a Git command the harness runs itself
+// is given: the same allowlist an agent invocation is built from.
+//
+// It is the same answer ExplicitEnvironment gives and it is named separately
+// because the reason is different. An agent invocation is built explicitly so
+// that nothing the harness's environment carried reaches an agent; a Git
+// command is built explicitly because Git runs hooks, and a hook lives in the
+// repository rather than in the harness. A `git worktree add` runs
+// post-checkout, a ref update runs reference-transaction, and both of those are
+// programs a run's own checkout supplies -- so a Git command that inherited the
+// harness's environment handed a Slack token to a program the harness never
+// wrote, by a path the run's own explicit environment says nothing about.
+//
+// Nothing about the forge is here. A command that talks to a remote gets
+// ForgeEnvironment, which is this plus the credential that command needs and
+// nothing else gets.
+func GitEnvironment(parent []string) []string {
+	return ExplicitEnvironment(parent)
+}
+
+// forgeEnvironmentNames are what a command that talks to the forge is given on
+// top of the allowlist: the credential an installation authenticates the forge
+// CLI with, the two settings that say which forge and which stored login, and
+// the transport settings a Git command reaching a remote is pointed at its keys
+// by.
+//
+// The credential ones are all names sensitiveEnvironmentName recognizes, so
+// they are dropped from every other process the harness starts and reinstated
+// only here. That is the whole of the arrangement: the forge commands are the
+// ones that need a forge credential, and they are a short, named list rather
+// than everything that happens to run.
+//
+// SSH_AUTH_SOCK is deliberately not here and must not be added: it is on the
+// standing allowlist above, so every process the harness starts already carries
+// it, and a push to an SSH remote finds the agent exactly where a check
+// fetching a private module does. Repeating it here would say that a command
+// not reaching a remote does without it, which is not what this file does and
+// would be a second, quieter statement of the same thing. What is here is what
+// the allowlist does *not* carry.
+var forgeEnvironmentNames = []string{
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"GH_ENTERPRISE_TOKEN",
+	"GITHUB_ENTERPRISE_TOKEN",
+	"GH_HOST",
+	"GH_CONFIG_DIR",
+	"GIT_ASKPASS",
+	"SSH_ASKPASS",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_TERMINAL_PROMPT",
+}
+
+// ForgeEnvironment returns the environment a command that talks to the forge is
+// given: the allowlisted environment every harness-launched process gets, plus
+// the entries forgeEnvironmentNames admits, in the order parent carried them.
+//
+// A nil parent starts from this process's own environment, as ExplicitEnvironment
+// does. A name the allowlist already admitted is not added twice: which of two
+// entries of one name a process reads is the operating system's to decide, and a
+// credential that depended on that would be one nobody could reason about.
+func ForgeEnvironment(parent []string) []string {
+	if parent == nil {
+		parent = os.Environ()
+	}
+	environment := ExplicitEnvironment(parent)
+	carried := make(map[string]struct{}, len(environment))
+	for _, entry := range environment {
+		if name, _, named := strings.Cut(entry, "="); named {
+			carried[name] = struct{}{}
+		}
+	}
+	for _, entry := range parent {
+		name, _, named := strings.Cut(entry, "=")
+		if !named || !forgeEnvironmentName(name) {
+			continue
+		}
+		if _, already := carried[name]; already {
+			continue
+		}
+		carried[name] = struct{}{}
+		environment = append(environment, entry)
+	}
+	return environment
+}
+
+func forgeEnvironmentName(name string) bool {
+	for _, admitted := range forgeEnvironmentNames {
+		if name == admitted {
+			return true
+		}
+	}
+	return false
+}
+
+// ProviderKeyNames are the environment variables an installation may have been
+// authenticating a provider with. Every one of them reads as a credential, so
+// every one of them is dropped from the environment an invocation is built with
+// -- which is the point and is also what makes the list worth stating.
+//
+// Before the explicit environment, a key exported in a shell profile
+// authenticated every provider invocation the harness made. It now authenticates
+// none of them, and an installation that had been relying on it does not
+// degrade: its next run is refused by the provider. So the names are here, in
+// one place, and the surfaces that warn about it read them from here rather than
+// each spelling its own list.
+//
+// Provider authentication is the provider's own login, held in its provider
+// home. That is what the accounts machinery names an account by, and it is the
+// only authentication a run receives.
+var ProviderKeyNames = []string{
+	"ANTHROPIC_API_KEY",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"OPENAI_API_KEY",
+}
+
+// ProviderKeysInEnvironment names the provider keys parent carries, in the order
+// ProviderKeyNames states them. A nil parent is this process's own environment.
+//
+// It names the variables and never reads a value out to a caller: what a surface
+// reports is that a key is set, and a diagnostic that helpfully printed one would
+// put it in a terminal and a scrollback.
+func ProviderKeysInEnvironment(parent []string) []string {
+	if parent == nil {
+		parent = os.Environ()
+	}
+	set := make(map[string]struct{}, len(parent))
+	for _, entry := range parent {
+		name, value, named := strings.Cut(entry, "=")
+		if !named || strings.TrimSpace(value) == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	present := make([]string, 0, len(ProviderKeyNames))
+	for _, name := range ProviderKeyNames {
+		if _, carried := set[name]; carried {
+			present = append(present, name)
+		}
+	}
+	return present
 }
 
 // explicitEnvironmentAdmits reports whether a name is on the allowlist, by exact

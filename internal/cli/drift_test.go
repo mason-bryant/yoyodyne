@@ -85,7 +85,10 @@ func TestConfigValidateSpeaksAnAvailableImprovementWithoutBeingAsked(t *testing.
 // nothing available says nothing at all, and a project that never recorded a
 // baseline is not told about it on every invocation either.
 func TestConfigValidateIsSilentWhenThereIsNothingToSay(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it asserts what this command says, and clearing the
+	// provider keys is what keeps a key exported on the machine running the
+	// tests from being one more thing said.
+	withoutProviderKeys(t)
 
 	withBaseline := driftingProject(t, "agents.developer.model")
 	// Adopt it by hand, which is what the report is for: the project and the
@@ -152,7 +155,10 @@ func TestConfigValidateCarriesTheComparisonInItsJSON(t *testing.T) {
 // doctor says the same thing the same way. Two surfaces disagreeing about
 // whether a project is current is a disagreement only the operator could settle.
 func TestDoctorSpeaksTheSameNoticeAsConfigValidate(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it asserts what this command says, and clearing the
+	// provider keys is what keeps a key exported on the machine running the
+	// tests from being one more thing said.
+	withoutProviderKeys(t)
 
 	path := driftingProject(t, "agents.developer.model")
 

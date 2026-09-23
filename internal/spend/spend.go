@@ -48,9 +48,23 @@ type Provider interface {
 	Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error)
 }
 
-// Log is where a line is appended. It is satisfied by runstate.SpendStore.
+// Log is where a line is appended, and what says how much of a session has
+// already been paid for. It is satisfied by runstate.SpendStore.
+//
+// The second half is on the interface rather than beside it because a line
+// cannot be written without it. A provider resuming a session reports what that
+// session has cost since it began, so what this invocation cost is knowable only
+// against what the session was last reported at -- and the only record of that
+// is the log itself, since a session outlives the process that opened it. An
+// implementation that could not answer would be one every line written through
+// it recorded the whole session again.
 type Log interface {
 	Append(line runstate.Spend) error
+	// ReportedSessionTotal is the last figure the provider reported for a
+	// session, and whether anything has been recorded for it at all. A session
+	// nothing has recorded is the first invocation of one, which records what the
+	// provider reported whole.
+	ReportedSessionTotal(sessionID string) (float64, bool, error)
 }
 
 // Attribution is what the harness knows about one invocation and the provider
@@ -106,6 +120,23 @@ type Metered struct {
 	// A caller that leaves it nil takes the failure, which is what everything but
 	// the conversation does.
 	RecordFailure func(error)
+	// Recorded, where a caller sets it, is handed the line as it was appended.
+	//
+	// It is how a caller that needs to know what an invocation cost gets the
+	// figure, and the reason it exists rather than the caller reading
+	// RunResult.CostUSD is that the two are different numbers: the provider
+	// reports what a resumed session has cost since it began, and the amount on
+	// the line is what this invocation added to it. A caller summing the former
+	// over a conversation's turns counts the whole conversation once per turn.
+	//
+	// It is handed the line rather than the amount so that a caller which needs
+	// to tell an unpriced invocation from a free one can, and it is called as
+	// soon as the amount is settled rather than once the line is safely stored:
+	// a log that refused a line has already said so through RecordFailure, and a
+	// budget that also stopped counting over it would be the operator's cap
+	// leaking silently behind a failure they were told about. The one thing it is
+	// not called for is a line whose amount could not be worked out at all.
+	Recorded func(line runstate.Spend)
 }
 
 // Run makes the invocation and records what it spent.
@@ -132,13 +163,35 @@ type Metered struct {
 // is handed the failure instead of it being joined on.
 func (m Metered) Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error) {
 	result, err := m.Provider.Run(ctx, request)
+	line := m.line(request, result, err)
 	// A provider with nowhere to record what it spends is one nothing is
 	// metering. The harness always wires the log; this is what keeps a test
 	// harness that does not care about money from having to.
+	//
+	// The line is still built and still handed back, because a caller counting
+	// what it spent is not the same thing as a log. What it cannot be told
+	// without one is what a resumed session's figure means: correcting that needs
+	// the record of what the session was last reported at, and an unmetered
+	// harness has none, so the amount is the provider's figure as it stands.
 	if m.Log == nil {
+		if m.Recorded != nil {
+			m.Recorded(line)
+		}
 		return result, err
 	}
-	if recordErr := m.Log.Append(m.line(request, result, err)); recordErr != nil {
+	line, recordErr := m.ownCost(line)
+	if recordErr == nil {
+		// The amount is settled, so a caller counting what it spent is told even if
+		// what follows cannot keep the line. Its figure and the log's are the same
+		// number, and a log that refused one line must not also quietly stop a
+		// budget counting -- which is the operator's cap leaking rather than a
+		// bookkeeping failure they were already told about.
+		if m.Recorded != nil {
+			m.Recorded(line)
+		}
+		recordErr = m.Log.Append(line)
+	}
+	if recordErr != nil {
 		recordErr = fmt.Errorf("record what the %s invocation spent: %w", request.Role, recordErr)
 		// Either way the failure is reported and never swallowed. What the caller
 		// chooses is whether it costs the invocation as well as the record.
@@ -194,12 +247,52 @@ func (m Metered) line(request backend.RunRequest, result backend.RunResult, err 
 	}
 	if result.CostReported {
 		line.Classification = runstate.SpendKnown
+		// What the provider said, which ownCost turns into what this invocation
+		// cost. The two are the same number on an invocation that opened its
+		// session and different ones on every invocation that resumed it.
 		line.AmountUSD = result.CostUSD
 		return line
 	}
 	line.Classification = runstate.SpendUnknown
 	line.Unknown = unknownReason(err)
 	return line
+}
+
+// ownCost turns the figure the provider reported into what this invocation
+// cost. A provider asked to resume a session reports what the session has cost
+// since it began, so the amount recorded is what that total moved by, and the
+// reported figure is kept beside it for the session's next invocation to be
+// priced against.
+//
+// A log that cannot say what the session was last reported at stops the line
+// being written, and is reported the way a log that cannot be appended to is.
+// That is not a hedge about which failure is worse: it is the same failure. The
+// total is read from the log this line is about to be appended to, so a log that
+// will not answer is a log that is about to refuse the append as well -- and the
+// alternative, writing the reported figure as though it were this invocation's
+// cost, is the overstatement the amount exists to avoid.
+//
+// Reading the total and appending the line are not one atomic step, and they do
+// not need to be. What they race with is another invocation of the same session
+// finishing between them, and a session is a conversation or a run's developer
+// taking one turn at a time: the processes that append here concurrently are
+// different runs and different conversations, each in a session of its own.
+func (m Metered) ownCost(line runstate.Spend) (runstate.Spend, error) {
+	if !line.Known() || line.SessionID == "" {
+		return line, nil
+	}
+	reported := line.AmountUSD
+	previous, seen, err := m.Log.ReportedSessionTotal(line.SessionID)
+	if err != nil {
+		return line, fmt.Errorf("read what session %s has already been reported at: %w", line.SessionID, err)
+	}
+	own := runstate.OwnCostUSD(reported, previous, seen)
+	if own == reported {
+		return line, nil
+	}
+	line.AmountUSD = own
+	line.ReportedTotalUSD = reported
+	return line, nil
 }
 
 // unknownReason says why nobody knows what an invocation cost, in as much of the

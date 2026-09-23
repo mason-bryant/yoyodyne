@@ -110,6 +110,13 @@ type executionDocument struct {
 	// preference nobody wrote down. Absent leaves every slot preferring nothing,
 	// which is what every file written before slots could prefer anything means.
 	DeveloperSlots *[]domain.DeveloperSlot `yaml:"developer_slots"`
+	// DeveloperModels is the label-to-model mapping a run's developer invocations
+	// are resolved against. A supplied list replaces an inherited one wholesale
+	// for the reason the slot list does: the order is what decides which of an
+	// item's labels wins, and an order half from a bundle and half from a project
+	// is one nobody wrote down. Absent leaves every run on the developer's
+	// configured model, which is what every file written before this means.
+	DeveloperModels *[]DeveloperModelRule `yaml:"developer_models"`
 	// DeclarativeDelivery is absent from every file written before it existed and
 	// from every file whose project is content with the default. A layer that does
 	// not supply it leaves the harness default in force, which is the declarative

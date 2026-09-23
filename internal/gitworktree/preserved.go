@@ -388,7 +388,7 @@ func (m *Manager) capturePreservedWork(ctx context.Context, worktree Worktree, p
 		return "", fmt.Errorf("recorded preserved commit %q is invalid", commit)
 	}
 	ref := PreservedWorkRef(worktree.RunID)
-	updated, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	updated, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"update-ref", ref, commit)
 	if err != nil {

@@ -245,13 +245,33 @@ func (f providerFunc) Run(_ context.Context, request backend.RunRequest) (backen
 // recordingLog is a cost log that keeps what it was given, and one that refuses
 // everything when a failure is set.
 type recordingLog struct {
-	lines   []runstate.Spend
-	failure error
+	lines []runstate.Spend
+	// failure is what appending reports and totalFailure what reading a session's
+	// recorded total reports. They are separate because they are separate
+	// failures: one loses the line after the amount was worked out, the other
+	// stops the amount being worked out at all.
+	failure      error
+	totalFailure error
 }
 
 func (l *recordingLog) Append(line runstate.Spend) error {
 	l.lines = append(l.lines, line)
 	return l.failure
+}
+
+// ReportedSessionTotal answers from the lines this log has already taken, the
+// way the durable store answers from the lines it has already written.
+func (l *recordingLog) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	if l.totalFailure != nil {
+		return 0, false, l.totalFailure
+	}
+	total, found := 0.0, false
+	for _, line := range l.lines {
+		if line.SessionID == sessionID && line.Known() {
+			total, found = line.ReportedTotal(), true
+		}
+	}
+	return total, found, nil
 }
 
 type fixedClock struct{}
@@ -318,5 +338,218 @@ func TestADeadInvocationStillNamesTheAdapterThisBuildKnows(t *testing.T) {
 	}
 	if version := declared.lines[0].AdapterVersion; version != "" {
 		t.Fatalf("adapter version = %q, want nothing for a provider this build has no description of", version)
+	}
+}
+
+// A provider asked to resume a session reports what that session has cost since
+// it opened, so three turns of one conversation report a rising total and not
+// three costs. Recording what each of them reported charges the operator for the
+// whole session again on every turn: this product's management conversations
+// read at thirty times what they cost, and its last seven days at $30,841
+// against an actual $3,464, on exactly that arithmetic.
+//
+// So the log adds up to the session's final total, and the three lines are what
+// each turn moved it by. The store is the durable one rather than a fake,
+// because the session outlives whatever process opened it and the log is the
+// only thing that remembers what it was last reported at.
+func TestResumingASessionRecordsWhatEachInvocationAddedRatherThanTheSessionAgain(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewSpendStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewSpendStore() error = %v", err)
+	}
+	// What the provider reports at the end of each of three turns of one session.
+	reported := []float64{2.50, 6.25, 9.00}
+	for _, total := range reported {
+		metered := testMetered(store, func(backend.RunRequest) (backend.RunResult, error) {
+			return backend.RunResult{
+				Backend:      "claude-code",
+				SessionID:    "session-resumed",
+				CostUSD:      total,
+				CostReported: true,
+			}, nil
+		})
+		if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	}
+
+	lines, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("recorded %d line(s), want one per invocation", len(lines))
+	}
+	var total float64
+	for _, line := range lines {
+		total += line.AmountUSD
+	}
+	final := reported[len(reported)-1]
+	if total != final {
+		t.Fatalf("the log adds up to %v, want the session's final total of %v; "+
+			"summing what each invocation reported would have made it %v", total, final, 17.75)
+	}
+	// Each line is what its own turn cost, and the first records the whole because
+	// it opened the session and had nothing to be an increment over.
+	for index, want := range []float64{2.50, 3.75, 2.75} {
+		if lines[index].AmountUSD != want {
+			t.Fatalf("line %d is %v, want %v", index, lines[index].AmountUSD, want)
+		}
+	}
+	// And what the provider actually said is kept beside the corrected figure, so
+	// the correction can be checked rather than taken on trust. The first line has
+	// nothing to keep: its amount is the reported figure.
+	if lines[0].ReportedTotalUSD != 0 {
+		t.Fatalf("the first line reports a total it did not correct: %#v", lines[0])
+	}
+	if lines[1].ReportedTotalUSD != 6.25 || lines[2].ReportedTotalUSD != 9.00 {
+		t.Fatalf("the reported totals were not kept: %#v, %#v", lines[1], lines[2])
+	}
+	for _, line := range lines {
+		if err := line.Validate(); err != nil {
+			t.Fatalf("a corrected line does not satisfy the durable contract: %v", err)
+		}
+	}
+}
+
+// Two sessions recorded side by side are priced apart. A run's repair attempts
+// resume the developer's session while the reviewer's invocations run in one of
+// their own, so a rule that tracked a single running total per product would
+// read every crossing between them as a total that had fallen back.
+func TestSessionsArePricedApartFromEachOther(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{}
+	spend := func(session string, reportedTotal float64) {
+		metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+			return backend.RunResult{
+				Backend:      "claude-code",
+				SessionID:    session,
+				CostUSD:      reportedTotal,
+				CostReported: true,
+			}, nil
+		})
+		if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	}
+	spend("session-developer", 8.0)
+	spend("session-reviewer", 0.5)
+	spend("session-developer", 11.0)
+	spend("session-reviewer", 0.9)
+
+	for index, want := range []float64{8.0, 0.5, 3.0, 0.4} {
+		if log.lines[index].AmountUSD != want {
+			t.Fatalf("line %d is %v, want %v", index, log.lines[index].AmountUSD, want)
+		}
+	}
+}
+
+// A provider that reports what the invocation itself cost, rather than a running
+// total, is left alone. Nothing here asks a provider which of the two it does;
+// the rule reads it off the figures, and a figure that did not rise is not one
+// this invocation is an increment over. It is also what a session whose total
+// restarts mid-conversation looks like, which is what this product's provider
+// did on 2026-09-19 -- in the other direction, and inside one session.
+func TestAProviderReportingEachInvocationsOwnCostIsRecordedAsItReports(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{}
+	for _, cost := range []float64{3.0, 1.25, 0.5} {
+		metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+			return backend.RunResult{
+				Backend:      "claude-code",
+				SessionID:    "session-own-costs",
+				CostUSD:      cost,
+				CostReported: true,
+			}, nil
+		})
+		if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	}
+	for index, want := range []float64{3.0, 1.25, 0.5} {
+		if log.lines[index].AmountUSD != want || log.lines[index].ReportedTotalUSD != 0 {
+			t.Fatalf("line %d is %#v, want the reported figure recorded whole", index, log.lines[index])
+		}
+	}
+}
+
+// A log that cannot say what the session was last reported at cannot say what
+// this invocation cost either, and the line is not written rather than written
+// at the whole session's total. The failure is reported the way a log that
+// refuses the append is, which is the same failure: the total is read from the
+// file the line is about to be appended to.
+func TestALogThatCannotSayWhatTheSessionCostDoesNotRecordTheWholeSessionInstead(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{totalFailure: errors.New("the spend log could not be read")}
+	metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{
+			Backend:      "claude-code",
+			SessionID:    "session-resumed",
+			CostUSD:      42.0,
+			CostReported: true,
+		}, nil
+	})
+	result, err := metered.Run(context.Background(), testRequest())
+	if err == nil || !strings.Contains(err.Error(), "the spend log could not be read") {
+		t.Fatalf("Run() error = %v, want the reason the session's total could not be read", err)
+	}
+	// The provider's own answer still comes back: what failed is the bookkeeping.
+	if result.CostUSD != 42.0 {
+		t.Fatalf("the invocation's own result did not come back: %#v", result)
+	}
+	if len(log.lines) != 0 {
+		t.Fatalf("recorded %#v, want no line rather than one at the session's total", log.lines)
+	}
+}
+
+// A caller counting what it spent is told what the invocation cost rather than
+// what the provider reported, and is told even when the log would not take the
+// line. Those are two claims about one hook and they pull the same way: the
+// figure an operator is shown and the figure the log holds are one number, and
+// a log that refused a line has already said so without also stopping a budget
+// counting.
+func TestACallerIsToldWhatTheInvocationCostRatherThanWhatTheProviderReported(t *testing.T) {
+	t.Parallel()
+
+	log := &recordingLog{}
+	var counted []float64
+	spendTwice := func() {
+		for _, reportedTotal := range []float64{0.75, 2.00} {
+			metered := testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+				return backend.RunResult{
+					Backend:      "claude-code",
+					SessionID:    "session-resumed",
+					CostUSD:      reportedTotal,
+					CostReported: true,
+				}, nil
+			})
+			metered.Recorded = func(line runstate.Spend) { counted = append(counted, line.AmountUSD) }
+			if _, err := metered.Run(context.Background(), testRequest()); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+		}
+	}
+	spendTwice()
+	if len(counted) != 2 || counted[0] != 0.75 || counted[1] != 1.25 {
+		t.Fatalf("counted %v, want the whole first figure and the $1.25 the second added", counted)
+	}
+
+	// And a log that refuses the line still tells the caller what was spent.
+	refusing := &recordingLog{failure: errors.New("the disk is full")}
+	var overRefusal []float64
+	metered := testMetered(refusing, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{Backend: "claude-code", SessionID: "session-new", CostUSD: 3, CostReported: true}, nil
+	})
+	metered.Recorded = func(line runstate.Spend) { overRefusal = append(overRefusal, line.AmountUSD) }
+	if _, err := metered.Run(context.Background(), testRequest()); err == nil {
+		t.Fatal("Run() hid the failure to record")
+	}
+	if len(overRefusal) != 1 || overRefusal[0] != 3 {
+		t.Fatalf("counted %v over a refused line, want the spend still counted", overRefusal)
 	}
 }

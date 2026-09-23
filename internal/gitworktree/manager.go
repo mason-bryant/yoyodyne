@@ -2564,7 +2564,7 @@ func (m *Manager) fastForward(ctx context.Context, branch, target, previousTarge
 	if inPrimary {
 		// Merge the exact commit we just created, not the mutable source branch.
 		// A concurrent ref update must never redirect approved integration work.
-		merged, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+		merged, err := m.run(ctx, "-C", m.repositoryRoot,
 			"-c", "core.hooksPath="+os.DevNull,
 			"merge", "--ff-only", sourceCommit)
 		if err != nil {
@@ -2575,7 +2575,7 @@ func (m *Manager) fastForward(ctx context.Context, branch, target, previousTarge
 		}
 		return nil
 	}
-	updated, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	updated, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"update-ref", "refs/heads/"+target, sourceCommit, previousTarget)
 	if err != nil {
@@ -2645,8 +2645,13 @@ func defaultCommitMessage(worktree Worktree) string {
 		worktree.WorkItemID, worktree.RunID, worktree.Branch, worktree.BaseCommit)
 }
 
+// harnessCommitEnvironment is the environment a commit the harness makes is
+// given: the allowlisted one every Git command here gets, with the harness
+// identity written over whatever the allowlist admitted. The identity is stated
+// on the command line too; it is stated here as well because an explicit
+// environment value takes precedence over an ambient GIT_* one.
 func harnessCommitEnvironment() []string {
-	return append(os.Environ(),
+	return append(execution.GitEnvironment(nil),
 		"GIT_AUTHOR_NAME="+harnessCommitAuthorName,
 		"GIT_AUTHOR_EMAIL="+harnessCommitAuthorEmail,
 		"GIT_COMMITTER_NAME="+harnessCommitAuthorName,
@@ -2839,7 +2844,7 @@ func (m *Manager) deleteIntegratedBranch(ctx context.Context, branch, sourceComm
 			return false, fmt.Errorf("branch %s is still checked out in %s", branch, entry.path)
 		}
 	}
-	deleted, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	deleted, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"update-ref", "-d", "refs/heads/"+branch, sourceCommit)
 	if err != nil {
@@ -2873,7 +2878,7 @@ func (m *Manager) deleteIntegratedBranch(ctx context.Context, branch, sourceComm
 // compare-and-swap on the commit the branch was made at, which is what makes
 // leaving such a branch alone the safe outcome rather than a guess.
 func (m *Manager) discardUncheckedOutBranch(ctx context.Context, branch, commit string) {
-	deleted, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+	deleted, err := m.run(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"update-ref", "-d", "refs/heads/"+branch, commit)
 	if err != nil {
@@ -3174,6 +3179,10 @@ func (m *Manager) run(ctx context.Context, args ...string) (execution.ProcessRes
 	return m.runWithEnvironment(ctx, nil, args...)
 }
 
+// runWithEnvironment runs one local Git command. A nil environment is the
+// allowlisted one every Git command here gets -- see runBounded, which is where
+// nil is resolved so that no call site can inherit the harness's own by
+// forgetting to say.
 func (m *Manager) runWithEnvironment(ctx context.Context, environment []string, args ...string) (execution.ProcessResult, error) {
 	return m.runBounded(ctx, environment, m.localTimeout(), args...)
 }
@@ -3321,8 +3330,13 @@ func scaledTimeout(base time.Duration, load float64, cores int) time.Duration {
 // own longer timeout, because a network round trip is not a local ref update
 // and holding both to the same deadline would either starve the push or let a
 // local command hang.
+//
+// It is also the one family of Git commands here given a forge credential.
+// Reaching a remote is what needs one; a local ref update, a diff, and a
+// checkout do not, and handing every Git command a token so that the push has
+// one would put it in front of every hook the repository runs.
 func (m *Manager) runRemote(ctx context.Context, args ...string) (execution.ProcessResult, error) {
-	return m.runBounded(ctx, nil, m.remoteTimeout(), args...)
+	return m.runBounded(ctx, execution.ForgeEnvironment(nil), m.remoteTimeout(), args...)
 }
 
 func (m *Manager) remoteTimeout() time.Duration {
@@ -3355,6 +3369,14 @@ func (m *Manager) runBounded(ctx context.Context, environment []string, timeout 
 			return execution.ProcessResult{}, err
 		}
 		defer func() { _ = lease.release() }()
+	}
+	// A Git command runs hooks the repository supplies, so what it is launched
+	// with is what those hooks are launched with. Nothing here inherits the
+	// harness's own environment: a caller that named none gets the allowlist an
+	// agent invocation is built from, and the one family of commands that needs a
+	// forge credential asks for it by name — see runRemote.
+	if environment == nil {
+		environment = execution.GitEnvironment(nil)
 	}
 	for attempt := 1; ; attempt++ {
 		result, err := m.runner.Run(ctx, execution.Command{

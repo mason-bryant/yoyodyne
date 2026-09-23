@@ -1433,17 +1433,33 @@ type State struct {
 	// ProviderModel is the selector the developer invocation requested and
 	// ProviderResolvedModel is what the provider reported serving it. A
 	// floating alias makes the resolved identifier the only real audit record.
-	ProviderModel         string     `json:"provider_model,omitempty"`
-	ProviderResolvedModel string     `json:"provider_resolved_model,omitempty"`
-	Status                Status     `json:"status"`
-	Phase                 Phase      `json:"phase,omitempty"`
-	LastSequence          uint64     `json:"last_sequence"`
-	StartedAt             time.Time  `json:"started_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	CompletedAt           *time.Time `json:"completed_at,omitempty"`
-	WorktreePath          string     `json:"worktree_path,omitempty"`
-	Branch                string     `json:"branch,omitempty"`
-	BaseCommit            string     `json:"base_commit,omitempty"`
+	ProviderModel         string `json:"provider_model,omitempty"`
+	ProviderResolvedModel string `json:"provider_resolved_model,omitempty"`
+	// DeveloperModel is the selector execution.developer_models chose for this
+	// run from the labels its item carried, and DeveloperModelReason is why that
+	// entry rather than another or than none. They are settled once, when the run
+	// is reserved, and read back off the record by every developer invocation the
+	// run goes on to make — the first attempt, each repair, and anything a later
+	// process resumes — for the reason the account alias is: a run that resolved
+	// the mapping again per invocation would split one piece of work across two
+	// models the first time the file was edited under it.
+	//
+	// Both are absent on a run whose project configured no mapping, which reads
+	// as the developer's configured model and is what every run written before
+	// this did. The reason is recorded even where the item was unmapped, because
+	// an unmapped item and a mapping nobody read are two different accounts of
+	// one model and only the record can tell them apart.
+	DeveloperModel       string     `json:"developer_model,omitempty"`
+	DeveloperModelReason string     `json:"developer_model_reason,omitempty"`
+	Status               Status     `json:"status"`
+	Phase                Phase      `json:"phase,omitempty"`
+	LastSequence         uint64     `json:"last_sequence"`
+	StartedAt            time.Time  `json:"started_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	WorktreePath         string     `json:"worktree_path,omitempty"`
+	Branch               string     `json:"branch,omitempty"`
+	BaseCommit           string     `json:"base_commit,omitempty"`
 	// HarnessCommit is the last commit the harness itself made in this run's
 	// worktree, which publishing needs before it can push a branch. It is durable
 	// because it is what permits the worktree's HEAD to have moved: a resumed run
