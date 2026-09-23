@@ -47,9 +47,12 @@ var explicitEnvironmentNames = map[string]struct{}{
 	// Locale.
 	"LANG":     {},
 	"LANGUAGE": {},
-	// A Git command over an SSH remote -- a private module a check fetches --
-	// asks the agent at this socket. It is a path to a socket rather than a
-	// credential, and the keys stay with the agent that holds them.
+	// A Git command over an SSH remote asks the agent at this socket -- a
+	// private module a check fetches, and the harness's own push, fetch,
+	// ls-remote and branch delete against a project whose remote is SSH. It is a
+	// path to a socket rather than a credential, and the keys stay with the
+	// agent that holds them, so it is on the standing list rather than added to
+	// the forge commands alone.
 	"SSH_AUTH_SOCK": {},
 	// Reaching the provider from behind a proxy, and trusting the certificates
 	// that proxy presents.
@@ -142,6 +145,14 @@ func GitEnvironment(parent []string) []string {
 // only here. That is the whole of the arrangement: the forge commands are the
 // ones that need a forge credential, and they are a short, named list rather
 // than everything that happens to run.
+//
+// SSH_AUTH_SOCK is deliberately not here and must not be added: it is on the
+// standing allowlist above, so every process the harness starts already carries
+// it, and a push to an SSH remote finds the agent exactly where a check
+// fetching a private module does. Repeating it here would say that a command
+// not reaching a remote does without it, which is not what this file does and
+// would be a second, quieter statement of the same thing. What is here is what
+// the allowlist does *not* carry.
 var forgeEnvironmentNames = []string{
 	"GH_TOKEN",
 	"GITHUB_TOKEN",

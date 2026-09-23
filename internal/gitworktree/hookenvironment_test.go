@@ -69,6 +69,14 @@ func TestAGitCommandTalkingToTheRemoteCarriesTheForgeCredentialAndNoOther(t *tes
 
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-git")
 	t.Setenv("GH_TOKEN", "ghp-only-for-the-forge")
+	// A project whose remote is SSH authenticates the push with a key the agent
+	// at this socket holds, and the socket is what points Git at it. It is on
+	// the standing allowlist rather than on the forge's own list, which is easy
+	// to read as an omission: a remote-reaching command that lost it would fail
+	// to authenticate on every installation with an SSH remote, and every run
+	// would stop at integration. The test remote here is a local path, so
+	// nothing would notice the loss on its own — this is what notices it.
+	t.Setenv("SSH_AUTH_SOCK", "/private/tmp/ssh-agent-for-this-test.sock")
 
 	runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
 	manager, err := New(Options{
@@ -96,9 +104,13 @@ func TestAGitCommandTalkingToTheRemoteCarriesTheForgeCredentialAndNoOther(t *tes
 
 	local, reachingTheRemote := 0, 0
 	for _, command := range runner.bounds {
-		environment := environmentNames(command.Env)
+		environment := environmentValues(command.Env)
 		if _, credentialed := environment["GH_TOKEN"]; credentialed {
 			reachingTheRemote++
+			if environment["SSH_AUTH_SOCK"] != "/private/tmp/ssh-agent-for-this-test.sock" {
+				t.Errorf("git %v reaches the remote and was given SSH_AUTH_SOCK=%q, so an SSH remote would not authenticate",
+					command.Args, environment["SSH_AUTH_SOCK"])
+			}
 		} else {
 			local++
 		}
@@ -144,14 +156,4 @@ func environmentValues(entries []string) map[string]string {
 		}
 	}
 	return values
-}
-
-func environmentNames(entries []string) map[string]struct{} {
-	names := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		if name, _, named := strings.Cut(entry, "="); named {
-			names[name] = struct{}{}
-		}
-	}
-	return names
 }

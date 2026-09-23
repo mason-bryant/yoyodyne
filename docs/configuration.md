@@ -2022,6 +2022,13 @@ them, so the hooks those run have no forge credential to hand out. Handing every
 Git command a token so that the push would have one is exactly the arrangement
 this replaces.
 
+`SSH_AUTH_SOCK` is not on that second list and does not need to be: it is on the
+standing one above, so **a project whose remote is SSH pushes through the agent
+exactly as it always did** — every process the harness starts carries the socket,
+and the keys stay with the agent holding them. It is worth saying because the
+absence reads like an omission, and the cost of it actually being one would be
+every run stopping at integration on every installation with an SSH remote.
+
 ### Which provider authentication is supported
 
 **A provider authenticates by its own login, held in its provider home, and by

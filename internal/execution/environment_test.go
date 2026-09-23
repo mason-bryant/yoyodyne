@@ -157,6 +157,32 @@ func TestForgeEnvironmentAddsTheForgeCredentialToTheAllowlistAndNothingElse(t *t
 	}
 }
 
+// The agent socket is what an SSH remote authenticates through, and it is on
+// the standing allowlist rather than on the forge's own list — so it reaches a
+// remote-reaching Git command the way it reaches everything else the harness
+// starts. It is asserted rather than left to be read off two lists, because the
+// cost of it having been dropped is every run stopping at integration on any
+// installation whose remote is SSH, and a local test remote never notices.
+func TestTheAgentSocketReachesAForgeCommandAndEveryOtherBuiltEnvironment(t *testing.T) {
+	t.Parallel()
+
+	parent := []string{
+		"PATH=/usr/bin",
+		"SSH_AUTH_SOCK=/private/tmp/agent.sock",
+		"GH_TOKEN=ghp-secret",
+		"SLACK_BOT_TOKEN=xoxb-secret",
+	}
+	for name, built := range map[string][]string{
+		"ForgeEnvironment":    ForgeEnvironment(parent),
+		"GitEnvironment":      GitEnvironment(parent),
+		"ExplicitEnvironment": ExplicitEnvironment(parent),
+	} {
+		if !slices.Contains(built, "SSH_AUTH_SOCK=/private/tmp/agent.sock") {
+			t.Errorf("%s() = %v, want the agent socket carried", name, built)
+		}
+	}
+}
+
 // One name reaches a process once. Which of two entries of a name a process
 // reads is the operating system's to decide, and a credential that depended on
 // that would be one nobody could reason about.
