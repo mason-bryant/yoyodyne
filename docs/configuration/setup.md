@@ -4,9 +4,6 @@ docs/configuration.md left intact. The links below into ../configuration.md
 resolve today and point at sections a later tranche moves; the tranche that
 moves a section retargets the link:
 
-  #what-init-proposes-for-checks      -> configuration/runs.md (117.3)
-  #triage-thresholds                  -> configuration/recovery.md (117.3)
-  #waiting-out-a-provider-that-refuses -> configuration/recovery.md (117.3)
   #provider-accounts                  -> configuration/agents.md (117.4; the
                                          map's row, left in configuration.md
                                          this tranche on the DM's direction)
@@ -21,6 +18,9 @@ moves a section retargets the link:
                                          gives them a home
 
 117.2 retargeted #what-reaches-the-queue to goals.md when it landed that guide.
+117.3 retargeted #what-init-proposes-for-checks to runs.md, and
+#triage-thresholds and #waiting-out-a-provider-that-refuses to recovery.md,
+when it landed those guides.
 
 "The configuration index ... lists the other guides" below is a forward claim:
 configuration.md becomes the index in 117.4.
@@ -62,7 +62,7 @@ never left half-configured.
 
 The one thing `init` derives from the project rather than from the template is
 `checks`, which it proposes by reading what the repository already declares about
-its toolchain. See [What `init` proposes for `checks`](../configuration.md#what-init-proposes-for-checks)
+its toolchain. See [What `init` proposes for `checks`](runs.md#what-init-proposes-for-checks)
 for what it reads and what it does with an answer it cannot settle. A run with
 nothing to verify has no gate to integrate behind, so `yoyo run` refuses one
 whatever `init` found; read what it proposed before running work.
@@ -132,7 +132,7 @@ team sharing one: two people each running their own harness against one
 repository is
 [not supported](../team-mode-scope.md#what-v1-supports-meanwhile), because the
 coordination around the backlog — claims, reports, directives, and the
-[triage budgets](../configuration.md#triage-thresholds) — stays on the machine
+[triage budgets](recovery.md#triage-thresholds) — stays on the machine
 that made it.
 
 Two consequences of the tracker riding your repository are worth knowing before
@@ -282,7 +282,7 @@ serves, which tool postures it can hold them to, and how to read what it says
 about rate limits, retries, and reset times. A declared provider describes and
 decides nothing: whether to wait, how long, and against which budget stay the
 harness's, because those are what the
-[`execution.usage_limit_*` settings](../configuration.md#waiting-out-a-provider-that-refuses)
+[`execution.usage_limit_*` settings](recovery.md#waiting-out-a-provider-that-refuses)
 mean. [Provider plugins](../provider-plugins.md) is the format and its limits — in
 particular that a provider speaking a protocol no compiled adapter speaks needs
 an adapter rather than a declaration.
