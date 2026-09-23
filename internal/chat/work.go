@@ -318,6 +318,14 @@ type RunReport struct {
 	// appear without a run behind it, on work a dependency stopped before it was
 	// ever claimed.
 	DependencyPause string `json:"dependency_pause,omitempty"`
+	// TrackerPause is set instead of any of the others when what parked the run
+	// was the tracker not answering the read a gate boundary makes, for the whole
+	// of that boundary's recovery window. It names the read and what the window
+	// was spent on, because what makes this continuable is the store answering
+	// again rather than anything about the work. Unlike the two pauses above it
+	// never appears without a run behind it: it is a run that reached a gate and
+	// could not find out whether it may take the next step.
+	TrackerPause string `json:"tracker_pause,omitempty"`
 	// IntakeHold is set instead of any of the others when the work was never
 	// started because something is holding what the harness chooses for itself.
 	// It never appears on a run: nothing was claimed and nothing developed, so
@@ -903,6 +911,12 @@ func (r RunReport) Headline() string {
 		// run is in flight: a dependency can stop work before anything was claimed.
 		return fmt.Sprintf("%s is paused waiting on unfinished work it depends on: %s; closing that work, or unlinking it, is what releases %s and /work %s carries on after that",
 			item, r.DependencyPause, item, item)
+	case r.Paused && r.TrackerPause != "":
+		// A tracker park is lifted by the store answering rather than by a decision
+		// or a clock, so this says what went unanswered and that the run is waiting
+		// where it stopped. Nothing about the change was judged.
+		return fmt.Sprintf("%s is parked because %s; nothing about its change was judged, its claim, branch, worktree, and developer session are all preserved, and /work %s continues the same run once the store answers",
+			item, r.TrackerPause, item)
 	case r.Paused && r.ProviderStop != "":
 		stopped := "its provider stopped emitting events and was stopped"
 		if r.ProviderStop == ProviderStopBudgetExhausted {

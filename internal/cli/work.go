@@ -393,6 +393,8 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
 	case state.DependencyPause != nil:
 		snapshot.Detail = "paused waiting on unfinished work it depends on: " + state.DependencyPause.Summary()
+	case state.TrackerPause != nil:
+		snapshot.Detail = "parked waiting on the tracker to answer: " + state.TrackerPause.Summary()
 	case state.UsageLimitResetsAt != nil:
 		snapshot.Detail = fmt.Sprintf("paused for %s until %s",
 			runstate.DescribePause(state.PauseCause, state.UsageLimitKind), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
@@ -559,6 +561,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	// themselves are read with /show.
 	if outcome.PausedByDependency != nil {
 		report.DependencyPause = outcome.PausedByDependency.Summary()
+	}
+	// A tracker park is carried the same way: what a conversation says about it is
+	// which read went unanswered and for how long, and the run's own record holds
+	// each wait that was taken.
+	if outcome.PausedByTracker != nil {
+		report.TrackerPause = outcome.PausedByTracker.Summary()
 	}
 	// The operator's own pause is carried as the moment they placed it, which is
 	// the whole of what a conversation has to say about it: what lifts it is one

@@ -727,6 +727,14 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 			if err != nil {
 				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
 			}
+		} else if outcome.PausedByTracker != nil {
+			// A tracker park always has a run behind it, and is reported on its own
+			// terms because what lifts it is the store answering rather than a
+			// provider, a person, or other work.
+			reportTrackerPause(stdout, outcome)
+			if err != nil {
+				fmt.Fprintf(stderr, "the park is recorded, but reporting it failed: %v\n", err)
+			}
 		} else {
 			reportRunPause(stdout, stderr, outcome, err)
 		}
@@ -922,6 +930,22 @@ func reportDependencyPause(stdout io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintln(stdout, "nothing was started for it, so there is nothing to clean up")
 	}
 	fmt.Fprintf(stdout, "closing that work, or removing the dependency link, lifts the pause; running yoyodyne on %s after that carries on\n",
+		outcome.WorkItemID)
+}
+
+// reportTrackerPause describes a run parked because the tracker would not answer
+// the read it makes at a gate boundary. It names the read and what the window
+// was spent on, because a store that was contended and one that is broken are
+// different things to look at, and it says that nothing was judged: a run parked
+// here has its change exactly where it left it.
+func reportTrackerPause(stdout io.Writer, outcome orchestrator.Outcome) {
+	fmt.Fprintf(stdout, "%s is parked: the tracker did not answer a read this run makes before it may take its next step\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "waiting on: %s\n", outcome.PausedByTracker.Summary())
+	fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
+	fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+	fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+	fmt.Fprintln(stdout, "nothing about the change was judged; the item stays claimed and its artifacts are preserved")
+	fmt.Fprintf(stdout, "the tracker answering lifts the park; running yoyodyne on %s continues the same run from where it stopped\n",
 		outcome.WorkItemID)
 }
 

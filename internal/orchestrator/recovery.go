@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -68,6 +69,42 @@ func recoveringValue[T any](ctx context.Context, a *activeRun, boundary string, 
 		return attemptErr
 	})
 	return value, err
+}
+
+// readWorkItem is the same rule at the one boundary that has no run to record
+// on: the tracker read a dispatch makes before it claims an item or adopts a run
+// in flight, which is where what the item waits on and what the operator has
+// directed are settled. A `bd` killed under load there turned a dispatch away
+// outright, and for a resume that is a run left in flight that nothing picked up
+// until somebody asked for it again.
+//
+// Nothing is recorded, because there is nothing to record it on: no run has been
+// reserved, and the run a resume is about belongs to whichever process holds its
+// lease rather than to this one. That is the whole of what this gives up against
+// the recording rule the run's own boundaries follow, and it costs nothing to
+// give up here: a dispatch that dies mid-window claimed nothing and left nothing
+// behind, so what a fresh window buys is one more attempt rather than a wait
+// somebody has already paid for. The window and the intervals are the same, so
+// the store gets asked the same way wherever a run meets it.
+func (p Pipeline) readWorkItem(ctx context.Context, workItemID string) (beads.WorkItem, error) {
+	var waited time.Duration
+	for attempt := 1; ; attempt++ {
+		item, err := p.Tracker.Show(ctx, workItemID)
+		if err == nil || !recovery.Recoverable(err) {
+			return item, err
+		}
+		delay := recovery.Interval(attempt)
+		if waited+delay > recovery.Window {
+			return item, fmt.Errorf("the tracker kept failing on something a later attempt could have survived, and %d retr(ies) over %s did not outlast it: %w",
+				attempt-1, waited.Round(time.Second), err)
+		}
+		if sleepErr := p.sleep(ctx, delay); sleepErr != nil {
+			// The dispatch is over — cancelled, or out of time — so the read is left
+			// as it failed rather than asked again under a context that has ended.
+			return item, err
+		}
+		waited += delay
+	}
 }
 
 // recoverProvider decides what a provider death does once the relaunch budget is

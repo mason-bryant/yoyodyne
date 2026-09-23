@@ -561,8 +561,9 @@ func TestOnlyARunResumedOnPurposeIsPickedUpAtItsPromotion(t *testing.T) {
 }
 
 // timingOutTracker is a tracker whose Nth read dies the way a `bd` killed under
-// load does, which is the second of yoyodyne-ifd.309's two stops. Everything
-// else it answers as the tracker under it does.
+// load does, which is the second of yoyodyne-ifd.309's two stops. It refuses
+// once and then answers, which is what the boundary's recovery window is for:
+// everything else it answers as the tracker under it does.
 type timingOutTracker struct {
 	*fakeTracker
 	failShowAt int
@@ -578,11 +579,11 @@ func (f *timingOutTracker) Show(ctx context.Context, id string) (beads.WorkItem,
 }
 
 // The 309 shape, over a real repository and a forge: the change is approved,
-// the promotion is refused for an uncommitted edit in the primary checkout, the
-// resumed promotion dies on a tracker read that timed out, and the second
-// resumption reaches a merged pull request — with every counter exactly where
-// the review left it, and the run's record saying each resumption was a
-// continuation rather than an attempt.
+// the promotion is refused for an uncommitted edit in the primary checkout, and
+// the resumed promotion meets the tracker read that timed out — which used to be
+// 309's second stop and is now waited out — and reaches a merged pull request,
+// with every counter exactly where the review left it and the run's record
+// saying the resumption was a continuation rather than an attempt.
 func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestChargingNothing(t *testing.T) {
 	t.Parallel()
 
@@ -684,41 +685,16 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 		t.Fatalf("Remove() error = %v", err)
 	}
 
-	// The first resumption: the promotion goes again and dies on the tracker read
-	// the gate makes before it promotes — the second of 309's two stops. The
-	// resumed run's own read is the second Show the continued pipeline makes; the
-	// first is the continuation loading the item.
+	// The resumption: the promotion goes again, and the tracker read the gate
+	// makes before it promotes times out — the second of 309's two stops, which
+	// used to end the run here. The resumed run's own read is the second Show the
+	// continued pipeline makes; the first is the continuation loading the item.
+	// Since yoyodyne-ifd.428.6 that read is waited out on the same window every
+	// other recoverable boundary gets, so the same resumption carries through to
+	// the merged pull request instead of stopping a second time.
 	var observed []runstate.State
 	flaky := &timingOutTracker{fakeTracker: tracker, failShowAt: 2}
 	result, err := resumer(build(flaky), &observed).Resume(context.Background(), IntegrationResumeRequest{Run: outcome.RunID})
-	if !result.Resumed || err == nil || !strings.Contains(err.Error(), "waits on: bd show failed with status timed_out") {
-		t.Fatalf("Resume() = resumed %t, error = %v; want the run resumed and then stopped by the tracker", result.Resumed, err)
-	}
-	if len(observed) != 1 || !observed[0].ResumingIntegration() {
-		t.Fatalf("the run in flight did not read as resuming its integration: %#v", observed)
-	}
-	stopped, err = store.Load(outcome.RunID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if stopped.Status != runstate.StatusFailed || stopped.IntegrationStop == nil || stopped.IntegrationStop.Cause != runstate.CauseTransportFailure {
-		t.Fatalf("after the tracker died: %s, stop %#v; want the run stopped again with the transport failure recorded", stopped.Status, stopped.IntegrationStop)
-	}
-	if len(stopped.IntegrationResumptions) != 1 || stopped.IntegrationResumptions[0].Cause != runstate.CauseDirtyPrimary {
-		t.Fatalf("resumptions = %#v, want the first resumption recorded as a continuation", stopped.IntegrationResumptions)
-	}
-	// The stoppage is docketed afresh, because it stopped again after the
-	// resumption closed the first entry.
-	if _, err := docketer.RecordStoppedRun(stopped); err != nil {
-		t.Fatalf("RecordStoppedRun() error = %v", err)
-	}
-	if entry := docket.entries[0]; entry.IntegrationStop == nil || entry.IntegrationStop.Cause != string(runstate.CauseTransportFailure) || entry.Closed != nil {
-		t.Fatalf("re-docketed entry = %#v, want the second stop carried and the entry open", entry)
-	}
-
-	// The second resumption reaches the merged pull request.
-	observed = nil
-	result, err = resumer(build(tracker), &observed).Resume(context.Background(), IntegrationResumeRequest{Run: outcome.RunID})
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
@@ -732,8 +708,8 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
 		t.Fatalf("integrated feature.txt = %q, want the approved content", integrated)
 	}
-	if len(observed) != 1 || !observed[0].ResumingIntegration() || len(observed[0].IntegrationResumptions) != 2 {
-		t.Fatalf("the run in flight did not read as resuming its integration a second time: %#v", observed)
+	if len(observed) != 1 || !observed[0].ResumingIntegration() || len(observed[0].IntegrationResumptions) != 1 {
+		t.Fatalf("the run in flight did not read as resuming its integration: %#v", observed)
 	}
 	// Nothing was invoked: the developer's attempt and the reviewer's verdict are
 	// the ones the first run made.
@@ -746,13 +722,13 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 		t.Fatalf("Counters() error = %v", err)
 	}
 	if !reflect.DeepEqual(landed, left) {
-		t.Fatalf("the item's triage record moved across two resumptions:\nleft   %#v\nlanded %#v", left, landed)
+		t.Fatalf("the item's triage record moved across the resumption:\nleft   %#v\nlanded %#v", left, landed)
 	}
 	final, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if final.Status != runstate.StatusSucceeded || final.RepairAttempts != 0 || final.ReviewRounds != 1 || len(final.IntegrationResumptions) != 2 {
+	if final.Status != runstate.StatusSucceeded || final.RepairAttempts != 0 || final.ReviewRounds != 1 || len(final.IntegrationResumptions) != 1 {
 		t.Fatalf("final run = %s, attempts %d, rounds %d, resumptions %d; want it succeeded with no attempt or round added", final.Status, final.RepairAttempts, final.ReviewRounds, len(final.IntegrationResumptions))
 	}
 	if !strings.Contains(tracker.notes, "was approved by an independent reviewer, and was integrated automatically") {

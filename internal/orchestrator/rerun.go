@@ -819,6 +819,8 @@ func pauseMet(outcome Outcome) string {
 		return "the unresolved directive " + outcome.PausedByDirective.ID
 	case outcome.PausedByDependency != nil:
 		return "unfinished work its item waits on: " + outcome.PausedByDependency.Summary()
+	case outcome.PausedByTracker != nil:
+		return "a tracker that would not answer: " + outcome.PausedByTracker.Summary()
 	default:
 		return "a pause"
 	}
