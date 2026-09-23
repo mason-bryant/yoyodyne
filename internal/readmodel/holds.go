@@ -294,8 +294,21 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		carryOut, _ := decided(run.WorkItemID, run.RunID)
 		return carryOut
 	}) {
-		carryOut, problem := decided(workItemID, run.RunID)
 		found, preserved := remaining[run.RunID]
+		// An approved change the environment stopped is answered before the item's
+		// triage record is read at all, and without reading it: what such a stoppage
+		// waits on is the harness resuming the promotion, whatever has or has not
+		// been decided about the item's other stoppages. It is reported as the
+		// harness's move — the same wait the surfaces already call a carry-out —
+		// because the alternative is naming the development manager on a stoppage
+		// the docket (triage.Entry.renderNextMover) tells her she owes nothing
+		// about, and an item given two next movers is a disagreement only the
+		// operator can settle.
+		if run.IntegrationStop != nil {
+			reasons[workItemID] = backlog.Hold{Reason: stoppedIntegration(run, found, preserved), Decided: true}
+			continue
+		}
+		carryOut, problem := decided(workItemID, run.RunID)
 		if !preserved {
 			reasons[workItemID] = heldFor(continuedStoppage(run), carryOut, problem)
 			continue
@@ -333,15 +346,24 @@ func latestPerItem(runs []runstate.State, matches func(runstate.State) bool) map
 	return latest
 }
 
-// stoppage reports a run that stopped on this item and was handed to somebody.
-// A run that ended without a durable blocker was not, so nothing is waiting on
-// a decision about it however much of it survives. Whether its change survived
-// is deliberately not asked here: that is the repository's answer rather than
-// the record's, and the derivation asks for it.
+// stoppage reports a run that stopped on this item and left it for somebody.
+// Whether its change survived is deliberately not asked here: that is the
+// repository's answer rather than the record's, and the derivation asks for it.
+//
+// Two endings are one, and reading only the first is what cost yoyodyne-ifd.436.4
+// a second run of work that was already approved. A durable blocker is the
+// harness having handed the item to somebody, and it is the obvious one. The
+// other is a run that died inside its own process: it hands nobody a blocker, on
+// purpose, because the harness may yet resume it — so its record ends `failed`
+// rather than `stopped` while its change sits on a branch exactly as a
+// stoppage's does. run-b0b6d18d ended that way on an approved change the
+// environment stopped, and read to the pull as an item with nothing holding it.
+// To a reader the two are the same fact, and the hold covers them the same way.
 func stoppage(run runstate.State) bool {
-	return run.WorkItemID != "" &&
-		run.Status.Terminal() &&
-		strings.TrimSpace(run.Blocker) != ""
+	if run.WorkItemID == "" || !run.Status.Terminal() {
+		return false
+	}
+	return strings.TrimSpace(run.Blocker) != "" || run.DiedInItsOwnProcess()
 }
 
 // preservedChange says why an item with work still on a branch is not something
@@ -361,6 +383,17 @@ func preservedChange(run runstate.State, found survival) string {
 			"run %s stopped on it and %s, so it is held as preserved: a fresh run would start over on top of work that may still be there",
 			run.RunID, found.Unchecked)
 	}
+	return fmt.Sprintf(
+		"run %s stopped on it and its change is preserved (%s), so a fresh run would start over on top of work that is still there",
+		run.RunID, whatWasFound(found))
+}
+
+// whatWasFound is what the look came to, in the words every account of a
+// preserved change says it in: what is there, and how that was established. The
+// two are said together because they are different claims — a branch checked and
+// there is not a branch a record says nothing removed — and a reader about to
+// release the item acts on the difference.
+func whatWasFound(found survival) string {
 	var there []string
 	if found.Found.BranchExists {
 		there = append(there, "branch")
@@ -372,9 +405,34 @@ func preservedChange(run runstate.State, found survival) string {
 	if found.Unchecked != "" {
 		checked = found.Unchecked
 	}
-	return fmt.Sprintf(
-		"run %s stopped on it and its change is preserved (%s %s), so a fresh run would start over on top of work that is still there",
-		run.RunID, strings.Join(there, " and "), checked)
+	return strings.Join(there, " and ") + " " + checked
+}
+
+// stoppedIntegration says why an item whose approved change the environment
+// stopped short of its promotion is not something to pull, and who finishes it.
+//
+// It is its own account rather than the preserved-change one closed by a clause,
+// and the ordering is the point: the scheduler cuts a hold's reason to a line
+// when it says why an item was passed over, so the fact that decides what
+// anybody does — the approval stands, the environment is what stopped it, and
+// `yoyo triage resume` is the verb — has to come before the evidence rather than
+// after it. Said the other way round, the verb was the part that fell off.
+//
+// What was found of the change is still said, because it is what a reader about
+// to release the item checks; it is last because it is the part that can be cut
+// without leaving somebody unable to act.
+func stoppedIntegration(run runstate.State, found survival, preserved bool) string {
+	account := fmt.Sprintf(
+		"run %s stopped on it with its change approved, and the environment is what stopped the promotion, so `yoyo triage resume` finishes it rather than a decision or a fresh run",
+		run.RunID)
+	switch {
+	case !preserved:
+		return account
+	case found.Unknown:
+		return account + " (" + found.Unchecked + ")"
+	default:
+		return account + " (" + whatWasFound(found) + ")"
+	}
 }
 
 // continuedStoppage says why an item whose stopped run left nothing behind is

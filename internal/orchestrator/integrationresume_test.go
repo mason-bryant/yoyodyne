@@ -978,3 +978,167 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 		t.Fatalf("final run = %s, removed %t, swept %v, resumptions %d; want it succeeded with the restored checkout cleaned up by its own integration", final.Status, final.WorktreeRemoved, final.WorktreeSweptAt, len(final.IntegrationResumptions))
 	}
 }
+
+// The 2026-09-22 duplication, end to end, over a real repository and a forge.
+//
+// run-b0b6d18d's change on yoyodyne-ifd.436.4 was approved and then stopped
+// short of the target branch by the environment, leaving a record that ends
+// `failed` with the stop on it, its branch preserved, and its pull request open.
+// The docket named the harness and `yoyo triage resume`. Half an hour later the
+// claim audit read the item as a claim with nothing working on it and gave it
+// back, the next pull started a fresh run, and that run re-derived the same
+// change, spent a developer run and a review, and integrated it a second time.
+//
+// Two things had to be true for that, and both are asserted here: the audit does
+// not release such a claim, and the pull's hold covers the run even if something
+// else has put the item back — a run that ended `failed` holding its change is
+// the same fact to a reader as one that ended `stopped`. Then the resume, which
+// is what actually promotes it, with nothing bought in between.
+//
+// The cause here is the dirty primary checkout rather than the tracker read that
+// timed out, because it is the one an ordinary fixture can produce on demand;
+// what the audit and the pull read is the stop rather than which of the two
+// environmental causes wrote it.
+func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromotesIt(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-ifd.436.4", Title: "The duplicated one", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	// The operator's uncommitted edit lands while the reviewer is judging, so the
+	// promotion is refused for the checkout after the approval rather than before.
+	dirtying := filepath.Join(repository, "AGENTS.md")
+	serve := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+		}
+		return serve(request)
+	}
+	pipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"test -f feature.txt"}), provider), forge)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
+		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The record the two readings below are asked about, and the shape that had no
+	// marker either of them read: failed rather than stopped, no blocker, the
+	// approval standing, and the change on its branch.
+	if stopped.Outcome() != runstate.OutcomeFailed || strings.TrimSpace(stopped.Blocker) != "" {
+		t.Fatalf("the stopped run reads as %q with blocker %q, want the ending that hands nobody one", stopped.Outcome(), stopped.Blocker)
+	}
+	if stopped.IntegrationStop == nil || !stopped.ResumableIntegration() {
+		t.Fatalf("the stopped run is not a resumable integration stop: %#v", stopped.IntegrationStop)
+	}
+
+	// The claim audit, half an hour later, over the item the run left claimed.
+	// Nothing is working on it and nothing ever will be again, and that is exactly
+	// what must not be read as a claim to give back.
+	audited := stopped.UpdatedAt.Add(9 * time.Hour)
+	queue := newScheduleHarness()
+	queue.now = audited
+	queue.finished = []runstate.State{stopped}
+	queue.items = []beads.WorkItem{claimedItem(tracker.item.ID, tracker.item.Title)}
+	queue.ready = map[string]bool{}
+	queue.stoppages = haltedWork{runs: []runstate.State{stopped}}
+	queue.claims = ClaimAuditor{
+		Tracker: queue, Runs: queue, Releases: &claimLog{},
+		ProductID: "yoyodyne", Clock: fixedClock{at: audited},
+	}
+
+	schedule, err := Scheduler{Open: queue.open, Sleep: queue.sleep, Now: queue.clock}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.ReleasedClaims) != 0 {
+		t.Fatalf("released = %+v, want the claim over an approved change left exactly where it is", schedule.ReleasedClaims)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %d run(s), want nothing started over a change that is already on a branch: %s", len(schedule.Started), schedule.Render())
+	}
+	if _, ended := queue.Recorded(); ended != nil {
+		t.Fatalf("Recorded() error = %v", ended)
+	}
+	if reloaded, err := store.Load(outcome.RunID); err != nil || reloaded.Status != runstate.StatusFailed || len(reloaded.IntegrationResumptions) != 0 {
+		t.Fatalf("the audit wrote to the stopped run: %#v (error %v)", reloaded, err)
+	}
+
+	// And the other half, because the audit is not the only way an item comes
+	// back: put the item back in the queue by hand and the pull holds it anyway,
+	// naming the run, the change still on its branch, and the verb that finishes
+	// it. Before this, a run that ended `failed` read to the pull as an item with
+	// nothing holding it at all.
+	if _, err := queue.Release(context.Background(), tracker.item.ID, "put back by hand"); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	schedule, err = Scheduler{Open: queue.open, Sleep: queue.sleep, Now: queue.clock}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %d run(s), want the reopened item held rather than run again: %s", len(schedule.Started), schedule.Render())
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != tracker.item.ID {
+		t.Fatalf("deferred = %#v, want the stoppage passed over with what holds it named", schedule.Deferred)
+	}
+	for _, want := range []string{outcome.RunID, "its change approved", "`yoyo triage resume`"} {
+		if !strings.Contains(schedule.Deferred[0].Reason, want) {
+			t.Fatalf("deferred reason = %q, want it to name %q", schedule.Deferred[0].Reason, want)
+		}
+	}
+
+	// The resume is what promotes it. Nothing was bought in between: the run is
+	// the one the reviewer approved, made live again at the promotion it stopped
+	// short of, with the developer's one attempt and the reviewer's one verdict.
+	left, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if err := os.Remove(dirtying); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	docket := &memoryDocket{}
+	if _, err := docketerOverStore(docket, store, pipeline.Config).RecordStoppedRun(stopped); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	resumed, err := IntegrationResumer{
+		Docket: docket, Runs: store, Intake: newIntakeHoldStore(t), Items: tracker, Worktrees: worktrees,
+		Capacity: pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start:    pipeline.Continue,
+	}.Resume(context.Background(), IntegrationResumeRequest{Run: outcome.RunID})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if !resumed.Resumed || resumed.Outcome.Integration == nil || resumed.Outcome.PullRequest == nil || !resumed.Outcome.PullRequest.Merged {
+		t.Fatalf("result = %#v, want the approved change promoted and its pull request merged", resumed)
+	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", resumed.Outcome.Integration.TargetCommit)
+	if developer, reviewer := provider.requestsForRole(domain.RoleDeveloper), provider.requestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
+		t.Fatalf("invocations = %d developer, %d reviewer; want the one attempt and the one review the stopped run made", len(developer), len(reviewer))
+	}
+	landed, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if !reflect.DeepEqual(landed, left) {
+		t.Fatalf("the item's triage record moved across the resumption:\nleft   %#v\nlanded %#v", left, landed)
+	}
+}

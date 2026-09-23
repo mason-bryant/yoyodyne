@@ -1742,19 +1742,25 @@ Needs a human (3):
   fourth not-startable lines in the example above: a run stopped on it and its
   change is still on a branch or in a checkout, its stoppage is in front of the
   development manager and nobody has decided about it, a decision about its
-  stoppage is recorded and not yet carried out, or a run promoted its change and
-  could not finish publishing it. The first is stated from the repository rather
+  stoppage is recorded and not yet carried out, an approved change the
+  environment stopped short of its promotion is waiting on `yoyo triage resume`,
+  or a run promoted its change and could not finish publishing it. A run that
+  ended `failed` holding its change is the first of those exactly as a run that
+  ended `stopped` is: a run that fails inside its own process hands nobody a
+  blocker, so its record ends `failed` while its branch sits there — which is
+  what left yoyodyne-ifd.436.4 reading as an item with nothing holding it while
+  its approved change waited on a branch. The first is stated from the repository rather
   than from the run's record — the parenthesis says what was found, `branch and
   worktree checked and there` or only one of them — because the record's removal
   flags are what a sweep remembered to write, and on 2026-09-19 a hold read off
   them released yoyodyne-ifd.372 as no longer preserved. A look that could not
-  be made holds the item as preserved and says why. The last of those four
+  be made holds the item as preserved and says why. The last of those five
   accounts is not a stoppage at all and is held for the opposite reason: the
   change is on the target branch already, so there is nothing left to implement
   and a run started against it can only find that out again — which is what
   yoyodyne-ifd.295 cost, three developer runs and three reviews deep. It says
   whether the forge merged the publication or not, and never guesses: the two
-  are different things to settle. Every one of the four names the run and what
+  are different things to settle. Every one of the five names the run and what
   has to be decided rather than leaving the item to its `blocked` status, because
   a status says the same word about a stoppage nobody has answered and about work
   whose every blocker closed months ago — and reading that word as a refusal is
@@ -1768,7 +1774,10 @@ Needs a human (3):
   settle the stoppage and leave the harness nothing: an item told to wait, to be
   re-scoped, or escalated is held by what she decided rather than by anything
   outstanding, so it is not in the carry-out wait and nobody is watching for a
-  run that is not coming. One rule answers that for every surface — the status
+  run that is not coming. An approved change the environment stopped is in the
+  carry-out wait with her having decided nothing, because the wait is named for
+  whose move it is rather than for what was decided: the reviewer decided, and
+  what is outstanding is the harness resuming the promotion. One rule answers that for every surface — the status
   head, the attention line, the alarm, and the next mover on the development
   manager's own docket — so one piece of work cannot be given two next movers.
   The counts are in
@@ -2070,7 +2079,7 @@ so the test is whether anything has been written to it within the hour — and t
 whether its lease can be taken, which is the answer the timestamps were standing
 in for.
 
-Two kinds of claim are never given back. A run that stopped short and is owed a
+Four kinds of claim are never given back. A run that stopped short and is owed a
 continuation keeps its claim however quiet it has gone — one waiting out a
 [usage limit](#waiting-out-a-provider-usage-limit) or an
 [overloaded provider](#waiting-out-an-overloaded-provider), which the
@@ -2099,6 +2108,40 @@ An item whose latest run already promoted its change is left alone too, and that
 one is left for `yoyo reconcile` rather than for a person: the change is on the
 target branch and the item wants closing rather than developing a second time,
 which is what the sweep does from the promotion the record holds.
+
+**And an item whose latest run ended holding its change is left alone, whatever
+the claim says.** A claim there is not a claim nothing is working on: it is the
+one thing saying an item whose change is sitting on a branch is spoken for, and
+giving it back buys a fresh run started over the top of that change. Three
+endings are in the class, and they are the same three the pull's own
+[hold](work.md#letting-the-harness-choose-the-work) reads, so the two cannot
+disagree about one run:
+
+- **An approved change the environment stopped** short of its promotion, which
+  `yoyo triage resume` finishes. The audit leaves it for that verb, as it leaves
+  a wait for the sweep.
+- **A run that left somebody a blocker** with its change still on its branch — a
+  replay that conflicted against a target that moved, first among them.
+- **A run that died inside its own process** with its change still on its
+  branch. This one is the ending nothing announced: such a run deliberately
+  hands nobody a blocker, so its record ends `failed` rather than `stopped` and
+  every rule that looked for a blocker read it as an item with nothing holding
+  it.
+
+That last shape is what this rule was written for. On 2026-09-22 run-b0b6d18d's
+change on yoyodyne-ifd.436.4 was approved and then stopped at the promotion by a
+tracker read that timed out; the run ended `failed` at 04:04Z with its branch
+preserved and its pull request open, and the docket named the harness and `yoyo
+triage resume`. At 05:00Z the audit read the item as a claim with nothing
+working on it and gave it back, the next pull started a run from scratch, and
+that run spent a developer and a reviewer re-deriving the change that was
+already on the branch and integrated it a second time.
+
+A run whose process was killed is none of these, and is a dead claim exactly as
+it was however much of its half-finished change is on disk: nothing ended it and
+nothing owes it a move, which is the whole failure the audit exists for. What
+tells them apart is the ending on the record rather than what is in the
+worktree.
 
 Each release is
 [sent to the operators once](reporting.md#reporting-into-slack), in the item's

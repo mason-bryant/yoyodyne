@@ -10,7 +10,8 @@
         "branch": "yoyodyne/yoyodyne-task/01234567",
         "branch_removed": false,
         "changes": {
-          "status": "?? feature.txt"
+          "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
+          "status": "A feature.txt"
         },
         "checks": [
           {
@@ -59,10 +60,12 @@
     "base_commit": "\u003ccommit-1\u003e",
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "changes": {
-      "files": "?? feature.txt"
+      "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
+      "files": "A feature.txt"
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
+    "harness_commit": "\u003ccommit-2\u003e",
     "last_sequence": 2,
     "phase": "complete",
     "product_id": "yoyodyne",
@@ -115,7 +118,10 @@
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
         "Changes:",
-        "?? feature.txt",
+        "A feature.txt",
+        "Diff stat:",
+        "feature.txt | 1 +",
+        " 1 file changed, 1 insertion(+)",
         "Check: test -f feature.txt (passed=true, exit=0, \u003celapsed\u003e of 30m0s)"
       ]
     ]

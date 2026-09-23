@@ -97,6 +97,14 @@ type WorktreeManager interface {
 	// export the harness stopped holding must not go on being refused, and one it
 	// began holding must not go on being committable.
 	CurrentExports() []string
+	// CommitAttempt records what one developer invocation left in the worktree as
+	// a harness-owned commit and reports the commit the branch then stands at. It
+	// is what every run does with an attempt, publishing or not: the checks, the
+	// reviewer and the promotion all read the change base-relative, but the branch
+	// tip is what a reviewer's evidence names and what a repair round is judged
+	// against, and a tip that lags the worktree is a round judged on the round
+	// before it.
+	CommitAttempt(ctx context.Context, worktree gitworktree.Worktree, message string) (string, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
@@ -2878,6 +2886,22 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			return err
 		}
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
+		// What the invocation left in the worktree is committed here, before
+		// anything below decides what became of the invocation. Here is the one
+		// place every ending passes through, and every ending below it either hands
+		// the change to the checks and the reviewer or reissues the attempt into the
+		// same worktree — and both of those want the branch tip to be what the last
+		// invocation actually wrote. A commit made only on the accepted path is what
+		// left run-f3755e3f reissuing its developer against findings it had already
+		// fixed, with the branch tip four invocations behind the worktree.
+		//
+		// A commit that could not be made ends the round rather than carrying on:
+		// the reviewer's evidence names a tip commit, and a tip that is not the
+		// round's is an approval of something nobody read.
+		if committed := a.commitAttempt(ctx); committed != nil {
+			a.observeDevelopEnded(ctx, committed)
+			return committed
+		}
 		// A provider nobody is logged into or nobody can reach is answered before
 		// anything is counted, because what it asks for is the one wait that spends
 		// nothing: no relaunch, no repair attempt, no blocker. The refused attempt
@@ -2972,10 +2996,11 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 				a.observeDevelopEnded(ctx, recorded)
 				return recorded
 			}
-			// The attempt that just finished is what publishes. Doing it here
-			// covers every developer invocation a run makes — the first and each
-			// repair — so the pull request always shows the change the checks and
-			// the reviewer are about to judge.
+			// The attempt that just finished is what publishes. Its work is already
+			// committed — commitAttempt did that above, for this ending and for
+			// every other one — so what happens here is the push and the pull
+			// request, and it happens on the accepted path because that is the
+			// change the checks and the reviewer are about to judge.
 			published := a.publishAttempt(ctx)
 			a.observeDevelopEnded(ctx, published)
 			return published

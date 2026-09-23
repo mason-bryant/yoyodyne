@@ -954,11 +954,14 @@ func stoppedRun(state runstate.State) bool {
 // where a blocker would be. That is reported by the run that could not write it,
 // and is the same trade the scan makes everywhere else: the run's record still
 // says what happened, and nothing about the change is lost.
+//
+// The three conditions the death itself carries are runstate.DiedInItsOwnProcess,
+// asked there rather than restated here because the hold the pull reads asks the
+// same question of the same record; what is added here is the artifacts test,
+// which the docket answers from the run's own flags at the moment of the death
+// and the hold answers by looking in the repository.
 func preservedDeath(state runstate.State) bool {
-	return state.Status == runstate.StatusFailed &&
-		state.Integration == nil &&
-		strings.TrimSpace(state.Failure) != "" &&
-		state.Artifacts().Preserved()
+	return state.DiedInItsOwnProcess() && state.Artifacts().Preserved()
 }
 
 // unstartedRun reports a run that died before it took its work item.

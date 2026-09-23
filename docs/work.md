@@ -94,9 +94,10 @@ its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
 delivered with it, and the check results. The change it is shown is measured
 against the commit the run was cut from rather than against what happens to be
-uncommitted, so work an attempt already published — every attempt is committed
-by the harness before the checks run — is in the patch it judges. The evidence
-says that rather than leaving it to be worked out: it names the base commit the
+uncommitted, so work an earlier attempt already made — every attempt is
+committed by the harness before the checks run, whether or not the run
+publishes — is in the patch it judges. The evidence says that rather than
+leaving it to be worked out: it names the base commit the
 change is measured against and lists the commits already made for it, so a
 reviewer never has to guess whether a branch's committed work is inside the
 patch or behind it. It used to have to, and
@@ -734,8 +735,21 @@ stopped run's change is still there is looked for in the repository as the hold
 is read, not taken from the run's own removal flags — a flag is a field
 something has to remember to write, and on 2026-09-19 the product manager's
 repair cleared yoyodyne-ifd.372 on one while the item's own notes still said the
-run's branch and worktree were checked and there. None is released by a pass
-deciding to. Releasing a stoppage would start a fresh run on top of a change that is still
+run's branch and worktree were checked and there.
+
+**A run that ended `failed` holding its change is held exactly as one that ended
+`stopped` is.** The two look different in a listing and are the same fact to a
+reader: a run that fails inside its own process deliberately hands nobody a
+blocker — the harness may yet resume it, and a blocked item is one it would
+refuse to resume — so its record ends `failed` with no blocker on it while its
+branch sits there exactly as a stoppage's does. Reading only the blocker is what
+cost yoyodyne-ifd.436.4 a second run on 2026-09-22: run-b0b6d18d's change was
+approved and then stopped short of `main` by a tracker read that timed out, and
+the pull found nothing holding the item. The [claim
+audit](operations.md#claims-with-nothing-working-on-them) reads the same endings
+and leaves such an item's claim alone for the same reason.
+
+None of these is released by a pass deciding to. Releasing a stoppage would start a fresh run on top of a change that is still
 there, and releasing an outstanding publication would start one over work the
 promotion has already put on the target branch — which is what
 [yoyodyne-ifd.295](operations.md#recovering-interrupted-runs)
@@ -808,6 +822,16 @@ the three decisions that buy another attempt — a repair, a re-run, a merge
 re-arm — which the harness has not yet acted on. A stoppage she settled by
 waiting, re-scoping or escalating leaves the harness nothing to carry out, so it
 is not in that wait.
+
+An approved change the environment stopped short of its promotion — the
+[integration stop](#how-work-flows-once-you-approve-it) above — is in the second
+wait without her having decided anything, and that is deliberate rather than a miscount: the reviewer decided,
+the environment got in the way, and what the item waits on is the harness
+resuming the promotion with `yoyo triage resume`. The hold names that verb, and
+it names it first, ahead of what was found of the change, so the part that says
+what to do survives a rendering that cuts the reason to a line. The development
+manager's docket says the same thing on the same stoppage, because an item given
+two next movers is a disagreement only you could settle.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
