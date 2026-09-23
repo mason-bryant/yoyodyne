@@ -769,6 +769,17 @@ for an approved change the environment stopped, it is refused in the one
 sentence the docket entry carries: the change is approved, what stopped it, and
 "resume" is what it needs.
 
+A stall is the second stoppage "repair" continues, and the one it charges
+nothing for. A run whose provider the harness stopped on time before anything
+was returned to its developer -- a stream gone silent, or a total budget run
+out -- is continued at the attempt it was stopped in, in the session it stalled
+in, and counts no review round and no repair attempt, because a stall judges
+nothing. It is the one continuation whose preserved worktree need not hold a
+change already: an attempt stopped early may never have written one, and an
+empty worktree is what the attempt it is owed starts from. A re-run of such a
+stoppage is still available and still the right verb where the ground moved,
+and it discards the session and whatever the stalled attempt left uncommitted.
+
 "rearm" is about the other thing that stops: an approved change published to a
 forge that queued its merge and then dropped it. It repeats exactly the request
 the reviewer's verdict authorized -- the same pull request, by the method that

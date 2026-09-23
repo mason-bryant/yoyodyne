@@ -13,6 +13,14 @@ package orchestrator
 // developer session that already holds the context, with the findings handed
 // back exactly as the reviewer wrote them.
 //
+// It carries out one other stoppage, and the two differ in what they hand the
+// developer rather than in what they do. A run the harness stopped on time
+// before anything was returned to its developer — a stall — is continued at the
+// attempt it was stopped in, in the same session, with nothing handed back
+// because nothing judged anything. Everything below holds for it identically,
+// with two exceptions named where they are made: the preserved worktree need
+// not already hold a change, and the continuation counts no repair attempt.
+//
 // The decision is not this package's, and neither is the size of what it grants.
 // The development manager records a repair, which spends the item's repair-grant
 // budget as it is recorded and is truncated there to the review rounds the cap
@@ -219,6 +227,14 @@ type RepairContinueResult struct {
 	RepairBudget   int  `json:"repair_budget,omitempty"`
 	RepairAttempts int  `json:"repair_attempts,omitempty"`
 	Continued      bool `json:"continued"`
+	// Stall says what was carried out was a stalled attempt being carried on
+	// rather than a change being repaired: the harness stopped this run's
+	// provider before anything was returned to its developer, so the
+	// continuation resumes that session at the point it stalled and counts no
+	// repair attempt. It is reported because the two cost the item different
+	// things, and a reader told only that a repair was carried out would read
+	// the attempt counters below as a run that had spent one.
+	Stall bool `json:"stall,omitempty"`
 	// SupersededBlocker is the durable blocker the re-entry cleared, in the words
 	// it was recorded in.
 	SupersededBlocker string `json:"superseded_blocker,omitempty"`
@@ -359,6 +375,11 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	}
 	result.RepairAttempts = prior.RepairAttempts
 	result.SupersededBlocker = prior.Blocker
+	// Whether this is a stall being carried on rather than a change being
+	// repaired decides two things below, and both of them before anything is
+	// written: whether the worktree has to hold a change already, and whether the
+	// continuation counts an attempt.
+	result.Stall = continuableStall(prior)
 	// The architect's condition, asked before anything is written: the change a
 	// continued developer is handed back is whatever is in that worktree.
 	if err := c.Worktrees.VerifyOwnedHead(ctx, worktreeOf(prior)); err != nil {
@@ -369,8 +390,16 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	// resumed run asks this again where it would invoke a developer, which is the
 	// enforcement; asking it here is what keeps a handback that cannot work from
 	// spending the item's grant to find out.
-	if err := preservedChangeHeld(ctx, c.Worktrees, prior); err != nil {
-		return result, MissingPreservedChangeError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
+	//
+	// A stall is the exception, and it is the same exception the resumed run
+	// makes: nothing was handed back, so there is no change this continuation is
+	// about, and an empty worktree is exactly what the attempt it is owed starts
+	// from. Asking here for a change a stalled first attempt may never have
+	// written would refuse the decision this action exists to carry out.
+	if !result.Stall {
+		if err := preservedChangeHeld(ctx, c.Worktrees, prior); err != nil {
+			return result, MissingPreservedChangeError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
+		}
 	}
 	if err := noRunInFlight(c.Runs, entry.WorkItemID); err != nil {
 		return result, err
@@ -414,7 +443,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 		return result, nil
 	}
 
-	result.Reason = continueReason(entry, granted, reasoning)
+	result.Reason = continueReason(entry, granted, reasoning, result.Stall)
 
 	// The item is put back first, because a run made live behind an item that
 	// still says it is blocked is a run nothing can resume and nothing will
@@ -423,7 +452,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	if err := c.supersedeOnItem(ctx, entry.WorkItemID, result.Reason); err != nil {
 		return result, err
 	}
-	continued, err := c.supersedeOnRun(prior, granted, result.Reason)
+	continued, err := c.supersedeOnRun(prior, granted, result.Reason, result.Stall)
 	if err != nil {
 		return result, fmt.Errorf("record the re-entry on run %s, whose item has already been put back and told why: %w", prior.RunID, err)
 	}
@@ -565,6 +594,13 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 // that kept refusing, a replay that conflicted — has no repair loop to continue:
 // what it needs is a re-run or a person, and handing it another repair budget
 // would buy attempts at a failure nobody ever showed the developer.
+//
+// A stall is the one exception, and it is an exception to the input rather than
+// to the reasoning. The harness is what stopped that run, before anything was
+// returned to its developer, so what it is owed is the attempt it was making —
+// which is a continuation of the same session rather than another answer to a
+// complaint, and is charged accordingly. continuableStall is the whole of what
+// admits it.
 func continuableRepair(prior runstate.State) error {
 	if prior.IntegrationStop != nil {
 		return errors.New(prior.IntegrationStop.ResumeSays(prior.RunID))
@@ -578,8 +614,14 @@ func continuableRepair(prior runstate.State) error {
 	if prior.ProviderSessionID == "" {
 		return fmt.Errorf("run %s recorded no developer session, so a continuation could not be the same developer carrying on with the change it made", prior.RunID)
 	}
-	if !handedBackRepair(prior) {
-		return fmt.Errorf("run %s recorded no reviewer findings, failing check, or refused paths, so no failure was ever returned to its developer and there is no repair loop to re-enter: %s stopped for something a repair budget does not answer",
+	// A stall is the one stoppage with no repair input that a continuation still
+	// answers: nothing judged anything, so what the run is owed is the attempt
+	// the harness stopped it in rather than a repair of a change nobody
+	// complained about. Before this it was refused here, and the only decision
+	// left was a re-run — which starts over from the target branch and discards
+	// both the session and the uncommitted work in the preserved worktree.
+	if !handedBackRepair(prior) && !continuableStall(prior) {
+		return fmt.Errorf("run %s recorded no reviewer findings, failing check, or refused paths, and is not a provider the harness stopped with its session preserved, so no failure was ever returned to its developer and there is no attempt to carry on with: %s stopped for something a repair budget does not answer",
 			prior.RunID, prior.RunID)
 	}
 	return nil
@@ -647,7 +689,17 @@ func (c RepairContinuer) supersedeOnItem(ctx context.Context, workItemID, reason
 // hand the item one more developer invocation than the operator configured a
 // grant to be worth. It is recorded before the developer is invoked, exactly as
 // the repair loop's own attempts are.
-func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGrant, reason string) (runstate.State, error) {
+//
+// A stall is the one continuation that counts no attempt, and for the reason
+// the paragraph above counts every other one: what a repair attempt buys is
+// another answer to a failure somebody returned, and a stall returned none. The
+// run is owed the attempt the harness stopped it in, so charging one here would
+// take an attempt off a budget that has bought nothing — and would hand the
+// developer a prompt saying which attempt of how many this is for an attempt it
+// has not made yet. What is still spent is the item's grant: the continuation
+// records what it was worth, so the decision that authorized it is carried out
+// once and a second is a second decision.
+func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGrant, reason string, stalled bool) (runstate.State, error) {
 	continued := prior
 	continued.RepairContinuations = append(append([]runstate.RepairContinuation{}, prior.RepairContinuations...),
 		runstate.RepairContinuation{
@@ -655,8 +707,11 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 			Reason:            reason,
 			ContinuedAt:       c.now(),
 			SupersededBlocker: prior.Blocker,
+			Stall:             stalled,
 		})
-	continued.RepairAttempts = prior.RepairAttempts + 1
+	if !stalled {
+		continued.RepairAttempts = prior.RepairAttempts + 1
+	}
 	// The blocker is cleared onto the continuation that supersedes it. A terminal
 	// run whose blocker still stands is what the docket re-dockets and what
 	// `yoyo status` reports as stopped work, and this run has not stopped.
@@ -687,7 +742,13 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 // and is stated as one; the prose after it arrived with the instruction to carry
 // the decision out, and is attributed to that rather than quoted as the
 // development manager's own words.
-func continueReason(entry triage.Entry, granted repairGrant, reasoning string) string {
+//
+// A stall says what it is rather than borrowing the repair's sentence. What the
+// item's notes carry is what the next reader of this run finds instead of
+// deciding the stoppage again, and "re-entered on the change it already has"
+// would describe a change nobody complained about and an attempt that was
+// never judged.
+func continueReason(entry triage.Entry, granted repairGrant, reasoning string, stalled bool) string {
 	grant := fmt.Sprintf("%d further repair attempt(s)", granted.attempts)
 	if granted.truncated {
 		grant = fmt.Sprintf("%d further repair attempt(s), from a grant the review-round cap had already cut to %d",
@@ -696,6 +757,11 @@ func continueReason(entry triage.Entry, granted repairGrant, reasoning string) s
 	reason := fmt.Sprintf(
 		"Triaged: the repair loop of run %s was re-entered on the change it already has, under a grant of %s recorded against %s's durable triage budget. The durable blocker that run stopped on is superseded by this re-entry. The reasoning given to the harness when it was asked to: ",
 		entry.RunID, grant, entry.WorkItemID)
+	if stalled {
+		reason = fmt.Sprintf(
+			"Triaged: run %s was continued in the developer session it stalled in, at the attempt the harness stopped it in, under a grant of %s recorded against %s's durable triage budget. Nothing had judged the work, so the continuation counts no review round and no repair attempt. The durable blocker that run stopped on is superseded by this re-entry. The reasoning given to the harness when it was asked to: ",
+			entry.RunID, grant, entry.WorkItemID)
+	}
 	// The reasoning is folded to what the run's record will hold rather than
 	// refused: losing the end of a long argument is better than refusing to carry
 	// out a decision because of its length.
@@ -760,12 +826,19 @@ func (result RepairContinueResult) Render() string {
 		fmt.Fprintf(&rendered, "%s keeps its repair grant and the decision still stands, so asking again once a slot frees carries out the same one\n", result.WorkItemID)
 		return rendered.String()
 	}
-	fmt.Fprintf(&rendered, "re-entered the repair loop of run %s on the change it already has\n", result.RunID)
+	if result.Stall {
+		fmt.Fprintf(&rendered, "continued run %s in the developer session it stalled in, at the attempt the harness stopped it in\n", result.RunID)
+	} else {
+		fmt.Fprintf(&rendered, "re-entered the repair loop of run %s on the change it already has\n", result.RunID)
+	}
 	fmt.Fprintf(&rendered, "carried out %d further repair attempt(s)", result.Granted)
 	if result.Truncated {
 		fmt.Fprintf(&rendered, ", from a grant the review-round cap had already cut to %d", result.Decided)
 	}
 	fmt.Fprintf(&rendered, "; %d of %d attempt(s) now spent\n", result.RepairAttempts, result.RepairBudget)
+	if result.Stall {
+		fmt.Fprintln(&rendered, "nothing had judged the work, so this continuation counts no review round and no repair attempt")
+	}
 	fmt.Fprintf(&rendered, "continued because %s\n", result.Reason)
 	if result.SupersededBlocker != "" {
 		fmt.Fprintf(&rendered, "superseded blocker: %s\n", singleLine(result.SupersededBlocker, 240))

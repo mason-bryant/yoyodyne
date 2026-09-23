@@ -236,6 +236,13 @@ type Artifacts struct {
 	// harness already removed.
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
+	// DeveloperSession is the provider session the stopped run's developer was
+	// working in. It is an artifact of the run in the way the branch and the
+	// worktree are — a continuation resumes it rather than starting a developer
+	// from nothing — and it is on the entry because the decision it feeds turns
+	// on whether there is one: a repair continues the session, and a re-run
+	// discards it along with whatever that session had not committed.
+	DeveloperSession string `json:"developer_session,omitempty"`
 	// PullRequest and PullRequestURL name the request the run published its
 	// branch through, where the project publishes, and PullRequestMerged and
 	// PullRequestMergeQueued what the run's record last said the forge did with
@@ -916,6 +923,22 @@ type Entry struct {
 	Summary     string       `json:"summary,omitempty"`
 	Artifacts   Artifacts    `json:"artifacts"`
 	Publication *Publication `json:"publication,omitempty"`
+	// SessionResumable says this stoppage is the harness having stopped a
+	// provider that had judged nothing — a stream gone silent, or a total budget
+	// run out — with the developer session, branch, and worktree it stopped in
+	// all still there and no failure ever returned to the developer. A repair
+	// decided about it is carried out as a continuation of that session at the
+	// point it stalled, spending neither a review round nor a repair attempt,
+	// because a stall judges nothing.
+	//
+	// It is on the entry because it is what separates the two decisions a reader
+	// would otherwise weigh from the same evidence. From 2026-09-23 such a
+	// stoppage read as a stopped run with no findings and no failing check, which
+	// the repair verb then refused for want of a repair input — so the only
+	// decision that could be carried out was a re-run, and a re-run starts over
+	// from the target branch with the session gone and the uncommitted work in
+	// that worktree gone with it.
+	SessionResumable bool `json:"session_resumable,omitempty"`
 	// Unready is why dispatch declined to start this item, on the one class that
 	// describes work which never ran. It carries the whole of what a development
 	// manager has to decide about: what the item asks for, what the read found,
@@ -1162,6 +1185,18 @@ func (e Entry) Validate() error {
 			problems = append(problems, fmt.Errorf("environmental: account is %d bytes, limit is %d", len(e.Environmental.Account), MaxMessageBytes))
 		}
 	}
+	if e.SessionResumable {
+		// The whole of what the claim is worth is the session it names. An entry
+		// that said a session was resumable and named none would send a development
+		// manager to record a repair the carry-out then refuses, which is exactly
+		// the round trip this field exists to remove.
+		if strings.TrimSpace(e.Artifacts.DeveloperSession) == "" {
+			problems = append(problems, errors.New("session_resumable: the developer session is required, because it is what a continuation resumes"))
+		}
+		if strings.TrimSpace(e.Artifacts.WorktreePath) == "" || e.Artifacts.WorktreeRemoved {
+			problems = append(problems, errors.New("session_resumable: a preserved worktree is required, because it is what a continued developer carries on in"))
+		}
+	}
 	if e.IntegrationStop != nil {
 		if strings.TrimSpace(e.IntegrationStop.Cause) == "" {
 			problems = append(problems, errors.New("integration_stop: the cause is required, because it is what says the environment stopped the change rather than a verdict"))
@@ -1383,6 +1418,7 @@ func (e Entry) Render() string {
 	// counters mean rather than a remark about them: a development manager who
 	// read the figures first has already decided how close this item is to its cap.
 	rendered.WriteString(e.renderEnvironmental())
+	rendered.WriteString(e.renderResumableSession())
 	rendered.WriteString(e.renderIntegrationStop())
 	rendered.WriteString(e.renderNextMover())
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
@@ -1484,6 +1520,30 @@ func (e Entry) renderAttempt() string {
 	}
 	rendered.WriteString(indented("Why it never started", e.Failure))
 	return rendered.String()
+}
+
+// renderResumableSession says this stoppage judged nothing and its developer
+// session is still there, so a repair continues that session at the point it
+// stalled rather than starting the item over.
+//
+// It names what the continuation costs as well, because that is the half a
+// reader would otherwise supply from every other entry here: a repair elsewhere
+// on this docket buys attempts at a change a reviewer or a check complained
+// about, and the counters below say how few of those the item has left. Nothing
+// complained here, so the continuation spends neither a round nor an attempt,
+// and a reader weighing this against the cap would otherwise decide a re-run for
+// want of budget it is not being asked for.
+//
+// It is said under the environmental account rather than over it, because the
+// account is what happened and this is what to do about it. It is silent on
+// every other stoppage, which is nearly all of them.
+func (e Entry) renderResumableSession() string {
+	if !e.SessionResumable {
+		return ""
+	}
+	return fmt.Sprintf(
+		"      Nothing was judged: the harness stopped this run's provider and no failure was ever returned to its developer, and the session it stopped in is preserved along with whatever that attempt had written. `yoyo triage repair %s` continues that session at the point it stalled, in the worktree above; it spends no review round and no repair attempt, because a stall judges nothing. A re-run starts over from the target branch instead, with the session and whatever that worktree holds uncommitted both discarded.\n",
+		e.RunID)
 }
 
 // renderIntegrationStop says the change was approved and the environment is
@@ -1832,6 +1892,17 @@ func (e Entry) renderArtifacts() string {
 			state = "removed"
 		}
 		fmt.Fprintf(&rendered, "      Worktree (%s): %s\n", state, e.Artifacts.WorktreePath)
+	}
+	if e.Artifacts.DeveloperSession != "" {
+		state := "preserved"
+		if e.Artifacts.WorktreeRemoved {
+			// The session is the provider's and nothing here removes one, but there
+			// is nowhere left to continue it: what a continued developer works in is
+			// the checkout, and a retired one is what a resumption has nothing to
+			// hand back.
+			state = "preserved, with no checkout left to continue it in"
+		}
+		fmt.Fprintf(&rendered, "      Developer session (%s): %s\n", state, e.Artifacts.DeveloperSession)
 	}
 	if e.Artifacts.TargetBranch != "" {
 		fmt.Fprintf(&rendered, "      Integration target: %s\n", e.Artifacts.TargetBranch)

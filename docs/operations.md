@@ -1057,6 +1057,30 @@ blocked with what the sweep observed, the stoppage is docketed, and the slot is
 free. Inside the half hour the sweep still reports the run resumable and says
 when the grace ends.
 
+**What the settled stoppage is owed is the attempt it was stopped in, and the
+docket entry says so.** A stall judges nothing: no reviewer saw the change, no
+check ran, and nothing was returned to the developer — so the entry the
+development manager reads carries the fact that decides between her two verbs.
+It names the developer session the run stalled in, says the session is preserved
+with whatever that attempt had written still in the worktree, and prints
+`yoyo triage repair <run-id>` as what continues it. `yoyo triage repair` then
+does exactly that: the same run goes on, in the same worktree, branch, and
+session, resuming at the point the provider was stopped. It counts no review
+round and no repair attempt, because a stall returned no failure for an attempt
+to answer — what the item's budget records is the grant the decision spent, and
+what the run records is a continuation with no attempt against it, marked as the
+stall it carried on. The one condition a repair of a change is held to and this
+is not is that the worktree hold a change already: a first attempt stopped early
+may never have written anything, and an empty worktree is exactly what the
+attempt it is owed starts from.
+
+Until 2026-09-23 the repair was refused for a stoppage like that, for want of a
+repair input, which left a re-run as the only decision that could be carried
+out — and a re-run starts the item over from the target branch, discarding the
+session and whatever the stalled attempt had left uncommitted in the preserved
+worktree. `yoyo triage rerun` is still the right verb where the ground has moved
+and the work is to be done again; it is no longer the only one available.
+
 ## When a run says more than the harness keeps
 
 There is a third bound beside those two, and it is not a deadline: how much of a
@@ -1513,12 +1537,14 @@ moved, and why the provider was stopped. The branch and worktree are left
 exactly as a stopped run's are, the item is blocked with that account, and the
 stoppage goes on the triage docket, so a repair-continue the development
 manager decides about it carries out as it does for any stopped run — on the
-change the run already has, in its own worktree and developer session. That
-carry-out still asks what it asks of every stoppage: a run stopped inside its
-repair loop, with a failing check or the reviewer's findings handed back to it,
-is continued; one stopped in its first attempt, with nothing handed back, is
-refused a repair in the same words any such run is, and a re-run from the
-preserved branch is what the development manager records instead. The
+change the run already has, in its own worktree and developer session. Both
+shapes of stoppage are carried out: a run stopped inside its repair loop, with a
+failing check or the reviewer's findings handed back to it, is continued on that
+failure; one stopped in its first attempt, with nothing handed back, is
+continued at the attempt it was stopped in, and counts no review round and no
+repair attempt because a stall judges nothing — the entry says so, and
+[what a stall is owed](#when-a-provider-stalls-or-runs-out-of-budget) is the
+whole of it. The
 slot the run was holding and the in-flight guard's hold over the items beside it
 release with the record going terminal. `yoyo status <item>` reads the run as
 `stopped` with that reason under it. Whether the round it ends spent anything

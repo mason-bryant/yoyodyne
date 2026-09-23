@@ -1197,6 +1197,14 @@ func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
 	if entry.Artifacts.WorktreePath != stopped.WorktreePath || entry.Artifacts.Branch != stopped.Branch || entry.Artifacts.WorktreeRemoved || entry.Artifacts.BranchRemoved {
 		t.Fatalf("artifacts = %#v, want the preserved worktree and branch", entry.Artifacts)
 	}
+	// Nothing was returned to this run's developer, so what it is owed is the
+	// attempt the harness stopped it in, and the entry says so through the
+	// durable store rather than only in the process that wrote it.
+	// TestARepairContinuesAFirstAttemptStallInItsOwnSession is what carries that
+	// decision out.
+	if !entry.SessionResumable || entry.Artifacts.DeveloperSession != stopped.ProviderSessionID {
+		t.Fatalf("entry = %#v, want the preserved developer session named and reported resumable", entry)
+	}
 
 	// A second sweep finds a settled run and nothing to do: the stoppage is keyed
 	// to the run, so it is docketed once however many sweeps walk past it.
@@ -1337,6 +1345,165 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 	}
 	if landed.Environmental != nil || landed.ProviderStop != "" || landed.Blocker != "" {
 		t.Fatalf("landed run = %#v, want the settled stoppage superseded", landed)
+	}
+}
+
+// The other run of 2026-09-23, and the one nothing could carry on: a stall in
+// the run's first attempt, with the developer session preserved and no failure
+// ever returned. The sweep settles and dockets it after the half hour, the entry
+// says the session is resumable, and the repair the development manager records
+// is carried out as a continuation of that session at the point it stalled
+// rather than refused for want of a repair input. Before this the refusal left
+// a re-run as the only decision that could be carried out, and a re-run starts
+// over from the target branch with the session gone and the uncommitted work in
+// the preserved worktree gone with it.
+func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// The first developer attempt writes half of the change and is then stopped
+	// on time, which is the whole of what a stall leaves: a session, a worktree
+	// with uncommitted work in it, and nothing anybody judged.
+	stalling := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
+	checks := []string{"exit 0"}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
+	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
+		t.Fatalf("Run() error = %v, outcome = %#v, want the first attempt stopped on time", err, paused)
+	}
+	stopped, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// Nothing was handed back, which is what used to refuse the repair: no
+	// findings, no failing check, no refused paths, and no attempt spent.
+	if stopped.RepairAttempts != 0 || stopped.CheckFailure != nil || len(stopped.ReviewFindingDetails) != 0 || stopped.PathRefusal != nil {
+		t.Fatalf("stopped run = %#v, want a first attempt with nothing returned to its developer", stopped)
+	}
+	if stopped.ProviderSessionID == "" {
+		t.Fatalf("stopped run = %#v, want the developer session it stalled in preserved", stopped)
+	}
+	tracker.item.Status = "in_progress"
+
+	docket := &memoryDocket{}
+	reconciler := Reconciler{
+		Tracker:   tracker,
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Docket:    docketerOverStore(docket, store, pipeline.Config),
+		Clock:     &pausingClock{now: stopped.UpdatedAt.Add(DefaultVanishedGrace)},
+	}
+	results, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the stalled run settled after the grace", results)
+	}
+
+	// The entry carries the fact the decision turns on: the session is there and
+	// can simply be carried on, and the continuation costs the item neither a
+	// round nor an attempt.
+	if len(docket.entries) != 1 {
+		t.Fatalf("docket = %#v, want the stalled run docketed once", docket.entries)
+	}
+	entry := docket.entries[0]
+	if !entry.SessionResumable || entry.Artifacts.DeveloperSession != stopped.ProviderSessionID {
+		t.Fatalf("entry = %#v, want the preserved session named and reported resumable", entry)
+	}
+	for _, want := range []string{
+		"Nothing was judged",
+		"the session it stopped in is preserved",
+		"yoyo triage repair " + paused.RunID,
+		"spends no review round and no repair attempt",
+	} {
+		if !strings.Contains(entry.Render(), want) {
+			t.Fatalf("entry does not say %q:\n%s", want, entry.Render())
+		}
+	}
+
+	// The development manager records a repair about that stoppage, exactly as
+	// the conversation records one.
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	roundsBefore, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	// What the continued developer finds is asked where it is handed over rather
+	// than afterwards: a run that lands removes its worktree on purpose, so the
+	// only moment the half-written work can be proved to have survived is the
+	// moment the attempt it belongs to is resumed.
+	survived := false
+	continuing := roleBackend(func(request backend.RunRequest) error {
+		if _, err := os.Stat(filepath.Join(request.WorkingDirectory, "partial.txt")); err == nil {
+			survived = true
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	continuer := RepairContinuer{
+		Docket:             docket,
+		Runs:               store,
+		Intake:             intake,
+		Decisions:          store.Triage(),
+		Items:              tracker,
+		Worktrees:          worktrees,
+		ConfiguredAttempts: pipeline.Config.Execution.RepairAttemptsBeforeReplan,
+		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, continuing, checks), continuing).
+				Continue(ctx, workItemID, runID)
+		},
+	}
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID, Reason: continueReasoning})
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || !result.Stall || result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil {
+		t.Fatalf("result = %#v, want the stalled run carried on and its change landed", result)
+	}
+
+	// The same session, in the same worktree, with the half-written work still
+	// in it.
+	continued := continuing.requestsForRole(domain.RoleDeveloper)
+	if len(continued) != 1 || continued[0].SessionID != stopped.ProviderSessionID || continued[0].WorkingDirectory != stopped.WorktreePath {
+		t.Fatalf("continued attempts = %#v, want one, in the stalled run's own session and worktree", continued)
+	}
+	if !survived {
+		t.Fatal("the stalled attempt's uncommitted work was not in the worktree the continuation was handed")
+	}
+
+	// And a stall judged nothing, so the continuation is charged nothing: no
+	// repair attempt on the run, and no review round on the item beyond the one
+	// the continued run's own verdict bought.
+	landed, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(landed.RepairContinuations) != 1 || !landed.RepairContinuations[0].Stall {
+		t.Fatalf("continuations = %#v, want the one continuation recorded as a stall", landed.RepairContinuations)
+	}
+	if landed.RepairAttempts != 0 {
+		t.Fatalf("repair attempts = %d, want a stall to count none", landed.RepairAttempts)
+	}
+	roundsAfter, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if roundsAfter.ReviewRounds != roundsBefore.ReviewRounds {
+		t.Fatalf("review rounds = %d, want the %d the item stood at: an approving verdict charges none and a stall judges nothing",
+			roundsAfter.ReviewRounds, roundsBefore.ReviewRounds)
 	}
 }
 

@@ -1101,7 +1101,11 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		Artifacts:       docketArtifacts(state),
 		Environmental:   docketEnvironmental(state.Environmental),
 		IntegrationStop: docketIntegrationStop(state.IntegrationStop),
-		Counters:        counters,
+		// Whether the session this run stopped in can simply be carried on is read
+		// from the same predicate the repair carry-out admits a stall by, so the
+		// entry cannot offer a continuation the verb then refuses.
+		SessionResumable: continuableStall(state),
+		Counters:         counters,
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
@@ -1524,6 +1528,11 @@ func docketArtifacts(state runstate.State) triage.Artifacts {
 		BaseCommit:      state.BaseCommit,
 		BranchRemoved:   state.BranchRemoved,
 		WorktreeRemoved: state.WorktreeRemoved,
+		// The session the developer was working in is an artifact of the run in
+		// the way the branch is: a repair continues it, and a re-run discards it
+		// along with whatever it had not committed. Which of those two to decide
+		// is what the entry is for.
+		DeveloperSession: state.ProviderSessionID,
 	}
 	// The request the run published through is an artifact of the run the way
 	// its branch is: a stopped or escalated run leaves it open on the forge, and

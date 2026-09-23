@@ -4140,10 +4140,14 @@ budget, and an item with no rounds left never gets a grant to carry out at all.
 Five more things refuse it. The stopped run has to be really over, terminal and
 still standing on whichever of the two docketed it, read from the run's own
 record rather than from the docket
-entry. The run has to have recorded a repair input — a run whose provider kept
-refusing, whose replay conflicted, or that died before anything judged its work,
-never had a failure returned to its developer, so there is no repair loop to
-re-enter; a re-run is what those need. The preserved worktree has
+entry. The run has to have recorded a repair input, or be a stall — a run whose
+provider kept refusing, or whose replay conflicted, never had a failure returned
+to its developer and has no attempt to carry on with either; a re-run is what
+those need. A stall is continued rather than re-run: the harness is what stopped
+it, before anything judged the work, so what it is owed is the attempt it was
+stopped in, resumed in the session it stalled in — and the continuation counts
+no review round and no repair attempt, because a stall judges nothing. The
+preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
@@ -4152,7 +4156,10 @@ checkout the harness would call its own and that holds nothing passes the gate
 above and fails this one, and a developer handed the reviewer's findings and an
 empty directory delivers an empty repair or reinvents the change from them, with
 nothing in the run's record afterwards to tell either from a repair that went
-well. And the decision standing about the stoppage has to still be the repair:
+well. A stall is not held to that last one, for the reason the resumed run below
+exempts the same case: nothing was handed back to be about a change, and an
+empty worktree is what the attempt it is owed starts from.
+And the decision standing about the stoppage has to still be the repair:
 one decision stands per stopped run, and a re-run, an escalation, or a wait
 recorded in the repair's place released the rounds the repair had reserved (see
 [what spends a round and what does not](#what-spends-a-round-and-what-does-not)),
