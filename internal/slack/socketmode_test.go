@@ -112,6 +112,74 @@ func TestAnUnreadableMessageDoesNotEndTheConnection(t *testing.T) {
 	}
 }
 
+// Slack counts every Socket Mode connection this app holds against a limit of
+// ten, and a reconnect that left its predecessor open would spend that headroom
+// a connection at a time until the sink stopped being able to connect at all.
+// One connection per process means the one being replaced is closed before the
+// replacement is opened.
+func TestAReconnectClosesTheConnectionItReplaces(t *testing.T) {
+	t.Parallel()
+
+	opened := make(chan int, 4)
+	ended := make(chan int, 4)
+	server := startReconnectingWebSocketServer(t, func(number int, peer *serverSocket) {
+		// The hello is written before the connection is announced, and a write to
+		// the pipe finishes when the client has taken it — so by the time the test
+		// acts on this connection, the connection is one the sink is reading and
+		// not merely one it has dialled.
+		peer.writeText([]byte(`{"type":"hello","num_connections":1}`))
+		opened <- number
+		if number == 0 {
+			// Slack's routine refresh, which is the reconnect this test is about.
+			peer.writeText([]byte(`{"type":"disconnect","reason":"refresh_requested"}`))
+		}
+		peer.awaitEnd()
+		ended <- number
+	})
+
+	link := &connection{
+		api:     connectionAPI(t, server.url),
+		dial:    server.dial,
+		log:     func(string, ...any) {},
+		timeout: 2 * time.Second,
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	running := make(chan struct{})
+	go func() {
+		defer close(running)
+		link.run(ctx)
+	}()
+
+	if number := <-opened; number != 0 {
+		t.Fatalf("the first connection was numbered %d, want the first one dialled", number)
+	}
+	// The order of these two reads is the whole assertion: the connection being
+	// replaced has to be gone by the time the replacement exists, or the app is
+	// holding two.
+	select {
+	case number := <-ended:
+		if number != 0 {
+			t.Fatalf("connection %d ended first, want the one the reconnect replaced", number)
+		}
+	case number := <-opened:
+		t.Fatalf("connection %d was opened while its predecessor was still open", number)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection the reconnect replaced was never closed")
+	}
+	if number := <-opened; number != 1 {
+		t.Fatalf("the replacement connection was numbered %d, want the second one dialled", number)
+	}
+
+	// A sink that is stopped closes what it is holding too, so the process
+	// leaves nothing behind for Slack to keep counting.
+	stop()
+	<-running
+	if number := <-ended; number != 1 {
+		t.Fatalf("connection %d ended last, want the one the stop closed", number)
+	}
+}
+
 // connectionAPI is a client whose apps.connections.open points at the test's own
 // pipe, which is what makes the connection exercisable without a network.
 func connectionAPI(t *testing.T, url string) *API {

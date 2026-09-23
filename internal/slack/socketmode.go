@@ -26,12 +26,20 @@ import (
 )
 
 const (
-	// socketReadTimeout is how long a connection may say nothing before it is
-	// treated as dead. Slack pings a Socket Mode connection every few tens of
-	// seconds, so silence past this is a connection that has gone away without
-	// saying so — the failure that otherwise leaves a sink connected to nothing
-	// and reporting no problem.
+	// socketReadTimeout is how long a connection may say nothing at all before it
+	// is treated as dead. Slack pings a Socket Mode connection every few tens of
+	// seconds and those pings renew this, so silence past it is a connection that
+	// has gone away without saying so — the failure that otherwise leaves a sink
+	// connected to nothing and reporting no problem. It is silence and not
+	// quiet: a workspace with nothing happening in it sends no events for hours,
+	// and a bound that counted only events would hang up on a healthy connection
+	// every ninety seconds for as long as the product was idle.
 	socketReadTimeout = 90 * time.Second
+	// maxAppConnections is how many Socket Mode connections Slack allows one app
+	// at a time. At the limit a new connection costs the oldest one, so an app
+	// that opens them faster than Slack retires them ends up cycling through
+	// connections it is still being counted for.
+	maxAppConnections = 10
 	// The reconnection backoff. It starts short because most disconnections are
 	// Slack asking for a refresh, and grows because a workspace that is refusing
 	// is not helped by being asked faster.
@@ -54,9 +62,11 @@ type socketEnvelope struct {
 	// Reason is why Slack is disconnecting — a refresh it schedules routinely, a
 	// warning before one, or an app whose connection has been disabled.
 	Reason string `json:"reason,omitempty"`
-	// NumConnections and DebugInfo arrive on the hello message and are read for
-	// one thing only: a workspace holding more connections than this sink opened
-	// is a second sink, which is what duplicate threads look like from here.
+	// NumConnections arrives on the hello message and is how this process learns
+	// what Slack thinks it is holding. This one holds a single connection at a
+	// time, so a larger count is either a second sink — which is what duplicate
+	// threads look like from here — or connections Slack has not yet retired,
+	// and either way it is headroom against the limit being spent.
 	NumConnections int `json:"num_connections,omitempty"`
 }
 
@@ -117,6 +127,11 @@ func (c *connection) run(ctx context.Context) {
 }
 
 // session opens one connection and reads it until it ends.
+//
+// It closes that connection before it returns, whichever way it ends, so the
+// caller's next session is this process's only open connection: run calls this
+// one at a time, and closing here is what keeps a reconnect from leaving its
+// predecessor behind to be counted against the app's connection limit.
 func (c *connection) session(ctx context.Context) error {
 	url, err := c.api.OpenConnection(ctx)
 	if err != nil {
@@ -146,7 +161,7 @@ func (c *connection) session(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		raw, err := socket.ReadMessage(time.Now().Add(timeout))
+		raw, err := socket.ReadMessage(timeout)
 		if err != nil {
 			return err
 		}
@@ -167,7 +182,7 @@ func (c *connection) session(ctx context.Context) error {
 		case socketHello:
 			c.log("connected to Slack over Socket Mode")
 			if envelope.NumConnections > 1 {
-				c.log("this workspace holds %d Socket Mode connections for this app; more than one sink per product opens more than one thread per work item", envelope.NumConnections)
+				c.log("this workspace holds %d of the %d Socket Mode connections Slack allows this app; this process holds one and closes it before opening another, so the rest are a second sink — which opens a second thread per work item — or connections Slack has not retired yet, and at %d Slack closes the oldest to make room", envelope.NumConnections, maxAppConnections, maxAppConnections)
 			}
 		case socketDisconnect:
 			if envelope.Reason == disconnectDisabled {
