@@ -260,6 +260,12 @@ func (s *Store) SaveWorkflowInstance(instance WorkflowInstance) error {
 // not recognize: an unknown field is a record written by different code, and
 // reading it as though the field were not there is resuming an instance whose
 // state was partly ignored.
+//
+// It is the strict door of the two in tolerantread.go, and there is no tolerant
+// one beside it: an instance is only ever read to be advanced and saved back, so
+// every read of it is a read that precedes a write. The refusal reaches whoever
+// asked to resume the instance as an error naming the record, which is the one
+// answer that cannot be mistaken for an instance with nothing in it.
 func (s *Store) LoadWorkflowInstance(instanceID string) (WorkflowInstance, error) {
 	path, err := s.workflowInstancePath(instanceID)
 	if err != nil {

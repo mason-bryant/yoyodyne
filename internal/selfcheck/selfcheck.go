@@ -289,6 +289,14 @@ func Extract(reply string) (string, Record, error) {
 // and oversized input are refused rather than tolerated, for the reason a
 // landing claim refuses them: what a gate decides on has to be exactly what the
 // agent wrote.
+//
+// It is a validator of what an agent just said rather than a reader of a durable
+// record, so it stays strict where the run-record listings became tolerant: the
+// block was written seconds ago by a developer this build told what to write,
+// and a key this build does not know is a developer that recorded something
+// other than what it was asked for. The refusal reaches the caller as an error
+// naming the block, and the submission is held for the evidence rather than
+// admitted on a record that was read past.
 func Decode(payload string) (Record, error) {
 	trimmed := strings.TrimSpace(payload)
 	if trimmed == "" {

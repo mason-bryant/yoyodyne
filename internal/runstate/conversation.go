@@ -843,6 +843,12 @@ func (s *ConversationStore) stampHolder(path string) error {
 // reported as ErrNotExist for the caller to read as an unheld conversation; a
 // file that is there and will not decode is a failure to answer, because a
 // reader that guessed at it would be inventing whether somebody is mid-turn.
+//
+// That is why this is the strict door and stays there while the listings beside
+// it move to the tolerant one. A stamp carrying something this build does not
+// know is a stamp a different build wrote, and what the field might say is
+// exactly what this has to decide from; the caller reports the refusal rather
+// than being handed an answer about who is talking to the agent.
 func (s *ConversationStore) readHolder(path string, identity ConversationIdentity) (conversationHolder, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -990,7 +996,23 @@ func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, e
 // there is ask it differently, and neither can answer it from the file alone.
 // The label names the record in a failure, because a reader that cannot say
 // which file would not decode has been told nothing useful.
+//
+// This is the strict door: an agent resuming its conversation writes the record
+// back at the end of its turn, and a field stepped over on the way in is a field
+// lost on the way out. readListing beside it is the other door.
 func (s *ConversationStore) read(path, label string) (Conversation, error) {
+	return s.decode(path, label, false)
+}
+
+// readListing is the read behind Recorded, which tolerates a field this build
+// does not know for the reason the run listings do: a listing is noticed and
+// never written back, and a reader that refused the whole record would report
+// nothing at all about every conversation in the directory.
+func (s *ConversationStore) readListing(path, label string) (Conversation, error) {
+	return s.decode(path, label, true)
+}
+
+func (s *ConversationStore) decode(path, label string, tolerateUnknownFields bool) (Conversation, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Conversation{}, ErrNoConversation
@@ -1006,13 +1028,18 @@ func (s *ConversationStore) read(path, label string) (Conversation, error) {
 	if info.Size() > maxEncodedStateBytes {
 		return Conversation{}, fmt.Errorf("conversation state for %s is %d bytes, limit is %d", label, info.Size(), maxEncodedStateBytes)
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var conversation Conversation
-	if err := decoder.Decode(&conversation); err != nil {
-		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return Conversation{}, fmt.Errorf("read conversation state for %s: %w", label, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	var conversation Conversation
+	if tolerateUnknownFields {
+		unknown, err := decodeTolerating(encoded, &conversation)
+		if err != nil {
+			return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
+		}
+		noteUnknownFields("conversation record", unknown)
+	} else if err := decodeStrictly(encoded, &conversation); err != nil {
 		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
 	}
 	if err := s.validateConversation(conversation); err != nil {
@@ -1050,7 +1077,7 @@ func (s *ConversationStore) Recorded() ([]Conversation, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		conversation, err := s.read(filepath.Join(s.root, entry.Name()), entry.Name())
+		conversation, err := s.readListing(filepath.Join(s.root, entry.Name()), entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("discover recorded conversations: %w", err)
 		}

@@ -422,7 +422,25 @@ func (s *Store) Save(state State) error {
 	return syncDirectory(s.root)
 }
 
+// Load reads one run record for a caller that is about to act on it, which is
+// the strict door: a field this build does not know refuses the record rather
+// than being stepped over, because the caller is going to save the record back
+// and a field stepped over here is a field lost there. See tolerantread.go for
+// the other door and why the listings go through it.
 func (s *Store) Load(runID string) (State, error) {
+	return s.load(runID, false)
+}
+
+// loadListing reads one run record for a listing, which is the tolerant door: a
+// field this build does not know is stepped over and named rather than refusing
+// the whole record. Nothing decided from a listing is written back — every
+// caller that acts re-reads through Load, under the run's lease — so the field
+// this steps over is one nothing here could have saved anyway.
+func (s *Store) loadListing(runID string) (State, error) {
+	return s.load(runID, true)
+}
+
+func (s *Store) load(runID string, tolerateUnknownFields bool) (State, error) {
 	path, err := s.statePath(runID)
 	if err != nil {
 		return State{}, err
@@ -439,13 +457,18 @@ func (s *Store) Load(runID string) (State, error) {
 	if info.Size() > maxEncodedStateBytes {
 		return State{}, fmt.Errorf("run state %s is %d bytes, limit is %d", runID, info.Size(), maxEncodedStateBytes)
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var state State
-	if err := decoder.Decode(&state); err != nil {
-		return State{}, fmt.Errorf("decode run state %s: %w", runID, err)
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return State{}, fmt.Errorf("read run state %s: %w", runID, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	var state State
+	if tolerateUnknownFields {
+		unknown, err := decodeTolerating(encoded, &state)
+		if err != nil {
+			return State{}, fmt.Errorf("decode run state %s: %w", runID, err)
+		}
+		noteUnknownFields("run record", unknown)
+	} else if err := decodeStrictly(encoded, &state); err != nil {
 		return State{}, fmt.Errorf("decode run state %s: %w", runID, err)
 	}
 	if state.RunID != runID {
@@ -584,7 +607,7 @@ func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 		if !runIDPattern.MatchString(runID) {
 			continue
 		}
-		state, err := s.Load(runID)
+		state, err := s.loadListing(runID)
 		if err != nil {
 			return nil, fmt.Errorf("discover %s runs: %w", label, err)
 		}

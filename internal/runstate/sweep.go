@@ -32,7 +32,6 @@ package runstate
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -666,6 +665,11 @@ func closeOffATornFragment(file *os.File, encoded *[]byte) error {
 // decode is not one: it comes back in the second return value, and the sweeps
 // around it come back with it — see UnreadableSweep for why that is the
 // direction this fails in.
+//
+// A line carrying a field this build does not know is not a line that will not
+// decode. It is a record a newer build wrote, and it is read without that field
+// rather than set aside: this is the tolerant door, and the sweep log is only
+// ever listed, never written back from a listing. See tolerantread.go.
 func (s *SweepStore) List() ([]Sweep, []UnreadableSweep, error) {
 	file, err := os.Open(s.Path())
 	if errors.Is(err, os.ErrNotExist) {
@@ -687,17 +691,13 @@ func (s *SweepStore) List() ([]Sweep, []UnreadableSweep, error) {
 		if text == "" {
 			continue
 		}
-		decoder := json.NewDecoder(bytes.NewReader([]byte(text)))
-		decoder.DisallowUnknownFields()
 		var entry Sweep
-		if err := decoder.Decode(&entry); err != nil {
+		unknown, err := decodeTolerating([]byte(text), &entry)
+		if err != nil {
 			unreadable = append(unreadable, UnreadableSweep{Line: line, Problem: err.Error()})
 			continue
 		}
-		if err := ensureJSONEOF(decoder); err != nil {
-			unreadable = append(unreadable, UnreadableSweep{Line: line, Problem: err.Error()})
-			continue
-		}
+		noteUnknownFields("recurring task record", unknown)
 		if entry.ProductID != s.productID {
 			unreadable = append(unreadable, UnreadableSweep{
 				Line:    line,
@@ -717,6 +717,11 @@ func (s *SweepStore) List() ([]Sweep, []UnreadableSweep, error) {
 	return recorded, unreadable, nil
 }
 
+// load is one task's claim as it sits on disk, and it is the strict door: a
+// claim is read to decide whether the task is due and then written back with the
+// firing counted on it, so a field stepped over on the way in is a field lost on
+// the way out. The refusal is an error the caller reports; the cadence stops
+// rather than quietly losing what a newer build recorded about it.
 func (s *SweepStore) load(task string) (SweepClaim, bool, error) {
 	path := s.path(task)
 	file, err := os.Open(path)
