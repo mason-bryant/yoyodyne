@@ -165,9 +165,10 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
-		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
-	}, approveVerdict)
+	// The round produces nothing, which is what leaves a branch the sweep may
+	// delete: every attempt that writes anything is committed onto the run branch
+	// before the checks run, so a branch with work on it is one the sweep keeps.
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
 	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
@@ -194,8 +195,9 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	// The branch carries nothing the target does not, because the run stopped
-	// before it committed anything — which is what earns the deletion.
+	// The branch carries nothing the target does not, because the round wrote
+	// nothing for the harness to commit onto it — which is what earns the
+	// deletion.
 	sweep, swept := reconciler.sweepBranch(context.Background(), retired)
 	if !swept || !sweep.Removed || sweep.Kept != "" || sweep.Failure != "" || sweep.RecordProblem != "" {
 		t.Fatalf("sweep = %#v, swept = %t, want the branch deleted and written down", sweep, swept)
@@ -387,10 +389,15 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	}
 	reconciler := Reconciler{Tracker: tracker, Worktrees: newObserver(t, repository, worktreeRoot), Store: store}
 
-	// The developer's change is uncommitted, which is the state a stopped run's
-	// checkout is normally in.
+	// What the attempt produced is on the branch — every attempt is committed
+	// before the checks run — and what is uncommitted is whatever an invocation
+	// the process died inside had written but not finished. That half exists in no
+	// other record, and it is the half this preserves, so the fixture leaves one.
+	if err := os.WriteFile(filepath.Join(settled.WorktreePath, "half-finished.txt"), []byte("mid-invocation\n"), 0o600); err != nil {
+		t.Fatalf("seed the checkout's uncommitted work: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
-		t.Fatalf("the fixture left no uncommitted work to preserve: %v", err)
+		t.Fatalf("the fixture left no work in the checkout at all: %v", err)
 	}
 	retired, swept := reconciler.sweepWorktree(context.Background(), settled)
 	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" ||
@@ -405,6 +412,9 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	if retired.PreservedWork != gitworktree.PreservedWorkRef(settled.RunID) {
 		t.Fatalf("preserved work = %q, want %q", retired.PreservedWork, gitworktree.PreservedWorkRef(settled.RunID))
 	}
+	if preserved := gitOutput(t, repository, "show", retired.PreservedWork+":half-finished.txt"); preserved != "mid-invocation\n" {
+		t.Errorf("preserved half-finished.txt = %q, want the work the checkout alone held", preserved)
+	}
 	if preserved := gitOutput(t, repository, "show", retired.PreservedWork+":feature.txt"); preserved != "implemented\n" {
 		t.Errorf("preserved feature.txt = %q, want the developer's change", preserved)
 	}
@@ -414,8 +424,8 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	if branches := strings.TrimSpace(gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/heads/"+settled.Branch)); branches == "" {
 		t.Error("the branch was deleted with the checkout")
 	}
-	if commit := strings.TrimSpace(gitOutput(t, repository, "rev-parse", "refs/heads/"+settled.Branch)); commit != settled.BaseCommit {
-		t.Errorf("branch = %q, want it left at the base commit %q rather than carrying the capture", commit, settled.BaseCommit)
+	if commit := strings.TrimSpace(gitOutput(t, repository, "rev-parse", "refs/heads/"+settled.Branch)); commit != settled.HarnessCommit {
+		t.Errorf("branch = %q, want it left at the attempt's commit %q rather than carrying the capture", commit, settled.HarnessCommit)
 	}
 
 	// The removal is written onto the run it belongs to, and so is where the work

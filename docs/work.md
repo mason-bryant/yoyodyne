@@ -94,9 +94,10 @@ its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
 delivered with it, and the check results. The change it is shown is measured
 against the commit the run was cut from rather than against what happens to be
-uncommitted, so work an attempt already published — every attempt is committed
-by the harness before the checks run — is in the patch it judges. The evidence
-says that rather than leaving it to be worked out: it names the base commit the
+uncommitted, so work an earlier attempt already made — every attempt is
+committed by the harness before the checks run, whether or not the run
+publishes — is in the patch it judges. The evidence says that rather than
+leaving it to be worked out: it names the base commit the
 change is measured against and lists the commits already made for it, so a
 reviewer never has to guess whether a branch's committed work is inside the
 patch or behind it. It used to have to, and

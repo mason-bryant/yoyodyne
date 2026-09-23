@@ -88,9 +88,53 @@ func (p Pipeline) resolvePublishing(ctx context.Context) (bool, string, error) {
 	return true, "", nil
 }
 
-// publishAttempt publishes what one developer attempt produced. The harness
-// commits the work itself, pushes the run branch, and opens the pull request if
-// the branch does not have one yet; a repair attempt updates that same request
+// commitAttempt records what one developer invocation left in the worktree, as
+// the harness-owned commit the branch then stands at. Every invocation passes
+// through it — the first attempt, every repair round, and every invocation the
+// provider ended in a way that reissues the attempt rather than accepting it —
+// and it does the same thing whether or not the run publishes.
+//
+// It used to be the first half of publishAttempt, and both halves of where it
+// sat were wrong. A project that does not publish committed nothing until its
+// promotion, so its branch tip stood at the base commit for the whole run; and a
+// publishing one committed only on the path where an invocation was accepted, so
+// an invocation the provider ended twice — a relaunch condition rather than a
+// judgement about the work — left its round's change in the worktree and the
+// branch tip on the round before it. Run run-f3755e3f spent four invocations
+// that way on yoyodyne-ifd.425: its developer fixed both of the reviewer's
+// findings, four further invocations were reissued with the same findings and
+// the same prompt, and the branch tip stayed at the repair-3 commit d18d295
+// while every one of them wrote to the worktree.
+//
+// A commit that cannot be made ends the round here rather than at the checks or
+// the reviewer. What the two of those judge is the worktree, and a worktree the
+// harness cannot record is one nothing downstream can be held to: the evidence a
+// review is bound to names a tip commit, and a tip that is not the round's is
+// exactly how an approval comes to authorize a change nobody read.
+func (a *activeRun) commitAttempt(ctx context.Context) error {
+	commit, err := a.pipeline.Worktrees.CommitAttempt(ctx, a.worktree, attemptMessage(a.item, a.outcome))
+	if commit != "" {
+		// Recorded the moment it exists, for the reason the publishing commit below
+		// is: the commit is what permits this worktree's HEAD to have moved, and a
+		// later step, a later process, or the very next invocation here accepts
+		// exactly that commit and nothing an agent could put in its place.
+		a.recordHarnessCommit(commit)
+	}
+	if errors.Is(err, gitworktree.ErrNoChanges) {
+		// An invocation that changed nothing has nothing to record. It is not a
+		// failure here: the checks and the reviewer are what judge an empty change.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("commit what the developer attempt left in the worktree: %w", err)
+	}
+	return nil
+}
+
+// publishAttempt publishes what one developer attempt produced. The work is
+// already in a harness commit by the time this runs — commitAttempt made it —
+// so what is left is to push the run branch and open the pull request if the
+// branch does not have one yet; a repair attempt updates that same request
 // rather than opening another. Publishing happens before the checks run, which
 // is deliberate: a pull request is where work is reviewed, and work that does
 // not pass yet is exactly what a reviewer should be able to see.
@@ -100,18 +144,16 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	}
 	// The push is the first place a run touches the network, and a reset one is
 	// what killed a run at this exact step. Asking again is safe as well as
-	// necessary: the commit the dropped attempt made is already in the worktree,
-	// so a second attempt commits nothing and pushes that same commit.
+	// necessary: commitAttempt has already recorded the work, so a second attempt
+	// commits nothing and pushes that same commit.
 	//
-	// What makes it safe is the recording below happening inside the attempt
-	// rather than after the last one. The commit the harness made is what permits
-	// this worktree's HEAD to have moved, so it is recorded the moment it exists —
-	// including when the push that followed it failed — and a later step, a later
-	// process resuming this run, or the very next attempt here then accepts
-	// exactly that commit and nothing an agent could put in its place. Recorded
-	// after the retries instead, the retry's own ownership check would read a HEAD
-	// the run had not yet been told about and refuse the push it was asked to
-	// repeat.
+	// The commit is still recorded inside the attempt rather than after the last
+	// one, for the case commitAttempt cannot cover: a worktree written to between
+	// the two — nothing this pipeline does, but the ownership check does not
+	// assume that — is committed by the push and must be recorded the moment it
+	// exists, including when the push that followed it failed. Recorded after the
+	// retries instead, the retry's own ownership check would read a HEAD the run
+	// had not yet been told about and refuse the push it was asked to repeat.
 	publication, err := recoveringValue(ctx, a, runstate.RetryPublishBranch, func(ctx context.Context) (gitworktree.Publication, error) {
 		published, publishErr := a.pipeline.Worktrees.PublishBranch(ctx, a.worktree, attemptMessage(a.item, a.outcome))
 		if published.Commit != "" {

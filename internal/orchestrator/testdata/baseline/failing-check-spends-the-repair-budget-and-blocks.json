@@ -12,7 +12,8 @@
         "branch": "yoyodyne/yoyodyne-task/01234567",
         "branch_removed": false,
         "changes": {
-          "status": "?? feature.txt"
+          "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
+          "status": "A feature.txt"
         },
         "checks": [
           {
@@ -70,7 +71,8 @@
     "blocker": "Yoyodyne stopped this item: a configured check still failed after every permitted attempt.\nRepair attempts: 2 of 2 permitted\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nThe branch and worktree are preserved; the failing check below needs a replan or a reassignment.\nFailing check: exit 1 (exit 1)",
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "changes": {
-      "files": "?? feature.txt"
+      "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
+      "files": "A feature.txt"
     },
     "check_failure": {
       "command": "exit 1",
@@ -79,6 +81,7 @@
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
     "failure": "verification failed after 2 of 2 permitted attempt(s): exit 1 exited with 1",
+    "harness_commit": "\u003ccommit-2\u003e",
     "last_sequence": 6,
     "phase": "checking",
     "product_id": "yoyodyne",
@@ -141,7 +144,10 @@
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
         "Changes when the run ended:",
-        "?? feature.txt"
+        "A feature.txt",
+        "Diff stat when the run ended:",
+        "feature.txt | 1 +",
+        " 1 file changed, 1 insertion(+)"
       ]
     ],
     "blocker": [

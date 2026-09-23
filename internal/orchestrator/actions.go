@@ -87,8 +87,10 @@ func deliverySteps() []deliveryStep {
 				// pull request exactly as candidate.publish does. A declaration that named
 				// only what the function's own body reaches would understate the authority
 				// this action actually needs, which is the one thing the registry exists
-				// to state truthfully. The repository read is the change summary
-				// recordDevelopment takes of what the invocation produced.
+				// to state truthfully. The worktree write is both the commit every
+				// invocation's work is recorded in and the publishing one above it; the
+				// repository read is the change summary recordDevelopment takes of what
+				// the invocation produced.
 				Capabilities: []capability.Capability{
 					capability.ProviderInvoke,
 					capability.RepositoryRead,
@@ -110,7 +112,7 @@ func deliverySteps() []deliveryStep {
 		{
 			action: action.Action[*activeRun]{
 				Name:    "candidate.publish",
-				Summary: "commit what the attempt produced, push the run branch, and open or update its pull request",
+				Summary: "push the run branch the attempt was committed on, and open or update its pull request",
 				Wraps:   "(*activeRun).publishAttempt",
 				Capabilities: []capability.Capability{
 					capability.WorktreeMutate,

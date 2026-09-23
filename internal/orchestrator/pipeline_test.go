@@ -105,7 +105,7 @@ func TestPipelineEndToEndWithFakeBackend(t *testing.T) {
 	if outcome.Status != runstate.StatusSucceeded || outcome.Branch == "" || outcome.WorktreePath == "" || outcome.BaseCommit == "" || outcome.ProviderSessionID != "session-1" {
 		t.Fatalf("Run() outcome = %#v", outcome)
 	}
-	if !strings.Contains(outcome.Changes.Status, "?? feature.txt") {
+	if !strings.Contains(outcome.Changes.Status, "A feature.txt") {
 		t.Fatalf("change summary = %#v", outcome.Changes)
 	}
 	if !tracker.claimed || !strings.Contains(tracker.notes, "bootstrap run succeeded") || strings.Contains(tracker.notes, "closed") {
@@ -122,7 +122,7 @@ func TestPipelineEndToEndWithFakeBackend(t *testing.T) {
 	// this process happens to be holding. It has to be: the worktree it
 	// describes is removed when the run is cleaned up, and a change nobody
 	// recorded is one nobody can be shown afterwards.
-	if state.Changes == nil || !strings.Contains(state.Changes.Files, "?? feature.txt") {
+	if state.Changes == nil || !strings.Contains(state.Changes.Files, "A feature.txt") {
 		t.Fatalf("recorded changes = %#v, want the account of what the run changed", state.Changes)
 	}
 	events, err := store.LoadEvents(outcome.RunID)
@@ -267,7 +267,7 @@ func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	if !strings.Contains(tracker.notes, "bootstrap run failed") || !strings.Contains(tracker.notes, outcome.RunID) {
 		t.Fatalf("failure notes = %q", tracker.notes)
 	}
-	if !strings.Contains(tracker.notes, "?? partial.txt") {
+	if !strings.Contains(tracker.notes, "A partial.txt") {
 		t.Fatalf("failure notes did not include preserved changes: %q", tracker.notes)
 	}
 	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "partial.txt")); err != nil {
@@ -394,10 +394,10 @@ func TestPipelineCapturesChangesWhenBackendReturnsInfrastructureError(t *testing
 	if err == nil || !strings.Contains(err.Error(), "developer backend failed") {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !strings.Contains(outcome.Changes.Status, "?? partial.txt") {
+	if !strings.Contains(outcome.Changes.Status, "A partial.txt") {
 		t.Fatalf("Run() change summary = %#v", outcome.Changes)
 	}
-	if !strings.Contains(tracker.notes, "Changes when the run ended:\n?? partial.txt") {
+	if !strings.Contains(tracker.notes, "Changes when the run ended:\nA partial.txt") {
 		t.Fatalf("failure notes omitted the change the run had made: %q", tracker.notes)
 	}
 	// The change is only worth naming because somebody can go and get it, and the
@@ -1822,6 +1822,129 @@ func TestPipelineReturnsFindingsToTheSameDeveloperUntilOneAttemptIsApproved(t *t
 	}
 }
 
+// recordingReviewer keeps the evidence each round was reviewed against, and
+// hands the review on unchanged. What it is for is the one fact no assertion
+// after the run can recover: the evidence of a round that has been superseded by
+// the next one.
+type recordingReviewer struct {
+	reviewer ChangeReviewer
+	evidence []gitworktree.ChangeDiff
+}
+
+func (r *recordingReviewer) Review(ctx context.Context, request review.Request) (review.Result, error) {
+	r.evidence = append(r.evidence, request.Changes)
+	return r.reviewer.Review(ctx, request)
+}
+
+// A repair round is reviewed against the round's own change, and the evidence
+// says so at the grain the evidence is bound to: the tip commit.
+//
+// Everything the reviewer is shown is measured against the base commit, so a
+// change left in the working tree reaches it either way — which is why this went
+// unnoticed. What did not reach it was the tip: the branch a publishing run
+// pushes, the commits a reviewer is told the patch spans, and the tip the
+// verdict is recorded against all named a commit from before the round. On
+// run-f3755e3f the branch tip sat at the repair-3 commit d18d295 through four
+// further invocations, its developer reporting that both findings were fixed in
+// a worktree HEAD did not carry.
+func TestPipelineReviewsARepairRoundAgainstATipThatCarriesIt(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		content := "incomplete\n"
+		if attempts > 1 {
+			content = "implemented\n"
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte(content), 0o600)
+	}, repairVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+	recorder := &recordingReviewer{reviewer: pipeline.Reviewer}
+	pipeline.Reviewer = recorder
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.RepairAttempts != 1 || outcome.Integration == nil {
+		t.Fatalf("Run() outcome = %#v, want one repair round promoted", outcome)
+	}
+	if len(recorder.evidence) != 2 {
+		t.Fatalf("reviews = %d, want the first attempt and its repair", len(recorder.evidence))
+	}
+	first, repair := recorder.evidence[0], recorder.evidence[1]
+
+	// Each round's tip is a commit, and the two are different commits: a repair
+	// reviewed at the tip its predecessor was reviewed at is a repair judged on
+	// the code it replaced.
+	if first.HeadCommit == "" || first.HeadCommit == first.BaseCommit {
+		t.Fatalf("the first round was reviewed at %q against base %q, want its own commit", first.HeadCommit, first.BaseCommit)
+	}
+	if repair.HeadCommit == first.HeadCommit {
+		t.Fatalf("the repair round was reviewed at %q, the tip its first attempt was reviewed at", repair.HeadCommit)
+	}
+	// And each tip carries that round's change, which is the whole of the claim.
+	if shown := gitLine(t, repository, "show", first.HeadCommit+":feature.txt"); shown != "incomplete" {
+		t.Errorf("the first round's tip carries %q, want the attempt the reviewer sent back", shown)
+	}
+	if shown := gitLine(t, repository, "show", repair.HeadCommit+":feature.txt"); shown != "implemented" {
+		t.Errorf("the repair round's tip carries %q, want the repair the round made", shown)
+	}
+	// The promoted commit is the tip the approving verdict was given, rather than
+	// a commit made after it out of a worktree nobody reviewed.
+	if outcome.Integration.SourceCommit != repair.HeadCommit {
+		t.Errorf("promoted %q, want the tip the approval was recorded against (%q)", outcome.Integration.SourceCommit, repair.HeadCommit)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.ReviewHeadCommit != repair.HeadCommit {
+		t.Errorf("the record names %q as what was reviewed, want the repair round's tip %q", state.ReviewHeadCommit, repair.HeadCommit)
+	}
+}
+
+// A round the harness cannot commit never reaches the checks or the reviewer.
+// Both of those judge the worktree and are recorded against a tip commit, so a
+// tip that is not the round's is how an approval comes to authorize a change
+// nobody read — which makes a commit that refuses the end of the round rather
+// than something to carry on past.
+func TestPipelineFailsARoundItCannotCommit(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+	pipeline.Worktrees = refusingCommitWorktrees{WorktreeManager: pipeline.Worktrees}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "commit what the developer attempt left in the worktree") {
+		t.Fatalf("Run() error = %v, want the round failed on the commit", err)
+	}
+	if outcome.Integration != nil || tracker.closed {
+		t.Fatalf("a round that was never committed reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 0 {
+		t.Fatalf("reviewer invocations = %d, want none: the round ended at the commit", reviews)
+	}
+}
+
+// refusingCommitWorktrees is the real manager with the attempt's commit refused,
+// which is the one failure this pipeline has no other way to produce: the commit
+// is the harness's own Git write, and everything that would make it fail is
+// outside the repository.
+type refusingCommitWorktrees struct{ WorktreeManager }
+
+func (refusingCommitWorktrees) CommitAttempt(context.Context, gitworktree.Worktree, string) (string, error) {
+	return "", errors.New("the object store is read-only")
+}
+
 func TestPipelineBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 
@@ -3170,6 +3293,10 @@ func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree
 }
 
 func (partialWorktreeManager) CurrentExports() []string { return nil }
+
+func (partialWorktreeManager) CommitAttempt(context.Context, gitworktree.Worktree, string) (string, error) {
+	return "", errors.New("partial worktree cannot be committed")
+}
 
 func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
@@ -5866,8 +5993,11 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	if len(heads) != 2 {
 		t.Fatalf("check runs = %d (%v), want the checks run again after the replay", len(heads), heads)
 	}
-	if heads[0] != base {
-		t.Fatalf("first check ran against %q, want the original base %q", heads[0], base)
+	// The first check ran on the commit the developer's attempt was recorded in,
+	// which sits directly on the base the run was cut at: what it judged is the
+	// change as it stood before the replay.
+	if parent := gitLine(t, repository, "rev-parse", heads[0]+"^"); parent != base {
+		t.Fatalf("first check ran against %q, whose parent is %q, want a commit on the original base %q", heads[0], parent, base)
 	}
 	if heads[1] != outcome.Integration.SourceCommit {
 		t.Fatalf("second check ran against %q, want the replayed commit that was promoted %q", heads[1], outcome.Integration.SourceCommit)
@@ -6106,14 +6236,19 @@ func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
 	if state.Integration != nil || state.IntegrationRetries != 0 {
 		t.Fatalf("state = %#v", state)
 	}
-	// This promotion was refused before it committed anything, so the change is
-	// still uncommitted and the worktree is still at the HEAD the run recorded.
-	// Nothing about the ownership rule is loosened by the refusal.
-	if state.HarnessCommit != "" {
-		t.Fatalf("a promotion that never committed recorded a harness commit: %q", state.HarnessCommit)
+	// This promotion was refused before it committed anything, so the worktree is
+	// still at the commit the developer's attempt was recorded in and the record
+	// still names it. Nothing about the ownership rule is loosened by the refusal:
+	// the one commit above the base is the attempt's, and the promotion added
+	// none of its own.
+	if state.HarnessCommit == "" {
+		t.Fatalf("the developer attempt recorded no harness commit: %#v", state)
 	}
-	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.BaseCommit {
-		t.Fatalf("worktree HEAD = %q, want the recorded base %q", head, state.BaseCommit)
+	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
+		t.Fatalf("worktree HEAD = %q, want the attempt's recorded commit %q", head, state.HarnessCommit)
+	}
+	if parent := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD^"); parent != state.BaseCommit {
+		t.Fatalf("worktree HEAD^ = %q, want the recorded base %q: the refused promotion committed something of its own", parent, state.BaseCommit)
 	}
 }
 

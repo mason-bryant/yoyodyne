@@ -2170,6 +2170,58 @@ func (m *Manager) contains(ctx context.Context, commit, branch string) (bool, er
 	return result.Status == execution.ProcessSucceeded, nil
 }
 
+// CommitAttempt records whatever one developer invocation left in the worktree
+// as a harness-owned commit, and reports the commit the branch stands at
+// afterwards. It is the local half of what PublishBranch used to do on its own,
+// separated from the push because committing is what every run does and pushing
+// is what a publishing one does: a local project's branch tip lagged its
+// worktree by a whole run, and a publishing one lagged it by every invocation
+// the provider did not end cleanly.
+//
+// A worktree holding nothing above its base is ErrNoChanges, the same answer
+// PublishBranch gives: an invocation that wrote nothing has nothing to record,
+// which is not a failure. A worktree that is clean above a commit the harness
+// already made is not that — the commit is reported, because the branch does
+// carry the attempt.
+func (m *Manager) CommitAttempt(ctx context.Context, worktree Worktree, message string) (string, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = defaultCommitMessage(worktree)
+	}
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
+	if err != nil {
+		return "", err
+	}
+	dirty, err := m.isDirty(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if !dirty {
+		if head == worktree.BaseCommit {
+			return "", ErrNoChanges
+		}
+		return head, nil
+	}
+	commit, err := m.commitWorktree(ctx, path, message)
+	// A dirty worktree with nothing stageable in it — the exports the manager
+	// holds out of the change are the case — is the branch as it already stands
+	// rather than a failure, and it is ErrNoChanges only where the branch stands
+	// at its base.
+	if errors.Is(err, ErrNoChanges) {
+		if head == worktree.BaseCommit {
+			return "", ErrNoChanges
+		}
+		return head, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if commit == worktree.BaseCommit {
+		return "", ErrNoChanges
+	}
+	return commit, nil
+}
+
 // Integrate promotes an already checked and approved worktree into its
 // recorded target branch. The harness owns every Git write here: it commits
 // whatever the developer left uncommitted, revalidates the target, and advances

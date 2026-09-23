@@ -181,10 +181,10 @@ harness.
 
 | Phase | What it does | What it writes |
 | --- | --- | --- |
-| `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first | `provider_session_id`, `provider_model`, `provider_resolved_model`, `changes`, `last_sequence`, `verification` |
+| `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first, and a harness commit of whatever it left there | `provider_session_id`, `provider_model`, `provider_resolved_model`, `harness_commit`, `changes`, `last_sequence`, `verification` |
 | `checking` | The protected-path gate first, then the execution-evidence gate, then every configured check in order | `path_refusal`, the `verification` record's `owed`, or `check_failure` while one is outstanding, and clears the others when a gate passes |
 | `reviewing` | One independent review invocation, its own session, no tools, shown the branch's whole diff against the run's recorded base | `review_session_id`, `review_model`, `review_resolved_model`, `review_base_commit`, `review_head_commit`, `review_decision`, `review_approves`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
-| `integrating` | Under the target branch's promotion lease: commit, fast-forward the local target, publish and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
+| `integrating` | Under the target branch's promotion lease: fast-forward the local target onto the branch tip the developer's attempts were committed at, and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
 | `completing` | Record the outcome on the item, settle it — closed when the change discharges the item, back in the backlog parked or waiting on a named impediment when it does not — price it | the tracker's record and settlement |
 | `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
 | `complete` | Nothing outstanding | `completed_at` |
@@ -741,7 +741,12 @@ them.
   One state is missing from the definitions and is worth knowing about before
   reading one as the pipeline. There is no `publish` state, because
   `candidate.develop` ends by calling `publishAttempt` — a definition selecting
-  `candidate.publish` beside it would publish every attempt twice.
+  `candidate.publish` beside it would publish every attempt twice. There is no
+  `commit` state either, and for a stronger reason: the commit is not something a
+  sequence may order or omit. `candidate.develop` makes one of whatever each
+  invocation left in the worktree, before it decides what became of the
+  invocation, so a round whose change the branch tip does not carry cannot be
+  arranged.
 
 **Not observable in these scenarios.**
 

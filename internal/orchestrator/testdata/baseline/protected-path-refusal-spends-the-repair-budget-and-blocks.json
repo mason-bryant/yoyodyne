@@ -12,7 +12,8 @@
         "branch": "yoyodyne/yoyodyne-task/01234567",
         "branch_removed": false,
         "changes": {
-          "status": "?? docs/designs/delivery.md\n?? docs/product/brief.md\n?? feature.txt"
+          "diff_stat": "docs/designs/delivery.md | 1 +\n docs/product/brief.md    | 1 +\n feature.txt              | 1 +\n 3 files changed, 3 insertions(+)",
+          "status": "A docs/designs/delivery.md\nA docs/product/brief.md\nA feature.txt"
         },
         "failure": "protected paths refused after 2 of 2 permitted attempt(s): docs/designs/delivery.md, docs/product/brief.md",
         "phase": "checking",
@@ -55,11 +56,13 @@
     "blocker": "Yoyodyne stopped this item: its change kept touching paths the work item does not grant, after every permitted attempt.\nRepair attempts: 2 of 2 permitted\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nThe branch and worktree are preserved. Either the change reaches outside this item, or this item is missing a grant it should have had; the grant belongs in the item's own text.\nRefused paths: docs/designs/delivery.md, docs/product/brief.md\nProtected by this project: .yoyodyne, docs/decisions, docs/decisions/invariants, docs/designs, docs/product\nGranted by this work item: nothing",
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "changes": {
-      "files": "?? docs/designs/delivery.md\n?? docs/product/brief.md\n?? feature.txt"
+      "diff_stat": "docs/designs/delivery.md | 1 +\n docs/product/brief.md    | 1 +\n feature.txt              | 1 +\n 3 files changed, 3 insertions(+)",
+      "files": "A docs/designs/delivery.md\nA docs/product/brief.md\nA feature.txt"
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
     "failure": "protected paths refused after 2 of 2 permitted attempt(s): docs/designs/delivery.md, docs/product/brief.md",
+    "harness_commit": "\u003ccommit-2\u003e",
     "last_sequence": 0,
     "path_refusal": {
       "paths": [
@@ -121,9 +124,14 @@
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
         "Changes when the run ended:",
-        "?? docs/designs/delivery.md",
-        "?? docs/product/brief.md",
-        "?? feature.txt"
+        "A docs/designs/delivery.md",
+        "A docs/product/brief.md",
+        "A feature.txt",
+        "Diff stat when the run ended:",
+        "docs/designs/delivery.md | 1 +",
+        " docs/product/brief.md    | 1 +",
+        " feature.txt              | 1 +",
+        " 3 files changed, 3 insertions(+)"
       ]
     ],
     "blocker": [

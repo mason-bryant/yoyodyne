@@ -10,7 +10,8 @@
         "branch": "yoyodyne/yoyodyne-task/01234567",
         "branch_removed": false,
         "changes": {
-          "status": "?? partial.txt"
+          "diff_stat": "partial.txt | 1 +\n 1 file changed, 1 insertion(+)",
+          "status": "A partial.txt"
         },
         "paused": true,
         "phase": "developing",
@@ -45,7 +46,8 @@
         "branch": "yoyodyne/yoyodyne-task/01234567",
         "branch_removed": true,
         "changes": {
-          "status": "?? feature.txt\n?? partial.txt"
+          "diff_stat": "feature.txt | 1 +\n partial.txt | 1 +\n 2 files changed, 2 insertions(+)",
+          "status": "A feature.txt\nA partial.txt"
         },
         "checks": [
           {
@@ -76,7 +78,7 @@
         "review_approves": "implementation",
         "review_base_commit": "\u003ccommit-1\u003e",
         "review_decision": "approve",
-        "review_head_commit": "\u003ccommit-1\u003e",
+        "review_head_commit": "\u003ccommit-2\u003e",
         "review_model": "opus",
         "review_resolved_model": "claude-opus-5-reviewer",
         "review_session_id": "reviewer-session",
@@ -110,10 +112,12 @@
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "branch_removed": true,
     "changes": {
-      "files": "?? feature.txt\n?? partial.txt"
+      "diff_stat": "feature.txt | 1 +\n partial.txt | 1 +\n 2 files changed, 2 insertions(+)",
+      "files": "A feature.txt\nA partial.txt"
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
+    "harness_commit": "\u003ccommit-2\u003e",
     "integration": {
       "previous_target_commit": "\u003ccommit-1\u003e",
       "source_commit": "\u003ccommit-2\u003e",
@@ -130,7 +134,7 @@
     "review_approves": "implementation",
     "review_base_commit": "\u003ccommit-1\u003e",
     "review_decision": "approve",
-    "review_head_commit": "\u003ccommit-1\u003e",
+    "review_head_commit": "\u003ccommit-2\u003e",
     "review_model": "opus",
     "review_resolved_model": "claude-opus-5-reviewer",
     "review_rounds": 1,
@@ -196,12 +200,16 @@
         "Claude session: developer-session",
         "Developer model: opus (resolved: claude-opus-5-developer)",
         "Changes:",
-        "?? feature.txt",
-        "?? partial.txt",
+        "A feature.txt",
+        "A partial.txt",
+        "Diff stat:",
+        "feature.txt | 1 +",
+        " partial.txt | 1 +",
+        " 2 files changed, 2 insertions(+)",
         "Check: test -f feature.txt (passed=true, exit=0, \u003celapsed\u003e of 30m0s)",
         "Reviewer session: reviewer-session",
         "Reviewer model: opus (resolved: claude-opus-5-reviewer)",
-        "Reviewed against: base \u003ccommit-1\u003e, tip \u003ccommit-1\u003e",
+        "Reviewed against: base \u003ccommit-1\u003e, tip \u003ccommit-2\u003e",
         "Review decision: approve",
         "Approved as: implementation",
         "Review summary: the change matches the acceptance criteria",

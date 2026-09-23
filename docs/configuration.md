@@ -4393,10 +4393,10 @@ on replay, which reached no verdict and leaves the approval standing on the
 stopped run for the conflict path to re-enter through. What bounds a developer
 that delivers nothing is the run's own repair budget, exactly as it bounds a
 trivial residue. Whether a diff is empty is measured against the run's recorded
-base commit, not against what happens to be uncommitted: under
-`approvals.publishing: automatic` the harness commits each attempt before the
-reviewer sees it, so a published change judged with a clean status is a change
-that was present, and a repair verdict on it spends a round
+base commit, not against what happens to be uncommitted: the harness commits
+each attempt before the reviewer sees it, whatever `approvals.publishing` says,
+so a committed change judged with a clean status is a change that was present,
+and a repair verdict on it spends a round
 ([the counters of the first such run](diagnoses/yoyodyne-ifd-399-empty-diff-rule-is-base-relative.md)
 say so).
 
