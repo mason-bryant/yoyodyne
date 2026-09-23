@@ -18,7 +18,12 @@ the nine headings it has never seen, and it goes where its parent goes. Merge
 and removal semantics, which this guide's row once carried, moved to
 setup.md in the map's reconciliation and is not here.
 
-Size: 322 lines against the map's 226-line budget; the sections themselves
+Extracted from docs/configuration.md as it stands on the target branch rather
+than on this branch's base commit. Nothing on the target branch has changed
+either of this guide's two sections since the base, so the two copies agree
+here whichever one is read.
+
+Size: 326 lines against the map's 226-line budget; the sections themselves
 grew after the map's counts were taken.
 -->
 # Configuring publishing, branches, and promotion
@@ -319,4 +324,3 @@ carries the change that would actually be promoted. That is the same
 compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
-

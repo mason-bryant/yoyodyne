@@ -29,16 +29,33 @@ configuration.md becomes the index in 117.4.
 
 Scope against docs/docs-map.md: both sections the map's disposition table
 assigns this guide — Checks and Scheduling ready work — with their children.
-Three of those children have no row of their own, because the table was last
-reconciled on 2026-08-24 and the file has grown since: What a check leaves
-running, The environment a check runs in, and A developer slot that prefers a
-label each sit under a section that has a row, so each goes where its parent
-goes, and the map already names the second among the nine headings it has
-never seen. Running a work item against the workflow definition, which follows
-Scheduling ready work in configuration.md, has no row and is nobody's child,
-so it stays there.
+Four of those children have no row of their own, because the table was last
+reconciled on 2026-08-24 and the file has grown since: What a developer has to
+have run, What a check leaves running, The environment a check runs in, and A
+developer slot that prefers a label each sit under a section that has a row, so
+each goes where its parent goes, and the map already names the third among the
+nine headings it has never seen. Running a work item against the workflow
+definition, which follows Scheduling ready work in configuration.md, has no row
+and is nobody's child, so it stays there.
 
-Size: 671 lines against the map's 343-line budget; the sections themselves
+Extracted from docs/configuration.md as it stands on the target branch rather
+than on this branch's base commit. The base predates yoyodyne-ifd.184,
+yoyodyne-ifd.261, and yoyodyne-ifd.441, so the copy of configuration.md in this
+worktree is older than what is extracted here and lacks What a developer has to
+have run, the paragraph saying two items merely filed under one epic are not
+racing, and brake_escalation_cycles with the bound on the brake loop; reading
+the two side by side in the worktree shows that gap rather than a divergence
+this guide introduced. On the target branch the two agree.
+
+One consequence, and it is the only place this guide's words are not
+configuration.md's. The brake-escalation paragraph links "one direct message"
+to reporting.md#a-brake-hold-the-harness-escalates, a heading yoyodyne-ifd.441
+added to docs/reporting.md — present on the target branch, absent from this
+base, so the link resolves to nothing here and fails the doclink check that
+make test runs. It is named in prose instead of linked. Whoever next edits
+this section on a base that carries that heading should restore the link.
+
+Size: 765 lines against the map's 343-line budget; the sections themselves
 grew after the map's counts were taken.
 -->
 # Configuring checks, scheduling, and what a run may spend
@@ -95,6 +112,55 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+### What a developer has to have run
+
+The checks above are what the harness runs. What a developer has to have run
+itself is decided from them, and it is asked for rather than assumed: every
+developer's reply records the commands it executed, and the harness refuses a
+change that records none before it spends a suite on it.
+
+Two things are asked, and only the first is universal.
+
+- **The probe.** One execution of a declared check, or of the build step
+  underneath it, made in the worktree before anything is changed. Every run is
+  asked for it whatever the work turns out to be, and what it answers is whether
+  commands run here rather than whether they pass. A probe the developer records
+  as `refused` — the command never started — ends the run naming what refused,
+  because nothing a developer does to its change fixes an environment that
+  cannot spawn a process. A probe recorded as `failed` is the opposite finding:
+  the environment works and something else is red, usually the commit the run
+  was cut from, so the run carries on and the configured checks report the
+  failure with the repair loop behind them.
+- **The check run.** The developer's own record of running a check against the
+  change it is handing over. This is asked only of a change the declared checks
+  would actually read: a change to content nothing here checks submits on the
+  probe alone. Demanding a suite run for a change the suite never reads teaches
+  padding rather than verification, which is why the line is drawn rather than
+  the bar raised.
+
+What belongs in the `detail` of anything but a pass is the message the command
+itself printed, rather than a paraphrase of it, because a tool that refuses
+often says how to stop refusing and that sentence is the whole value of the
+record. The class this was written for is already closed from the other side:
+the Go build cache defaults under the user's home, which a run's sandbox does
+not grant, and the harness points `GOCACHE` at `.git/yoyodyne/go-build` for
+every run it makes — the developer's own probe included, as
+[the environment a check runs in](#the-environment-a-check-runs-in) describes.
+An environment the harness did not make is the project's own to warn about, and
+this repository's `make` targets refuse with the redirect named; a developer
+copying that refusal into the `detail` puts the fix in the run's record rather
+than leaving the next reader to rediscover it.
+
+Which files the checks read is a mechanical question rather than a developer's
+judgement, and the answer comes from the checks themselves. This repository
+keeps a ledger of what it is made of — every content class, and for each one
+either the declared checks that exercise it or why nothing does — and the bar is
+read off that, so a class that gains or loses coverage moves what is asked of a
+developer without anything else being edited. The ledger is consulted only for a
+project that declares the checks it was written against; a project with checks
+of its own is asked for the record on every change, which is the stricter of the
+two answers and the one that costs nothing to be wrong about.
 
 ### What a check leaves running
 
@@ -312,7 +378,12 @@ integration. A child covers whether it is queued, blocked, or already claimed,
 and the container is ordinary work again once its last unfinished child leaves
 the backlog. And an item that would race work already in flight is sequenced
 behind it rather than started beside it, named with the run it would have raced
-and what the two share — the siblings of one epic, or overlapping files. That one
+and what the two share — the epic one of them was broken out of and the other
+is, or overlapping files. Two items merely filed under one epic are not racing:
+an epic is as often a heading as it is one piece of work broken into several,
+nothing tells the two apart from the outside, and holding every child of a
+heading behind whichever started first serializes the queue rather than
+declining a race. That one
 is a wait rather than a refusal: the conflicts are re-read at every pull from
 what is actually in flight, so the item is pulled at the first pull where the run
 it would have raced has ended, and the slot the hold freed is spent on the next
@@ -465,6 +536,7 @@ execution:
   work_poll: 60s                       # the default
   blocked_runs_before_intake_hold: 3   # the default
   brake_cooldown: 30m                  # the default
+  brake_escalation_cycles: 4           # the default: two hours at that cooldown
 ```
 
 Nothing else about the pass changes, and nothing needed to. Every pull re-reads
@@ -549,7 +621,8 @@ which is what happened on 2026-09-17 over an expired login, again on
 2026-09-19 when two of the three stops that tripped it were environmental, and
 again on 2026-09-21 when all three were one diverged target.
 
-**The brake's hold does not wait on you.** She decides what happens to it — to
+**The brake's hold does not wait on you while the harness is still working
+it.** She decides what happens to it — to
 release it, to keep it and probe the line, or to escalate it to you — and the
 watching session acts on the decision at its next poll. `brake_cooldown` is how
 long the brake waits for that decision before it decides on evidence instead:
@@ -558,13 +631,33 @@ the hold, and the probe landing reopens intake while the probe blocking keeps it
 held, restarts the cooldown, and summons her again with the probe's own
 stoppage beside the three. So a broken machine is probed once per cooldown and
 put to her each time, and a machine that was fine is choosing again within a
-cooldown of the trip whether or not anybody answered. The one brake hold that
-waits on a person is one she escalated. `yoyo release` and the conversation's
-`/release` still lift any of them sooner. Thirty minutes is the default: a
-summoned turn is minutes, so that is several answers' worth of slack, and a
-summons the provider refused costs the line half an hour rather than the two
-hours the 2026-09-19 trip cost it. Zero waits for her summoned turn and no
-longer.
+cooldown of the trip whether or not anybody answered. Thirty minutes is the
+default: a summoned turn is minutes, so that is several answers' worth of
+slack, and a summons the provider refused costs the line half an hour rather
+than the two hours the 2026-09-19 trip cost it. Zero waits for her summoned
+turn and no longer.
+
+**And the loop that makes has a bound.** On a machine that stays broken, each
+blocked probe summons her again and restarts the cooldown, so the brake goes
+round — one of her turns and one probe run per cooldown — and before the bound
+nothing about it got louder unless she escalated it. `brake_escalation_cycles`
+is how many of those summons-and-probe cycles the harness goes round before it
+escalates the hold to you itself: the cycle that reaches it is not put to her
+again, no further probe starts, and you are sent one direct message — the
+reporting guide's "A brake hold the harness escalates" — tagged
+by member id, naming the cycles spent and what stopped the last probe. It is a
+count of cycles rather than a length of time because the loop is what it
+bounds; what it comes to in hours is the cooldown times it, and the default of
+four is two hours at the default cooldown — the same bar the heartbeat raises a
+stopped line to critical at. Every summons names which cycle it is and at what
+cycle the harness stops asking, so she can escalate sooner herself. A hold the
+harness escalated is still hers to release if the line turns out to be fine; a
+probe decision on it is refused, because the bound ended the loop. Zero never
+escalates on its own, which is the loop as it stood before the bound existed.
+
+So a brake hold waits on a person only once it is escalated, by her or by the
+harness at that bound. `yoyo release` and the conversation's `/release` still
+lift any of them sooner.
 
 The hold records which of you placed it, and everything that reports one says
 so: "the harness's own brake placed it after 3 run(s) blocked in a row with
@@ -651,9 +744,11 @@ changing them under a running developer would mean a run judged by rules it was
 never started under.
 
 A watching session is the same answer said again: `work_poll`,
-`blocked_runs_before_intake_hold`, and `brake_cooldown` are re-read at every
-pull too, so an interval you shorten or a brake you loosen takes effect at the
-next wait rather than at the next restart.
+`blocked_runs_before_intake_hold`, `brake_cooldown`, and
+`brake_escalation_cycles` are re-read at every pull too, so an interval you
+shorten or a brake you loosen takes effect at the next wait rather than at the
+next restart, and a bound you tighten under a standing loop is heard at the
+next probe.
 
 ### Why each run says why it was there
 
@@ -668,4 +763,3 @@ exactly like work happening behind your back, and holding intake — which stops
 having only if the thing that chooses actually consults it. Both halves are
 enforced rather than conventional: an item you name yourself is exempt from the
 hold, because naming it is you deciding it is the exception.
-

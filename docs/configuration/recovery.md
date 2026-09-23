@@ -23,7 +23,14 @@ children have no row of their own, because the table was last reconciled on
 alternate model and Pinning an agent to a model version both sit under Waiting
 out a provider that refuses, so both go where their parent goes.
 
-Size: 1292 lines against the map's 513-line budget; the sections themselves
+Extracted from docs/configuration.md as it stands on the target branch rather
+than on this branch's base commit. The base predates yoyodyne-ifd.428.8, so the
+copy of configuration.md in this worktree is older than what is extracted here
+and lacks the give-back paragraph under Triage thresholds; reading the two side
+by side in the worktree shows that gap rather than a divergence this guide
+introduced. On the target branch the two agree.
+
+Size: 1311 lines against the map's 513-line budget; the sections themselves
 grew after the map's counts were taken, Triage thresholds most of all.
 -->
 # Configuring triage thresholds and provider waits
@@ -668,8 +675,20 @@ and lifting it and asking again carries out the same decision — rather than
 meeting the once-only guard for a run nobody ever made. Two of the four are read
 before the claim as well, which is not the same question twice: that reading
 keeps a harness already held from spending anything, and this covers one that
-arrives while the claim is being taken. A claim carrying a run is never given
-back, whatever became of that run.
+arrives while the claim is being taken.
+
+**A fresh run the environment refused before any agent of it ran gives the claim
+back as well**, and it is the one give-back on the far side of the reservation. A
+worktree whose checkout the harness's own budget ended is the case it was built
+for: the run was reserved and its record says what stopped it, but no developer
+was invoked and no change was delivered, so the claim bought nothing. Both halves
+come off the run's own record rather than from anybody's word for it — the
+refusing site writes that nothing of the round ran, because it is the only thing
+that can know, and the run's settle marks the round refused only once it has
+proved the round delivered nothing. Every other claim carrying a run stands and
+is settled like any other, whatever became of that run, including one whose round
+the settle could not classify: a claim given back twice is one decision starting
+two runs.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
@@ -680,8 +699,9 @@ not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
 deletes the record, for the reason nothing deletes a counter file — save the
-withdrawals above, which remove a claim whose fresh run the pipeline answered
-before it reserved anything, and which therefore never existed.
+withdrawals above, which remove a claim that provably bought nothing: one whose
+fresh run the pipeline answered before it reserved anything, and one whose fresh
+run the environment refused before any agent of it ran.
 
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say
@@ -1289,4 +1309,3 @@ overrides, and says how many of the item's five are spent:
 **It carries nothing out and buys nothing.** A crossing spends none of the
 budgets: it moves one cap, and the decision it makes recordable is still a
 decision he records afterwards, refused by everything it was always refused by.
-
