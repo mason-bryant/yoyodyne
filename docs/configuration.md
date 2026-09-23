@@ -2338,6 +2338,82 @@ pulled ahead of the item: the item waits on nothing about itself, and what
 takes it is the next slot with no preference to come free, or slot 1 once its
 label's work is exhausted.
 
+### A developer model chosen by the item's label
+
+The slot preference above says which work a seat pulls first. This says what
+that work costs to do. **Model spend follows the work rather than the role**: a
+documentation item and a change to the scheduler are both developer runs, and
+only one of them needs the developer's own model. `execution.developer_models`
+is how a project says so — the tracker's own labels, the ones
+[a slot prefers](#a-developer-slot-that-prefers-a-label), mapped to the model a
+run over such an item asks for:
+
+```yaml
+execution:
+  developer_models:
+    - label: docs
+      model: sonnet
+    - label: config
+      model: sonnet
+    - label: tests
+      model: sonnet
+```
+
+With that block, a run over an item labelled `docs` asks for `sonnet`, and an
+item carrying none of the three labels asks for the developer agent's own
+`model` exactly as every run did before the mapping existed. It is the
+operator's direction of 2026-09-19, taken off a seven-day reading in which
+developer runs on Opus were 64% of $1,431: the largest spend line is developer
+runs that do not all need the developer's model, and the label already says
+which do. The block is the operator's to paste into the project's own
+configuration by hand, because `.yoyodyne/` is a
+[protected path](#protected-paths-in-a-developers-change) no run may write, so
+a project whose file does not yet carry it runs every item on the developer's
+configured model.
+
+**One label per entry, and the order is the answer.** An item can carry two
+labels the mapping names, and what it takes is **the first entry in the
+mapping's own order** — the file's order, not the item's — so moving an entry
+up the list is how a project says which of two labels wins. That is why an
+entry names one label rather than a list: an entry preferring several would
+make "the first match" a question about which of *that entry's* labels matched
+first, which the file does not answer.
+
+**It is read once, when the run starts, and written onto the run.** The labels
+it is read against are the ones the item carried when it was pulled, which the
+run already records; the model it chose and **why it chose that one** are
+recorded beside them. Every developer invocation the run goes on to make — the
+first attempt, each repair, and anything a later process resumes — reads the
+model back off that record rather than resolving the mapping again, for the
+reason [the account](#pooling-work-across-several-accounts) is read back: a run
+that resolved it per invocation would move mid-flight the first time the file
+was edited under it. The reason is recorded for an unmapped item too, because
+an item nothing mapped and a mapping nobody read are two accounts of one model
+and only the record tells them apart.
+
+`yoyo status` names the model each running run is on as it always did, and the
+[cost log](#provider-accounts) records it per invocation, so what a kind of work
+costs is read off the same surfaces as before — a mapped run simply says
+`sonnet` where it used to say `opus`.
+
+**The reviewer's model is not reachable from here.** There is no key in this
+block that could name it, deliberately: a reviewer's posture is a safety
+property rather than a spend decision, and an independent verdict bought more
+cheaply is the one saving that costs the gate its meaning. The
+[account pool and the failover rules](#serving-a-turn-from-a-permitted-alternate-model)
+apply to a mapped run unchanged, and so does everything else — a run on a
+mapped model is claimed, developed, checked, reviewed, and promoted exactly as
+any run is, under the same contract and the same authority table. Configuration
+selects the model and never widens what a role may do.
+
+**What the file refuses.** A label the tracker would not carry — anything but
+one identifier-shaped word, the same rule a slot's preference is held to. A
+`model` that cannot name a model, held to the rule every other configured
+selector is. And a label mapped twice, because the first match in the order is
+what an item takes, so a second entry for one label is a mapping the operator
+believes is active and that nothing will ever reach. All three are refused when
+the configuration loads, before anything is claimed.
+
 ### Watching instead of draining
 
 `yoyo work` returns when nothing more is ready. `yoyo work --watch` does not: it
@@ -4720,6 +4796,10 @@ These are all errors, reported before any work is claimed:
   since a preference for a slot the capacity does not have is one nothing would
   act on; and a slot preferring a label the tracker would not carry — anything
   but one identifier-shaped word — or naming one label twice;
+- an `execution.developer_models` entry naming a label the tracker would not
+  carry, naming no usable model selector, or naming a label an earlier entry
+  already mapped — since the first match in the mapping's order is what an item
+  takes, so a second entry for one label is one nothing would ever reach;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;
