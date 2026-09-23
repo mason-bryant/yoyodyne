@@ -148,6 +148,14 @@ func ReadReply(reply string) (Reply, error) {
 // decodeSide strictly decodes the block payload. Unknown fields, trailing
 // content, and oversized input are refused rather than tolerated: what the main
 // thread is going to ratify has to be exactly what the side thread said.
+//
+// It validates what an agent just said rather than reading a durable record, so
+// it stays strict where the run-record listings became tolerant: the block was
+// written seconds ago by a role this build told what to write, and a key this
+// build does not know is a role that answered something other than what it was
+// asked. The refusal travels back to the caller as an error, beside the prose the
+// thread sent, so the turn is visibly unratified rather than ratified on half a
+// block.
 func decodeSide(payload string) (Reply, error) {
 	trimmed := strings.TrimSpace(payload)
 	if trimmed == "" {

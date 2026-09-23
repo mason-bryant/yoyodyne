@@ -376,6 +376,15 @@ func Extract(reply string) (prose string, result *Result, note string, err error
 // Decode strictly decodes the block payload. Unknown fields, trailing content,
 // and oversized input are refused rather than tolerated: what is written into a
 // durable report has to be exactly what the role wrote.
+//
+// This is a validator of what an agent just said rather than a reader of a
+// durable record, so the reasoning that made the run-record listings tolerant
+// does not reach it. There is no older build on the other side of this — the
+// block was written seconds ago, by a role this build told what to write — and a
+// key this build does not know is a role that answered something other than what
+// it was asked. The refusal reaches the caller as an error naming the block, and
+// the pass fails visibly rather than recording a sweep with part of the answer
+// in it.
 func Decode(payload string) (*Result, error) {
 	trimmed := strings.TrimSpace(payload)
 	if trimmed == "" {
