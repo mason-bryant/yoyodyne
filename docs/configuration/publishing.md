@@ -18,12 +18,13 @@ the nine headings it has never seen, and it goes where its parent goes. Merge
 and removal semantics, which this guide's row once carried, moved to
 setup.md in the map's reconciliation and is not here.
 
-Extracted from docs/configuration.md as it stands on the target branch rather
-than on this branch's base commit. Nothing on the target branch has changed
-either of this guide's two sections since the base, so the two copies agree
-here whichever one is read.
+Extracted from docs/configuration.md as main carries it (8c680f45), which for
+this guide is the same text as the copy in this worktree: nothing between this
+branch's base 5e62b9f2 and main touched either of the two sections below, so
+the two copies agree whichever one is read. The sibling guides runs.md and
+recovery.md are not in that position and say so in their own headers.
 
-Size: 326 lines against the map's 226-line budget; the sections themselves
+Size: 327 lines against the map's 226-line budget; the sections themselves
 grew after the map's counts were taken.
 -->
 # Configuring publishing, branches, and promotion

@@ -38,24 +38,37 @@ nine headings it has never seen. Running a work item against the workflow
 definition, which follows Scheduling ready work in configuration.md, has no row
 and is nobody's child, so it stays there.
 
-Extracted from docs/configuration.md as it stands on the target branch rather
-than on this branch's base commit. The base predates yoyodyne-ifd.184,
-yoyodyne-ifd.261, and yoyodyne-ifd.441, so the copy of configuration.md in this
-worktree is older than what is extracted here and lacks What a developer has to
-have run, the paragraph saying two items merely filed under one epic are not
-racing, and brake_escalation_cycles with the bound on the brake loop; reading
-the two side by side in the worktree shows that gap rather than a divergence
-this guide introduced. On the target branch the two agree.
+Extracted from docs/configuration.md as main carries it (8c680f45), not as the
+copy in this worktree carries it. This branch was cut from 5e62b9f2, which
+predates yoyodyne-ifd.184, yoyodyne-ifd.261, and yoyodyne-ifd.441, so the
+configuration.md beside this file is the older text: grep it here and "What a
+developer has to have run", "merely filed under one epic", and
+"brake_escalation_cycles" each return nothing, while all three are in
+`git show main:docs/configuration.md`. Reading the two side by side in this
+worktree therefore shows that gap and not a divergence this guide introduced;
+once this branch is merged, the two agree. Extracting the older text instead is
+what the previous revision of this guide did, and it is what review rejected:
+the guide is the copy that survives 117.4, so it has to match what
+configuration.md will say, not what this base froze.
 
 One consequence, and it is the only place this guide's words are not
-configuration.md's. The brake-escalation paragraph links "one direct message"
-to reporting.md#a-brake-hold-the-harness-escalates, a heading yoyodyne-ifd.441
-added to docs/reporting.md — present on the target branch, absent from this
-base, so the link resolves to nothing here and fails the doclink check that
-make test runs. It is named in prose instead of linked. Whoever next edits
-this section on a base that carries that heading should restore the link.
+configuration.md's. In main's text the brake-escalation paragraph below links
+"one direct message" to reporting.md#a-brake-hold-the-harness-escalates, a
+heading yoyodyne-ifd.441 added to docs/reporting.md in the same change. That
+heading is not in docs/reporting.md at this base, so the link cannot be made
+here: restored, it fails the doclink check inside make test, which reports
 
-Size: 765 lines against the map's 343-line budget; the sections themselves
+  docs/configuration/runs.md:660: it links to
+  "../reporting.md#a-brake-hold-the-harness-escalates", and docs/reporting.md
+  carries no heading with that anchor
+
+and the check is red until the link comes out again. configuration.md in this
+worktree does not carry that link either — it has none of the paragraph — so
+there is nothing here for the same link to be a defect in. It is named in prose
+instead. Whoever next edits this section on a base that carries the heading
+should restore the link.
+
+Size: 778 lines against the map's 343-line budget; the sections themselves
 grew after the map's counts were taken.
 -->
 # Configuring checks, scheduling, and what a run may spend

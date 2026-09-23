@@ -23,14 +23,17 @@ children have no row of their own, because the table was last reconciled on
 alternate model and Pinning an agent to a model version both sit under Waiting
 out a provider that refuses, so both go where their parent goes.
 
-Extracted from docs/configuration.md as it stands on the target branch rather
-than on this branch's base commit. The base predates yoyodyne-ifd.428.8, so the
-copy of configuration.md in this worktree is older than what is extracted here
-and lacks the give-back paragraph under Triage thresholds; reading the two side
-by side in the worktree shows that gap rather than a divergence this guide
-introduced. On the target branch the two agree.
+Extracted from docs/configuration.md as main carries it (8c680f45), not as the
+copy in this worktree carries it. This branch was cut from 5e62b9f2, which
+predates yoyodyne-ifd.428.8, so the configuration.md beside this file is the
+older text: grep it here for "the environment refused before any agent of it
+ran" and it returns nothing, while `git show main:docs/configuration.md` has it
+twice — the give-back paragraph under Triage thresholds and the withdrawal
+sentence that names it. Reading the two side by side in this worktree therefore
+shows that gap and not a divergence this guide introduced; once this branch is
+merged, the two agree.
 
-Size: 1311 lines against the map's 513-line budget; the sections themselves
+Size: 1314 lines against the map's 513-line budget; the sections themselves
 grew after the map's counts were taken, Triage thresholds most of all.
 -->
 # Configuring triage thresholds and provider waits
