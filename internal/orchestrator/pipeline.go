@@ -1732,6 +1732,52 @@ func resumesAnExistingChange(state runstate.State) bool {
 	}
 }
 
+// continuableStall reports a settled run whose provider the harness stopped
+// before anything was ever returned to its developer, with the session, branch,
+// and worktree it stopped in all still there.
+//
+// It is the one stoppage that is owed a continuation and carries no repair
+// input. The harness stops a provider that has gone silent or run out of its
+// total budget and leaves the run in flight to be continued; nothing continues
+// one on its own, so half an hour later the reconciling sweep settles it as an
+// environmental stop and dockets it. What that leaves is a run with a live
+// developer session, a worktree holding whatever the stopped attempt had
+// written, and no findings, failing check, or refused paths — so the repair
+// carry-out refused it for want of a repair input, and the only decision left
+// was a re-run, which discards both the session and the uncommitted work.
+//
+// A stall judges nothing, which is why the continuation it authorizes is not a
+// repair round: what the run is owed is the attempt the harness stopped it in,
+// resumed in the same session at the point it stalled.
+//
+// It is deliberately the exact complement of resumesAnExistingChange for a run
+// stopped mid-attempt, because the two have to agree: a continuation this
+// admitted and that gate then refused would spend the item's grant on a run the
+// pipeline stops at its first step. Every other phase is a run that completed a
+// developer attempt, and what the steps past it judge is the change that attempt
+// made.
+func continuableStall(state runstate.State) bool {
+	if state.Environmental == nil || state.Environmental.Cause != runstate.CauseProcessVanished {
+		return false
+	}
+	// An approved change the environment stopped is never this, however it
+	// stopped: what it needs is its integration resumed, which is the refusal
+	// continuableRepair already gives ahead of everything else.
+	if state.IntegrationStop != nil {
+		return false
+	}
+	if state.ProviderSessionID == "" {
+		return false
+	}
+	if state.WorktreePath == "" || state.Branch == "" || state.BaseCommit == "" || state.TargetBranch == "" {
+		return false
+	}
+	if state.WorktreeRemoved || state.BranchRemoved {
+		return false
+	}
+	return state.Phase == runstate.PhaseDeveloping && !handedBackRepair(state)
+}
+
 // owedARepair reports a stopped run a repair would continue rather than replace:
 // it ended on a blocker nobody has settled, a failure was returned to its
 // developer, and the branch it left still carries the change. All three are read
@@ -6080,8 +6126,21 @@ func durableFindings(findings []review.Finding) []runstate.Finding {
 // repair input that attempt was given: the refused paths, the failing check, or
 // the reviewer's findings. Anything else is left to reconciliation rather than
 // reconstructed from guesswork.
+//
+// A stalled attempt being carried on is the one run here with neither of the
+// last two, and the carry-out's own record is what says so. The harness stopped
+// such a run before anything was returned to its developer, so what it is owed
+// is the attempt it was making rather than another one, and the continuation
+// counts none — which leaves a run with a grant against it and no attempt, and
+// no repair input for the developing phase to recognize it by. What it is
+// recognized by instead is the continuation the carry-out recorded: the
+// environmental account of the stoppage is cleared as the re-entry is written,
+// because a run that is going again has not stopped.
 func resumableRepair(state runstate.State) bool {
-	if state.Status != runstate.StatusRunning || state.RepairAttempts == 0 {
+	if state.Status != runstate.StatusRunning {
+		return false
+	}
+	if state.RepairAttempts == 0 && !state.ContinuedStall() {
 		return false
 	}
 	if state.WorktreePath == "" || state.Branch == "" || state.BaseCommit == "" || state.TargetBranch == "" {
@@ -6092,7 +6151,7 @@ func resumableRepair(state runstate.State) bool {
 	}
 	switch state.Phase {
 	case runstate.PhaseDeveloping:
-		return handedBackRepair(state)
+		return handedBackRepair(state) || state.ContinuedStall()
 	case runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:

@@ -1362,10 +1362,15 @@ words it was recorded in — or, for a death that recorded none, the failure the
 run gave, labelled as what it is so nobody goes to the item for words nobody
 wrote there — the reviewer's own findings, the check that was
 failing and what it printed, the branch and worktree that were preserved and
-whether they still exist, what the forge says about the merge, and the counters
+whether they still exist, the developer session the run was working in, what the
+forge says about the merge, and the counters
 saying how many review rounds the item has accumulated against the configured
 cap and what a repair grant would be worth. A decision made without those last
-ones is a decision the cap then contradicts.
+ones is a decision the cap then contradicts. The session is on the entry because
+a decision turns on it: a repair carries it on, and a re-run discards it along
+with whatever it left uncommitted — which is most of what there is to decide
+about a run [a stall stopped](#deciding-what-becomes-of-stopped-work), where the
+entry says outright that the session is resumable and what continuing it costs.
 
 It carries what triage has already decided about the item too, joined from the
 durable record the guards spend and refuse against at the moment the docket is
@@ -1657,6 +1662,21 @@ it is worth and hands the run exactly that, so it can never give a run more
 attempts than the round cap let the item have. **Your hold on intake applies to
 this too**, for the same reason it applies to a re-run.
 
+**A stall is the second thing it continues, and it is charged nothing.** A run
+whose provider [the harness stopped on time](operations.md#when-a-provider-stalls-or-runs-out-of-budget)
+before anything was ever returned to its developer — a stream gone silent, or a
+total budget run out, in the run's first attempt — is settled by the reconciling
+sweep half an hour later and docketed like any other stoppage. Its entry says the
+developer session is preserved and names it, because that is what separates the
+two verbs here: a repair carries that session on at the point it stalled, and a
+re-run discards it along with whatever the stalled attempt left uncommitted in
+the worktree. The continuation counts no review round and no repair attempt, as a
+stall judges nothing; what it spends is the grant the decision spent when it was
+recorded, so one decision still buys one continuation. It is the one continuation
+the preserved worktree does not have to hold a change for — a first attempt
+stopped early may never have written anything, and an empty worktree is exactly
+what the attempt it is owed starts from.
+
 **It supersedes the blocker rather than needing you to remember to.** The run
 that stopped blocked its item and recorded the blocker on its own state, which
 `/status`, `yoyo reconcile`, and the docket all read as the fact that it stopped.
@@ -1676,8 +1696,10 @@ stopped it and at which step, and that `yoyo triage resume <run-id>` is what it
 needs once the cause has cleared. That is the same sentence the docket entry
 carries and the channel line ends on, so wherever you read about the stop, you
 are sent to the same command. It has to have recorded a failure that was actually
-returned to its developer — findings, a failing check, or refused paths — because
-a run whose provider kept refusing has no repair loop to re-enter. The item must
+returned to its developer — findings, a failing check, or refused paths — or be
+the stall above, which returned none because the harness stopped it; a run whose
+provider kept refusing, or whose replay conflicted, is neither, and has no
+attempt to carry on with. The item must
 not be closed or waiting on other work. A grant of the development manager's has
 to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
@@ -1691,7 +1713,10 @@ preserved-work ref the sweep recorded before it took the directory. And **the
 change has to still be in it**: a worktree the harness would call its own and that
 holds nothing passes the check above and fails this one, and a developer handed
 the reviewer's findings and an empty directory delivers an empty repair or
-reinvents the change from them.
+reinvents the change from them. That last one is the one condition a stall is
+not held to, because nothing was handed back to be about a change — and the
+resumed run makes the same exception, so the two cannot disagree about which
+continuations may start on an empty worktree.
 
 The run asks that last question again itself, on every resume whose worktree is
 supposed to hold a change already — one picked up inside its repair loop, and one

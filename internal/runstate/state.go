@@ -1143,6 +1143,15 @@ type RepairContinuation struct {
 	// answered before: what this run may still do, and what triage has already
 	// handed the item. See environmental.go.
 	Returned bool `json:"returned,omitempty"`
+	// Stall says this continuation resumed a run the harness had stopped before
+	// anything was returned to its developer: a stall judges nothing, so what the
+	// run is owed is the attempt it was stopped in rather than a repair of a
+	// change nobody complained about. The attempt is therefore not counted
+	// against the run, and this is what accounts for a record carrying a
+	// continuation with no attempt beside it — which without it reads as a
+	// counter somebody forgot to move. The item's grant is still consumed, so one
+	// decision still buys one continuation and no more.
+	Stall bool `json:"stall,omitempty"`
 }
 
 // Validate reports every contract violation in the recorded continuation at once.
@@ -2561,6 +2570,22 @@ func (s State) CarriedOutRepairAttempts() int {
 		carried += continuation.GrantedAttempts
 	}
 	return carried
+}
+
+// ContinuedStall reports a run the triage carry-out made live again to carry on
+// an attempt the harness had stopped before anything was returned to its
+// developer. It is what such a run is recognized by afterwards, and it has to
+// be the continuation rather than the environmental account of the stoppage:
+// a run that is going again has not stopped, so that account is cleared as the
+// re-entry is written, and the continuation is the half of the record that
+// survives it.
+//
+// The most recent continuation is the whole of the answer, for the reason it is
+// the whole of what a granted round can be given back from: an earlier one
+// describes a re-entry this run has already been through.
+func (s State) ContinuedStall() bool {
+	last := len(s.RepairContinuations) - 1
+	return last >= 0 && s.RepairContinuations[last].Stall
 }
 
 // ReturnGrantedRound gives back the granted repair round the most recent

@@ -269,6 +269,106 @@ func TestARepairContinuesTheSameRunUnderTheConfiguredGrant(t *testing.T) {
 	}
 }
 
+// stalledState is the other stoppage this action answers: a run whose provider
+// the harness stopped in its first attempt, settled by the reconciling sweep
+// half an hour later, with the developer session it stalled in preserved and no
+// failure ever returned to that developer.
+func stalledState() runstate.State {
+	state := continuableState()
+	state.Phase = runstate.PhaseDeveloping
+	state.RepairAttempts = 0
+	state.ReviewRounds = 0
+	state.ReviewSummary = ""
+	state.ReviewFindings = 0
+	state.ReviewFindingDetails = nil
+	state.CheckFailure = nil
+	state.Blocker = "Yoyodyne stopped this item: the harness stopped its provider because it stopped emitting events, and nothing continued the run within 30m0s of that."
+	state.Environmental = &runstate.EnvironmentalRefusal{
+		Cause:      runstate.CauseProcessVanished,
+		Detail:     "no live process held the run, no ending was recorded on it, and the harness stopped its provider because it stopped emitting events",
+		RecordedAt: docketedNow.Add(-time.Hour),
+		Settled:    true,
+	}
+	return state
+}
+
+// A stall judges nothing, so what the run is owed is the attempt the harness
+// stopped it in. Before this it was refused here for want of a repair input,
+// which left a re-run as the only decision anything could carry out — and a
+// re-run starts over from the target branch with the session and the
+// uncommitted work in the preserved worktree both discarded.
+func TestARepairCarriesOnAStalledAttemptAndChargesItNothing(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, stalledState())
+	result, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || !result.Stall || len(harness.started) != 1 || harness.started[0].runID != docketedRunID {
+		t.Fatalf("started = %#v, result = %#v, want the stalled run itself carried on", harness.started, result)
+	}
+	state := harness.reload(t)
+	if state.Status != runstate.StatusRunning || state.Phase != runstate.PhaseDeveloping || state.ProviderSessionID != "developer-session" {
+		t.Fatalf("continued run = %#v, want it developing again in the session it stalled in", state)
+	}
+	// The attempt is not counted, because there was no failure to answer: what
+	// the continuation buys is the attempt that was interrupted, and charging one
+	// would take it off a budget that had bought nothing.
+	if state.RepairAttempts != 0 {
+		t.Fatalf("repair attempts = %d, want a stall to count none", state.RepairAttempts)
+	}
+	if len(state.RepairContinuations) != 1 || !state.RepairContinuations[0].Stall {
+		t.Fatalf("continuations = %#v, want the one continuation recorded as a stall", state.RepairContinuations)
+	}
+	// The item's grant is still consumed by it, which is what keeps one decision
+	// to one continuation: the guard that refuses a second reads exactly this.
+	if carried := state.CarriedOutRepairAttempts(); carried != continueGrantRounds {
+		t.Fatalf("carried out = %d of a grant of %d, want the decision's whole grant consumed by the one continuation it authorized",
+			carried, continueGrantRounds)
+	}
+	// And what the item and the run record says what it was, rather than
+	// borrowing the repair's account of a change somebody complained about.
+	for _, want := range []string{"continued in the developer session it stalled in", "counts no review round and no repair attempt"} {
+		if !strings.Contains(result.Reason, want) {
+			t.Fatalf("reason = %q, does not say %q", result.Reason, want)
+		}
+	}
+}
+
+// A stalled attempt may never have written anything, and an empty worktree is
+// exactly what the attempt it is owed starts from. The gate that refuses a
+// handback arriving on a worktree holding none of its change is therefore not
+// asked here — asking it would refuse the decision this carry-out exists for —
+// and it is still asked of every continuation that is a repair of a change.
+func TestAStalledAttemptIsCarriedOnIntoAWorktreeThatHoldsNothingYet(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, stalledState())
+	harness.ownership.changed = []string{}
+	result, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err != nil {
+		t.Fatalf("Continue() error = %v, want a stalled first attempt carried on into the worktree it had not written to", err)
+	}
+	if !result.Continued || len(harness.ownership.read) != 0 {
+		t.Fatalf("continued = %t, change reads = %#v, want the continuation made without asking for a change nobody made",
+			result.Continued, harness.ownership.read)
+	}
+	// The worktree is still proved to be the one the harness left, which is the
+	// architect's condition and is asked of every continuation.
+	if len(harness.ownership.asked) != 1 {
+		t.Fatalf("ownership checks = %#v, want the preserved worktree still proved to be the harness's", harness.ownership.asked)
+	}
+
+	// A repair of a change is unchanged: an empty worktree there is refused
+	// before the grant is spent.
+	repairing := newContinueHarness(t, continuableState())
+	repairing.ownership.changed = []string{}
+	if _, err := repairing.continuer().Continue(context.Background(), continueRequest()); !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Continue() error = %v, want a handback onto an empty worktree still refused", err)
+	}
+}
+
 // The harness carries decisions out; it does not make them. An item nobody
 // granted a repair is an item nobody decided this about, and the size of what a
 // grant is worth is read from that record rather than from the configuration a
@@ -739,7 +839,9 @@ func TestEveryRefusalIsAskedBeforeTheGrantIsSpent(t *testing.T) {
 		},
 		{
 			// A run that stopped with no failure ever returned to its developer
-			// has no repair loop to re-enter.
+			// has nothing to carry on with — unless the harness is what stopped
+			// it, which is the one exception and is
+			// TestARepairCarriesOnAStalledAttemptAndChargesItNothing.
 			name: "nothing was ever returned to the developer",
 			arrange: func(t *testing.T, h *continueHarness) {
 				state := h.reload(t)
@@ -749,7 +851,7 @@ func TestEveryRefusalIsAskedBeforeTheGrantIsSpent(t *testing.T) {
 				state.PathRefusal = nil
 				h.save(t, state)
 			},
-			want: "no repair loop to re-enter",
+			want: "there is no attempt to carry on with",
 		},
 		{
 			// A run whose artifacts triage already retired has nothing left to
