@@ -144,6 +144,22 @@ const (
 	LandingEscalate = "escalate"
 )
 
+// What a developer recorded of its own executions is duplicated here for the
+// reason the landing outcomes are. What it decides is whether a change may be
+// handed to a reviewer at all, and whether the run ends on its environment, so
+// an unrecognized outcome is refused at the save rather than read as something
+// the gate then acts on.
+const (
+	VerificationPassed = "passed"
+	// VerificationFailed is a command that ran and exited non-zero, and
+	// VerificationRefused one that never started. They are separate words because
+	// the harness answers them oppositely — one is a change or a base commit to
+	// repair, the other is a run to end — and a record that collapsed them would
+	// file every red baseline as a broken sandbox.
+	VerificationFailed  = "failed"
+	VerificationRefused = "refused"
+)
+
 // The vocabularies above stated as lists, which is what the validation below
 // reads. None of them is repeated in a switch anywhere in this package, so a list
 // and what a record may carry cannot come to disagree.
@@ -168,6 +184,8 @@ var (
 	reviewApprovals   = []string{ApprovesImplementation, ApprovesEvidence}
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
 	landingOutcomes   = []string{LandingDischarged, LandingEvidence, LandingEscalate}
+
+	verificationOutcomes = []string{VerificationPassed, VerificationFailed, VerificationRefused}
 )
 
 // ReviewDecisions and FindingSeverities are those vocabularies as a caller
@@ -184,6 +202,10 @@ func ReviewApprovals() []string { return slices.Clone(reviewApprovals) }
 // LandingOutcomes is the landing vocabulary the durable schema stores, read the
 // same way and closed for the same reason.
 func LandingOutcomes() []string { return slices.Clone(landingOutcomes) }
+
+// VerificationOutcomes is how a recorded execution may say it ended, read the
+// same way and closed for the same reason.
+func VerificationOutcomes() []string { return slices.Clone(verificationOutcomes) }
 
 // quotedAlternatives names a vocabulary the way a refusal has to: every value
 // quoted, the last joined with "or". It is derived from the list rather than
@@ -307,6 +329,116 @@ func (c CheckFailure) Validate() error {
 	}
 	if len(c.Output) > MaxCheckOutputBytes {
 		problems = append(problems, fmt.Errorf("output is %d bytes, which exceeds the %d byte bound", len(c.Output), MaxCheckOutputBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// The bounds a recorded execution is held to. They are this package's own
+// rather than the reading package's for the reason the vocabulary above is:
+// what a record may hold is decided by the schema that stores it.
+const (
+	MaxVerificationCommandBytes = 512
+	MaxVerificationDetailBytes  = 2 << 10
+	// MaxVerificationChecks bounds how many executions one record carries. A
+	// developer that ran twenty commands against its change ran enough of them,
+	// and a longer list is padding — which is the failure this gate has to avoid
+	// teaching, so the record cannot grow without bound as a way of looking
+	// thorough.
+	MaxVerificationChecks = 20
+	// MaxVerificationOwed bounds what one record is told it still owes. The list
+	// is written by the harness rather than by an agent, so this is a guard on a
+	// record growing rather than on anything untrusted.
+	MaxVerificationOwed = 8
+)
+
+// VerificationExecution is one command a developer recorded running, and how it
+// ended.
+type VerificationExecution struct {
+	Command string `json:"command"`
+	Outcome string `json:"outcome"`
+	// Detail is what refused or what broke, on an execution that failed.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Validate reports every contract violation in one recorded execution at once.
+func (v VerificationExecution) Validate() error {
+	var problems []error
+	switch trimmed := strings.TrimSpace(v.Command); {
+	case trimmed == "":
+		problems = append(problems, errors.New("command is required"))
+	case len(trimmed) > MaxVerificationCommandBytes:
+		problems = append(problems, fmt.Errorf("command is %d bytes, which exceeds the %d byte bound", len(trimmed), MaxVerificationCommandBytes))
+	}
+	if !slices.Contains(verificationOutcomes, v.Outcome) {
+		problems = append(problems, fmt.Errorf("outcome %q is invalid, want %s", v.Outcome, quotedAlternatives(verificationOutcomes)))
+	}
+	if len(v.Detail) > MaxVerificationDetailBytes {
+		problems = append(problems, fmt.Errorf("detail is %d bytes, which exceeds the %d byte bound", len(v.Detail), MaxVerificationDetailBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// Passed reports an execution that ran and succeeded.
+func (v VerificationExecution) Passed() bool { return v.Outcome == VerificationPassed }
+
+// Started reports an execution that ran, whichever way it then went. It is what
+// the probe answers, and it is deliberately not Passed: a suite that ran and
+// failed has proved the environment works.
+func (v VerificationExecution) Started() bool { return v.Outcome != VerificationRefused }
+
+// Verification is what the developer recorded executing: the probe it ran before
+// it changed anything, the checks it ran against the change, and — where the
+// record did not meet the bar — what it still owes.
+//
+// It is durable because three different readers need it after the process that
+// took it is gone. A repair attempt interrupted before it ran has to be reissued
+// with exactly the input it was given; the reviewer is shown what the developer
+// executed beside the change it is judging; and a run that stops for want of a
+// record has to be able to say so on the work item, where the whole point is
+// that nobody has to take the run's word for what was run.
+type Verification struct {
+	// Probe is the execution made before anything was changed, and is absent on a
+	// record that never made one.
+	Probe *VerificationExecution `json:"probe,omitempty"`
+	// Checks are the executions made against the change itself.
+	Checks []VerificationExecution `json:"checks,omitempty"`
+	// Owed is what the record still lacks, in the harness's own words. A record
+	// that meets the bar owes nothing, and this is empty.
+	Owed []string `json:"owed,omitempty"`
+	// Problem is a block the harness could not read, recorded rather than
+	// discarded: a developer that wrote one was trying to say what it ran, and
+	// the difference between an unreadable record and no record at all is what
+	// whoever reads this afterwards needs.
+	Problem string `json:"problem,omitempty"`
+}
+
+// Met reports a record that satisfies the bar: something was recorded, and
+// nothing is owed.
+func (v Verification) Met() bool {
+	return v.Probe != nil && len(v.Owed) == 0 && strings.TrimSpace(v.Problem) == ""
+}
+
+// Validate reports every contract violation in the recorded verification at once.
+func (v Verification) Validate() error {
+	var problems []error
+	if v.Probe != nil {
+		if err := v.Probe.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("probe: %w", err))
+		}
+	}
+	if len(v.Checks) > MaxVerificationChecks {
+		problems = append(problems, fmt.Errorf("%d checks are recorded, which exceeds the bound of %d", len(v.Checks), MaxVerificationChecks))
+	}
+	for index, check := range v.Checks {
+		if err := check.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("checks[%d]: %w", index, err))
+		}
+	}
+	if len(v.Owed) > MaxVerificationOwed {
+		problems = append(problems, fmt.Errorf("%d owed entries are recorded, which exceeds the bound of %d", len(v.Owed), MaxVerificationOwed))
+	}
+	if len(v.Problem) > MaxChannelProblemBytes {
+		problems = append(problems, fmt.Errorf("problem is %d bytes, which exceeds the %d byte bound", len(v.Problem), MaxChannelProblemBytes))
 	}
 	return errors.Join(problems...)
 }
@@ -1415,6 +1547,17 @@ type State struct {
 	// gate is decided before the checks, recording a refusal clears both of the
 	// others rather than competing with them for the next attempt.
 	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
+	// Verification carries what the developer recorded executing — the probe it
+	// ran before it changed anything, and what it ran against the change. It is
+	// the fourth kind of repair input and behaves as the three above do: a record
+	// that does not meet the bar is handed back before any check runs, so
+	// recording one clears the others rather than competing with them.
+	//
+	// Unlike them it is also kept when it owes nothing, because then it is the
+	// evidence rather than the complaint: it is what the reviewer is shown beside
+	// the change, and what says afterwards that somebody executed this before it
+	// was handed over.
+	Verification *Verification `json:"verification,omitempty"`
 	// RefusedAmendments are the changes agents on this run proposed that the
 	// harness could not record, each with the role that proposed it, waiting to be
 	// put in front of that role. It is not a fourth kind of repair input and
@@ -1939,6 +2082,11 @@ func (s State) Validate() error {
 	if s.PathRefusal != nil {
 		if err := s.PathRefusal.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("path_refusal: %w", err))
+		}
+	}
+	if s.Verification != nil {
+		if err := s.Verification.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("verification: %w", err))
 		}
 	}
 	if len(s.RefusedAmendments) > MaxCarriedAmendmentRefusals {

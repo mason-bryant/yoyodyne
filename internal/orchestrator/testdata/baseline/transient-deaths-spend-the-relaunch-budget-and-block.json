@@ -28,6 +28,18 @@
         "status": "failed",
         "summary": "API Error: the provider ended this invocation and named no reason for it",
         "transient_relaunches": 2,
+        "verification": {
+          "checks": [
+            {
+              "command": "make test",
+              "outcome": "passed"
+            }
+          ],
+          "probe": {
+            "command": "make build",
+            "outcome": "passed"
+          }
+        },
         "work_item_closed": false,
         "work_item_id": "yoyodyne-task",
         "worktree_path": "\u003cworktrees\u003e/yoyodyne-task-01234567",
@@ -57,6 +69,18 @@
     "target_branch": "main",
     "transient_relaunches": 2,
     "updated_at": "\u003ctime\u003e",
+    "verification": {
+      "checks": [
+        {
+          "command": "make test",
+          "outcome": "passed"
+        }
+      ],
+      "probe": {
+        "command": "make build",
+        "outcome": "passed"
+      }
+    },
     "work_item_claimed_at": "\u003ctime\u003e",
     "work_item_id": "yoyodyne-task",
     "work_item_title": "Task",

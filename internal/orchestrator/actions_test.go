@@ -818,6 +818,7 @@ var notAStep = map[string]string{
 	"blockOnFailingCheck":        "hands a spent repair budget to a person",
 	"blockOnRefusedPaths":        "hands a spent repair budget to a person",
 	"blockOnUnresolvedFindings":  "hands a spent repair budget to a person",
+	"blockOnMissingVerification": "hands a spent repair budget to a person",
 	"blockOnSpentRelaunchBudget": "hands a spent relaunch budget to a person",
 
 	// The runtime envelope. Holds, directives, dependency waits, operator stops
@@ -858,6 +859,7 @@ var notAStep = map[string]string{
 	"attemptReview":           "one provider invocation inside candidate.review",
 	"recordReviewVerdict":     "records a verdict against the item, charging a round where it sent the work back, inside candidate.review",
 	"gateProtectedPaths":      "the scope refusal candidate.check makes before it spends a suite",
+	"gateSelfVerification":    "the execution-evidence refusal candidate.check makes before it spends a suite",
 	"settleRemoteTarget":      "the pre-promotion remote check inside candidate.integrate",
 	"publishIntegration":      "the merge candidate.integrate asks the forge for once the promotion stands",
 	"repair":                  "records one repair attempt and re-enters candidate.develop with the findings",

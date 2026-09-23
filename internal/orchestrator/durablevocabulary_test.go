@@ -8,6 +8,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/landing"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/selfcheck"
 )
 
 // The durable schema keeps its own copy of the reviewer's vocabularies, so a
@@ -107,6 +108,38 @@ func TestTheDurableSchemaStoresEveryLandingADeveloperCanClaim(t *testing.T) {
 		if claimed.Discharges() != stored.LandingDischarges() {
 			t.Errorf("landing %q discharges=%t as a claim and %t as a record", outcome,
 				claimed.Discharges(), stored.LandingDischarges())
+		}
+	}
+}
+
+// The execution vocabulary is the third kept in two places, and it is held
+// together here for the same reason as the other two. What an outcome decides is
+// whether a change may be handed to a reviewer at all, so a word a developer can
+// write and the schema will not store would be refused at the save — in the
+// middle of a run whose developer had done exactly what its contract asked.
+func TestTheDurableSchemaStoresEveryExecutionOutcomeADeveloperCanRecord(t *testing.T) {
+	t.Parallel()
+
+	durableOutcomes := runstate.VerificationOutcomes()
+	for _, outcome := range selfcheck.Outcomes() {
+		if !slices.Contains(durableOutcomes, string(outcome)) {
+			t.Fatalf("a developer can record %q and the durable schema stores only %v", outcome, durableOutcomes)
+		}
+		// Checked through the conversion a run actually stores the record by, so
+		// the vocabulary is held where it crosses rather than only where it is
+		// listed.
+		stored := durableVerification(selfcheck.Record{
+			Probe: selfcheck.Execution{Command: "make build", Outcome: outcome, Detail: "what refused"},
+		})
+		if err := stored.Validate(); err != nil {
+			t.Fatalf("a stored %q execution is refused: %v", outcome, err)
+		}
+		// And the two derivations have to agree about which outcome is a passing
+		// one, because the developer writes in one vocabulary and the gate decides
+		// in the other.
+		written := selfcheck.Execution{Command: "make build", Outcome: outcome, Detail: "what refused"}
+		if written.Passed() != stored.Probe.Passed() {
+			t.Errorf("execution %q passes=%t as a record and %t as a stored one", outcome, written.Passed(), stored.Probe.Passed())
 		}
 	}
 }

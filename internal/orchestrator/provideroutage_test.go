@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -186,12 +187,28 @@ func (r *stderrRefusingRunner) Run(_ context.Context, command execution.Command,
 	}
 	stream := []string{
 		`{"type":"system","subtype":"init","session_id":"developer-session","model":"` + developerResolved + `"}`,
-		`{"type":"result","subtype":"success","session_id":"developer-session","is_error":false,"terminal_reason":"end_turn","result":"implemented the work item","total_cost_usd":0.01,"usage":{}}`,
+		developerResultEnvelope(withVerification("implemented the work item")),
 	}
 	for _, line := range stream {
 		observer(execution.Output{Stream: execution.StreamStdout, Text: line})
 	}
 	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: strings.Join(stream, "\n") + "\n"}, nil
+}
+
+// developerResultEnvelope is the terminal a served developer turn ends on, with
+// what it said in it. The reply is built rather than written out because it
+// carries the record of its own executions the contract asks for, and a reply
+// without one is refused before the change reaches a reviewer.
+func developerResultEnvelope(reply string) string {
+	encoded, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "session_id": "developer-session",
+		"is_error": false, "terminal_reason": "end_turn", "result": reply,
+		"total_cost_usd": 0.01, "usage": map[string]any{},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 // The shape yoyodyne-ifd.377 could not see. A CLI that refuses an expired login

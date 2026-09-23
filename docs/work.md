@@ -69,6 +69,26 @@ change behind each grant and to raise a finding when none is named.
 [Configuration](configuration.md#protected-paths-in-a-developers-change)
 has the details.
 
+The change is then gated on whether anybody ran it. A developer's reply records
+what it executed — the probe it ran in the worktree before it changed anything,
+and the checks it ran against the change itself — and a change that records
+nothing is handed back for it in the same repair loop, before the suite is spent
+on it and before a reviewer is asked. A run that spends its attempts that way
+stops in front of a person instead of reaching a reviewer. The probe is asked of
+every run because it is nearly free and because what it catches is invisible
+from the inside: an environment where nothing can be spawned at all looks exactly
+like one nobody has asked yet, and a developer that never tries can write code,
+report it working, and close a work item on it. What the probe answers is whether
+commands run rather than whether they pass: a probe the developer records as
+never having started ends the run at once, naming what refused, rather than
+spending the rest of its context against a wall, and one that ran and failed says
+the environment works and something else is red — so the run carries on and the
+configured checks report it. The check half is asked only of a change the
+declared checks would read, and
+[what a developer has to have run](configuration.md#what-a-developer-has-to-have-run)
+says how that line is drawn. What the developer executed is part of the
+reviewer's evidence either way.
+
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants

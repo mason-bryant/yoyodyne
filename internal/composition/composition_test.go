@@ -298,3 +298,63 @@ func requireTool(t *testing.T, tool string) {
 		t.Skipf("this needs %s, which is not on PATH", tool)
 	}
 }
+
+// The declared checks are what decides whether a change has to carry its
+// developer's own record of running one. The question is asked of the ledger
+// rather than of a list of file extensions written beside the bar, so a class
+// that gains or loses coverage moves the bar without anything else being edited.
+func TestWhetherTheDeclaredChecksReachWhatAChangeTouched(t *testing.T) {
+	t.Parallel()
+
+	declared := []string{"make fmtcheck", "make test", "make race", "make vet"}
+	root := writeFixture(t, map[string]string{
+		"internal/run.go":     "package run\n",
+		"docs/work.md":        "# Work\n",
+		"docs/slack/icon.png": "not really an image\n",
+		"LICENSE":             "a licence\n",
+		".beads/issues.jsonl": "{}\n",
+		"bin/release":         "#!/bin/sh\necho released\n",
+	})
+
+	for _, asked := range []struct {
+		name      string
+		paths     []string
+		exercised bool
+	}{
+		{"a change to Go", []string{"internal/run.go"}, true},
+		{"a change to prose the suite reads", []string{"docs/work.md"}, true},
+		{"a change to shell recognized by its first line", []string{"bin/release"}, true},
+		{"an image nothing deterministic can read", []string{"docs/slack/icon.png"}, false},
+		{"the licence and the tracker's export", []string{"LICENSE", ".beads/issues.jsonl"}, false},
+		{"one exercised path among unexercised ones", []string{"LICENSE", "internal/run.go"}, true},
+		{"content no class recognizes", []string{"notes.rst"}, true},
+		{"a file the change deleted", []string{"internal/gone.go"}, true},
+		{"nothing at all", nil, false},
+	} {
+		t.Run(asked.name, func(t *testing.T) {
+			t.Parallel()
+			if exercised := Exercised(root, declared, asked.paths); exercised != asked.exercised {
+				t.Fatalf("Exercised(%v) = %t, want %t", asked.paths, exercised, asked.exercised)
+			}
+		})
+	}
+}
+
+// And the leeway is available at all only where this ledger is an account of the
+// project being asked about. A project declaring checks the ledger was not
+// written against is asked for evidence on every change, which is the bar this
+// repository held before any leeway existed.
+func TestTheLedgerExcusesNothingInAProjectItDoesNotDescribe(t *testing.T) {
+	t.Parallel()
+
+	root := writeFixture(t, map[string]string{"docs/slack/icon.png": "not really an image\n"})
+	if Describes([]string{"cargo test"}) {
+		t.Fatal("the ledger claims to describe a project whose checks it does not name")
+	}
+	if !Exercised(root, []string{"cargo test"}, []string{"docs/slack/icon.png"}) {
+		t.Fatal("a project this ledger does not describe was granted the leeway anyway")
+	}
+	if !Describes([]string{"make fmtcheck", "make test", "make race", "make vet"}) {
+		t.Fatal("the ledger does not describe the project it was written for")
+	}
+}

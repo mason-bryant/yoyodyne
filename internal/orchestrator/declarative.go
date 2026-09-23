@@ -557,6 +557,19 @@ func (a *activeRun) observeCheckEnded(ctx context.Context, err error, unrepaired
 		a.observe(ctx, deliveryCheck, "refused")
 		return
 	}
+	// A change nobody ran anything against is refused by the same state, in front
+	// of the same checks, and handed back into the same loop — so it is the same
+	// outcome. The definition distinguishes what the transition is rather than
+	// which gate decided it, and which one this was is on the run's own record.
+	var missing missingVerification
+	if errors.As(err, &missing) {
+		if unrepaired {
+			a.observe(ctx, deliveryCheck, "refused-unrepaired")
+			return
+		}
+		a.observe(ctx, deliveryCheck, "refused")
+		return
+	}
 	var failing checkFailure
 	if errors.As(err, &failing) {
 		if unrepaired {

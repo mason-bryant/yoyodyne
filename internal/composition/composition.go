@@ -262,6 +262,96 @@ func Classify(root string, ledger []Class, files []string) (map[string][]string,
 	return members, unclassified, nil
 }
 
+// Exercised reports whether the checks a project declares read any of the paths
+// a change touched. It is the mechanical line the submission-evidence bar is
+// drawn on: a change the checks would read has to carry the developer's own
+// record of running one, and a change to content nothing reads does not.
+//
+// It answers from the ledger above rather than from a list of file extensions
+// written beside the bar, so the line moves when this repository's coverage
+// moves — a class that gains a check, or loses the last one and has to be
+// rewritten as unexercised, changes what is asked of a developer without
+// anything here being edited.
+//
+// Two things make it safe to ask of a project this ledger was not written for,
+// and both fail towards asking for evidence rather than excusing it. The ledger
+// is consulted at all only where every check it names is one the project
+// declares, which is this repository and nothing else; and a path no class
+// recognizes, or one that cannot be read, is exercised as far as this is
+// concerned. So a project with its own checks is asked for evidence on every
+// change, which is the bar this repository held before the leeway existed.
+//
+// It answers with no error for that last reason. Every way a path could fail to
+// be classified — a file the census cannot open, content with no suffix and no
+// shebang — already means the same thing here, and a caller that had to decide
+// what to do about the error would be deciding the same question twice.
+func Exercised(root string, declared []string, paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	if !Describes(declared) {
+		return true
+	}
+	for _, path := range paths {
+		class, recognized := classOfChanged(root, Classes, path)
+		if !recognized || len(class.Checks) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Describes reports whether this ledger is an account of a project declaring
+// these checks. It asks that every check any class names is declared, and not
+// the reverse: a project that declares a check no class names has coverage this
+// ledger does not describe, which is a claim to weaken nothing rather than a
+// reason to distrust the classes.
+func Describes(declared []string) bool {
+	if len(Classes) == 0 {
+		return false
+	}
+	for _, class := range Classes {
+		for _, check := range class.Checks {
+			if !slices.Contains(declared, check) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// classOfChanged is classOf over a path a change touched, which is not quite the
+// same population the census walks: a change deletes files as well as writing
+// them, and a file that is not there can still be recognized by its suffix or
+// its name. Only the shebang needs the content, so only that is skipped, and a
+// path nothing recognized — including one whose content could not be read —
+// comes back unrecognized.
+func classOfChanged(root string, ledger []Class, path string) (Class, bool) {
+	if suffix := Extension(path); suffix != "" {
+		for _, class := range ledger {
+			if slices.Contains(class.Extensions, suffix) {
+				return class, true
+			}
+		}
+	}
+	base := filepath.Base(path)
+	for _, class := range ledger {
+		if slices.Contains(class.Names, base) {
+			return class, true
+		}
+	}
+	shell, err := shellShebang(root, path)
+	if err != nil || !shell {
+		return Class{}, false
+	}
+	for _, class := range ledger {
+		if class.ID == ShellClass {
+			return class, true
+		}
+	}
+	return Class{}, false
+}
+
 func classOf(root string, ledger []Class, path string) (string, error) {
 	if suffix := Extension(path); suffix != "" {
 		for _, class := range ledger {
