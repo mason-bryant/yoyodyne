@@ -193,9 +193,9 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	}
 	// A developer invocation, a repair attempt, and one the provider ended in an
 	// error: the failure cost money too, so it is priced rather than ignored.
-	appendLegacyCostEvents(t, store, first.RunID, 1, execution.EventRunCompleted, 6.5)
-	appendLegacyCostEvents(t, store, first.RunID, 2, execution.EventRunCompleted, 2.25)
-	appendLegacyCostEvents(t, store, first.RunID, 3, execution.EventRunFailed, 0.25)
+	appendLegacyCostEvents(t, store, first.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 6.5)
+	appendLegacyCostEvents(t, store, first.RunID, 2, execution.EventRunCompleted, domain.RoleDeveloper, 2.25)
+	appendLegacyCostEvents(t, store, first.RunID, 3, execution.EventRunFailed, domain.RoleDeveloper, 0.25)
 
 	second := testState(t, StatusSucceeded)
 	second.RunID = mustRunID(t)
@@ -210,7 +210,7 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	if err := store.Create(second); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, second.RunID, 1, execution.EventRunCompleted, 19.0)
+	appendLegacyCostEvents(t, store, second.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 19.0)
 
 	// Another item's run must never reach this item's price.
 	other := testState(t, StatusSucceeded)
@@ -220,7 +220,7 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	if err := store.Create(other); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, other.RunID, 1, execution.EventRunCompleted, 100)
+	appendLegacyCostEvents(t, store, other.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 100)
 
 	price, err := store.Price(first.WorkItemID)
 	if err != nil {
@@ -267,7 +267,7 @@ func TestStorePricesARunWithNoSurvivingRecordAsUnknown(t *testing.T) {
 	if err := store.Create(kept); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, kept.RunID, 1, execution.EventRunCompleted, 3.5)
+	appendLegacyCostEvents(t, store, kept.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 3.5)
 
 	price, err := store.Price(lost.WorkItemID)
 	if err != nil {
@@ -358,7 +358,7 @@ func TestStorePricesEveryItemItHasRun(t *testing.T) {
 		if err := store.Create(state); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
-		appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 1.5)
+		appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 1.5)
 	}
 
 	prices, err := store.Prices()
@@ -422,7 +422,7 @@ func TestStorePricesOnlyRealInvocations(t *testing.T) {
 		"text":           `the last "run.completed" event said it was done`,
 		"total_cost_usd": 99.0,
 	})
-	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -462,13 +462,13 @@ func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
 	}
 	// The change, a review that asked for repair, the repair, and the review that
 	// took it: the shape every run of any length has.
-	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 9.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
 	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
-	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, 2.0)
+	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleReviewer, 2.0)
 	appendEvent(t, store, state.RunID, 4, execution.EventReviewCompleted, nil)
-	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
 	appendEvent(t, store, state.RunID, 6, execution.EventReviewStarted, nil)
-	appendLegacyCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, 1.5)
+	appendLegacyCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, domain.RoleReviewer, 1.5)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -511,11 +511,11 @@ func TestStoreChargesAReissuedInvocationToTheAttemptItReissues(t *testing.T) {
 	}
 	// The provider refused the first attempt for want of capacity, the reissue
 	// finished it, and only then did a review send it back for repair.
-	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunFailed, 10.5)
-	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 8.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunFailed, domain.RoleDeveloper, 10.5)
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleDeveloper, 8.0)
 	appendEvent(t, store, state.RunID, 3, execution.EventReviewStarted, nil)
-	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.0)
-	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 3.0)
+	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, domain.RoleReviewer, 2.0)
+	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, domain.RoleDeveloper, 3.0)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -547,11 +547,11 @@ func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 6.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 6.0)
 	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
 	// The reviewer died without a verdict, so nothing closed the review.
-	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunFailed, 0.5)
-	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.5)
+	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunFailed, domain.RoleReviewer, 0.5)
+	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, domain.RoleDeveloper, 2.5)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -705,8 +705,8 @@ func TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot(t *testin
 	if err := store.Create(legacy); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, legacy.RunID, 1, execution.EventRunCompleted, 9.0)
-	appendLegacyCostEvents(t, store, legacy.RunID, 2, execution.EventRunCompleted, 6.0)
+	appendLegacyCostEvents(t, store, legacy.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	appendLegacyCostEvents(t, store, legacy.RunID, 2, execution.EventRunCompleted, domain.RoleDeveloper, 6.0)
 
 	price, err = store.Price(current.WorkItemID)
 	if err != nil {
@@ -736,7 +736,7 @@ func TestStoreReportsWhatARunWaitedEvenWhenItCannotBePriced(t *testing.T) {
 	if err := store.Create(priced); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendLegacyCostEvents(t, store, priced.RunID, 1, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, priced.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
 
 	lost := testState(t, StatusFailed)
 	lost.RunID = mustRunID(t)
@@ -1034,7 +1034,7 @@ func TestStoreCountsAnInvocationThatReportedNoUsageApartFromTheShare(t *testing.
 	}
 	appendUsageCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0,
 		usageTokens{InputTokens: 250, OutputTokens: 3000, CacheReadTokens: 750})
-	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -1092,10 +1092,16 @@ func appendUsageCostEvents(t *testing.T, store *Store, runID string, sequence ui
 // so what they look like is worth stating explicitly rather than producing by
 // leaving a field out of a current event -- which is a different thing entirely,
 // and is what the test below this one is about.
-func appendLegacyCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, cost float64) {
+// The role is taken so the fixture can say which session the invocation ran in,
+// which a log of that vintage did record and which is what the price reader
+// takes a reported figure as an increment over. It is deliberately not written
+// into the payload: a terminal that does not say whose invocation it was is the
+// whole of what makes these logs legacy, and a helper that leaked the role into
+// the record would be testing the current shape under an older name.
+func appendLegacyCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, role domain.AgentRole, cost float64) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{
-		"session_id":     "session-developer",
+		"session_id":     "session-" + string(role),
 		"total_cost_usd": cost,
 	})
 	if err != nil {
@@ -1146,4 +1152,64 @@ func mustRunID(t *testing.T) string {
 		t.Fatalf("NewRunID() error = %v", err)
 	}
 	return runID
+}
+
+// A run's repair attempts resume the developer's session, so every terminal
+// after the first reports what that session has cost since the run began rather
+// than what the attempt cost. Adding those figures up charged the development
+// attempt to the item again on every repair after it: measured across this
+// product's recorded history, repair read at $1,467 against an actual $351.
+//
+// The reviewer's invocations run in a session of their own and are unaffected,
+// which is why a run of one attempt and one review was never overstated and why
+// this had to be found in the repairs rather than in the totals.
+func TestStorePricesRepairAttemptsAtWhatEachAddedToTheDevelopersSession(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.432.10"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The change, a review that sent it back, the repair, and the review that
+	// took it. The developer's figures are the session's running total: $6.00 for
+	// the change, $10.00 by the end of the repair. The reviewer's are its own
+	// session's, $0.40 and then $0.90.
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 6.0)
+	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleReviewer, 0.4)
+	appendEvent(t, store, state.RunID, 4, execution.EventReviewCompleted, nil)
+	appendRoleCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, domain.RoleDeveloper, 10.0)
+	appendEvent(t, store, state.RunID, 6, execution.EventReviewStarted, nil)
+	appendRoleCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, domain.RoleReviewer, 0.9)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if money(phases.Development) != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first attempt alone", phases.Development)
+	}
+	// $4.00 rather than the $10.00 the terminal reported: the repair is what the
+	// developer's session moved by, not what it had cost altogether.
+	if money(phases.Repair) != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want what the repair added to the session", phases.Repair)
+	}
+	if money(phases.Review) != (PhaseCost{CostUSD: 0.9, Invocations: 2}) {
+		t.Fatalf("review = %#v, want what the reviewer's own session moved by", phases.Review)
+	}
+	// The run's total is the two sessions' final totals, which is the whole claim:
+	// what the run cost is what the provider last said each of its sessions had
+	// cost, and never the sum of every figure it reported on the way there.
+	if price.Runs[0].CostUSD != 10.9 {
+		t.Fatalf("run = %v, want the developer's 10 and the reviewer's 0.9; "+
+			"summing the reported figures would have made it %v", price.Runs[0].CostUSD, 17.3)
+	}
+	if phases.TotalUSD() != price.Runs[0].CostUSD {
+		t.Fatalf("split = %v, run = %v", phases.TotalUSD(), price.Runs[0].CostUSD)
+	}
 }

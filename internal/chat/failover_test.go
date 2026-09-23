@@ -122,6 +122,18 @@ func (c *collectingSpend) Append(line runstate.Spend) error {
 	return nil
 }
 
+// ReportedSessionTotal answers from the lines this log has already taken, the
+// way the durable store answers from the lines it has already written.
+func (c *collectingSpend) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	total, found := 0.0, false
+	for _, line := range c.lines {
+		if line.SessionID == sessionID && line.Known() {
+			total, found = line.ReportedTotal(), true
+		}
+	}
+	return total, found, nil
+}
+
 // An agent that has not enabled failover behaves exactly as it did before: the
 // refused turn fails, the refusal is recorded as a stoppage, and nothing asks a
 // second model on the operator's money.

@@ -261,11 +261,15 @@ func TestStreamStoreSpendsByTheDayTheMoneyWasSpent(t *testing.T) {
 	today := time.Date(2026, 8, 23, 12, 0, 0, 0, time.Local)
 	id := mustConversationID(t)
 	appendConversationEvent(t, conversations, id, 1, execution.EventRunStarted, today.AddDate(0, 0, -14), nil)
+	// The conversation resumes one provider session across all three turns, so
+	// each terminal reports what the session has cost since it opened: $1.50,
+	// then $4.00, then $4.25. What each turn cost is the difference — $1.50,
+	// $2.50, and $0.25 — which is what the day rows below are in.
 	appendConversationEvent(t, conversations, id, 2, execution.EventRunCompleted, today.AddDate(0, 0, -14), invocationPayload(1.5, 10, 20, 30, 40))
-	appendConversationEvent(t, conversations, id, 3, execution.EventRunCompleted, today, invocationPayload(2.5, 1, 2, 3, 4))
+	appendConversationEvent(t, conversations, id, 3, execution.EventRunCompleted, today, invocationPayload(4.0, 1, 2, 3, 4))
 	// A turn the provider ended in an error cost money like any other, so it is
 	// priced rather than left out of the total it belongs in.
-	appendConversationEvent(t, conversations, id, 4, execution.EventRunFailed, today, invocationPayload(0.25, 5, 5, 5, 5))
+	appendConversationEvent(t, conversations, id, 4, execution.EventRunFailed, today, invocationPayload(4.25, 5, 5, 5, 5))
 
 	report, err := store.Spend(SpendQuery{Now: today})
 	if err != nil {
@@ -643,10 +647,15 @@ func newStreamEvent(t *testing.T, id string, sequence uint64, eventType executio
 
 // invocationPayload is what the provider reports when an invocation ends, which
 // is the only place the cost and the token counts are ever written down.
-func invocationPayload(cost float64, input, output, cacheWrite, cacheRead int64) map[string]any {
+// The cost is what the provider reported, which for a second invocation of a
+// session it was asked to resume is that session's running total rather than
+// what the invocation itself cost. A test with more than one terminal on one
+// stream therefore passes rising figures, and what the ledger reports is the
+// difference between them.
+func invocationPayload(reportedTotal float64, input, output, cacheWrite, cacheRead int64) map[string]any {
 	return map[string]any{
 		"session_id":     "session-stream",
-		"total_cost_usd": cost,
+		"total_cost_usd": reportedTotal,
 		"usage": map[string]any{
 			"input_tokens":                input,
 			"output_tokens":               output,
@@ -672,4 +681,43 @@ func mustBranchReviewID(t *testing.T) string {
 		t.Fatalf("NewBranchReviewID() error = %v", err)
 	}
 	return id
+}
+
+// A management conversation resumes one provider session across every turn it
+// takes, so every terminal after the first reports what the conversation has
+// cost since it opened. This is the ledger `yoyo status --spend` and the
+// dashboard's throughput are read from, and summing those figures is what had
+// the development manager's conversation reading at $24,659 against an actual
+// $825 over this product's recorded history.
+//
+// What it reports is therefore the session's final total, however many turns it
+// took to reach it.
+func TestAResumedConversationIsPricedAtWhatEachTurnAddedRatherThanTheWholeAgain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	_, conversations, _ := streamStores(t, root)
+	store := newStreamStore(t, root)
+
+	today := time.Date(2026, 9, 22, 12, 0, 0, 0, time.Local)
+	id := mustConversationID(t)
+	appendConversationEvent(t, conversations, id, 1, execution.EventRunStarted, today, nil)
+	// Five turns of one session, each reporting what the session has cost so far.
+	for sequence, reportedTotal := range []float64{0.50, 1.10, 1.75, 2.30, 3.00} {
+		appendConversationEvent(t, conversations, id, uint64(sequence)+2,
+			execution.EventRunCompleted, today, invocationPayload(reportedTotal, 1, 1, 1, 1))
+	}
+
+	report, err := store.Spend(SpendQuery{Now: today})
+	if err != nil {
+		t.Fatalf("Spend() error = %v", err)
+	}
+	totals := report.Totals()
+	if totals.Calls != 5 {
+		t.Fatalf("priced %d invocation(s), want every turn counted", totals.Calls)
+	}
+	if totals.CostUSD != 3.00 {
+		t.Fatalf("the conversation reads as %v, want the session's final total of 3; "+
+			"summing what each turn reported would have made it %v", totals.CostUSD, 8.65)
+	}
 }

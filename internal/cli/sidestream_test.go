@@ -120,6 +120,18 @@ func (r *recordedSpend) Append(line runstate.Spend) error {
 	return nil
 }
 
+// ReportedSessionTotal answers from the lines this log has already taken, the
+// way the durable store answers from the lines it has already written.
+func (r *recordedSpend) ReportedSessionTotal(sessionID string) (float64, bool, error) {
+	total, found := 0.0, false
+	for _, line := range r.lines {
+		if line.SessionID == sessionID && line.Known() {
+			total, found = line.ReportedTotal(), true
+		}
+	}
+	return total, found, nil
+}
+
 // The voice reports what served the turn back to the runner, which pins it on
 // the stream. A side turn has no run and no conversation of its own, so the
 // stream is the only place the four things

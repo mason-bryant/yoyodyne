@@ -33,6 +33,24 @@ func (s *Session) spendAttribution() spend.Attribution {
 	}
 }
 
+// countSpend takes one invocation's own cost off the line the meter has just
+// recorded. It is the only thing that moves these three figures, so what the
+// operator is shown, what a budgeted session counts, and what the cost log holds
+// are one number rather than three readings of the provider's.
+//
+// An invocation nobody was told the price of adds nothing rather than adding a
+// zero it would be indistinguishable from: the line says which it is, and these
+// figures are a running total with no room to say so. What says so is the cost
+// log, where the classification is kept.
+func (s *Session) countSpend(line runstate.Spend) {
+	if !line.Known() {
+		return
+	}
+	s.lastInvocationCostUSD += line.AmountUSD
+	s.turnCostUSD += line.AmountUSD
+	s.sessionCostUSD += line.AmountUSD
+}
+
 // failoverAttribution is the same, for a turn served on the endpoint this
 // conversation fails over to. The account and the provider are that endpoint's
 // rather than this conversation's, because they are what the money was actually

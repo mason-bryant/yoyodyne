@@ -17,9 +17,11 @@ import (
 )
 
 // SpendLog is the cost log one provider invocation lands in. It is satisfied by
-// runstate.SpendStore.
+// runstate.SpendStore, and it is spend.Log restated here so the pipeline's own
+// wiring names a type of its own rather than reaching into the meter's.
 type SpendLog interface {
 	Append(line runstate.Spend) error
+	ReportedSessionTotal(sessionID string) (float64, bool, error)
 }
 
 // spendAttribution is what one of this run's invocations is charged to.
