@@ -3483,8 +3483,13 @@ refused a turn nobody asked it.
 
 A pin covers the same invocations failover does: the turns an agent takes as
 itself, its conversation and the rounds where another role asks it something. A
-run's developer and reviewer invocations ask for `model`. `yoyo agent list` says
-so for every pinned agent rather than leaving it to be assumed.
+run's invocations are not among them, and neither of them asks for the pin: the
+reviewer's asks for the reviewer agent's `model`, and the developer's asks for
+whichever selector the item's own labels chose under
+[`execution.developer_models`](#a-developer-model-chosen-by-the-items-label) —
+which is the developer agent's `model` for an item that mapping names no label
+of, and the mapped one otherwise. `yoyo agent list` says so for every pinned
+agent rather than leaving it to be assumed.
 
 ## Relaunching a run the provider killed
 
