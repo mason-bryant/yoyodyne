@@ -1889,15 +1889,33 @@ Two things are asked, and only the first is universal.
 
 - **The probe.** One execution of a declared check, or of the build step
   underneath it, made in the worktree before anything is changed. Every run is
-  asked for it whatever the work turns out to be. A probe the developer records
-  as having failed ends the run naming what refused, because nothing a developer
-  does to its change fixes an environment that cannot start a process.
+  asked for it whatever the work turns out to be, and what it answers is whether
+  commands run here rather than whether they pass. A probe the developer records
+  as `refused` — the command never started — ends the run naming what refused,
+  because nothing a developer does to its change fixes an environment that
+  cannot spawn a process. A probe recorded as `failed` is the opposite finding:
+  the environment works and something else is red, usually the commit the run
+  was cut from, so the run carries on and the configured checks report the
+  failure with the repair loop behind them.
 - **The check run.** The developer's own record of running a check against the
   change it is handing over. This is asked only of a change the declared checks
   would actually read: a change to content nothing here checks submits on the
   probe alone. Demanding a suite run for a change the suite never reads teaches
   padding rather than verification, which is why the line is drawn rather than
   the bar raised.
+
+What belongs in the `detail` of anything but a pass is the message the command
+itself printed, rather than a paraphrase of it, because a tool that refuses
+often says how to stop refusing and that sentence is the whole value of the
+record. The class this was written for is already closed from the other side:
+the Go build cache defaults under the user's home, which a run's sandbox does
+not grant, and the harness points `GOCACHE` at `.git/yoyodyne/go-build` for
+every run it makes — the developer's own probe included, as
+[the environment a check runs in](#the-environment-a-check-runs-in) describes.
+An environment the harness did not make is the project's own to warn about, and
+this repository's `make` targets refuse with the redirect named; a developer
+copying that refusal into the `detail` puts the fix in the run's record rather
+than leaving the next reader to rediscover it.
 
 Which files the checks read is a mechanical question rather than a developer's
 judgement, and the answer comes from the checks themselves. This repository

@@ -141,16 +141,22 @@ func bounded(value string, limit int) string {
 	return value[:limit]
 }
 
-// probeRefused reports a developer that recorded an environment which cannot
-// execute at all. It is deliberately not a judgement about the change: nothing a
-// developer does to its work fixes a sandbox that cannot spawn a process, so a
-// run that meets this ends rather than spending an attempt on it.
+// probeRefused reports a developer that recorded an environment which could not
+// start its probe at all. It is deliberately not a judgement about the change:
+// nothing a developer does to its work fixes a sandbox that cannot spawn a
+// process, so a run that meets this ends rather than spending an attempt on it.
+//
+// It asks whether the command started and never whether it passed. A probe that
+// ran and failed says the opposite thing — the environment works, and something
+// the run did not cause is red — and recording that as a sandbox that could not
+// be entered would point triage at the machine while the base commit stayed
+// broken, on the one path where the whole point is an honest report.
 func (a *activeRun) probeRefused() (runstate.VerificationExecution, bool) {
 	if a.state.Verification == nil || a.state.Verification.Probe == nil {
 		return runstate.VerificationExecution{}, false
 	}
 	probe := *a.state.Verification.Probe
-	if probe.Passed() {
+	if probe.Started() {
 		return runstate.VerificationExecution{}, false
 	}
 	return probe, true

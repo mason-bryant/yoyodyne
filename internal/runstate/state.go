@@ -146,11 +146,18 @@ const (
 
 // What a developer recorded of its own executions is duplicated here for the
 // reason the landing outcomes are. What it decides is whether a change may be
-// handed to a reviewer at all, so an unrecognized outcome is refused at the save
-// rather than read as something the gate then acts on.
+// handed to a reviewer at all, and whether the run ends on its environment, so
+// an unrecognized outcome is refused at the save rather than read as something
+// the gate then acts on.
 const (
 	VerificationPassed = "passed"
-	VerificationFailed = "failed"
+	// VerificationFailed is a command that ran and exited non-zero, and
+	// VerificationRefused one that never started. They are separate words because
+	// the harness answers them oppositely — one is a change or a base commit to
+	// repair, the other is a run to end — and a record that collapsed them would
+	// file every red baseline as a broken sandbox.
+	VerificationFailed  = "failed"
+	VerificationRefused = "refused"
 )
 
 // The vocabularies above stated as lists, which is what the validation below
@@ -178,7 +185,7 @@ var (
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
 	landingOutcomes   = []string{LandingDischarged, LandingEvidence, LandingEscalate}
 
-	verificationOutcomes = []string{VerificationPassed, VerificationFailed}
+	verificationOutcomes = []string{VerificationPassed, VerificationFailed, VerificationRefused}
 )
 
 // ReviewDecisions and FindingSeverities are those vocabularies as a caller
@@ -373,6 +380,11 @@ func (v VerificationExecution) Validate() error {
 
 // Passed reports an execution that ran and succeeded.
 func (v VerificationExecution) Passed() bool { return v.Outcome == VerificationPassed }
+
+// Started reports an execution that ran, whichever way it then went. It is what
+// the probe answers, and it is deliberately not Passed: a suite that ran and
+// failed has proved the environment works.
+func (v VerificationExecution) Started() bool { return v.Outcome != VerificationRefused }
 
 // Verification is what the developer recorded executing: the probe it ran before
 // it changed anything, the checks it ran against the change, and — where the

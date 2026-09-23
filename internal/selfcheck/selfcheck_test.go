@@ -75,6 +75,7 @@ func TestARecordIsRefusedForEveryWayItCanBeWrong(t *testing.T) {
 		{"no probe", `{"checks":[{"command":"make test","outcome":"passed"}]}`, "command is required"},
 		{"unknown outcome", `{"probe":{"command":"make build","outcome":"ran"}}`, `outcome "ran"`},
 		{"a failure that says nothing", `{"probe":{"command":"make build","outcome":"failed"}}`, "detail is required"},
+		{"a refusal that says nothing", `{"probe":{"command":"make build","outcome":"refused"}}`, "detail is required"},
 		{"a field nobody defined", `{"probe":{"command":"make build","outcome":"passed"},"duration":"4s"}`, "unknown field"},
 		{"trailing content", `{"probe":{"command":"make build","outcome":"passed"}} and one more thing`, "trailing content"},
 		{"empty", "  ", "empty"},
@@ -111,22 +112,51 @@ func TestAFailedCheckIsRecordedAndIsNotEvidence(t *testing.T) {
 	}
 }
 
-// A probe that failed is the environment refusing rather than the change being
-// wrong, and it is recorded as such: the detail is required precisely so that
-// whoever reads the run afterwards is told what refused.
-func TestAFailedProbeIsReadAsAnEnvironmentThatCannotExecute(t *testing.T) {
+// A probe that could not start is the environment refusing, and it is recorded
+// as such: the detail is required precisely so that whoever reads the run
+// afterwards is told what refused, in the words the command itself used.
+func TestARefusedProbeIsReadAsAnEnvironmentThatCannotExecute(t *testing.T) {
 	t.Parallel()
 
-	record, err := Decode(`{"probe":{"command":"make build","outcome":"failed",` +
+	record, err := Decode(`{"probe":{"command":"make build","outcome":"refused",` +
 		`"detail":"could not start /bin/zsh: argument list too long"}}`)
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if !record.Recorded() || record.Probed() {
-		t.Fatalf("record = %#v, want a recorded probe that did not pass", record)
+	if !record.Recorded() || record.Probed() || !record.ProbeRefused() {
+		t.Fatalf("record = %#v, want a recorded probe that never started", record)
 	}
-	if !strings.Contains(record.Describe(), "argument list too long") {
-		t.Errorf("the description drops what refused: %q", record.Describe())
+	if described := record.Describe(); !strings.Contains(described, "argument list too long") ||
+		!strings.Contains(described, "would not start") {
+		t.Errorf("the description does not say the command never ran: %q", described)
+	}
+}
+
+// And a probe that ran and failed is the opposite fact: the environment works,
+// and something else — the commit the run was cut from, most often — is red. The
+// two were one word in the first draft of this, which would have filed every red
+// baseline as a broken sandbox.
+func TestAProbeThatRanAndFailedStillProvesTheEnvironmentExecutes(t *testing.T) {
+	t.Parallel()
+
+	record, err := Decode(`{"probe":{"command":"make test","outcome":"failed",` +
+		`"detail":"TestSomethingElse: want 2, got 3"}}`)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !record.Probed() || record.ProbeRefused() {
+		t.Fatalf("record = %#v, want a probe that ran and proved the environment", record)
+	}
+	if !record.Probe.Started() || record.Probe.Passed() {
+		t.Fatalf("probe = %#v, want an execution that started and did not pass", record.Probe)
+	}
+	if described := record.Describe(); !strings.Contains(described, "ran and failed") {
+		t.Errorf("the description does not say the command ran: %q", described)
+	}
+	// It owes nothing more for the probe's sake: the probe was made, and what is
+	// red is what the harness's own checks are about to say.
+	if owed := record.Missing(false); len(owed) != 0 {
+		t.Errorf("a probe that ran still owes %v", owed)
 	}
 }
 
@@ -148,7 +178,7 @@ func TestTheContractNamesTheProjectsOwnChecks(t *testing.T) {
 	t.Parallel()
 
 	contract := Contract([]string{"make test", "make vet"})
-	for _, named := range []string{"make test", "make vet", Fence} {
+	for _, named := range []string{"make test", "make vet", Fence, `"refused"`, "the command's own message"} {
 		if !strings.Contains(contract, named) {
 			t.Errorf("the contract does not name %q", named)
 		}

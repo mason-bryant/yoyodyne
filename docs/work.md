@@ -78,9 +78,12 @@ stops in front of a person instead of reaching a reviewer. The probe is asked of
 every run because it is nearly free and because what it catches is invisible
 from the inside: an environment where nothing can be spawned at all looks exactly
 like one nobody has asked yet, and a developer that never tries can write code,
-report it working, and close a work item on it. A probe the developer records as
-having failed ends the run at once, naming what refused, rather than spending the
-rest of its context against a wall. The check half is asked only of a change the
+report it working, and close a work item on it. What the probe answers is whether
+commands run rather than whether they pass: a probe the developer records as
+never having started ends the run at once, naming what refused, rather than
+spending the rest of its context against a wall, and one that ran and failed says
+the environment works and something else is red — so the run carries on and the
+configured checks report it. The check half is asked only of a change the
 declared checks would read, and
 [what a developer has to have run](configuration.md#what-a-developer-has-to-have-run)
 says how that line is drawn. What the developer executed is part of the

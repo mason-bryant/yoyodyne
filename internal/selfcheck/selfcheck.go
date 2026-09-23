@@ -69,22 +69,31 @@ const (
 	MaxChecks = 20
 )
 
-// Outcome is how one execution ended. The vocabulary is two words on purpose:
-// this records whether something ran and whether it passed, and every shade
-// between those belongs in the summary the developer writes anyway.
+// Outcome is how one execution ended. The vocabulary is three words, and the
+// distinction that earns the third one is whether the command ran at all: a
+// suite that ran and failed is a change or a base commit to fix, and a command
+// that could not be started is an environment nobody can work in. The harness
+// answers those two in opposite ways — one is repaired and one ends the run —
+// so a record that could not tell them apart would send every red baseline to
+// the operator as a broken sandbox.
 type Outcome string
 
 const (
 	// OutcomePassed is the command having run and exited successfully.
 	OutcomePassed Outcome = "passed"
-	// OutcomeFailed is the command having been refused, died, or exited
-	// non-zero. The three are one outcome here because what the harness does
-	// about them is decided from the probe's own detail and from the checks it
-	// then runs itself, rather than from a classification the developer makes.
+	// OutcomeFailed is the command having run and exited non-zero. It says the
+	// environment works and something else does not — the change, or the commit
+	// the run was cut from — which is what the checks the harness then runs
+	// itself are for.
 	OutcomeFailed Outcome = "failed"
+	// OutcomeRefused is the command never having started: a shell that could not
+	// be spawned, a binary that is not there, a sandbox that would not let it
+	// run. Nothing a developer does to its change answers this one, so it is the
+	// outcome a run ends on rather than repairs.
+	OutcomeRefused Outcome = "refused"
 )
 
-var outcomes = []Outcome{OutcomePassed, OutcomeFailed}
+var outcomes = []Outcome{OutcomePassed, OutcomeFailed, OutcomeRefused}
 
 // Outcomes is the closed vocabulary a record may carry, as a caller outside this
 // package reads it. It answers with a copy, because a package-level slice is a
@@ -99,14 +108,22 @@ type Execution struct {
 	Command string `json:"command"`
 	// Outcome is how it ended.
 	Outcome Outcome `json:"outcome"`
-	// Detail is what went wrong, required on a failure and empty otherwise. A
-	// failure that says nothing about itself is the report that costs a person
-	// the whole diagnosis, and it is the one this exists to collect.
+	// Detail is what went wrong, required on anything but a pass and empty
+	// otherwise. What belongs in it is the message the command itself printed,
+	// because a tool that refuses often says how to stop it refusing — a Go build
+	// cache the sandbox will not let it write names the redirect that fixes it —
+	// and a detail somebody paraphrased is the one that loses the fix.
 	Detail string `json:"detail,omitempty"`
 }
 
 // Passed reports an execution that ran and succeeded.
 func (e Execution) Passed() bool { return e.Outcome == OutcomePassed }
+
+// Started reports an execution that actually ran, whichever way it then went. It
+// is the question the probe exists to answer, and it is deliberately not the
+// same as having passed: a suite that runs and fails has proved the environment
+// works.
+func (e Execution) Started() bool { return e.Outcome != OutcomeRefused }
 
 // Validate reports every contract violation in one execution at once. The
 // position is named by the caller, which knows whether this is the probe or one
@@ -125,8 +142,8 @@ func (e Execution) Validate() error {
 	}
 	detail := strings.TrimSpace(e.Detail)
 	switch {
-	case e.Outcome == OutcomeFailed && detail == "":
-		problems = append(problems, errors.New("detail is required on a failure, naming what refused or what failed"))
+	case e.Outcome.Valid() && e.Outcome != OutcomePassed && detail == "":
+		problems = append(problems, errors.New("detail is required on anything but a pass, carrying what the command itself said"))
 	case len(detail) > MaxDetailBytes:
 		problems = append(problems, fmt.Errorf("detail is %d bytes, limit is %d", len(detail), MaxDetailBytes))
 	}
@@ -150,8 +167,15 @@ type Record struct {
 // record a reply carrying no block leaves.
 func (r Record) Recorded() bool { return strings.TrimSpace(r.Probe.Command) != "" }
 
-// Probed reports an environment that proved it can execute.
-func (r Record) Probed() bool { return r.Recorded() && r.Probe.Passed() }
+// Probed reports an environment that proved it can execute. A probe that ran and
+// failed proves exactly that, so this asks whether the command started rather
+// than whether it passed — the failing suite is somebody's to fix, and it is not
+// the environment.
+func (r Record) Probed() bool { return r.Recorded() && r.Probe.Started() }
+
+// ProbeRefused reports an environment that could not start the probe at all. It
+// is the one outcome no change can answer, and the caller ends the run on it.
+func (r Record) ProbeRefused() bool { return r.Recorded() && !r.Probe.Started() }
 
 // Evidenced reports at least one execution against the change itself that ran
 // and passed. A record whose every check failed is not evidence that the change
@@ -166,8 +190,9 @@ func (r Record) Evidenced() bool {
 	return false
 }
 
-// Failures are the executions the developer recorded as having failed, the probe
-// included, in the order the record carries them.
+// Failures are the executions that did not pass, the probe included, in the
+// order the record carries them. A refusal is one of them: it did not pass
+// either, and what tells the two apart is each execution's own outcome.
 func (r Record) Failures() []Execution {
 	var failed []Execution
 	if r.Recorded() && !r.Probe.Passed() {
@@ -232,7 +257,7 @@ func quotedOutcomes() string {
 	for _, outcome := range outcomes {
 		quoted = append(quoted, `"`+string(outcome)+`"`)
 	}
-	return strings.Join(quoted, " or ")
+	return strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
 }
 
 // Extract splits a reply into what the agent said and the executions it
@@ -325,11 +350,29 @@ func (r Record) Describe() string {
 }
 
 func describeExecution(execution Execution) string {
-	described := "`" + execution.Command + "`, which " + string(execution.Outcome)
+	described := "`" + execution.Command + "`, which " + describeOutcome(execution.Outcome)
 	if detail := strings.TrimSpace(execution.Detail); detail != "" {
 		described += " (" + folded(detail) + ")"
 	}
 	return described
+}
+
+// describeOutcome says what an outcome means rather than repeating the word a
+// reader would have to look up. The refusal is the one worth spelling out: "the
+// command would not start" and "the command failed" are opposite facts about the
+// environment, and a description that said "refused" for both would be the same
+// conflation the vocabulary exists to undo.
+func describeOutcome(outcome Outcome) string {
+	switch outcome {
+	case OutcomePassed:
+		return "passed"
+	case OutcomeFailed:
+		return "ran and failed"
+	case OutcomeRefused:
+		return "would not start at all"
+	default:
+		return string(outcome)
+	}
 }
 
 // folded is a developer's sentence as one line, which is what a prompt section
@@ -361,7 +404,9 @@ Your first action in this worktree, before you read far and before you change a 
 
 That probe is asked of every run, whatever the work turns out to be, because it is nearly free and because the thing it catches is invisible from the inside: an environment where nothing can be spawned at all looks exactly like an environment nobody has asked yet. A run that discovers it at first use discovers it having already spent its context, and one that never tries can write code, report it working, and close a work item on it — which is how a guard this repository depends on came to be reported delivered, never having been run, and rediscovered missing weeks later.
 
-If the probe fails, stop there and reply immediately with the block below, naming what refused in the detail. Do not work around it, and do not carry on and hope. The run ends on that record and the environment is reported, which is the cheapest of the endings available and the only one that tells anybody what is wrong.
+What the probe answers is whether commands run here, and not whether they pass. A probe that ran and came back red has answered it: the environment works, something else is broken — your worktree's base commit, most likely — and you carry on and say so in your summary. A probe that could not start at all is the other answer, and it is the one nothing you do to the change can fix. Stop there, reply immediately with the block below recording it as refused, and do not work around it or carry on and hope. The run ends on that record and the environment is reported, which is the cheapest ending available and the only one that tells anybody what is wrong.
+
+Whichever way it goes, put the command's own message in the "detail" rather than your paraphrase of it. A tool that refuses often says how to stop it refusing — a build cache the sandbox will not let it write names the redirect that fixes it, right there in the failure — and that sentence is the whole value of the record to whoever reads it next.
 
 When you hand the change over, the block also records what you ran against the change itself. That half is required when the declared checks read the kind of files you touched, and not otherwise: a change to content nothing here checks submits on the probe alone. The harness decides which of the two your change is, mechanically, from the same coverage the checks are held to — so it is never a judgement you have to make, and never one you can get wrong.
 
@@ -371,7 +416,7 @@ Put exactly one block of this shape in your reply:
 {"probe":{"command":"make build","outcome":"passed"},"checks":[{"command":"make test","outcome":"passed"}]}
 ` + "```" + `
 
-Each entry is the command as you typed it and how it ended: "passed" if it ran and exited successfully, "failed" otherwise. A failure takes a "detail" naming what refused or what broke; keep the output itself in your scratch directory and name the file there rather than pasting it. Record what you actually ran, including a focused command rather than the whole suite — that is what the harness asks for, and the declared checks are run by the harness itself afterwards either way, so nothing is bought by claiming more than you did.
+Each entry is the command as you typed it and how it ended. "passed" is it ran and exited successfully; "failed" is it ran and exited non-zero; "refused" is it never started — no shell, no binary, a sandbox that would not run it. Anything but a pass takes a "detail", and the message the command printed is what belongs there; keep the output itself in your scratch directory and name the file there rather than pasting it. Record what you actually ran, including a focused command rather than the whole suite — that is what the harness asks for, and the declared checks are run by the harness itself afterwards either way, so nothing is bought by claiming more than you did.
 
 A change handed over without this block is handed back to you for it, and a run that spends its attempts that way stops without reaching a reviewer.`)
 	return contract.String()

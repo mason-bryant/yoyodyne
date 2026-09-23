@@ -96,19 +96,19 @@ func TestAChangeNoDeclaredCheckReadsSubmitsOnTheProbeAlone(t *testing.T) {
 	}
 }
 
-// A probe the developer could not run at all is the environment refusing rather
-// than the work failing, so the run ends on it naming what refused instead of
-// spending its repair budget, its reviewer, and the rest of its context against
-// a wall that was already named in the first reply. This is the 2026-08-23
-// shape, where every shell a run could start died on the operating system's
-// argument limit and the run found out at first use, an hour in.
+// A probe the developer could not start at all is the environment refusing
+// rather than the work failing, so the run ends on it naming what refused
+// instead of spending its repair budget, its reviewer, and the rest of its
+// context against a wall that was already named in the first reply. This is the
+// 2026-08-23 shape, where every shell a run could start died on the operating
+// system's argument limit and the run found out at first use, an hour in.
 func TestAProbeTheEnvironmentRefusedEndsTheRunNamingIt(t *testing.T) {
 	t.Parallel()
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	provider.developerFinalText = "I cannot run anything in this worktree.\n\n" +
-		verificationBlock(`{"probe":{"command":"make build","outcome":"failed",`+
+		verificationBlock(`{"probe":{"command":"make build","outcome":"refused",`+
 			`"detail":"could not start /bin/zsh: the command line plus environment exceed the OS exec argument limit"}}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
@@ -128,6 +128,49 @@ func TestAProbeTheEnvironmentRefusedEndsTheRunNamingIt(t *testing.T) {
 	}
 	if !strings.Contains(recorded.Environmental.Detail, "argument limit") {
 		t.Errorf("the refusal does not say what refused: %q", recorded.Environmental.Detail)
+	}
+}
+
+// A probe that ran and came back red is the opposite finding, and the harness
+// must not file it as a broken sandbox: the environment executed exactly as the
+// probe asks it to prove, and what is red is the commit the run was cut from.
+// Recording that as an environmental refusal would end the run, charge it
+// nothing, and point triage at a machine that is working.
+func TestAProbeThatRanAndFailedIsNotAnEnvironmentalRefusal(t *testing.T) {
+	t.Parallel()
+
+	tracker := newOutcomeTracker()
+	provider := roleBackend(writeFeature, approveVerdict)
+	provider.developerFinalText = "the base commit is red; my own change is below\n\n" +
+		verificationBlock(`{"probe":{"command":"make test","outcome":"failed",`+
+			`"detail":"TestSomethingElse fails on the base commit: want 2, got 3"},`+
+			`"checks":[{"command":"make test ./internal/orchestrator/...","outcome":"passed"}]}`)
+	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Environmental != nil {
+		t.Fatalf("a probe that ran was filed as an environmental refusal: %#v", outcome.Environmental)
+	}
+	recorded := loadedRun(t, store, outcome.RunID)
+	if recorded.Environmental != nil {
+		t.Fatalf("the run records an environmental cause it never had: %#v", recorded.Environmental)
+	}
+	// The run carries on exactly as one whose probe passed: the record is kept,
+	// the change is checked, and the failure the probe saw is the reviewer's to
+	// read rather than the harness's to classify.
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("the run did not carry on past a probe that ran: %#v", outcome)
+	}
+	if recorded.Verification == nil || recorded.Verification.Probe == nil ||
+		recorded.Verification.Probe.Outcome != runstate.VerificationFailed {
+		t.Fatalf("verification = %#v, want the failing probe kept as it was recorded", recorded.Verification)
+	}
+	reviews := provider.requestsForRole(domain.RoleReviewer)
+	if len(reviews) != 1 || !strings.Contains(reviews[0].Prompt, "ran and failed") {
+		t.Errorf("the reviewer was not shown that the probe ran and failed")
 	}
 }
 

@@ -3225,19 +3225,24 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save the account of what the developer changed: %w", err)
 	}
-	// An environment whose developer could not execute a trivial command in it is
-	// the run's ending rather than a problem with the change. Nothing a developer
+	// An environment that could not start the developer's probe at all is the
+	// run's ending rather than a problem with the change. Nothing a developer
 	// does to its work fixes a sandbox that cannot spawn a process, so this is
 	// read before every ending below it: a run that carried on would spend its
 	// repair budget, its reviewer, and the rest of its context against a wall
 	// that was already named in the first reply.
+	//
+	// A probe that ran and failed is deliberately not this. It says the
+	// environment works and something else is red — the commit the run was cut
+	// from, most often — which the checks this run makes for itself will say
+	// again with the failure in hand, inside the repair loop that exists for it.
 	//
 	// It is the same class the harness records when a provider invocation never
 	// starts, and it is recorded here because here is the only place that knows
 	// the developer itself met it. The round delivered nothing, which the settle
 	// confirms against the worktree before it gives anything back.
 	if probe, refused := a.probeRefused(); refused {
-		detail := fmt.Sprintf("the developer could not execute %s in this worktree: %s", probe.Command, probe.Detail)
+		detail := fmt.Sprintf("the developer could not start %s in this worktree: %s", probe.Command, probe.Detail)
 		a.recordEnvironmentalRefusal(runstate.CauseSandboxSpawnFailure, detail, nothingRan)
 		return phaseError{status: runstate.StatusFailed, cause: errors.New(detail)}
 	}
