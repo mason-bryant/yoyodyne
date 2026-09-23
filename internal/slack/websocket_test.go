@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -28,7 +29,7 @@ func TestTheHandshakeIsCheckedRatherThanAssumed(t *testing.T) {
 			t.Fatalf("dialWebSocket() error = %v", err)
 		}
 		defer socket.Close()
-		message, err := socket.ReadMessage(noReadDeadline)
+		message, err := socket.ReadMessage(noReadTimeout)
 		if err != nil || string(message) != `{"type":"hello"}` {
 			t.Fatalf("ReadMessage() = %q, %v", message, err)
 		}
@@ -77,7 +78,7 @@ func TestAPingIsAnsweredWithoutTheCallerAsking(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	message, err := socket.ReadMessage(noReadDeadline)
+	message, err := socket.ReadMessage(noReadTimeout)
 	if err != nil {
 		t.Fatalf("ReadMessage() error = %v", err)
 	}
@@ -106,7 +107,7 @@ func TestAFragmentedMessageArrivesWhole(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	message, err := socket.ReadMessage(noReadDeadline)
+	message, err := socket.ReadMessage(noReadTimeout)
 	if err != nil || string(message) != `{"type":"hello"}` {
 		t.Fatalf("ReadMessage() = %q, %v, want the whole message", message, err)
 	}
@@ -129,7 +130,7 @@ func TestAnOrderlyCloseIsReportedAsTheConnectionEnding(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	if _, err := socket.ReadMessage(noReadDeadline); !errors.Is(err, errConnectionClosed) {
+	if _, err := socket.ReadMessage(noReadTimeout); !errors.Is(err, errConnectionClosed) {
 		t.Fatalf("ReadMessage() error = %v, want the connection reported as closed", err)
 	}
 }
@@ -147,15 +148,83 @@ func TestSilencePastTheDeadlineEndsTheRead(t *testing.T) {
 		t.Fatalf("dialWebSocket() error = %v", err)
 	}
 	defer socket.Close()
-	if _, err := socket.ReadMessage(time.Now().Add(50 * time.Millisecond)); err == nil {
+	if _, err := socket.ReadMessage(50 * time.Millisecond); err == nil {
 		t.Fatal("ReadMessage() = nil, want a silent connection to be given up on")
 	}
 }
 
-// noReadDeadline is the read deadline for a message the test's own peer is
-// certain to send: none, which is what a zero time means to a connection. The
-// one read here that is given a deadline is the one about the deadline.
-var noReadDeadline time.Time
+// A quiet workspace sends no events for hours, and Slack keeps the connection
+// alive with pings alone. Measuring the idle bound from the last message rather
+// than the last frame is what made the sink hang up on a working connection
+// every ninety seconds and open 1,988 connections in the life of one process.
+func TestPingsAloneKeepAQuietConnectionAlive(t *testing.T) {
+	t.Parallel()
+
+	// The pings span four times the idle bound, and no single gap between them
+	// comes near it, so this says the bound is renewed by a ping and not that it
+	// is generous.
+	const idle = 500 * time.Millisecond
+	const pings = 10
+	server := startWebSocketServer(t, func(peer *serverSocket) {
+		for range pings {
+			peer.writeFrame(opcodePing, nil)
+			// The pong is read so the client's write does not block on the pipe,
+			// and reading it is also what paces this loop.
+			peer.readFrame()
+			time.Sleep(idle / 5)
+		}
+		peer.writeText([]byte(`{"type":"hello"}`))
+	})
+	socket, err := dialWebSocket(context.Background(), server.url, server.dial)
+	if err != nil {
+		t.Fatalf("dialWebSocket() error = %v", err)
+	}
+	defer socket.Close()
+	message, err := socket.ReadMessage(idle)
+	if err != nil {
+		t.Fatalf("ReadMessage() error = %v, want a connection its pings kept alive", err)
+	}
+	if string(message) != `{"type":"hello"}` {
+		t.Fatalf("ReadMessage() = %q, want the message that followed the pings", message)
+	}
+}
+
+// Slack counts a Socket Mode connection against this app's limit until it sees
+// the connection end. Hanging up without saying so leaves Slack holding
+// connections this process has already forgotten, which is how one sink came to
+// sit at the ten Slack allows it.
+func TestHangingUpTellsThePeerTheConnectionIsOver(t *testing.T) {
+	t.Parallel()
+
+	hungUp := make(chan frame, 1)
+	server := startWebSocketServer(t, func(peer *serverSocket) {
+		peer.writeText([]byte(`{"type":"hello"}`))
+		hungUp <- peer.readFrame()
+	})
+	socket, err := dialWebSocket(context.Background(), server.url, server.dial)
+	if err != nil {
+		t.Fatalf("dialWebSocket() error = %v", err)
+	}
+	if _, err := socket.ReadMessage(noReadTimeout); err != nil {
+		t.Fatalf("ReadMessage() error = %v", err)
+	}
+	if err := socket.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if said := <-hungUp; said.opcode != opcodeClose {
+		t.Fatalf("the peer was sent opcode %#x on hang-up, want a close frame", said.opcode)
+	}
+	// Closing twice is what a caller does when it defers a close beside an error
+	// path that already closed, and the peer must not be sent a second close.
+	if err := socket.Close(); err != nil {
+		t.Fatalf("Close() called twice error = %v, want the second one to be a no-op", err)
+	}
+}
+
+// noReadTimeout is the idle bound for a message the test's own peer is certain
+// to send: none, which is what a zero duration means to a read. The reads here
+// that are given a bound are the ones about the bound.
+const noReadTimeout time.Duration = 0
 
 // testServer is the other end of one connection plus the dial function that
 // reaches it. It is an in-memory pipe rather than a listening socket, so the
@@ -204,6 +273,54 @@ func startWebSocketServer(t *testing.T, handle func(*serverSocket)) *testServer 
 		handle(&serverSocket{conn: conn, reader: reader, done: server.done, t: t})
 	})
 	return server
+}
+
+// startReconnectingWebSocketServer answers every dial with a connection of its
+// own, numbered in the order it was opened. One pipe per test is enough to read
+// a connection; saying what a reconnect did to the one it replaced needs two.
+func startReconnectingWebSocketServer(t *testing.T, handle func(number int, peer *serverSocket)) *testServer {
+	t.Helper()
+	server := &testServer{url: "ws://slack.test/link", done: make(chan struct{})}
+	var mu sync.Mutex
+	var opened int
+	var clients []net.Conn
+	server.dial = func(context.Context, string, string) (net.Conn, error) {
+		client, peer := net.Pipe()
+		mu.Lock()
+		number := opened
+		opened++
+		clients = append(clients, client)
+		mu.Unlock()
+		go func() {
+			defer peer.Close()
+			reader := bufio.NewReader(peer)
+			key := readHandshakeRequest(t, reader)
+			writeHandshakeResponse(peer, acceptKey(key))
+			handle(number, &serverSocket{conn: peer, reader: reader, done: server.done, t: t})
+		}()
+		return client, nil
+	}
+	t.Cleanup(func() {
+		close(server.done)
+		mu.Lock()
+		defer mu.Unlock()
+		for _, client := range clients {
+			client.Close()
+		}
+	})
+	return server
+}
+
+// awaitEnd blocks until the client hangs up, which is what a connection the
+// other end has closed looks like from here. The error that ends it is the
+// point, so it is read rather than reported.
+func (s *serverSocket) awaitEnd() {
+	read := &websocketConn{conn: s.conn, reader: s.reader}
+	for {
+		if _, err := read.readFrame(); err != nil {
+			return
+		}
+	}
 }
 
 func readHandshakeRequest(t *testing.T, reader *bufio.Reader) string {

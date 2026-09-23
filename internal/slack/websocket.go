@@ -57,6 +57,11 @@ const (
 	// handshakeTimeout bounds connecting. A handshake that has not finished by
 	// then is one the sink retries.
 	handshakeTimeout = 30 * time.Second
+	// closeCourtesyTimeout bounds telling the peer this connection is over. It is
+	// short because the frame is a courtesy and the connection is going away
+	// regardless: on a healthy socket two bytes leave immediately, and a peer
+	// that has stopped reading must not be able to hold a hang-up open.
+	closeCourtesyTimeout = 250 * time.Millisecond
 )
 
 // errConnectionClosed reports the peer closing the connection in the orderly
@@ -78,6 +83,10 @@ type websocketConn struct {
 	reader  *bufio.Reader
 	writeMu sync.Mutex
 	closed  bool
+	// closeSent records that the peer has already been told this connection is
+	// over, either by echoing its own close or by hanging up. It keeps the
+	// hang-up from sending a second close frame after an echoed one.
+	closeSent bool
 }
 
 // dialWebSocket performs the client handshake and returns the open connection.
@@ -213,17 +222,22 @@ func acceptKey(key string) string {
 // caller that had to remember to answer pings is a caller whose connection dies
 // the first time it forgets.
 //
-// The deadline bounds waiting for one message. Slack pings a Socket Mode
-// connection regularly, so a connection that says nothing for longer than the
-// deadline is a connection that has silently gone away, and reporting that is
-// what gets it reopened.
-func (w *websocketConn) ReadMessage(deadline time.Time) ([]byte, error) {
-	if err := w.conn.SetReadDeadline(deadline); err != nil {
-		return nil, fmt.Errorf("set read deadline: %w", err)
-	}
+// idle bounds waiting for the next frame rather than for the next message, and
+// every frame renews it — a ping as much as an event. That distinction is the
+// whole of this connection's liveness: Slack sends nothing but pings while a
+// workspace is quiet, so a bound measured from the last message would expire on
+// a connection the pings prove is alive, and the sink would hang up on a
+// working connection every time the channel went quiet for that long. What it
+// still catches is the failure it is for — a peer that has gone away without
+// saying so sends nothing at all, pings included. An idle of zero waits
+// forever, which is for a caller whose peer is certain to speak.
+func (w *websocketConn) ReadMessage(idle time.Duration) ([]byte, error) {
 	var assembled []byte
 	var assembling bool
 	for {
+		if err := w.renewReadDeadline(idle); err != nil {
+			return nil, err
+		}
 		frame, err := w.readFrame()
 		if err != nil {
 			return nil, err
@@ -265,6 +279,20 @@ func (w *websocketConn) ReadMessage(deadline time.Time) ([]byte, error) {
 			return nil, fmt.Errorf("websocket opcode %#x is not supported", frame.opcode)
 		}
 	}
+}
+
+// renewReadDeadline puts the idle bound ahead of the frame about to be read. It
+// is set per frame rather than once per call, which is what makes the bound one
+// on silence rather than one on how long a quiet workspace may stay quiet.
+func (w *websocketConn) renewReadDeadline(idle time.Duration) error {
+	var deadline time.Time
+	if idle > 0 {
+		deadline = time.Now().Add(idle)
+	}
+	if err := w.conn.SetReadDeadline(deadline); err != nil {
+		return fmt.Errorf("set read deadline: %w", err)
+	}
+	return nil
 }
 
 type frame struct {
@@ -334,14 +362,23 @@ func (w *websocketConn) WriteText(payload []byte) error {
 	return w.writeFrame(opcodeText, payload)
 }
 
-// writeFrame sends one masked frame. Every client frame is masked, which the
-// specification requires and servers enforce.
+// writeFrame sends one masked frame.
 func (w *websocketConn) writeFrame(opcode byte, payload []byte) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 	if w.closed {
 		return errConnectionClosed
 	}
+	if opcode == opcodeClose {
+		w.closeSent = true
+	}
+	return w.writeFrameLocked(opcode, payload, requestTimeout)
+}
+
+// writeFrameLocked sends one masked frame, with the write mutex already held.
+// Every client frame is masked, which the specification requires and servers
+// enforce.
+func (w *websocketConn) writeFrameLocked(opcode byte, payload []byte, timeout time.Duration) error {
 	var mask [4]byte
 	if _, err := rand.Read(mask[:]); err != nil {
 		return fmt.Errorf("generate frame mask: %w", err)
@@ -367,7 +404,7 @@ func (w *websocketConn) writeFrame(opcode byte, payload []byte) error {
 	for index := range payload {
 		masked[index] = payload[index] ^ mask[index%4]
 	}
-	if err := w.conn.SetWriteDeadline(time.Now().Add(requestTimeout)); err != nil {
+	if err := w.conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
 		return fmt.Errorf("set write deadline: %w", err)
 	}
 	if _, err := w.conn.Write(append(header, masked...)); err != nil {
@@ -378,14 +415,23 @@ func (w *websocketConn) writeFrame(opcode byte, payload []byte) error {
 
 // Close ends the connection, telling the peer first when it can. Closing twice
 // is a no-op, so a caller can defer it beside the error path that already
-// closed it.
+// closed it, and the second caller waits for the first rather than returning
+// while the socket is still open — a reconnect is allowed to say the connection
+// it replaced is gone.
 func (w *websocketConn) Close() error {
 	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
 	if w.closed {
-		w.writeMu.Unlock()
 		return nil
 	}
+	// Slack counts a Socket Mode connection against this app's limit until it
+	// sees the connection end, and a close frame is what says so at once rather
+	// than leaving Slack to notice. The frame is best effort: a peer that will
+	// not take it is told by the transport closing underneath it instead.
+	if !w.closeSent {
+		w.closeSent = true
+		_ = w.writeFrameLocked(opcodeClose, nil, closeCourtesyTimeout)
+	}
 	w.closed = true
-	w.writeMu.Unlock()
 	return w.conn.Close()
 }
