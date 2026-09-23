@@ -578,6 +578,7 @@ func (g conversationGround) git(ctx context.Context, args ...string) (execution.
 		Name:    g.gitBinary,
 		Args:    args,
 		Dir:     g.repository,
+		Env:     execution.GitEnvironment(nil),
 		Timeout: g.timeout,
 	}, nil)
 	if err != nil {

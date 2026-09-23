@@ -191,6 +191,9 @@ func brokenInstallations() map[string]func(*world) {
 		"every agent runs on one model and none names an alternate": func(w *world) {
 			w.configuration = singleModelConfig
 		},
+		"a provider is authenticated by a key exported in the environment": func(w *world) {
+			w.variables["ANTHROPIC_API_KEY"] = "sk-exported-in-a-shell-profile"
+		},
 		"the slack service is on and this project's secrets are not stored": func(w *world) {
 			w.configuration = servicesConfig("slack:\n    enabled: true\n")
 			w.runner.reply("find-generic-password", failed("The specified item could not be found in the keychain."))

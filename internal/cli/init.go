@@ -197,6 +197,7 @@ func gitRemoteURL(ctx context.Context, runner execution.ProcessRunner, root, rem
 	result, err := runner.Run(ctx, execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", root, "remote", "get-url", remote},
+		Env:     execution.GitEnvironment(nil),
 		Timeout: trackerCommandTimeout,
 	}, nil)
 	if err != nil {

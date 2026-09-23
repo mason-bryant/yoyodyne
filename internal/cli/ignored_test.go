@@ -92,7 +92,10 @@ func TestALocalIgnoreIsAcknowledgedRatherThanArguedWith(t *testing.T) {
 // tracked despite a rule naming it, because Git applies ignore rules to
 // untracked paths only and what is committed is what other machines get.
 func TestNothingIsSaidWhenTheConfigurationIsCommittable(t *testing.T) {
-	t.Parallel()
+	// Not parallel: it asserts what this command says, and clearing the
+	// provider keys is what keeps a key exported on the machine running the
+	// tests from being one more thing said.
+	withoutProviderKeys(t)
 
 	project := gitProject(t)
 	var stdout, stderr bytes.Buffer

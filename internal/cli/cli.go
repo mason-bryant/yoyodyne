@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -190,6 +191,13 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 	// exit code: an improvement available is a fact about a valid configuration
 	// rather than something wrong with one.
 	drift, unknown := config.ReadDrift(resolved)
+	// An installation that authenticates a provider by a key exported in the
+	// shell is one this command can still call valid and whose next run the
+	// provider refuses, because no invocation the harness makes carries a
+	// credential any more. It is said here for the same reason the two above
+	// are: this is the command somebody runs to be told whether their project is
+	// right, and the answer "valid" on its own would be true and unhelpful.
+	providerKeys := execution.ProviderKeysInEnvironment(nil)
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
@@ -201,6 +209,9 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 			"revision":   resolved.Config.Revision(),
 			"ignored":    ignored,
 			"drift":      drift,
+			// The names and never the values: a report that carried a credential
+			// would put it wherever the report is kept.
+			"provider_keys": providerKeys,
 			// Carried beside the comparison rather than folded into it, the way
 			// `config drift` carries it: an unknown answer has two reasons, and a
 			// reader given only `known: false` cannot tell a project that never
@@ -215,7 +226,30 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 	if notice := drift.Notice(); notice != "" {
 		fmt.Fprintln(stderr, notice)
 	}
+	if notice := describeProviderKeysInEnvironment(providerKeys); notice != "" {
+		fmt.Fprintln(stderr, notice)
+	}
 	return 0
+}
+
+// describeProviderKeysInEnvironment says what a provider key exported in this
+// shell now does, which is nothing, and what authenticates instead. It is empty
+// when none is exported, because a surface that says so unprompted on every
+// healthy machine is one nobody reads.
+//
+// It names the variables and never their values, and it names one remedy rather
+// than a command per key: what is missing is a login, and the login is the
+// provider's own. `yoyo doctor` says the same thing with the provider this
+// project runs on named, which is the surface with a configuration in front of
+// it; this one is the aside on the command that was asked a different question.
+func describeProviderKeysInEnvironment(present []string) string {
+	if len(present) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("warning: %s exported here and reaches no invocation the harness makes -- every invocation is built from an "+
+		"allowlist and a credential is dropped from it, so a provider authenticated this way refuses the next run rather than degrading; "+
+		"sign the provider in instead, with its own login in its provider home, and `yoyo doctor` names the command for this project",
+		strings.Join(present, ", "))
 }
 
 // runConfigDrift is the report the notices point at: the whole three-way

@@ -105,6 +105,11 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	// exactly the state nobody would think to check for, so it is said here rather
 	// than left in a document.
 	sayWhereStallsAreNoticed(stdout)
+	// Said once, here, for the same reason: the shell that starts a sink is
+	// usually the shell the harness was started from, and a provider key
+	// exported in it is an authentication the operator believes they have and
+	// no longer do.
+	sayProviderKeysReachNoInvocation(stdout)
 
 	if *once {
 		// One pass is what a setup document can tell somebody to run: it posts
@@ -139,6 +144,27 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 func sayWhereStallsAreNoticed(stdout io.Writer) {
 	fmt.Fprintln(stdout, "this sink reports stalls and no longer notices them: `yoyo work --watch` takes that reading as it polls, and `yoyo reconcile` takes it on every sweep")
 	fmt.Fprintln(stdout, "a product running neither records no stalls at all, and nothing here would say so; scheduling the sweep is the supervisor's periodic pass, yoyodyne-ifd.413, and until it lands it is yours")
+}
+
+// sayProviderKeysReachNoInvocation names, once on this process's start, the
+// provider keys this shell exports and what they now do.
+//
+// Unlike the line above it is conditional, because the condition is nearly
+// always absent and a line about it on every healthy start is one nobody would
+// still be reading by the time it mattered. What makes it worth saying at all
+// is the same shape of silent failure: an operator who exported a key before
+// yoyodyne-ifd.408 had a working installation, and after it has one whose next
+// run the provider refuses with nothing in between to say why.
+//
+// It names the variables and never their values, and it ends at `yoyo doctor`
+// rather than restating that command's per-project remedy here.
+func sayProviderKeysReachNoInvocation(stdout io.Writer) {
+	present := execution.ProviderKeysInEnvironment(nil)
+	if len(present) == 0 {
+		return
+	}
+	fmt.Fprintf(stdout, "%s exported in this shell and reaches no invocation the harness makes: provider authentication is the provider's own login in its provider home, and `yoyo doctor` names the command for this project\n",
+		strings.Join(present, ", "))
 }
 
 // ensureSlackSink is the step a maintenance pass takes about reporting: this

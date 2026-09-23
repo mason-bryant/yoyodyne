@@ -340,6 +340,7 @@ func (r Reader) git(ctx context.Context, maxOutput int, args ...string) (executi
 		Name:           name,
 		Args:           args,
 		Dir:            r.Directory,
+		Env:            execution.GitEnvironment(nil),
 		Timeout:        r.timeout(),
 		MaxOutputBytes: maxOutput,
 	}, nil)

@@ -94,6 +94,7 @@ func configurationIgnored(ctx context.Context, runner execution.ProcessRunner, r
 	result, err := runner.Run(ctx, execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "check-ignore", "--verbose", "--", named},
+		Env:     execution.GitEnvironment(nil),
 		Timeout: ignoreCommandTimeout,
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {

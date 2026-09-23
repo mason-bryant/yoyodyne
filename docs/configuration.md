@@ -1999,6 +1999,50 @@ to refuse a shell an agent opened. A check the harness runs itself does not
 carry it: a check is the project's command, launched by the harness rather
 than by an agent.
 
+### The environment the harness's own Git and forge commands run in
+
+Every Git command the harness runs itself gets that same list, and for a reason
+of its own. Git runs hooks, and a hook is a program the repository supplies and
+the harness executes: `git worktree add` runs `post-checkout`, a ref update runs
+`reference-transaction`, and both of those live in `.git/hooks`, which every
+worktree the harness cuts shares. So a Git command that inherited the harness's
+environment handed whatever that environment carried to a program the harness
+never wrote — the Slack tokens included, by a path the run's own built
+environment says nothing about.
+
+**The forge credential is added to the forge commands and to nothing else.**
+Those are the `gh` invocations the harness makes and the Git commands that reach
+a remote — the push, the fetch, `ls-remote`, and the delete of a merged branch.
+They carry, on top of the list above, whichever of `GH_TOKEN`, `GITHUB_TOKEN`,
+`GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`,
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, and
+`GIT_TERMINAL_PROMPT` the harness's own environment holds. Every local Git
+command — a diff, a ref update, a checkout, a `worktree add` — gets none of
+them, so the hooks those run have no forge credential to hand out. Handing every
+Git command a token so that the push would have one is exactly the arrangement
+this replaces.
+
+### Which provider authentication is supported
+
+**A provider authenticates by its own login, held in its provider home, and by
+nothing else.** That is what the accounts machinery names an account by, and it
+is the only authentication an invocation the harness makes receives.
+
+A key exported in a shell — `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`OPENAI_API_KEY` — reaches none of them. It reads as a credential, so the
+allowlist drops it from every process the harness launches, exactly as it drops
+the Slack tokens. An installation that had been authenticating that way does not
+degrade: the provider refuses its next run.
+
+Three things say so before that run happens, and none of them is a gate.
+[`yoyo doctor`](operations.md#which-provider-authentication-is-supported) reports
+it under `provider-authentication`, as a warning, with the login for this
+project's own provider as the remedy; `yoyo config validate` says it beside the
+validity answer, on standard error, and carries the variable names under
+`provider_keys` in its `--json`; and `yoyo slack` says it once when the sink
+starts, because the shell that starts a sink is usually the shell the harness
+was started from. All three name the variables and never their values.
+
 ### What `init` proposes for `checks`
 
 A project does not start from the empty list unless it has to. `yoyo init` reads
@@ -5118,7 +5162,11 @@ prompt. That is what keeps the boundary structural rather than behavioral — on
 separate process posts, and the harness builds every run's environment from an
 allowlist rather than handing down its own, so no run process, and therefore no
 agent's subprocess tree, has a Slack token in its environment at all, even on a
-machine where the pair is exported in a shell profile. What such an export does
+machine where the pair is exported in a shell profile. The Git commands the
+harness runs itself are held to the same rule, and for a reason of their own —
+a Git hook is a program the repository supplies and the harness executes; see
+[the environment the harness's own Git and forge commands run
+in](#the-environment-the-harnesss-own-git-and-forge-commands-run-in). What such an export does
 still cost is the harness's own process and the sink: they are read from a
 store only the sink's own launch looks at, under names that carry the product —
 `yoyo-slack-bot.<product id>` and `yoyo-slack-app.<product id>`. The product is
