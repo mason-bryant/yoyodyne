@@ -249,7 +249,14 @@ const (
 // turn, and any turn the operator asked for a refresh on. Repeating it there
 // would hand the provider the same document twice, which spends context to say
 // the same thing and reads as two pictures to reconcile.
+//
+// A refresh carried as changes is the exception: what moved means nothing to a
+// provider that never held the picture it moved from, so the rebuild carries the
+// whole of the new picture and the turn's own prompt says what in it is new.
 func (s *Session) workingBriefing() string {
+	if s.refresh != nil && s.carriedChanges {
+		return strings.TrimSpace(s.refresh.briefing.Text)
+	}
 	if s.refresh != nil || s.state.Turns == 0 {
 		return ""
 	}

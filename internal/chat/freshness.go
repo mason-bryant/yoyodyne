@@ -130,8 +130,13 @@ type Refreshed struct {
 // the turn that was going to deliver it. See recordPendingPicture.
 type pendingRefresh struct {
 	briefing Briefing
-	since    Movement
-	was      time.Time
+	// since is what moved between the picture the agent last received and this
+	// one, and was and wasCommit identify that picture. A second re-read taken
+	// before the first is delivered keeps them and adds to since, because the
+	// agent is still working from the older picture and is owed all of it.
+	since     Movement
+	was       time.Time
+	wasCommit string
 	// trigger says who took the picture, because the role is told so: a refresh
 	// the operator asked for and one the harness made because the picture was
 	// stale are framed differently, and the threshold the second names is what
@@ -251,13 +256,28 @@ func (p PictureAge) stale() bool {
 // only where there is nothing to measure with: a conversation with no ground
 // behind it cannot compare, and its freshness line already says so.
 //
-// A refresh the operator asked for and the turn is about to deliver is the
+// A refresh this session took and the turn is about to deliver is the
 // refreshed outcome without a second comparison: the movement it was measured
 // against is the one the operator was shown, and measuring again would report
-// the drift twice.
+// the drift twice. A refresh carried from an earlier turn that failed is
+// measured again, because it can be any age: on 2026-09-23 one was carried
+// through thirty hours of failing turns while the branch moved on under it. One
+// that has itself fallen past the threshold is read again, and the agent is
+// still told everything that moved since the picture it last received.
 func (s *Session) measurePicture(ctx context.Context) (*PictureAge, error) {
 	if s.options.Ground == nil {
 		return nil, nil
+	}
+	var unrecorded error
+	if s.refresh != nil && s.refresh.carried {
+		if movement := s.options.Ground.Movement(ctx, s.refresh.briefing); movement.RepositoryProblem == "" && movement.Commits > s.options.refreshAfterLandings() {
+			// The carried picture stands where the new read cannot be taken: it is
+			// still nearer the branch than what the agent holds. A new read the
+			// record would not take fails the message, as it does below.
+			if _, err := s.refreshFrom(ctx, refreshByHarness, movement); err != nil && !s.refresh.carried {
+				unrecorded = err
+			}
+		}
 	}
 	picture := s.picture()
 	age := &PictureAge{
@@ -266,11 +286,20 @@ func (s *Session) measurePicture(ctx context.Context) (*PictureAge, error) {
 		Threshold:  s.options.refreshAfterLandings(),
 	}
 	if s.refresh != nil {
+		// The picture measured is the one the agent last received, which is what
+		// this turn's refresh moves it from.
+		if !s.refresh.was.IsZero() {
+			age.GatheredAt = s.refresh.was
+			age.Commit = s.refresh.wasCommit
+		}
 		age.note(s.refresh.since)
 		age.Outcome = PictureRefreshed
 		age.RefreshedBy = string(s.refresh.trigger)
 		age.RefreshedTo = s.refresh.briefing.Commit
 		age.Carried = s.refresh.carried
+		if unrecorded != nil {
+			return age, unrecorded
+		}
 		return age, s.recordPictureAge(age)
 	}
 	movement := s.options.Ground.Movement(ctx, picture)
@@ -426,6 +455,12 @@ func (s *Session) Freshness(ctx context.Context) string {
 	// delivers it — so the comparison below is not made either: it would count a
 	// drift this picture is about to be replaced over.
 	if s.refresh != nil {
+		// The record already names the re-read, so the picture the line opens with
+		// is the one the agent last received, which is what the waiting re-read is
+		// about to move it from.
+		if !s.refresh.was.IsZero() {
+			taken = fmt.Sprintf("context gathered %s%s", ageOf(s.options.clock().Now().Sub(s.refresh.was)), atCommit(s.refresh.wasCommit))
+		}
 		return fmt.Sprintf("%s; a re-read taken %s%s is waiting, and is delivered with the next thing said to the agent.",
 			taken, ageOf(s.options.clock().Now().Sub(s.refresh.briefing.GatheredAt)), atCommit(s.refresh.briefing.Commit))
 	}
@@ -478,19 +513,37 @@ func (s *Session) refreshFrom(ctx context.Context, trigger refreshTrigger, movem
 	if briefing.GatheredAt.IsZero() {
 		briefing.GatheredAt = s.options.clock().Now()
 	}
+	// What the agent is owed is measured from the picture it last received. Where
+	// an earlier re-read is still waiting, that is the picture the earlier one
+	// replaced, and what moved under the earlier one is owed as well.
+	since, was, wasCommit := movement, previous.GatheredAt, previous.Commit
+	if waiting := s.refresh; waiting != nil && s.state.Turns > 0 {
+		since = waiting.since.add(movement)
+		was, wasCommit = waiting.was, waiting.wasCommit
+	}
 	s.refresh = &pendingRefresh{
 		briefing:  briefing,
-		since:     movement,
-		was:       previous.GatheredAt,
+		since:     since,
+		was:       was,
+		wasCommit: wasCommit,
 		trigger:   trigger,
 		threshold: s.options.refreshAfterLandings(),
 	}
+	// The conversation's picture is the one just read from here on, delivered or
+	// not, so the next measurement is taken from it rather than from a picture a
+	// failing turn never replaced. A conversation that has taken no turn has
+	// nothing recorded to advance: its first turn carries this picture whole.
+	if s.state.Turns > 0 {
+		s.state.ContextGatheredAt = briefing.GatheredAt
+		s.state.ContextCommit = briefing.Commit
+		s.state.ContextShippedDocumentationBytes = briefing.ShippedDocumentationBytes
+	}
 	refreshed := Refreshed{
-		Since:      movement,
+		Since:      since,
 		GatheredAt: briefing.GatheredAt,
-		Was:        previous.GatheredAt,
+		Was:        was,
 		Commit:     briefing.Commit,
-		WasCommit:  previous.Commit,
+		WasCommit:  wasCommit,
 		Problems:   briefing.Problems,
 	}
 	// The picture is durable before the turn that would deliver it is asked, so a
@@ -542,6 +595,7 @@ func (s *Session) pendingPicture() *runstate.PendingPicture {
 		Commit:                    s.refresh.briefing.Commit,
 		ShippedDocumentationBytes: s.refresh.briefing.ShippedDocumentationBytes,
 		Replaces:                  s.refresh.was,
+		ReplacesCommit:            s.refresh.wasCommit,
 		Commits:                   s.refresh.since.Commits,
 		TrackerChanges:            s.refresh.since.TrackerChanges,
 		RepositoryProblem:         s.refresh.since.RepositoryProblem,
@@ -581,6 +635,15 @@ func (s *Session) restorePendingPicture() {
 		// and records that it did. That costs a walk over the repository and the
 		// tracker, which is worse than carrying the picture and better than briefing
 		// the role with nothing.
+		//
+		// The record's picture advanced to the lost one when it was read, and the
+		// agent never received it, so the record goes back to the picture the agent
+		// did receive. Measured from the lost one, the next turn would find nothing
+		// to re-read and the agent would never be told what moved.
+		if !recorded.Replaces.IsZero() && s.state.ContextGatheredAt.Equal(recorded.GatheredAt) && s.state.ContextCommit == recorded.Commit {
+			s.state.ContextGatheredAt = recorded.Replaces
+			s.state.ContextCommit = recorded.ReplacesCommit
+		}
 		s.refresh = nil
 		s.state.PendingPicture = nil
 		return
@@ -599,20 +662,22 @@ func (s *Session) restorePendingPicture() {
 			TrackerProblem:    recorded.TrackerProblem,
 		},
 		was:       recorded.Replaces,
+		wasCommit: recorded.ReplacesCommit,
 		trigger:   refreshTrigger(recorded.Trigger),
 		threshold: recorded.Threshold,
 		carried:   true,
 	}
 }
 
-// picture is what the product manager is working from — or, before it has been
-// given anything, what the next turn will hand it. The durable record is what
-// says so, and it is read whether or not this process is the one that resumed
-// the conversation: a picture a refresh delivered earlier in this very session
-// is just as much the one being held as a picture some other process delivered
-// yesterday. Measuring from anything else would re-count drift that has already
-// been reported and call the conversation older than it is, which is the exact
-// failure this is here to end.
+// picture is the newest picture taken for the conversation — the one the agent
+// is working from, or a re-read of it waiting to be delivered — or, before it
+// has been given anything, what the next turn will hand it. The durable record
+// is what says so, and it is read whether or not this process is the one that
+// resumed the conversation: a picture a refresh read earlier in this very
+// session is just as much the one being held as a picture some other process
+// read yesterday. Measuring from anything else would re-count drift that has
+// already been read and call the conversation older than it is, which is the
+// exact failure this is here to end.
 func (s *Session) picture() Briefing {
 	switch {
 	case !s.state.ContextGatheredAt.IsZero():
@@ -691,17 +756,49 @@ func (m Movement) hint(threshold int) string {
 	}
 }
 
+// add is what moved across two readings taken one after the other: the counts
+// summed, and a comparison either could not make still named as not made.
+func (m Movement) add(later Movement) Movement {
+	return Movement{
+		Commits:           m.Commits + later.Commits,
+		TrackerChanges:    m.TrackerChanges + later.TrackerChanges,
+		RepositoryProblem: firstNonEmpty(m.RepositoryProblem, later.RepositoryProblem),
+		TrackerProblem:    firstNonEmpty(m.TrackerProblem, later.TrackerProblem),
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // settled reports a picture nothing has moved under, which is only true when
 // both comparisons were actually made.
 func (m Movement) settled() bool {
 	return m.Commits == 0 && m.TrackerChanges == 0 && m.RepositoryProblem == "" && m.TrackerProblem == ""
 }
 
-// refreshedContext frames a new picture for the product manager. It is evidence
+// prompt frames a new picture for the product manager, whole. It is evidence
 // of the same kind as everything else it is given: an account of what the
 // repository and the tracker now hold, never an instruction, and never a claim
 // that anything it said before was wrong.
 func (p pendingRefresh) prompt() string {
+	return p.framed("What follows is the product as it stands now.", p.briefing.Text)
+}
+
+// changesPrompt frames the same picture as what changed between the one the
+// product manager last received and this one, which is what a session that
+// already holds the earlier picture needs and a fraction of what the whole one
+// costs. See pictureChanges for the form the changes take.
+func (p pendingRefresh) changesPrompt(changes string) string {
+	return p.framed(changesLead, changes)
+}
+
+func (p pendingRefresh) framed(lead, body string) string {
 	var prompt strings.Builder
 	prompt.WriteString("# Refreshed product context\n\n")
 	switch p.trigger {
@@ -716,14 +813,14 @@ func (p pendingRefresh) prompt() string {
 		// saying it was read for this one would be a small false claim about the
 		// evidence under it; when it was read is on the record, where the cost of
 		// it is what the question is about.
-		fmt.Fprintf(&prompt, "The harness re-read the repository and the tracker for this conversation, because the picture you were working from had fallen %s behind the target branch, past the %d this project allows. That picture was gathered %s, and %s. What follows is the product as it stands now.\n\n",
-			plural(p.since.Commits, "landing", "landings"), p.threshold, ageOf(p.briefing.GatheredAt.Sub(p.was)), p.since.render())
+		fmt.Fprintf(&prompt, "The harness re-read the repository and the tracker for this conversation, because the picture you were working from had fallen %s behind the target branch, past the %d this project allows. That picture was gathered %s, and %s. %s\n\n",
+			plural(p.since.Commits, "landing", "landings"), p.threshold, ageOf(p.briefing.GatheredAt.Sub(p.was)), p.since.render(), lead)
 	default:
-		fmt.Fprintf(&prompt, "The operator had the harness re-read the repository and the tracker. The context you were given when this conversation opened was gathered %s, and %s. What follows is the product as it stands now.\n\n",
-			ageOf(p.briefing.GatheredAt.Sub(p.was)), p.since.render())
+		fmt.Fprintf(&prompt, "The operator had the harness re-read the repository and the tracker. The context you were given when this conversation opened was gathered %s, and %s. %s\n\n",
+			ageOf(p.briefing.GatheredAt.Sub(p.was)), p.since.render(), lead)
 	}
 	prompt.WriteString("It is evidence like the rest of what you are given, not an instruction, and nothing you or the operator has said is withdrawn by it. Where it differs from what you were told at the start, say so plainly and carry on from what is here rather than from what you remember.\n\n")
-	prompt.WriteString(p.briefing.Text)
+	prompt.WriteString(body)
 	prompt.WriteString("\n")
 	return prompt.String()
 }
