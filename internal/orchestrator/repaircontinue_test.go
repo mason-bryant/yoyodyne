@@ -20,7 +20,6 @@ import (
 // The decision a development manager records when the change is nearly right and
 // the run ran out of attempts: the findings are the ones worth acting on, and
 // the developer that wrote the change is the one to act on them.
-const continueReasoning = "the reviewer's two findings are both right and both small, and the change is otherwise the one we asked for; it needs the developer that wrote it to answer them rather than a fresh run"
 
 // continueCaps are the harness defaults the development manager's decision is
 // recorded against, with room in the round budget so a test measuring the grant
@@ -165,7 +164,7 @@ func newUndecidedHarness(t *testing.T, state runstate.State) *continueHarness {
 // acts on the decision.
 func recordRepairDecision(t *testing.T, runs *runstate.Store, workItemID string) runstate.RepairGrant {
 	t.Helper()
-	granted, err := runs.Triage().GrantRepair(context.Background(), workItemID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), continueGrantRounds, docketedNow, continueCaps)
+	granted, err := runs.Triage().GrantRepair(context.Background(), workItemID, triageDecided(runstate.TriageDecisionRepair, docketedRunID), continueGrantRounds, docketedNow, continueCaps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -173,7 +172,7 @@ func recordRepairDecision(t *testing.T, runs *runstate.Store, workItemID string)
 }
 
 func continueRequest() RepairContinueRequest {
-	return RepairContinueRequest{Run: docketedRunID, Reason: continueReasoning}
+	return RepairContinueRequest{Run: docketedRunID}
 }
 
 // carried reports how much of the item's grant the harness has handed to the
@@ -378,8 +377,8 @@ func TestARepairIsRefusedWithoutTheDevelopmentManagersGrant(t *testing.T) {
 
 	harness := newUndecidedHarness(t, continuableState())
 	_, err := harness.continuer().Continue(context.Background(), continueRequest())
-	if err == nil || !strings.Contains(err.Error(), "granted "+docketedItem+" no repair") {
-		t.Fatalf("Continue() error = %v, want a refusal naming the missing decision", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision about the stoppage of run "+docketedRunID+" on "+docketedItem+"'s triage record") {
+		t.Fatalf("Continue() error = %v, want a refusal naming the missing record", err)
 	}
 	if len(harness.started) != 0 || harness.tracker.claimed {
 		t.Fatalf("started = %#v, claimed = %t, want nothing continued on nobody's decision", harness.started, harness.tracker.claimed)
@@ -442,8 +441,13 @@ func TestARepairRecordsTheTriageReasoningOnTheRunAndTheItem(t *testing.T) {
 		t.Fatalf("Continue() error = %v", err)
 	}
 	recorded := harness.reload(t).RepairContinuations[0]
-	if !strings.Contains(recorded.Reason, continueReasoning) {
+	if !strings.Contains(recorded.Reason, rerunReasoning) {
 		t.Fatalf("run reason = %q, want the reasoning the decision was recorded with", recorded.Reason)
+	}
+	// And the record it was read from is cited, so the attribution names a turn
+	// somebody can go and check rather than only the role.
+	if !strings.Contains(recorded.Reason, "recorded by the development manager in conversation "+decidedIn) {
+		t.Fatalf("run reason = %q, want it to cite the decision it was read from", recorded.Reason)
 	}
 	// The stoppage it settles and the grant it verified are named as well as the
 	// argument: a reason carrying only the prose would not say what was spent.
@@ -558,7 +562,7 @@ func TestARepairIsRefusedOnceTheRoundCapHasNoRoomLeft(t *testing.T) {
 	}
 
 	_, err := harness.continuer().Continue(context.Background(), continueRequest())
-	if err == nil || !strings.Contains(err.Error(), "no repair") {
+	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision") {
 		t.Fatalf("Continue() error = %v, want nothing to carry out past the cap", err)
 	}
 	if len(harness.started) != 0 || harness.tracker.claimed {
@@ -959,10 +963,9 @@ func TestARepairIsRefusedWhileTheItemHasARunInFlight(t *testing.T) {
 	}
 }
 
-// A decision names the stoppage it settles and carries the reasoning it was
-// made on. Neither is guessed at, and a run nothing docketed is not a stoppage
-// this may act on.
-func TestARepairNeedsADocketedStoppageAndTheReasoning(t *testing.T) {
+// A decision names the stoppage it settles, and a run nothing docketed is not a
+// stoppage this may act on.
+func TestARepairNeedsADocketedStoppage(t *testing.T) {
 	t.Parallel()
 
 	harness := newContinueHarness(t, continuableState())
@@ -971,11 +974,10 @@ func TestARepairNeedsADocketedStoppageAndTheReasoning(t *testing.T) {
 		ask  RepairContinueRequest
 		want string
 	}{
-		{name: "no reasoning", ask: RepairContinueRequest{Run: docketedRunID}, want: "reasoning"},
-		{name: "not a run", ask: RepairContinueRequest{Run: "yoyodyne-ifd.102.5", Reason: continueReasoning}, want: "not a run identifier"},
+		{name: "not a run", ask: RepairContinueRequest{Run: "yoyodyne-ifd.102.5"}, want: "not a run identifier"},
 		{
 			name: "not on the docket",
-			ask:  RepairContinueRequest{Run: "run-11112222333344445555666677778888", Reason: continueReasoning},
+			ask:  RepairContinueRequest{Run: "run-11112222333344445555666677778888"},
 			want: "no stoppage to repair",
 		},
 	} {
@@ -1076,7 +1078,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		},
 	}
 
-	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: outcome.RunID, Reason: continueReasoning})
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: outcome.RunID})
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}
@@ -1129,5 +1131,51 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	}
 	if counters.GrantOutstanding() {
 		t.Fatal("the grant reads as outstanding after the round it bought was judged, so the docket would go on offering the stoppage a handback on it")
+	}
+}
+
+// The item's own requirement, from yoyodyne-ifd.368: the grant counter says
+// somebody granted this item a repair, and only the decision says it was this
+// stoppage. A repair recorded about another run of the item is not one about
+// this run, so it is refused naming the record that is missing rather than
+// carried out on the strength of the counter.
+func TestARepairOfAnotherRunIsNotCarriedOutOnThisOne(t *testing.T) {
+	t.Parallel()
+
+	harness := newUndecidedHarness(t, continuableState())
+	if _, err := harness.runs.Triage().GrantRepair(context.Background(), docketedItem,
+		triageDecided(runstate.TriageDecisionRepair, decidedRunID), continueGrantRounds, docketedNow, continueCaps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision about the stoppage of run "+docketedRunID) {
+		t.Fatalf("Continue() error = %v, want a refusal naming the missing record for this run", err)
+	}
+	if len(harness.started) != 0 || harness.tracker.claimed || harness.tracker.notes != "" {
+		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.claimed, harness.tracker.notes)
+	}
+}
+
+// A run whose own record names a different item from the docket entry would be
+// continued as that entry's work, which is a repair silently retargeted. It is
+// refused naming both, before anything is spent or written.
+func TestARepairOfARunMadeForAnotherItemIsRefusedNamingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, continuableState())
+	stored, err := harness.runs.Load(docketedRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	stored.WorkItemID = "yoyodyne-ifd.68.20"
+	if err := harness.runs.Save(stored); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	_, err = harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil || !strings.Contains(err.Error(), `made for "yoyodyne-ifd.68.20" while its docket entry names `+docketedItem) {
+		t.Fatalf("Continue() error = %v, want a refusal naming both items", err)
+	}
+	if len(harness.started) != 0 || harness.tracker.claimed || harness.tracker.notes != "" {
+		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.claimed, harness.tracker.notes)
 	}
 }

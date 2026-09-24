@@ -4185,8 +4185,8 @@ retirement the harness could not write onto that run is reported rather than
 swallowed: the artifacts are gone and its record still says otherwise, which is
 a thing to go and correct.
 
-`yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
-half of the same pair, and it starts nothing over. It re-enters the stopped run's
+`yoyo triage repair <run-id>` is the other half of the same pair, and it starts
+nothing over. It re-enters the stopped run's
 own repair loop: the same branch, the same worktree, the same developer session,
 and the reviewer's findings handed back exactly as they were written.
 
@@ -4194,10 +4194,17 @@ and the reviewer's findings handed back exactly as they were written.
 recorded**, and it spends nothing of its own. Deciding `repair` is what takes the
 item's grant — `repair_grant_attempts` rounds, truncated there to what the round
 cap had room for — so this reads that record for how many attempts it is worth
-and hands the run exactly that. An item nobody granted a repair is one nobody
-decided this about, and it is refused; so is an item whose grant the harness has
-already carried out, which it counts from the continuations the item's runs
-record. Past the once-per-item cap a second is an escalation rather than a larger
+and hands the run exactly that. Like a re-run, it takes the run and nothing else:
+the decision it carries out and the reasoning the run and the item record come
+from the durable triage record of the item that run was made for, and the
+account it writes cites the conversation and the turn the decision was recorded
+on. A stoppage with no repair decision standing about it on that record is
+refused naming the record that is missing — which is also what a repair
+recorded about some other run meets, so a decision is only ever carried out
+against the run it names — and a run whose own record names a different item
+from its docket entry is refused naming both. An item whose grant the harness
+has already carried out is refused too, which it counts from the continuations
+the item's runs record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
 Five more things refuse it. The stopped run has to be really over, terminal and

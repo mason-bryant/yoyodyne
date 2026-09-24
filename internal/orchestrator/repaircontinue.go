@@ -24,10 +24,27 @@ package orchestrator
 // The decision is not this package's, and neither is the size of what it grants.
 // The development manager records a repair, which spends the item's repair-grant
 // budget as it is recorded and is truncated there to the review rounds the cap
-// still had room for. What reaches here is that grant, and everything here is
-// the harness acting on it: proving the stoppage is over, proving the worktree
-// is still the one the harness left, reading whether it may spend on a provider
-// at all, superseding the blocker, and continuing the run.
+// still had room for. What reaches here is the run the docket entry names and
+// nothing else: the decision, the grant, and the reasoning it was made on are
+// read from the item's durable triage record, where the development manager's
+// own conversation wrote them, and everything here is the harness acting on
+// that: proving the stoppage is over, proving the worktree is still the one the
+// harness left, reading whether it may spend on a provider at all, superseding
+// the blocker, and continuing the run.
+//
+// # Why the reasoning is read and not given
+//
+// This verb used to take the reasoning as a flag and record it on the run and
+// the item as the account of why the run was going again — the same unchecked
+// attribution yoyodyne-ifd.311 took out of the re-run. A repair decision has been
+// durable since then too, written by the grant that spends its budget, so it is
+// read here the same way: a stoppage with no repair recorded about it is refused
+// naming the missing record, and the account the run and the item carry cites
+// the decision it was built from. The decision names the run it is about, and it
+// is read from the record of the item that run was made for, so a repair can only
+// ever be carried out against the run it names: one recorded about some other
+// item's run is not found here, and is refused rather than carried out against
+// whatever this item has on the docket.
 //
 // # Why nothing is written until everything has been asked
 //
@@ -197,11 +214,12 @@ type RepairContinuer struct {
 }
 
 // RepairContinueRequest is one decision to carry out: the run the docket entry
-// names, and the reasoning the development manager recorded for deciding a
-// repair of it.
+// names, and nothing else. The reasoning is not asked for and cannot be given —
+// it is read from the decision the development manager recorded, because a
+// continuation that took it from whoever typed the command would carry an
+// attribution to a role that never wrote those words.
 type RepairContinueRequest struct {
-	Run    string
-	Reason string
+	Run string
 }
 
 // RepairContinueResult is what the action did. It reports the continuation it
@@ -213,7 +231,8 @@ type RepairContinueResult struct {
 	RunID      string `json:"run_id"`
 	DocketKey  string `json:"docket_key"`
 	// Reason is what the run and the item record as why this continuation exists:
-	// the grant the harness verified and the reasoning it was given.
+	// the development manager's recorded decision, cited to the record it was read
+	// from, and the reasoning it was recorded with.
 	Reason string `json:"reason"`
 	// Granted is what this re-entry added to the run's repair budget, out of the
 	// Decided rounds the development manager's grant is worth. Truncated says the
@@ -339,12 +358,8 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 		return RepairContinueResult{}, err
 	}
 	runID := strings.TrimSpace(request.Run)
-	reasoning := strings.TrimSpace(request.Reason)
 	if !runstate.ValidRunID(runID) {
 		return RepairContinueResult{}, fmt.Errorf("%q is not a run identifier; a triage decision names the run the docket entry is about", request.Run)
-	}
-	if reasoning == "" {
-		return RepairContinueResult{}, errors.New("a repair continues on the development manager's reasoning, and none was given")
 	}
 
 	entry, err := docketedStoppage(c.Docket, runID, "repair")
@@ -369,6 +384,15 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 
 	if err := stoppageIsOver(prior); err != nil {
 		return result, err
+	}
+	// The run continued is the run the decision names, and it is continued on the
+	// item it was made for. A record that put this run under some other item would
+	// have the dispatch below continue one item's run as another's work, so it is
+	// refused naming both rather than retargeted.
+	if owner := strings.TrimSpace(prior.WorkItemID); owner != entry.WorkItemID {
+		return result, fmt.Errorf(
+			"run %s is recorded as made for %q while its docket entry names %s, so a repair of it would continue one item's run as another's work; nothing was spent, and which item this stoppage belongs to is a person's to settle",
+			prior.RunID, owner, entry.WorkItemID)
 	}
 	if err := continuableRepair(prior); err != nil {
 		return result, err
@@ -405,7 +429,9 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 		return result, err
 	}
 	// That the development manager granted this repair is read rather than taken
-	// on trust, and so is how much of that grant is left to carry out.
+	// on trust, and so is how much of that grant is left to carry out and what it
+	// was decided on. The reason the run records names that role, so the decision
+	// and the words attributed to it both come from the record the role wrote.
 	granted, err := c.granted(entry.WorkItemID, entry.RunID)
 	if err != nil {
 		return result, err
@@ -443,7 +469,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 		return result, nil
 	}
 
-	result.Reason = continueReason(entry, granted, reasoning, result.Stall)
+	result.Reason = continueReason(entry, granted, result.Stall)
 
 	// The item is put back first, because a run made live behind an item that
 	// still says it is blocked is a run nothing can resume and nothing will
@@ -479,9 +505,11 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 }
 
 // repairGrant is the development manager's grant as this carry-out found it:
-// how many of its rounds are left to carry out, how many it was worth in total,
-// and whether the round cap cut it when it was recorded.
+// the decision it was recorded as, how many of its rounds are left to carry out,
+// how many it was worth in total, and whether the round cap cut it when it was
+// recorded.
 type repairGrant struct {
+	decision  runstate.TriageDecision
 	attempts  int
 	decided   int
 	truncated bool
@@ -507,28 +535,42 @@ type repairGrant struct {
 // stoppage needs a further decision, which past the cap is an escalation rather
 // than a larger budget.
 //
-// The decision standing about this stoppage is asked as well, as a re-run asks
-// it. One decision stands per stopped run, and a re-run, a wait, or an
-// escalation recorded in place of the repair released the rounds the repair
-// reserved — so a repair carried out on that run afterwards would spend
-// attempts the cap no longer holds room for, on a decision nobody holds any
-// more. A stoppage with no decision recorded about it at all is one decided
-// before decisions were durable, and the grant's footprint is still read as the
-// decision there.
+// The decision standing about this stoppage is the first thing asked, as a
+// re-run asks it, and it is what the run's attribution is built from. A spent
+// counter says somebody granted this item a repair; the decision says it was
+// this stoppage, this role, this conversation and these words. A stoppage with
+// no decision recorded about it is refused naming the missing record — which is
+// also what a repair recorded before decisions were durable meets, and the one
+// the development manager has to record again. One decision stands per stopped
+// run, and a re-run, a wait, or an escalation recorded in place of the repair
+// released the rounds the repair reserved — so a repair carried out on that run
+// afterwards would spend attempts the cap no longer holds room for, on a
+// decision nobody holds any more.
+//
+// The record read is the one of the item the run was made for, and the decision
+// found there names the run itself. So a repair recorded against some other
+// item's run is never what this finds: it is refused here as missing from this
+// item's record rather than carried out against a run it does not name.
 func (c RepairContinuer) granted(workItemID, runID string) (repairGrant, error) {
 	counters, err := c.Decisions.Counters(workItemID)
 	if err != nil {
 		return repairGrant{}, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
 	}
-	if counters.RepairGrants < 1 {
+	standing, found := counters.DecisionOf(runID)
+	if !found {
 		return repairGrant{}, fmt.Errorf(
-			"triage has granted %s no repair, so there is no decision here to carry out: the development manager records the decision, which spends the item's repair budget, before the harness continues anything on it",
-			workItemID)
+			"the development manager has recorded no triage decision about the stoppage of run %s on %s's triage record, so there is nothing here to carry out: a repair carries the decision the record holds rather than words given to this command, and the decision is recorded where it is made, in the development manager's own conversation, against the item the run was made for. Recording it there spends a further repair grant of %s, which the cap may refuse — `yoyo triage override` is what permits that",
+			runID, workItemID, workItemID)
 	}
-	if standing, found := counters.DecisionOf(runID); found && standing.Decision != runstate.TriageDecisionRepair {
+	if standing.Decision != runstate.TriageDecisionRepair {
 		return repairGrant{}, fmt.Errorf(
 			"the decision standing about the stoppage of run %s is %q rather than a repair, %s: a repair recorded earlier about it was superseded by that decision and the rounds it reserved were released with it, so carrying a repair out here would spend attempts the item's record no longer holds",
 			runID, standing.Decision, standing.Cite())
+	}
+	if counters.RepairGrants < 1 {
+		return repairGrant{}, fmt.Errorf(
+			"a repair of the stoppage of run %s is recorded as decided, %s, and %s's repair budget shows none spent, so its durable record disagrees with itself and nothing here is safe to carry out: the decision spends the budget as it is recorded, in one write",
+			runID, standing.Cite(), workItemID)
 	}
 	carried, err := c.carriedOut(workItemID)
 	if err != nil {
@@ -540,7 +582,7 @@ func (c RepairContinuer) granted(workItemID, runID string) (repairGrant, error) 
 			"triage has granted %s %d repair attempt(s) and the harness has carried out %d, so there is nothing of that grant left to re-enter on: a further stoppage of an item that has already been handed back needs a further decision, which past the cap is an escalation rather than a larger budget",
 			workItemID, counters.GrantedRounds, carried)
 	}
-	return repairGrant{attempts: remaining, decided: counters.GrantedRounds, truncated: counters.TruncatedGrants > 0}, nil
+	return repairGrant{decision: standing, attempts: remaining, decided: counters.GrantedRounds, truncated: counters.TruncatedGrants > 0}, nil
 }
 
 // carriedOut is how much of one item's repair grant the harness has already
@@ -735,37 +777,46 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 }
 
 // continueReason is what the run and the item record as why this run is going
-// again: the grant the harness verified, and the reasoning it was given.
+// again: the decision the harness read, where that decision is recorded, the
+// grant it carries, and the reasoning the decision was recorded with.
 //
-// The two are worded apart on purpose, exactly as a re-run's reason is. That the
-// item was granted another repair is a fact read from its durable triage record
-// and is stated as one; the prose after it arrived with the instruction to carry
-// the decision out, and is attributed to that rather than quoted as the
-// development manager's own words.
+// All of it is read from the durable record, exactly as a re-run's reason is,
+// which is what makes the whole sentence evidence rather than a claim. It cites
+// the record it came from — whose decision, which conversation, which turn — so
+// a reader who doubts the attribution can go and find the turn it was written
+// on, and nothing in it can be supplied by whoever asked for the carry-out.
 //
 // A stall says what it is rather than borrowing the repair's sentence. What the
 // item's notes carry is what the next reader of this run finds instead of
 // deciding the stoppage again, and "re-entered on the change it already has"
 // would describe a change nobody complained about and an attempt that was
 // never judged.
-func continueReason(entry triage.Entry, granted repairGrant, reasoning string, stalled bool) string {
+func continueReason(entry triage.Entry, granted repairGrant, stalled bool) string {
 	grant := fmt.Sprintf("%d further repair attempt(s)", granted.attempts)
 	if granted.truncated {
 		grant = fmt.Sprintf("%d further repair attempt(s), from a grant the review-round cap had already cut to %d",
 			granted.attempts, granted.decided)
 	}
+	decided := granted.decision.Cite()
 	reason := fmt.Sprintf(
-		"Triaged: the repair loop of run %s was re-entered on the change it already has, under a grant of %s recorded against %s's durable triage budget. The durable blocker that run stopped on is superseded by this re-entry. The reasoning given to the harness when it was asked to: ",
-		entry.RunID, grant, entry.WorkItemID)
+		"Triaged: the development manager's triage decided a repair of the stopped work of run %s, %s, and the harness re-entered that run's repair loop on the change it already has, under a grant of %s recorded against %s's durable triage budget. The durable blocker that run stopped on is superseded by this re-entry. The reasoning that decision was recorded with: ",
+		entry.RunID, decided, grant, entry.WorkItemID)
 	if stalled {
 		reason = fmt.Sprintf(
-			"Triaged: run %s was continued in the developer session it stalled in, at the attempt the harness stopped it in, under a grant of %s recorded against %s's durable triage budget. Nothing had judged the work, so the continuation counts no review round and no repair attempt. The durable blocker that run stopped on is superseded by this re-entry. The reasoning given to the harness when it was asked to: ",
-			entry.RunID, grant, entry.WorkItemID)
+			"Triaged: the development manager's triage decided a repair of the stopped work of run %s, %s, and the run was continued in the developer session it stalled in, at the attempt the harness stopped it in, under a grant of %s recorded against %s's durable triage budget. Nothing had judged the work, so the continuation counts no review round and no repair attempt. The durable blocker that run stopped on is superseded by this re-entry. The reasoning that decision was recorded with: ",
+			entry.RunID, decided, grant, entry.WorkItemID)
 	}
 	// The reasoning is folded to what the run's record will hold rather than
 	// refused: losing the end of a long argument is better than refusing to carry
-	// out a decision because of its length.
-	return reason + singleLine(reasoning, runstate.MaxSelectionReasonBytes-len(reason))
+	// out a decision because of its length. The room is never negative, and the
+	// assembled sentence is folded to the same bound, for the reason a re-run's
+	// is: the prefix carries a citation built from recorded identifiers, so
+	// measuring room is not the same as enforcing the bound.
+	room := runstate.MaxSelectionReasonBytes - len(reason)
+	if room < 0 {
+		room = 0
+	}
+	return singleLine(reason+singleLine(strings.TrimSpace(granted.decision.Reason), room), runstate.MaxSelectionReasonBytes)
 }
 
 func (c RepairContinuer) validate() error {

@@ -34,7 +34,7 @@ func TestARepairDispatchCreatesNoWorktree(t *testing.T) {
 	docket := &memoryDocket{}
 
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, docket)
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	worktreesBefore := worktreeDirectories(t, worktreeRoot)
@@ -44,7 +44,7 @@ func TestARepairDispatchCreatesNoWorktree(t *testing.T) {
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
 
 	result, err := repairContinuerOver(t, continuing, store, docket, tracker).
-		Continue(context.Background(), RepairContinueRequest{Run: stopped.RunID, Reason: continueReasoning})
+		Continue(context.Background(), RepairContinueRequest{Run: stopped.RunID})
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}

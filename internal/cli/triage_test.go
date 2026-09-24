@@ -310,7 +310,7 @@ func TestTriageUsageSaysWhatAnOverrideIsAndIsNot(t *testing.T) {
 }
 
 // The verb carries out a decision somebody else recorded, so what it needs is
-// the stoppage and the reasoning. Neither is guessed at.
+// the stoppage. It is not guessed at.
 func TestTriageRepairRequiresTheStoppageItActsOn(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +325,24 @@ func TestTriageRepairRequiresTheStoppageItActsOn(t *testing.T) {
 	}
 }
 
+// The verb takes the run and nothing else: the reasoning is read from the
+// decision the development manager recorded, so words offered here are refused
+// before anything is read, rather than recorded as hers.
+func TestTriageRepairTakesNoReasoning(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"triage", "repair", "--reason", "the findings are both small",
+		"run-0123456789abcdef0123456789abcdef"}, &stdout, &stderr, "test")
+	if code != 2 {
+		t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -reason") {
+		t.Fatalf("stderr = %q, want the reasoning flag refused", stderr.String())
+	}
+}
+
 // A repair that was refused before anything was granted is reported as a
 // refusal rather than as a run that failed, and in JSON it carries the refusal
 // where a script reads it.
@@ -334,7 +352,7 @@ func TestTriageRepairReportsARefusalAsJSON(t *testing.T) {
 	path := writeConfig(t, "version: 3\n")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run([]string{"triage", "repair", "--config", path, "--reason", "the findings are both small", "--json",
+	code := Run([]string{"triage", "repair", "--config", path, "--json",
 		"run-0123456789abcdef0123456789abcdef"}, &stdout, &stderr, "test")
 	if code != 1 {
 		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr.String())

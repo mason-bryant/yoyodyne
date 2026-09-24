@@ -1695,15 +1695,19 @@ grant](configuration.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
-`yoyo triage repair <run-id> --reason "<what the development manager decided>"`
-is the other one, and it is the answer to the opposite case: the change is nearly
+`yoyo triage repair <run-id>` is the other one, and it is the answer to the
+opposite case: the change is nearly
 right and the run ran out of attempts. It starts nothing over. The stopped run
 goes on — same branch, same worktree, the developer session that already holds
 the context, and the reviewer's findings handed back exactly as they were
 written — under the grant the development manager already recorded. Deciding
 `repair` is what takes that grant and sizes it; this reads that record for what
 it is worth and hands the run exactly that, so it can never give a run more
-attempts than the round cap let the item have. **Your hold on intake applies to
+attempts than the round cap let the item have. Like a re-run it takes no
+reasoning: what the run and the item record as why it is going again is the
+decision itself, read from that record and citing the conversation and turn it
+was recorded on, and a stoppage with no repair decision recorded about it is
+refused naming the missing record. **Your hold on intake applies to
 this too**, for the same reason it applies to a re-run.
 
 **A stall is the second thing it continues, and it is charged nothing.** A run
