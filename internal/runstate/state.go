@@ -2870,7 +2870,16 @@ func (s State) Outstanding() bool {
 	if s.Integration == nil {
 		return false
 	}
-	return s.Phase != PhaseComplete || (s.PullRequest != nil && s.PullRequest.MergeQueued)
+	queued := s.PullRequest != nil && s.PullRequest.MergeQueued
+	// A landing through the pull request that ended with the forge neither having
+	// merged it nor holding the merge landed nowhere: the run stopped and handed
+	// the item to a person, and the harness owes it nothing until a re-arm queues
+	// the merge again. Counting it outstanding would have every sweep settle it
+	// against a local target it never meant to move.
+	if s.Integration.ThroughPullRequest && !queued && (s.PullRequest == nil || !s.PullRequest.Merged) {
+		return false
+	}
+	return s.Phase != PhaseComplete || queued
 }
 
 // AwaitingForge reports a promotion whose publication the forge has not

@@ -1631,7 +1631,9 @@ dropped leaves the change on its pull request and on no target branch, so the
 item is not closed: the run stops and hands it back with the forge's answer as
 the blocker, and `yoyo triage rearm` can repeat the merge once the requirement is
 met. A remote target that moved in the meantime is replayed onto, like any lost
-race. A forge that cannot be asked is treated as protecting the branch, and the
+race. A process killed mid-landing is settled by `yoyo reconcile` on the forge's
+answer about the pull request, never on the local target, which the landing did
+not move. A forge that cannot be asked is treated as protecting the branch, and the
 run says so on the item's `Target branch:` line, which every publishing run
 writes to name the path it took. An unprotected target keeps the local-first
 order above. The reason is the two stalls this ended: on 2026-09-20 and again on

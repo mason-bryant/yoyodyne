@@ -2851,7 +2851,11 @@ reviewer was being asked resumes at the checks rather than at the review, becaus
 a resumed run re-earns the whole gate, and no definition has a transition from
 the review back to the check; such a run records a divergence naming both. A
 process killed inside integration is settled by the sweep as succeeded with its
-instance still standing in `integrate`, and records the gap that leaves. Both are
+instance still standing in `integrate`, and records the gap that leaves. (That
+is a local promotion; a process killed while landing through a pull request is
+settled on the forge's answer instead, as
+[a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)
+says.) Both are
 left as divergences deliberately — the definition is missing a path the pipeline
 takes, and an observation that quietly agreed with itself would be worth nothing.
 
@@ -3137,6 +3141,12 @@ leaves your local target ahead of the remote:
   is fast-forwarded onto the remote and the change is replayed onto it, with
   the checks and the review re-earned, under the same
   [retry budget](#losing-a-race-for-the-target-branch).
+- **The process was killed** after the landing was prepared and before the
+  forge's answer was heard. The run recorded the landing before asking, and
+  `yoyo reconcile` settles it on what the forge says rather than on the local
+  target, which says nothing here: merged is confirmed, caught up onto, closed,
+  and cleaned up; queued is recorded as a queued landing and settled like any
+  other; anything else hands the item to a person, as the run itself would have.
 
 **Why.** On a protected target, promoting locally first strands commits. A
 merge the forge refuses or holds leaves the local target ahead of the remote,

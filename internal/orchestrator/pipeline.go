@@ -4819,6 +4819,16 @@ func (a *activeRun) integrate(ctx context.Context) error {
 		PreviousTargetCommit: integration.PreviousTargetCommit,
 		ThroughPullRequest:   integration.ThroughPullRequest,
 	}
+	// A landing through the pull request is on the record before the forge is
+	// asked for anything, so a process killed from here on leaves reconciliation
+	// the fact it needs: the change was to land by the forge's merge, and the
+	// local target says nothing about whether it did.
+	if integration.ThroughPullRequest {
+		a.state.UpdatedAt = p.clock().Now()
+		if err := p.Store.Save(a.state); err != nil {
+			return fmt.Errorf("record the landing through pull request before asking the forge to merge: %w", err)
+		}
+	}
 	// The approving verdict authorized this promotion, so it also authorized the
 	// merge of the pull request that carried it. Publishing does not fail the run
 	// over an unfinished publication — the local target branch has already moved

@@ -306,6 +306,12 @@ leaves your local target ahead of the remote:
   is fast-forwarded onto the remote and the change is replayed onto it, with
   the checks and the review re-earned, under the same
   [retry budget](#losing-a-race-for-the-target-branch).
+- **The process was killed** after the landing was prepared and before the
+  forge's answer was heard. The run recorded the landing before asking, and
+  `yoyo reconcile` settles it on what the forge says rather than on the local
+  target, which says nothing here: merged is confirmed, caught up onto, closed,
+  and cleaned up; queued is recorded as a queued landing and settled like any
+  other; anything else hands the item to a person, as the run itself would have.
 
 **Why.** On a protected target, promoting locally first strands commits. A
 merge the forge refuses or holds leaves the local target ahead of the remote,
