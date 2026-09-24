@@ -609,6 +609,32 @@ func agentEndpoints(cfg config.Config) []readmodel.AgentEndpoint {
 	return endpoints
 }
 
+// developerEndpoints is every endpoint a developer run's turn can be asked of:
+// the developer agent as configured, and the same agent on each model
+// execution.developer_models maps a label to, each failing over exactly as the
+// developer does. A usage window holds intake only where it closes every one of
+// them, because a mapped model the provider still serves is work that can run.
+func developerEndpoints(cfg config.Config) []readmodel.AgentEndpoint {
+	name := agentNameForRole(cfg, domain.RoleDeveloper)
+	if name == "" {
+		return nil
+	}
+	var developer readmodel.AgentEndpoint
+	for _, endpoint := range agentEndpoints(cfg) {
+		if endpoint.Name == name {
+			developer = endpoint
+		}
+	}
+	endpoints := []readmodel.AgentEndpoint{developer}
+	for _, rule := range cfg.Execution.DeveloperModels {
+		mapped := developer
+		mapped.Name = name + " (" + strings.TrimSpace(rule.Label) + ")"
+		mapped.Model = strings.TrimSpace(rule.Model)
+		endpoints = append(endpoints, mapped)
+	}
+	return endpoints
+}
+
 // unreadableTracker is the tracker a reading gets when the harness could not be
 // resolved far enough to build one. It answers every question with the reason,
 // so the queue's line says what went wrong rather than reporting an empty

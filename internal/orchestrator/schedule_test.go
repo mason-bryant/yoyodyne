@@ -2498,6 +2498,12 @@ type scheduleHarness struct {
 	outages     ScheduleOutages
 	provider    ScheduleProvider
 	outageProbe time.Duration
+	// usageLimits is the product's record of the provider refusing the harness
+	// for want of capacity, and developers every endpoint a developer's turn can
+	// end on. A pull is wired with them only where a test asks, so every other
+	// test's pass reads no recorded window — which is what every pass did before.
+	usageLimits readmodel.UsageLimits
+	developers  []readmodel.AgentEndpoint
 	// outstanding stands in for the decisions the development manager recorded
 	// and nobody has acted on, and carry for what firing one comes to. A pull is
 	// wired with them only where a test asks, so every other test's pass carries
@@ -2678,6 +2684,8 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		Outages:                     h.outages,
 		Provider:                    h.provider,
 		OutageProbe:                 h.outageProbe,
+		UsageLimits:                 h.usageLimits,
+		Developers:                  h.developers,
 	}, nil
 }
 

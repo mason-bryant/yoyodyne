@@ -578,6 +578,31 @@ It is the message that was missing between 2026-09-08 and 09-13, when 134
 refusals were each said once and nothing said that all five agents were on the
 one model being refused, with nothing to fail over to, for five days.
 
+### A watch session inside a recorded window
+
+The same two records hold intake by themselves. At every pull a watching
+`yoyo work` session reads the usage-limit log and the runs parked on a limit,
+and while a refusal the provider named a future reset for covers the model
+every developer's turn ends on — the developer's alternate where failover names
+one, and each model `execution.developer_models` maps a label to as well — it
+chooses nothing: no item is pulled and no recorded triage decision is carried
+out. It reads the record rather than remembering it, so a session started inside
+a window honours it from its first poll. That is what was missing on
+2026-09-23, when the maintenance pass restarted the watch repeatedly inside a
+`seven_day` window and each fresh session pulled new items into the same
+refusal: one limit, twelve failed runs.
+
+The session records the poll as one made inside the provider's window, so
+`yoyo status` opens with `Paused on the provider's usage window until …`, the
+channel says the same, and the watch log's idle line carries the window and its
+reset — which is what a maintenance script reads to stand its idle check down.
+It is never reported as a hold: nothing needs releasing, and the first poll past
+the reset pulls again. A limit with no reset named does not hold intake this
+way; a dispatch is how that one is asked about. A developer model the record
+does not refuse — a label mapped to a model the provider still serves — holds
+nothing, because work can run on it. A pass that is not watching stops on the window
+instead of waiting it out.
+
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
 and starts runs, so a limit it meets is met by a run it started, bar the turn it
 takes delivering a stopped run to the development manager. That the three above

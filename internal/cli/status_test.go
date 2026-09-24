@@ -1488,3 +1488,32 @@ func TestStatusSaysNothingAboutStallsOnAProductThatHasHadNone(t *testing.T) {
 		t.Fatalf("stdout asserts something about stalls on a product that has had none:\n%s", stdout)
 	}
 }
+
+// The endpoints a recorded window is read against are the developer's own and
+// one per model a label is mapped to, each failing over as the developer does,
+// and nothing any other role asks for.
+func TestDeveloperEndpointsAreTheDeveloperAndItsMappedModels(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Agents: map[string]config.AgentConfig{
+			"architect": {Role: domain.RoleArchitect, Backend: "claude-code", Model: "fable"},
+			"developer": {Role: domain.RoleDeveloper, Backend: "claude-code", Model: "opus",
+				Failover: config.Failover{Enabled: true, Model: "sonnet"}},
+		},
+		Execution: config.Execution{DeveloperModels: []config.DeveloperModelRule{{Label: "docs", Model: "haiku"}}},
+	}
+	endpoints := developerEndpoints(cfg)
+	if len(endpoints) != 2 {
+		t.Fatalf("endpoints = %+v, want the developer and its one mapped model", endpoints)
+	}
+	if endpoints[0].Model != "opus" || endpoints[0].Alternate != "sonnet" {
+		t.Fatalf("developer endpoint = %+v, want opus failing over to sonnet", endpoints[0])
+	}
+	if endpoints[1].Model != "haiku" || endpoints[1].Alternate != "sonnet" {
+		t.Fatalf("mapped endpoint = %+v, want haiku failing over as the developer does", endpoints[1])
+	}
+	if got := developerEndpoints(config.Config{}); got != nil {
+		t.Fatalf("endpoints with no developer = %+v, want none", got)
+	}
+}
