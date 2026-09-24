@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite/readertest"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite/writertest"
 )
 
@@ -32,6 +33,32 @@ func TestTheArtifactWriterIsConfinedToTheRepository(t *testing.T) {
 				Reason:    "the topology matrix",
 			}, moment())
 			return err
+		},
+	})
+}
+
+// The artifact reader is held to the same topologies as the writer. A document
+// read from outside the repository arrives as the product's own recorded intent,
+// named by a path inside the repository, and every role downstream reasons from
+// it as though somebody had written and reviewed it here.
+func TestTheArtifactReaderIsConfinedToTheRepository(t *testing.T) {
+	t.Parallel()
+
+	readertest.Run(t, readertest.Reader{
+		Name:      "the artifact store",
+		Directory: productHome,
+		File:      "example-brief.md",
+		Document:  document("example-brief", "brief", "Example brief", nil, "active") + "\nWhat this product is for.\n",
+		Read: func(t *testing.T, root string) ([]string, error) {
+			set, err := Store{RepositoryRoot: root, Homes: []string{productHome}}.Load()
+			if err != nil {
+				return nil, err
+			}
+			delivered := make([]string, 0, len(set.Artifacts))
+			for _, recorded := range set.Artifacts {
+				delivered = append(delivered, recorded.Path)
+			}
+			return delivered, nil
 		},
 	})
 }

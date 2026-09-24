@@ -15,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
@@ -348,13 +349,13 @@ func (p SpecificationProblem) String() string {
 // because a repository that outgrows the budget should still get a usable
 // conversation that says what it could not see.
 func AssembleProduct(request ProductRequest) (Bundle, error) {
-	root, err := filepath.Abs(request.RepositoryRoot)
+	// The same root every write into this repository is confined to, so the
+	// directories read below are resolved by the walk that decides where a
+	// document written to one of them would land, rather than by joining a
+	// configured string onto a path.
+	root, err := repowrite.NewRoot(request.RepositoryRoot)
 	if err != nil {
-		return Bundle{}, fmt.Errorf("resolve repository root: %w", err)
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return Bundle{}, fmt.Errorf("resolve repository root symlinks: %w", err)
+		return Bundle{}, err
 	}
 	directory, err := validateSpecificationsDirectory("specifications", request.SpecificationsDirectory)
 	if err != nil {
@@ -396,7 +397,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// directory must not be able to push it out. It is bounded by construction,
 	// so what it costs is what it renders.
 	triageDocket := renderTriageDocket(request.TriageDocket, request.TriageDocketUnavailable)
-	shipped := resolveShippedDocumentation(root, request.ShippedDocumentation)
+	shipped := resolveShippedDocumentation(root.Path(), request.ShippedDocumentation)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
 	// surface costs before any of its documents are read are reserved before any
@@ -418,7 +419,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	stated := 0
 	bundle := Bundle{Bytes: reserved}
 	for _, specificationPath := range specificationPaths {
-		reference, err := readReference(root, specificationPath, maxBytes-bundle.Bytes)
+		reference, err := readReference(root.Path(), specificationPath, maxBytes-bundle.Bytes)
 		if err != nil {
 			// A specification that does not fit is reported as omitted rather than
 			// failing the conversation; anything else is a real problem.
@@ -508,7 +509,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// The shipped surface is read after the specifications have taken what they
 	// need, so intent wins the budget over description by construction rather
 	// than by the order somebody happened to write the sections in.
-	documentation, err := readShippedDocumentation(root, shipped, maxBytes-bundle.Bytes)
+	documentation, err := readShippedDocumentation(root.Path(), shipped, maxBytes-bundle.Bytes)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -559,12 +560,19 @@ func validateSpecificationsDirectory(kind, directory string) (string, error) {
 }
 
 // discoverSpecifications lists the Markdown a product conversation reads. The
-// directory is walked to any depth without following symlinks, and every path
-// is still validated when it is read. A directory that does not exist is not an
-// error: a project with no specifications yet gets a conversation that says so.
-func discoverSpecifications(kind, root, directory string) ([]string, error) {
-	path := filepath.Join(root, directory)
-	info, err := os.Lstat(path)
+// directory is resolved component by component before it is walked, because a
+// directory that reads as `docs/product` is wherever the filesystem has since
+// put it and one symlink above it carries documents nobody wrote here into the
+// context as recorded intent. It is then walked to any depth without following
+// symlinks, and every path is still validated when it is read. A directory that
+// does not exist is not an error: a project with no specifications yet gets a
+// conversation that says so.
+func discoverSpecifications(kind string, root repowrite.Root, directory string) ([]string, error) {
+	base, err := root.ResolveDirectory(directory)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(base)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -586,14 +594,17 @@ func discoverSpecifications(kind, root, directory string) ([]string, error) {
 		if strings.ToLower(filepath.Ext(dirEntry.Name())) != ".md" {
 			return nil
 		}
-		relative, err := filepath.Rel(root, candidate)
+		relative, err := filepath.Rel(base, candidate)
 		if err != nil {
 			return err
 		}
-		found = append(found, filepath.ToSlash(relative))
+		// Named by the directory it was configured under rather than by where the
+		// walk found it, so a project that keeps its specifications behind a
+		// symlink inside the repository reads them under the path it configured.
+		found = append(found, path.Join(filepath.ToSlash(directory), filepath.ToSlash(relative)))
 		return nil
 	}
-	if err := filepath.WalkDir(path, walk); err != nil {
+	if err := filepath.WalkDir(base, walk); err != nil {
 		return nil, fmt.Errorf("discover %s under %q: %w", kind, directory, err)
 	}
 	sort.Strings(found)
@@ -1165,7 +1176,7 @@ func (b Bundle) holds(path string) bool {
 // as omitted rather than silently missing. A set whose directory does not exist
 // contributes nothing: a repository that has recorded no designs yet is a fact
 // about the repository, not a failure to assemble a context.
-func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes int, omitted *[]string) (string, map[string]bool, error) {
+func readRoleDocuments(root repowrite.Root, sets []DocumentSet, bundle *Bundle, maxBytes int, omitted *[]string) (string, map[string]bool, error) {
 	var rendered strings.Builder
 	// Which directories actually carried a document into the context, so the
 	// header can say what is here rather than what was asked for.
@@ -1182,7 +1193,7 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 			if bundle.holds(documentPath) {
 				continue
 			}
-			reference, err := readReference(root, documentPath, maxBytes-bundle.Bytes)
+			reference, err := readReference(root.Path(), documentPath, maxBytes-bundle.Bytes)
 			if err != nil {
 				var tooLarge tooLargeError
 				if errors.As(err, &tooLarge) {

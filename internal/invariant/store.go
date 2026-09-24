@@ -62,7 +62,14 @@ func (s Store) Load() (Set, error) {
 		return Set{}, err
 	}
 	set := Set{Directory: filepath.ToSlash(directory)}
-	base := filepath.Join(root, directory)
+	// Where the configured directory actually is, resolved component by component
+	// rather than joined onto the root: `docs/decisions/invariants` is whatever
+	// the filesystem has put along the path, and one symlink above it reads a
+	// constraint nobody committed and delivers it under exactly that path.
+	base, err := root.ResolveDirectory(directory)
+	if err != nil {
+		return Set{}, err
+	}
 	info, err := os.Lstat(base)
 	if errors.Is(err, os.ErrNotExist) {
 		return set, nil
@@ -513,18 +520,21 @@ func render(recorded Invariant) (string, error) {
 // confined to the repository here rather than only where it is configured,
 // because this package is what actually reads and writes the filesystem and a
 // confinement that holds only when a caller remembered to check is not one.
-func (s Store) resolve() (root, directory string, err error) {
+//
+// What comes back is the root itself rather than its path, because the reads
+// below go through the same walk the writes do: the lexical check this performs
+// says what the configured string is, and only the walk says where it lands.
+func (s Store) resolve() (root repowrite.Root, directory string, err error) {
 	// The same root the writes are confined to rather than a second reading of it,
 	// so a path this package reads from and the path it would write to cannot
 	// disagree about where the repository is.
-	resolved, err := repowrite.NewRoot(s.RepositoryRoot)
+	root, err = repowrite.NewRoot(s.RepositoryRoot)
 	if err != nil {
-		return "", "", err
+		return repowrite.Root{}, "", err
 	}
-	root = resolved.Path()
 	directory, err = validateDirectory(s.Directory)
 	if err != nil {
-		return "", "", err
+		return repowrite.Root{}, "", err
 	}
 	return root, directory, nil
 }
@@ -566,7 +576,15 @@ func (s Store) path(id string) (absolute, relative string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	return filepath.Join(root, directory, trimmed+".md"), filepath.ToSlash(filepath.Join(directory, trimmed+".md")), nil
+	relative = filepath.ToSlash(filepath.Join(directory, trimmed+".md"))
+	// Resolved the way the write that follows will resolve it, so what is
+	// inspected here for an existing invariant is the file the write would
+	// replace rather than whatever the same string reaches through a symlink.
+	absolute, err = root.Resolve(relative)
+	if err != nil {
+		return "", "", err
+	}
+	return absolute, relative, nil
 }
 
 // nestedMarkdown lists the Markdown filed below the invariants directory, which

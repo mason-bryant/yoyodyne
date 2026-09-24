@@ -323,18 +323,19 @@ outside it is still refused, and the refusal names both roots. The artifact dire
 
 That refusal is checked twice. When the file loads it is a check on the text: a
 path that is absolute or climbs out with `..` is refused before any work is
-claimed. When something writes a document into one of those directories it is
-checked again, against the filesystem, immediately before the bytes are written —
+claimed. When something reads or writes a document in one of those directories it
+is checked again, against the filesystem, immediately before the bytes move —
 because a directory that reads as `docs/decisions` in this file is whatever the
-filesystem has put there by the time anything writes to it, and one symlink along
-the way puts the document outside the repository without a single `..` appearing
-anywhere. So a directory that is a symlink out of the repository, or that sits
-below one, is refused at the point of the write and nothing is written. A symlink
-that stays inside the repository has not left it and the write follows it — with
-one exception: an artifact home that is itself a symlink is refused earlier and
-for a different reason, because the harness lists what a home holds without
-following links and reports one that is a link as not being a directory. The same
-holds of the `.yoyodyne` directory `yoyo init` writes: a project
+filesystem has put there by the time anything goes looking, and one symlink along
+the way reaches outside the repository without a single `..` appearing anywhere.
+So a directory that is a symlink out of the repository, or that sits below one, is
+refused: nothing is written, and nothing is read. The reading half is the half
+that costs more. A document from outside arrives named by a path this repository
+looks like it holds, so an invariant nobody committed and nobody reviewed would be
+delivered to every developer and every reviewer as a constraint this project holds
+itself to, and nothing downstream could tell it from one that was. A symlink that
+stays inside the repository has not left it, and the read and the write both
+follow it. The same holds of the `.yoyodyne` directory `yoyo init` writes: a project
 whose `.yoyodyne` leads out of the project is refused with the project untouched
 rather than scaffolded somewhere nothing commits. And of the configurations home
 below, which is a declared root like any other: a write that resolves out of it
