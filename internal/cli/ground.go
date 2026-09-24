@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -21,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -681,19 +681,8 @@ const maxSingleLineBytes = 160
 // falls on a rune boundary and is marked, because what is folded here is prose
 // somebody wrote — this repository's own em dashes among it — and half a rune is
 // not a shorter reason but a broken one.
-// singleLine and internal/backend's boundFailureDetail share the same
-// walk-back-to-a-rune-start fold with different bounds (160 bytes here, 512
-// there); a fix to either almost certainly belongs in both.
 func singleLine(value string) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= maxSingleLineBytes {
-		return folded
-	}
-	cut := maxSingleLineBytes
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, maxSingleLineBytes)
 }
 
 func firstNonEmpty(values ...string) string {

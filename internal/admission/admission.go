@@ -39,9 +39,9 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // scopeThreshold is how much of the smaller of two titles' distinctive wording
@@ -198,15 +198,7 @@ func (m Match) state() string {
 // stays part of the sentence describing it whatever it contains. It is cut on a
 // rune boundary: a line truncated mid-rune is not text.
 func singleLine(value string, limit int) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, limit)
 }
 
 func sortByID(matches []Match) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -1096,13 +1097,5 @@ func renderSettlements(settlements []Settlement) string {
 // failures stay a list entry whatever they contain. It is cut on a rune
 // boundary: a line truncated mid-rune is not text.
 func singleLine(value string, limit int) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, limit)
 }

@@ -14,11 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 const defaultTimeout = 30 * time.Second
@@ -1063,16 +1063,7 @@ func (c Client) unfinished(ctx context.Context) (map[string]struct{}, error) {
 // because the note must not depend on that, and a note carrying a provider's
 // whole output is one nobody reads.
 func singleLineNote(message string) string {
-	folded := strings.Join(strings.Fields(message), " ")
-	if len(folded) > maxCorrectionNoteBytes {
-		// Cut on a rune boundary: a note truncated mid-rune is not text.
-		cut := maxCorrectionNoteBytes
-		for cut > 0 && !utf8.RuneStart(folded[cut]) {
-			cut--
-		}
-		folded = strings.TrimSpace(folded[:cut]) + "..."
-	}
-	return "bd refused the claim: " + folded
+	return "bd refused the claim: " + oneline.Fold(message, maxCorrectionNoteBytes)
 }
 
 // maxCorrectionNoteBytes bounds what the correction note quotes of bd's refusal.

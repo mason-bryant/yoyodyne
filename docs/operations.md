@@ -2403,6 +2403,12 @@ kept:
 ./bin/yoyo status --limit 0 --json   # every recorded run, for a script
 ```
 
+A run's cost is read from its whole event log, so the listing prices only the
+runs it shows: the default twenty cost twenty log reads however many runs the
+product holds. `--limit 0` is the exception you ask for — it shows every run,
+so it reads every event log the product has written, and its cost grows with
+the product's history.
+
 The listing below is `./bin/yoyo status --failed --limit 2`:
 
 ```text
