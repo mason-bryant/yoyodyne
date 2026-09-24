@@ -598,3 +598,17 @@ func TestADispatchWaitIsANoteOnTheLogAndNotWhereTheSessionGotTo(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyAnIdlePollThatCouldNotReadTheStoreIsARetriedRead(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []WatchState{WatchWatching, WatchIdle, WatchBraked, WatchStopped} {
+		unread := WatchTransition{State: state, Unreadable: true}
+		if got, want := unread.RetryingRead(), state == WatchIdle; got != want {
+			t.Errorf("an unreadable %s transition: RetryingRead() = %v, want %v", state, got, want)
+		}
+		if (WatchTransition{State: state}).RetryingRead() {
+			t.Errorf("a readable %s transition reads as a retried read", state)
+		}
+	}
+}

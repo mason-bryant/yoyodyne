@@ -1462,6 +1462,46 @@ func TestAnIdleSessionCarriesWhatItSawGoingAndWhoItWaitsOn(t *testing.T) {
 	}
 }
 
+// A poll that never read the queue is not a poll that found nothing in it. It
+// records the same idle state, so the mark the session wrote is what the kind is
+// taken from — the precedent the restart below set — and the message it becomes
+// is the harness's, saying a read is being retried, rather than the idle line.
+func TestAnIdlePollThatCouldNotReadTheStoreIsSaidAsARetryRatherThanAsIdle(t *testing.T) {
+	quiet, err := FromWatch(watchTransition(runstate.WatchIdle, "the backlog is empty"))
+	if err != nil {
+		t.Fatalf("address an idle session: %v", err)
+	}
+	if quiet.Event.Kind != KindWatchIdle {
+		t.Fatalf("a poll that read the queue and found nothing was said as %q, want %q", quiet.Event.Kind, KindWatchIdle)
+	}
+
+	outage := watchTransition(runstate.WatchIdle, "the harness could not be read and is being read again for up to 2h0m0s before the session gives up on it: database is locked")
+	outage.Unreadable = true
+	retrying, err := FromWatch(outage)
+	if err != nil {
+		t.Fatalf("address a session retrying a read: %v", err)
+	}
+	if retrying.Event.Kind != KindWatchReadRetrying {
+		t.Fatalf("a poll that could not read the store was said as %q, want %q", retrying.Event.Kind, KindWatchReadRetrying)
+	}
+	if !retrying.Speaker.IsHarness() {
+		t.Fatalf("a retried read was spoken by %q, want the harness", retrying.Speaker.Key())
+	}
+	message, err := Render(retrying.Topic, retrying.Speaker, retrying.Event)
+	if err != nil {
+		t.Fatalf("render a session retrying a read: %v", err)
+	}
+	if strings.Contains(message.Body, "started nothing") || strings.Contains(message.Body, "product manager") {
+		t.Fatalf("body %q says the session found nothing, or hands the move to the product manager", message.Body)
+	}
+	if !strings.Contains(message.Body, "reading it again") || !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWatchReadRetrying]) {
+		t.Fatalf("body %q does not say the read is being retried and close on the harness's move", message.Body)
+	}
+	if !strings.HasPrefix(nextMoves[KindWatchReadRetrying], "the harness's") {
+		t.Fatalf("whose move follows %s is %q, want the harness's", KindWatchReadRetrying, nextMoves[KindWatchReadRetrying])
+	}
+}
+
 // The stop that is not an ending. A session being re-executed into a build
 // deployed over it records the same stopped state as a session somebody closed,
 // and the two ask opposite things of a reader — so the mark the session wrote is

@@ -194,6 +194,10 @@ var reaches = map[Kind]Reach{
 	KindWatchResumed:     ReachRecord,
 	KindWatchStopped:     ReachRecord,
 	KindWatchRedeploying: ReachRecord,
+	// A session retrying a read of the store it could not make. The waiting line
+	// says the same outage, attributed to the harness, once there is work a
+	// stopped line would have started.
+	KindWatchReadRetrying: ReachRecord,
 	// A braked line has stopped and stays stopped until intake is released.
 	KindWatchBraked: ReachChannel,
 	// The three readings of a line that is choosing nothing: the state said again

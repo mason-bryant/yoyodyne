@@ -1910,12 +1910,17 @@ Needs a human (3):
   not one. That last one comes from a closed set of named reasons, each
   of which says who it is waiting on: the operator's hold, a held intake, every
   developer slot taken, a session waiting out the provider's usage window, a live
-  watch session that has found nothing it can start, no watch session running any
-  more, and a product no session has ever watched. An idle session and no session
-  are named apart on purpose — telling you to start a session you are already
-  running sends you to the wrong place. A provider window is named apart from
-  both for the same reason and says `Paused on the provider's usage window until
-  13:43Z`: nobody has a move, the window lifts on the provider's clock, and
+  watch session retrying a read of the harness's store that failed, a live watch
+  session that has found nothing it can start, no watch session running any more,
+  and a product no session has ever watched. A retried read is the harness's move
+  and is never said as idle: the queue was not read, so nothing is known about
+  it, and the session line above the runs says `retrying a failed read of the
+  harness's store` rather than `idle` for as long as the read goes on failing.
+  An idle session and no session are named apart on purpose — telling you to
+  start a session you are already running sends you to the wrong place. A
+  provider window is named apart from both for the same reason and says `Paused
+  on the provider's usage window until 13:43Z`: nobody has a move, the window
+  lifts on the provider's clock, and
   reporting it as a session finding nothing to start sends you to look at a queue
   that is fine.
   It never comes from a watch session's memory of what it has already tried,

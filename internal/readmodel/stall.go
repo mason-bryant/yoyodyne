@@ -87,6 +87,14 @@ const (
 	// the session had found nothing to start would be sent to look at a queue that
 	// is fine.
 	ReasonTrackerWait Reason = "tracker"
+	// ReasonStoreUnreadable is a live session whose last poll could not read the
+	// harness's store at all and is reading it again. It is distinct from an idle
+	// session because the queue was never read: a reader told the session had found
+	// nothing to start would take an outage for an empty queue, and on 2026-09-01
+	// that is how a store outage was voiced for its whole length. It is the
+	// harness's to clear, by reading again until the store answers or the session
+	// gives up on it and stops.
+	ReasonStoreUnreadable Reason = "unreadable"
 	// ReasonSessionIdle is a live session that is choosing nothing. It is distinct
 	// from having no session at all because an operator does an entirely different
 	// thing about it, and because telling them to start a session they are already
@@ -111,6 +119,7 @@ func Reasons() []Reason {
 		ReasonNoCapacity,
 		ReasonProviderWindow,
 		ReasonTrackerWait,
+		ReasonStoreUnreadable,
 		ReasonSessionIdle,
 		ReasonNoWatchSession,
 		ReasonUnwatched,
@@ -142,6 +151,8 @@ func (r Reason) Whose() string {
 		return "nobody's — the harness asks again when the provider's usage window lifts"
 	case ReasonTrackerWait:
 		return "nobody's — the dispatch asks the tracker again on its own, and hands the item to a person only once the recovery window is spent"
+	case ReasonStoreUnreadable:
+		return "the harness's — the queue could not be read, and it is read again until it answers or the session gives up on it"
 	case ReasonSessionIdle:
 		return "the operator's — a queue with ready work and an idle session is a stall rather than a rest"
 	case ReasonNoWatchSession, ReasonUnwatched:
@@ -364,6 +375,16 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 		}
 	}
 	if len(live) > 0 {
+		// A poll that could not read the store never reached the queue, so nothing
+		// the log says about the queue is what stopped the choosing. It answers
+		// first, as it does in the cause the stall alarm names.
+		if live[0].RetryingRead() {
+			return Stall{
+				Reason: ReasonStoreUnreadable,
+				Says:   "the watch session could not read the harness's store and is reading it again",
+				Since:  live[0].At,
+			}
+		}
 		if window := WaitingOnProvider(sessions); window.Standing(now) {
 			return Stall{
 				Reason: ReasonProviderWindow,
