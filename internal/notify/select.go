@@ -252,7 +252,7 @@ func endingReason(state runstate.State) string {
 	if reason := blockerText(state); reason != "" {
 		return reason
 	}
-	return "the record names no reason"
+	return runstate.NoReasonSays
 }
 
 // resumeMove is whose move follows an approved change the environment stopped:

@@ -125,6 +125,15 @@ func Ending(status Status, handedToAPerson bool) RunOutcome {
 	}
 }
 
+// NoReasonSays is what every surface says as the reason of a run that ended
+// without succeeding and whose record gives none. It is one phrase here rather
+// than one per surface for the reason ResumingIntegrationSays is: the channel
+// line and `yoyo status` must not say different words about one run. It states
+// the absence as itself, because a run can honestly end with no reason — a
+// cancellation owes nobody a sentence — and a surface that printed nothing
+// instead reads as a run whose reason the operator had already seen.
+const NoReasonSays = "the record names no reason"
+
 // Artifacts is what a run's record says survives of its change: the branch and
 // the worktree it made, and the harness's own record of which of them it
 // removed. It is a type rather than four fields read in place because the

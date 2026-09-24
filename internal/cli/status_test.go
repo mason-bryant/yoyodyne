@@ -744,6 +744,55 @@ func TestStatusSaysAContradictedPromotionIsAStoppageRatherThanASuccess(t *testin
 	}
 }
 
+// A run that ended without succeeding and whose record gives no reason still has
+// a reason line, and it says the absence in the channel's words: leaving the line
+// out reads as a run with nothing to explain. A run that succeeded, one still
+// going, and one whose account is an outstanding publication get no such line.
+func TestStatusSaysARecordWithNoReasonNamesNone(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	ended := func(status runstate.Status, outcome runstate.RunOutcome) runstate.RunSummary {
+		return runstate.RunSummary{
+			RunID:       "run-9999999999999999999999999999cc",
+			WorkItemID:  "yoyodyne-ifd.428.1",
+			Status:      status,
+			Outcome:     outcome,
+			Phase:       runstate.PhaseChecking,
+			StartedAt:   completedAt,
+			CompletedAt: &completedAt,
+		}
+	}
+	want := "reason: " + runstate.NoReasonSays
+	for _, run := range []runstate.RunSummary{
+		ended(runstate.StatusCancelled, runstate.OutcomeStopped),
+		ended(runstate.StatusCancelled, runstate.OutcomeCancelled),
+		ended(runstate.StatusFailed, runstate.OutcomeFailed),
+	} {
+		var out bytes.Buffer
+		printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{run}}, "", true)
+		if rendered := out.String(); !strings.Contains(rendered, want) {
+			t.Fatalf("%s run with no reason rendered = %q, want it to contain %q", run.Outcome, rendered, want)
+		}
+	}
+
+	publishing := ended(runstate.StatusFailed, runstate.OutcomeFailed)
+	publishing.PublishFailure = "push refused"
+	running := ended(runstate.StatusRunning, runstate.RunOutcome(runstate.StatusRunning))
+	running.CompletedAt = nil
+	for _, run := range []runstate.RunSummary{
+		ended(runstate.StatusSucceeded, runstate.OutcomeSucceeded),
+		running,
+		publishing,
+	} {
+		var out bytes.Buffer
+		printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{run}}, "", true)
+		if rendered := out.String(); strings.Contains(rendered, runstate.NoReasonSays) {
+			t.Fatalf("%s run rendered = %q, want no absent reason said", run.Status, rendered)
+		}
+	}
+}
+
 func TestStatusRefusesArgumentsItCannotHonor(t *testing.T) {
 	t.Parallel()
 

@@ -472,6 +472,12 @@ func TestReconcileRecordsAStoppageSettledOntoAnAlreadyTerminalRun(t *testing.T) 
 	if len(build.Entries) != 1 || build.Entries[0].Blocker != settled.Blocker {
 		t.Fatalf("docket = %#v, want one entry carrying the run's blocker", build.Entries)
 	}
+	// And what the development manager reads off that entry says why, rather
+	// than only carrying it in a field nothing prints.
+	if rendered := build.Entries[0].Render(); !strings.Contains(rendered, "Blocker") ||
+		!strings.Contains(rendered, "no attempt of the harness can finish it") {
+		t.Fatalf("rendered docket entry = %q, want the stoppage's reason said", rendered)
+	}
 }
 
 // cancelledBetweenListingAndAdoption records the terminal write of the process
