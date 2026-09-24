@@ -225,7 +225,7 @@ func TestAnApprovedChangeWhoseBranchIsGoneIsNeverSentToTheResume(t *testing.T) {
 		{
 			name:  "branch and worktree deleted, nothing decided",
 			held:  false,
-			mover: "Next mover: you",
+			mover: "Next mover: the next pull",
 		},
 		{
 			name:     "branch deleted with the worktree left, nothing decided",

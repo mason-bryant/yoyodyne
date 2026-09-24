@@ -1743,7 +1743,12 @@ repaired — and the refusal is one sentence saying the change is approved, what
 stopped it and at which step, and that `yoyo triage resume <run-id>` is what it
 needs once the cause has cleared. That is the same sentence the docket entry
 carries and the channel line ends on, so wherever you read about the stop, you
-are sent to the same command. It has to have recorded a failure that was actually
+are sent to the same command — while the run's branch is there, which the
+resume needs. The refusal asks the repository for it by the look and the rule
+the docket asks, and once the branch is gone it says so, with what was found of
+the worktree, and that a re-run is the way on, which is what the docket entry
+and `yoyo status` then say too. The channel line is said once, as the run
+stops, when the branch is still the run's own. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — or be
 the stall above, which returned none because the harness stopped it; a run whose
 provider kept refusing, or whose replay conflicted, is neither, and has no
@@ -1883,7 +1888,10 @@ the pull's hold and `yoyo status` ask too. A stop whose branch is gone is one
 the resume would refuse, so its entry names no resume: it says the branch is
 gone, what was found of the worktree, and that a re-run is the way on, and it
 names the development manager as the next mover — or the harness, where a
-decision of hers about the stoppage is recorded and not yet carried out. The
+decision of hers about the stoppage is recorded and not yet carried out. Where
+the worktree is gone as well and nothing is decided, the pull's hold lets the
+item go, so the entry names the next pull instead: that is what starts the item
+over, and nothing about it waits on her unless she wants it held back. The
 resume then makes the run live again at exactly that step, with the approval
 it already has, and the pipeline promotes — replay onto where the target now
 stands, push, merge request — without invoking anybody: no developer attempt,

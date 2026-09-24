@@ -1671,6 +1671,14 @@ func (e Entry) renderNextMover() string {
 	if e.Counters.AwaitingCarryOut() {
 		return "      Next mover: the harness — " + gone + "a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
 	}
+	// Nothing of the change left and nothing decided is the one case the pull's
+	// hold lets go of: it holds a stop only while a worktree survives or a
+	// decision stands. So the item is not waiting on a triage decision — a re-run
+	// verb refuses a run that stands on neither a blocker nor a surviving change —
+	// and what starts it over is the next pull, which is what this says.
+	if gone != "" && !e.changeHeld() {
+		return "      Next mover: the next pull — this approved change's branch and worktree are both gone and nothing about this stoppage is decided, so nothing holds the item and the next pull starts it over from the target branch; nothing here needs your decision unless you want it held back.\n"
+	}
 	return "      Next mover: you — " + gone + "nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
 }
 
@@ -1678,6 +1686,18 @@ func (e Entry) renderNextMover() string {
 // of its run's change.
 func (e Entry) integrationResumable() bool {
 	return IntegrationResumable(e.Artifacts.Found, e.Artifacts.BranchRemoved)
+}
+
+// changeHeld is Found.Holds over what this entry last found of its run's
+// change: the branch or the worktree there, or a look that could not be made.
+// An entry written before the look existed answers from the run's own removal
+// flags.
+func (e Entry) changeHeld() bool {
+	if found := e.Artifacts.Found; found != nil {
+		return found.Holds()
+	}
+	return (e.Artifacts.Branch != "" && !e.Artifacts.BranchRemoved) ||
+		(e.Artifacts.WorktreePath != "" && !e.Artifacts.WorktreeRemoved)
 }
 
 // remains is what this entry last found of its run's change, as one clause.
