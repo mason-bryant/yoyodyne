@@ -279,6 +279,25 @@ func ReadSilence(activity Activity) Silence {
 	return silence
 }
 
+// SessionSays is what one transition's state is said as, wherever a surface names
+// where a session got to. The recorded state is the word for it, except for the
+// two transitions whose mark says the state alone would be read backwards: a stop
+// that is a restart, which reads as a session somebody has to start again, and an
+// idle poll that could not read the store at all, which reads as a queue with
+// nothing in it for as long as the outage lasts.
+func SessionSays(transition runstate.WatchTransition) string {
+	switch {
+	case transition.Restarting:
+		return "stopped to restart into the build deployed over it"
+	// Only an idle poll is a read being retried, which is the same condition the
+	// channel's kind is taken on. A session that gave up on the store records a
+	// stop, and a stop said as a retry is a session nobody starts again.
+	case transition.Unreadable && transition.State == runstate.WatchIdle:
+		return "retrying a failed read of the harness's store"
+	}
+	return string(transition.State)
+}
+
 // LastWord is what the sessions that choose work last said about themselves, as
 // the one clause a stall is reported with.
 //
@@ -295,12 +314,8 @@ func LastWord(sessions []runstate.WatchTransition) string {
 	// that has not stopped.
 	if live := Live(sessions); len(live) > 0 {
 		latest := live[0]
-		state := string(latest.State)
-		if latest.Restarting {
-			state = "stopped to restart into the build deployed over it"
-		}
 		return fmt.Sprintf("the session choosing work last recorded %s at %s, and has said nothing since",
-			state, latest.At.UTC().Format(time.RFC3339))
+			SessionSays(latest), latest.At.UTC().Format(time.RFC3339))
 	}
 	var stopped runstate.WatchTransition
 	for _, transition := range sessions {

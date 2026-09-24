@@ -744,6 +744,58 @@ func TestStatusSaysAStopThatIsARestartIsNotAnEnding(t *testing.T) {
 	}
 }
 
+// An idle poll that could not read the store is not a session idling over an
+// empty queue, and status says which: a reader told the session is idle through
+// a store outage goes looking for work to admit.
+func TestStatusSaysAFailedReadBeingRetriedRatherThanIdle(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	watch, err := runstate.NewWatchStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	sessionID, err := runstate.NewWatchSessionID()
+	if err != nil {
+		t.Fatalf("NewWatchSessionID() error = %v", err)
+	}
+	at := time.Now().UTC()
+	record := func(unreadable bool, reason string, when time.Time) {
+		t.Helper()
+		if err := watch.Record(runstate.WatchTransition{
+			SchemaVersion: runstate.WatchSchemaVersion,
+			ProductID:     "yoyodyne",
+			SessionID:     sessionID,
+			State:         runstate.WatchIdle,
+			At:            when,
+			Reason:        reason,
+			Unreadable:    unreadable,
+		}); err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
+	}
+
+	record(true, "the harness could not be read and is being read again", at)
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "the session choosing work is retrying a failed read of the harness's store") {
+		t.Fatalf("status stdout = %q, want the failing read said as one being retried", stdout)
+	}
+
+	record(false, "the backlog is empty", at.Add(time.Minute))
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "the session choosing work is idle") {
+		t.Fatalf("status stdout = %q, want a read that succeeded and found nothing said as idle", stdout)
+	}
+}
+
 // The answer to "when is a capacity change picked up?" is documented where an
 // operator looks for it. It is a decision rather than an accident, so the usage
 // states it rather than leaving it to be inferred from behavior.

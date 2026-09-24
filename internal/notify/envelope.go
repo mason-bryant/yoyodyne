@@ -230,6 +230,14 @@ const (
 	// them the same way would hand the operator a move they do not have, once per
 	// deploy, which is the standing chore self-redeployment exists to end.
 	KindWatchRedeploying Kind = "watch.redeploying"
+	// A session that chose nothing because the harness's store could not be read,
+	// and is reading it again. It is the same recorded idle poll as KindWatchIdle
+	// and it is said apart from it, on the precedent above: a poll that read the
+	// queue and found nothing and a poll that never read the queue ask different
+	// things of whoever reads them, and saying the second as the first told a
+	// reader for the whole of a store outage that the session had found nothing to
+	// start.
+	KindWatchReadRetrying Kind = "watch.read-retrying"
 	// A line that is choosing nothing while work is ready to be chosen. Every
 	// kind above is a transition said once; this one is a state said again while
 	// it stands, because the fact somebody needs is not that it began but that it
@@ -415,6 +423,7 @@ func Kinds() []Kind {
 		KindWatchResumed,
 		KindWatchStopped,
 		KindWatchRedeploying,
+		KindWatchReadRetrying,
 		KindLineWaiting,
 		KindResidentStale,
 		KindStallNoticed,
@@ -448,7 +457,7 @@ func (k Kind) Valid() bool {
 		KindDirectiveWithdrawn, KindQuestionHeard,
 		KindIntakeHeld, KindIntakeReleased, KindIntakeEscalated, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindWatchRedeploying, KindLineWaiting, KindResidentStale, KindStallNoticed,
+		KindWatchRedeploying, KindWatchReadRetrying, KindLineWaiting, KindResidentStale, KindStallNoticed,
 		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,
 		KindClaimReleased,
 		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest, KindLogLineSkipped:
@@ -930,8 +939,10 @@ type Detail struct {
 	// times as a line that had stopped.
 	Running int `json:"running,omitempty"`
 	// Unreadable is a poll that chose nothing because the harness could not be
-	// read, read by KindWatchIdle. It is the other state whose next move is not an
-	// admission: nothing a person admits reaches a store that will not answer.
+	// read. It is carried on KindWatchReadRetrying, which is what such a poll is
+	// said as, and read by KindWatchIdle only where a caller built one by hand: it
+	// is the other state whose next move is not an admission, since nothing a
+	// person admits reaches a store that will not answer.
 	Unreadable bool `json:"unreadable,omitempty"`
 	// ProviderWindow is a poll that chose nothing because the provider is refusing
 	// the harness for want of capacity, read by KindWatchIdle. It is the third such
