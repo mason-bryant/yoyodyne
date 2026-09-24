@@ -461,6 +461,30 @@ func TestReconcileRecordsAStoppageSettledOntoAnAlreadyTerminalRun(t *testing.T) 
 	if len(history.Runs) != 1 || history.Runs[0].Failure != settled.Failure {
 		t.Fatalf("history = %#v, want the settled run's own reason", history.Runs)
 	}
+	// The reason line `yoyo status` prints is the summary's EndingReason, and the
+	// channel's is the record's: one derivation, so one answer for this run.
+	if reason := history.Runs[0].EndingReason(); !strings.Contains(reason, "no attempt of the harness can finish it") ||
+		reason != settled.EndingReason() {
+		t.Fatalf("status reason = %q, channel reason = %q, want the same reason naming the stoppage", reason, settled.EndingReason())
+	}
+	// A record settled this way before the sweep wrote its own reason carries
+	// the blocker and no failure. Both surfaces still say why from the blocker,
+	// rather than saying the record names no reason over words it holds.
+	unreasoned := settled
+	unreasoned.Failure = ""
+	if err := store.Save(unreasoned); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	history, err = store.History(runstate.RunQuery{})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(history.Runs) != 1 {
+		t.Fatalf("history = %#v, want the one run", history.Runs)
+	}
+	if reason := history.Runs[0].EndingReason(); reason != strings.TrimSpace(settled.Blocker) || reason != unreasoned.EndingReason() {
+		t.Fatalf("status reason = %q, channel reason = %q, want the blocker %q on both", reason, unreasoned.EndingReason(), settled.Blocker)
+	}
 	// The triage docket is the other surface a person triages from, and a build
 	// after this sweep reads the same record rather than the sweep's own copy of
 	// it.
@@ -471,6 +495,12 @@ func TestReconcileRecordsAStoppageSettledOntoAnAlreadyTerminalRun(t *testing.T) 
 	}
 	if len(build.Entries) != 1 || build.Entries[0].Blocker != settled.Blocker {
 		t.Fatalf("docket = %#v, want one entry carrying the run's blocker", build.Entries)
+	}
+	// And what the development manager reads off that entry says why, rather
+	// than only carrying it in a field nothing prints.
+	if rendered := build.Entries[0].Render(); !strings.Contains(rendered, "Blocker") ||
+		!strings.Contains(rendered, "no attempt of the harness can finish it") {
+		t.Fatalf("rendered docket entry = %q, want the stoppage's reason said", rendered)
 	}
 }
 

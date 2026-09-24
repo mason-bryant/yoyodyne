@@ -993,7 +993,10 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		label string
 		text  string
 	}{
-		{label: "reason", text: run.Failure},
+		// The read model's reason, so this line and the channel's say one thing
+		// about a run: its failure, the blocker where it recorded none, and the
+		// absence stated where a run that ended badly gives neither.
+		{label: "reason", text: run.EndingReason()},
 		{label: "outstanding publication", text: run.PublishFailure},
 		{label: "outstanding cleanup", text: run.CleanupFailure},
 		{label: "completion recorded late", text: run.CompletionRecordingFailure},
