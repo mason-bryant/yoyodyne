@@ -823,7 +823,7 @@ func TestManagerReportsPublishedWorkAgainstTheBase(t *testing.T) {
 		if !strings.Contains(changes.DiffStat, want) {
 			t.Errorf("published diff stat does not name %s:\n%s", want, changes.DiffStat)
 		}
-		if !strings.Contains(changes.Patch, want) {
+		if !strings.Contains(changes.Patch, want) && !deletes(changes, want) {
 			t.Errorf("published patch does not name %s:\n%s", want, changes.Patch)
 		}
 	}
@@ -842,7 +842,7 @@ func TestManagerReportsPublishedWorkAgainstTheBase(t *testing.T) {
 		if !strings.Contains(beforeSummary.Status, want) {
 			t.Errorf("unpublished status does not name %s:\n%s", want, beforeSummary.Status)
 		}
-		if !strings.Contains(beforeChanges.Patch, want) {
+		if !strings.Contains(beforeChanges.Patch, want) && !deletes(beforeChanges, want) {
 			t.Errorf("unpublished patch does not name %s:\n%s", want, beforeChanges.Patch)
 		}
 	}
@@ -859,4 +859,15 @@ func TestManagerReportsPublishedWorkAgainstTheBase(t *testing.T) {
 		t.Errorf("diff stats = %q unpublished and %q published, want publishing to add the new file to it",
 			beforeSummary.DiffStat, summary.DiffStat)
 	}
+}
+
+// deletes reports that a change describes path as deleted whole, which is how a
+// deletion is carried beside the patch rather than in it.
+func deletes(changes ChangeDiff, path string) bool {
+	for _, file := range changes.DeletedFiles {
+		if file.Path == path && file.Whole {
+			return true
+		}
+	}
+	return false
 }
