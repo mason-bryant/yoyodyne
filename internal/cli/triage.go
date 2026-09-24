@@ -521,6 +521,10 @@ func repairContinuerFrom(parts components) orchestrator.RepairContinuer {
 		// developer is handed back is whatever is in it.
 		Items:     parts.tracker(),
 		Worktrees: parts.worktrees,
+		// The same repository the docket and the pull's hold look in, so the
+		// refusal of an integration stop names the resume only while the branch
+		// the resume needs is there.
+		Remains: parts.worktrees,
 		// The same limit the reservation enforces, read before the grant so a full
 		// harness leaves the decision standing rather than spending the item's
 		// grant on a run there is no room to continue.

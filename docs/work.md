@@ -409,7 +409,17 @@ checkout would then promote is not what was reviewed; both refuse to a
 person, and only a deleted branch ends the change for good. The docket entry for such a stop says all of
 this itself: it names the harness as the next mover and the verb that resumes
 it, so the development manager is not asked to choose among decisions that
-each spend something for a stop that was never hers to decide.
+each spend something for a stop that was never hers to decide. That holds while
+the branch is there, and the docket asks the repository for it each time it is
+built for her, by the same look and the same rule the pull's hold and `yoyo
+status` ask. A stop whose branch is gone names no resume, because the resume
+would refuse: the entry says what was found — the branch checked and not there,
+and the worktree whichever way it was found — and that a re-run is the way on,
+and names her as the next mover, or the harness where a decision of hers about
+the stoppage is already recorded and not yet carried out — or, where the
+worktree is gone too and nothing is decided, the next pull, since nothing then
+holds the item. `yoyo status` says the same on the run's integration-stop line,
+and `yoyo triage repair` refuses such a run in the same words.
 
 ## What an item may ask of a run
 
@@ -897,7 +907,14 @@ resuming the promotion with `yoyo triage resume`. The hold names that verb, and
 it names it first, ahead of what was found of the change, so the part that says
 what to do survives a rendering that cuts the reason to a line. The development
 manager's docket says the same thing on the same stoppage, because an item given
-two next movers is a disagreement only you could settle.
+two next movers is a disagreement only you could settle. Both say it only while
+the run's branch is there, which the resume needs and which both ask the
+repository for: once it is gone the stop is held exactly as any other stoppage
+is — held while its worktree survives or a decision about it stands, and let go
+otherwise — and the hold and the docket both say the branch is gone and that a
+re-run is the way on, naming the development manager, the harness where her
+decision is waiting to be carried out, or — where the hold has let the item go —
+the next pull.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its

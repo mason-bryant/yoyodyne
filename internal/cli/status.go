@@ -58,6 +58,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 type statusOutput struct {
@@ -1030,10 +1031,20 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	// An approved change the environment stopped is said beside its reason,
 	// because the reason alone reads as a failed piece of work and sends an
 	// operator to the verbs that each spend something for it. This names the one
-	// that spends nothing.
+	// that spends nothing — while the branch is there, by the rule the docket and
+	// the pull's hold ask it by. Once it is gone the resume would refuse, so the
+	// line says what is gone and that a re-run is the way on instead.
 	if run.IntegrationStop != nil {
-		fmt.Fprintf(writer, "  integration stop: %s; `yoyo triage resume %s` resumes it at no cost once the cause has cleared\n",
-			singleLine(run.IntegrationStop.Describe()), run.RunID)
+		if triage.IntegrationResumable(run.Found, run.BranchRemoved) {
+			fmt.Fprintf(writer, "  integration stop: %s; `yoyo triage resume %s` resumes it at no cost once the cause has cleared\n",
+				singleLine(run.IntegrationStop.Describe()), run.RunID)
+		} else {
+			// Each half is folded on its own, so the re-run is never the part a
+			// fold cuts; the branch and worktree lines below say what was found
+			// in full, so the clause here is the listing's short one.
+			fmt.Fprintf(writer, "  integration stop: %s; %s\n",
+				singleLine(run.IntegrationStop.Describe()), singleLine(triage.IntegrationGoneSays(run.RunID, run.DescribeRemains())))
+		}
 		printed = true
 	}
 	if run.FailingCheck != nil {

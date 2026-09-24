@@ -111,6 +111,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -199,6 +200,13 @@ type RepairContinuer struct {
 	// still holds the change. Required: the change handed back is whatever is in
 	// it, and a handback carrying nothing is a repair of nothing.
 	Worktrees RepairWorktrees
+	// Remains is the repository the refusal of an approved change the environment
+	// stopped asks whether the run's branch is still there, by the look and the
+	// rule (triage.IntegrationResumable) the docket, the pull's hold, and `yoyo
+	// status` ask: with the branch there the refusal names the resume, and with it
+	// gone it names what is gone and the re-run, as they do. Optional: nil answers
+	// from the run's own record and says that nothing looked.
+	Remains readmodel.Remains
 	// ConfiguredAttempts is `execution.repair_attempts_before_replan`, which is
 	// the budget the continued run's loop adds its grants to. It is read here
 	// only to report what the run may now spend in total: a carry-out that
@@ -394,7 +402,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 			"run %s is recorded as made for %q while its docket entry names %s, so a repair of it would continue one item's run as another's work; nothing was spent, and which item this stoppage belongs to is a person's to settle",
 			prior.RunID, owner, entry.WorkItemID)
 	}
-	if err := continuableRepair(prior); err != nil {
+	if err := continuableRepair(prior, readmodel.LookFor(ctx, c.Remains, prior)); err != nil {
 		return result, err
 	}
 	result.RepairAttempts = prior.RepairAttempts
@@ -643,8 +651,17 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 // which is a continuation of the same session rather than another answer to a
 // complaint, and is charged accordingly. continuableStall is the whole of what
 // admits it.
-func continuableRepair(prior runstate.State) error {
+//
+// found is what the repository holds of the run's change. It is asked only of
+// an integration stop, whose refusal names the resume while the branch is there
+// and, once it is gone, says so and names the re-run — the same answer the
+// docket gives on the same stoppage, by the same rule.
+func continuableRepair(prior runstate.State, found triage.Found) error {
 	if prior.IntegrationStop != nil {
+		if !triage.IntegrationResumable(&found, false) {
+			return errors.New(triage.IntegrationGoneSays(prior.RunID, found.Describe()) +
+				", and a repair has no approved change to hand back either")
+		}
 		return errors.New(prior.IntegrationStop.ResumeSays(prior.RunID))
 	}
 	if prior.WorktreePath == "" || prior.Branch == "" || prior.BaseCommit == "" || prior.TargetBranch == "" {
