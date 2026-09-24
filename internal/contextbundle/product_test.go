@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
@@ -1129,7 +1130,11 @@ func TestAnAdoptingProjectIsNotShownTheHarnessOwnDocumentation(t *testing.T) {
 func TestTheHarnessRecognizesThisRepository(t *testing.T) {
 	t.Parallel()
 
-	if !describesTheHarness("../..") {
+	root, err := repowrite.NewRoot("../..")
+	if err != nil {
+		t.Fatalf("NewRoot() error = %v", err)
+	}
+	if !describesTheHarness(root) {
 		declaration, err := os.ReadFile(filepath.Join("../..", "go.mod"))
 		if err != nil {
 			t.Fatalf("this repository was not recognized as the one the shipped set describes, and its go.mod could not be read: %v", err)
