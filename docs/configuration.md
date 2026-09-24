@@ -2180,8 +2180,10 @@ and a `yoyo run` beside it, share one limit rather than getting one each — a r
 that loses the race for the last slot is reported as declined, not as a failure.
 Integration stays serial: at most one promotion into a given target branch
 happens at a time, and a change whose target moved while it was being reviewed is
-replayed onto where the target went and promoted by fast-forward, or blocked if
-it will not replay. Nothing is ever forced.
+replayed onto where the target went and promoted by fast-forward. A replay that
+conflicts is handed back to the change's own developer to reconcile on top of
+the target, as a repair attempt that is checked and reviewed again, and the run
+blocks only once its repair budget is spent. Nothing is ever forced.
 
 Eight things keep an item out of a pass, reported at two different grains. Five are
 named against the item, because nothing else would report that this item was
@@ -2799,8 +2801,8 @@ carry them like every other fact about a run, and a divergence and an unobserved
 run each get a line there. Neither is a reason a run ended: the run delivered
 exactly as it would have, and what diverged or went unwatched is the observation.
 
-Two divergences are already known and expected, and both are interrupted
-processes rather than anything about the work. A run interrupted while its
+Three divergences are already known and expected. The first two are
+interrupted processes rather than anything about the work. A run interrupted while its
 reviewer was being asked resumes at the checks rather than at the review, because
 a resumed run re-earns the whole gate, and no definition has a transition from
 the review back to the check; such a run records a divergence naming both. A
@@ -2808,6 +2810,11 @@ process killed inside integration is settled by the sweep as succeeded with its
 instance still standing in `integrate`, and records the gap that leaves. Both are
 left as divergences deliberately — the definition is missing a path the pipeline
 takes, and an observation that quietly agreed with itself would be worth nothing.
+The third is a replay conflict handed back to its developer: `integrate` answers
+`reconciling`, and neither the built-in definition nor this repository's own copy
+routes that outcome back to `develop` yet, so such a run records the refusal as
+its divergence. Adding the transition means changing both copies together,
+because a test holds them to one digest.
 
 **The default and the rollback both reach new runs only.** Whether a run is
 observed is settled once, when the run is reserved, and read back off the run's
@@ -3661,15 +3668,35 @@ plainly that the checks passed and the reviewer approved, and that what needs
 looking at is the target branch. Setting the bound to `0` restores the earlier
 behavior: the first refused promotion ends the run.
 
-A replay that **conflicts** is never retried and never resolved automatically.
-The replay is abandoned, the branch and worktree are left exactly as they were,
-both sides of the conflict survive, and the run stops with a blocker on the
-item. Which side of a conflict is right is a decision about the product, not a
-Git operation.
+A replay that **conflicts** is never retried and never resolved automatically
+— which side of a conflict is right is a decision about the product, not a Git
+operation — and it goes back to the developer that wrote the change before it
+goes to anybody else. The change is moved onto where the target went, with
+whatever would not merge left in the worktree between Git's own conflict
+markers, and the same developer session is handed the conflict to settle: the
+branch it could not be replayed onto, the commit that branch is at, and the
+paths the replay stopped on. That hand-back is a repair attempt, spent from
+`execution.repair_attempts_before_replan` like any other, and what the
+developer produces goes through the whole gate again — the protected-path
+refusal, the checks, and a fresh independent review — before it is promoted by
+the same fast-forward. A replay conflict on an approved change therefore costs
+a continuation of the session that wrote it rather than a fresh run. The target
+keeps every commit it has; what the move drops is only the run's own commits,
+whose content is what the developer is handed back as uncommitted work.
+
+A run with no repair attempt left stops instead, as every conflict did before:
+the replay is abandoned, the branch and worktree are left exactly as they were,
+both sides survive, and the blocker on the item names the paths and the target
+commit. The conflict stays on the run's record, so a repair the development
+manager grants in triage continues that same session with the same conflict,
+moved onto the target first; a re-run starts the change over instead.
 
 A published run's pull request follows the replay: the run branch is replaced on
 the remote from exactly the commit the harness published there, so the request
-carries the change that would actually be promoted. That is the same
+carries the change that would actually be promoted. A change handed back to
+reconcile a conflict is replaced the same way, once the developer's attempt is
+committed — never with the target alone in between, since a request whose head
+is already in its base reads as merged. That is the same
 compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
@@ -4152,10 +4179,10 @@ budget, and an item with no rounds left never gets a grant to carry out at all.
 Five more things refuse it. The stopped run has to be really over, terminal and
 still standing on whichever of the two docketed it, read from the run's own
 record rather than from the docket
-entry. The run has to have recorded a repair input, or be a stall — a run whose
-provider kept refusing, or whose replay conflicted, never had a failure returned
-to its developer and has no attempt to carry on with either; a re-run is what
-those need. A stall is continued rather than re-run: the harness is what stopped
+entry. The run has to have recorded a repair input — a replay conflict is one,
+recorded on the run before it stops — or be a stall; a run whose provider kept
+refusing never had a failure returned to its developer and has no attempt to
+carry on with, and a re-run is what it needs. A stall is continued rather than re-run: the harness is what stopped
 it, before anything judged the work, so what it is owed is the attempt it was
 stopped in, resumed in the session it stalled in — and the continuation counts
 no review round and no repair attempt, because a stall judges nothing. The

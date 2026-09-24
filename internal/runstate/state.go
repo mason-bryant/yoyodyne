@@ -57,7 +57,10 @@ import (
 // then the whole of what bounded its repairs. What the work item's notes lost to
 // the context budget is the newest of them and behaves the same way: absent
 // means the item was delivered whole, which is what every run written before the
-// notes were ever truncated meant.
+// notes were ever truncated meant. The replay a moved target refused, handed
+// back to the developer to reconcile, is newer still and behaves the same way:
+// absent means no replay of this run was ever refused, which is what every run
+// written before a conflict went back to its author meant.
 const StateSchemaVersion = 1
 
 // The shape of the three things a run records about how it was configured and
@@ -485,6 +488,74 @@ func (p PathRefusal) Validate() error {
 	}
 	if p.Omitted < 0 {
 		problems = append(problems, errors.New("omitted cannot be negative"))
+	}
+	return errors.Join(problems...)
+}
+
+// MaxConflictedPaths bounds how many paths a refused replay carries into
+// durable state and into the developer's next attempt, and
+// MaxConflictDetailBytes bounds Git's own account of the refusal. A replay that
+// stopped on a hundred files must not be able to fill either, and what the
+// bound drops is counted beside what it kept, for the reason a bounded path
+// refusal counts its own.
+const (
+	MaxConflictedPaths     = 50
+	MaxConflictDetailBytes = 4 << 10
+)
+
+// ReplayConflict is the refused replay a repair attempt was handed: the change
+// passed its checks and was approved, the target branch moved, and the change
+// could not be replayed onto where it went, so the developer that wrote it is
+// asked to reconcile the two. It is the one repair input decided after the
+// whole gate has passed.
+//
+// It is durable for the reason the other inputs are: an attempt interrupted
+// before it ran has to be reissued with exactly the input it was given, and a
+// run whose budget is spent has to name what it still could not reconcile —
+// nothing re-derives it afterwards, because the replay was abandoned as it was
+// recorded.
+type ReplayConflict struct {
+	// TargetBranch is what the change could not be replayed onto, and
+	// TargetCommit is where that branch had got to: the other side of the
+	// disagreement.
+	TargetBranch string `json:"target_branch"`
+	TargetCommit string `json:"target_commit,omitempty"`
+	// Paths are the repository-relative paths the replay stopped on, in the
+	// order Git listed them, and Omitted is how many further ones the bound
+	// dropped. A replay refused for something other than content can name none.
+	Paths   []string `json:"paths,omitempty"`
+	Omitted int      `json:"omitted,omitempty"`
+	// Detail is Git's own account of the refusal, bounded.
+	Detail string `json:"detail,omitempty"`
+	// Moved says the change has already been put onto the target with the
+	// disagreement left in the worktree as conflict markers, which is the state
+	// the developer is asked to reconcile it in. It is recorded because the move
+	// and the attempt after it are two steps a process can die between, and a
+	// run continued afterwards — by an interrupted process being picked up, or
+	// by a repair triage granted once the run's own budget was spent — has to
+	// know whether the move is still owed before it invokes anybody.
+	Moved bool `json:"moved,omitempty"`
+}
+
+// Validate reports every contract violation in the recorded conflict at once.
+func (c ReplayConflict) Validate() error {
+	var problems []error
+	if !validLocalBranch(c.TargetBranch) {
+		problems = append(problems, errors.New("target_branch must be a local branch name"))
+	}
+	if len(c.Paths) > MaxConflictedPaths {
+		problems = append(problems, fmt.Errorf("%d conflicted paths are recorded, which exceeds the bound of %d", len(c.Paths), MaxConflictedPaths))
+	}
+	for index, conflicted := range c.Paths {
+		if strings.TrimSpace(conflicted) == "" {
+			problems = append(problems, fmt.Errorf("paths[%d] is empty", index))
+		}
+	}
+	if c.Omitted < 0 {
+		problems = append(problems, errors.New("omitted cannot be negative"))
+	}
+	if len(c.Detail) > MaxConflictDetailBytes {
+		problems = append(problems, fmt.Errorf("detail is %d bytes, which exceeds the %d byte bound", len(c.Detail), MaxConflictDetailBytes))
 	}
 	return errors.Join(problems...)
 }
@@ -1663,6 +1734,13 @@ type State struct {
 	// the change, and what says afterwards that somebody executed this before it
 	// was handed over.
 	Verification *Verification `json:"verification,omitempty"`
+	// ReplayConflict carries the replay a moved target refused, handed back to
+	// the developer to reconcile. It is the fifth kind of repair input and the
+	// only one decided after the whole gate has passed, so recording it clears
+	// the others. What clears it is the checks passing afterwards: the conflict
+	// is put into the worktree for its author to settle, and a change that
+	// passes on top of the target is that settlement.
+	ReplayConflict *ReplayConflict `json:"replay_conflict,omitempty"`
 	// RefusedAmendments are the changes agents on this run proposed that the
 	// harness could not record, each with the role that proposed it, waiting to be
 	// put in front of that role. It is not a fourth kind of repair input and
@@ -2191,6 +2269,11 @@ func (s State) Validate() error {
 	if len(s.ReviewFindingDetails) > 0 && s.ReviewFindings != len(s.ReviewFindingDetails) {
 		problems = append(problems, fmt.Errorf("review_findings is %d but %d review_finding_details are recorded", s.ReviewFindings, len(s.ReviewFindingDetails)))
 	}
+	if s.ReplayConflict != nil {
+		if err := s.ReplayConflict.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("replay_conflict: %w", err))
+		}
+	}
 	if s.CheckFailure != nil {
 		if err := s.CheckFailure.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("check_failure: %w", err))
@@ -2393,6 +2476,11 @@ func (s State) Validate() error {
 		// integration carrying an edit to the intent it was written against.
 		if s.PathRefusal != nil {
 			problems = append(problems, errors.New("integration requires no recorded protected-path refusal"))
+		}
+		// And for the gate behind them: a promotion recorded alongside a refused
+		// replay describes work put onto a target it could not be put onto.
+		if s.ReplayConflict != nil {
+			problems = append(problems, errors.New("integration requires no recorded replay conflict"))
 		}
 		// The target is fixed before the work starts, so an integration into a
 		// different branch describes a promotion this run was never set up to

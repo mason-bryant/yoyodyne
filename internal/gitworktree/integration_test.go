@@ -1353,9 +1353,177 @@ func TestManagerRebaseOntoTargetRefusesAConflictAndKeepsTheChange(t *testing.T) 
 	if content := readFile(t, repository, "README.txt"); content != "somebody else's answer\n" {
 		t.Fatalf("the target change was not preserved: %q", content)
 	}
+	// The refusal names what it stopped on and where the target had got to,
+	// which is what the developer asked to reconcile it is handed.
+	var conflict *RebaseConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("RebaseOntoTarget() error = %T, want the conflict's detail", err)
+	}
+	if target := gitLine(t, repository, "rev-parse", "refs/heads/main"); conflict.TargetCommit != target {
+		t.Fatalf("conflict target commit = %q, want main at %q", conflict.TargetCommit, target)
+	}
+	if len(conflict.Paths) != 1 || conflict.Paths[0] != "README.txt" {
+		t.Fatalf("conflict paths = %v, want README.txt", conflict.Paths)
+	}
 	worktree.HarnessCommit = replay.HeadCommit
 	if _, err := manager.Integrate(context.Background(), worktree, ""); !errors.Is(err, ErrTargetDrift) {
 		t.Fatalf("Integrate() after a refused replay error = %v, want ErrTargetDrift", err)
+	}
+}
+
+// yoyodyne-ifd.132: a refused replay is answered by moving the change onto the
+// target anyway, with the disagreement left in the worktree as Git's markers
+// for the developer who wrote the change. Nothing is chosen: both answers are in
+// the file, the target keeps every commit it had, and no Git operation is left
+// in progress — only an ordinary dirty worktree on top of the target.
+func TestManagerReplayForRepairLeavesTheConflictOnTopOfTheTarget(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID: testRunID, WorkItemID: "yoyodyne-conflict", BaseRef: "main", TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "README.txt", "this run's answer\n")
+	writeFile(t, worktree.Path, "added.txt", "a file only this change adds\n")
+	writeFile(t, repository, "README.txt", "somebody else's answer\n")
+	runGit(t, repository, "add", "README.txt")
+	runGit(t, repository, "commit", "-m", "conflicting target change")
+	target := gitLine(t, repository, "rev-parse", "refs/heads/main")
+
+	refused, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+	if !errors.Is(err, ErrRebaseConflict) {
+		t.Fatalf("RebaseOntoTarget() error = %v, want ErrRebaseConflict", err)
+	}
+	worktree.HarnessCommit = refused.HeadCommit
+
+	moved, err := manager.ReplayForRepair(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("ReplayForRepair() error = %v", err)
+	}
+	if moved.BaseCommit != target || moved.HeadCommit != target || !moved.Moved() {
+		t.Fatalf("moved = %#v, want the change based on the target at %q", moved, target)
+	}
+	if head := gitLine(t, worktree.Path, "rev-parse", "HEAD"); head != target {
+		t.Fatalf("worktree HEAD = %q, want the target %q", head, target)
+	}
+	if branch := gitLine(t, worktree.Path, "rev-parse", "--abbrev-ref", "HEAD"); branch != worktree.Branch {
+		t.Fatalf("worktree is not on its branch after the move: %q", branch)
+	}
+	content := readFile(t, worktree.Path, "README.txt")
+	for _, want := range []string{"<<<<<<<", "this run's answer", "somebody else's answer", ">>>>>>>"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("README.txt = %q, want both answers between conflict markers", content)
+		}
+	}
+	// What merged cleanly is there too, and nothing is staged: the resolution is
+	// the developer's to make, and no replay or apply is left in progress.
+	if added := readFile(t, worktree.Path, "added.txt"); added != "a file only this change adds\n" {
+		t.Fatalf("added.txt = %q, want the change's clean half applied", added)
+	}
+	if staged := gitOutput(t, worktree.Path, "diff", "--cached", "--name-only"); strings.TrimSpace(staged) != "" {
+		t.Fatalf("staged after the move = %q, want nothing staged", staged)
+	}
+	if unmerged := gitOutput(t, worktree.Path, "ls-files", "--unmerged"); strings.TrimSpace(unmerged) != "" {
+		t.Fatalf("index still records a conflict: %q", unmerged)
+	}
+	for _, state := range []string{"CHERRY_PICK_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {
+		location := gitLine(t, worktree.Path, "rev-parse", "--git-path", state)
+		if !filepath.IsAbs(location) {
+			location = filepath.Join(worktree.Path, location)
+		}
+		if _, err := os.Stat(location); err == nil {
+			t.Fatalf("%s is left in the worktree's Git directory", state)
+		}
+	}
+	if theirs := gitLine(t, repository, "show", "main:README.txt"); theirs != "somebody else's answer" {
+		t.Fatalf("main README.txt = %q, want the target left exactly as it was", theirs)
+	}
+
+	// Once reconciled, the change is an ordinary commit above the target and
+	// promotes by fast-forward.
+	writeFile(t, worktree.Path, "README.txt", "both answers, reconciled\n")
+	worktree.BaseCommit = moved.BaseCommit
+	worktree.HarnessCommit = ""
+	promoted, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() after reconciling error = %v", err)
+	}
+	if promoted.PreviousTargetCommit != target {
+		t.Fatalf("promotion = %#v, want it made from %q", promoted, target)
+	}
+	if integrated := gitLine(t, repository, "show", "main:README.txt"); integrated != "both answers, reconciled" {
+		t.Fatalf("main README.txt = %q, want the reconciliation", integrated)
+	}
+}
+
+// A process that dies after the move put the worktree on the target and before
+// the caller recorded it leaves a HEAD the ownership check refuses, with the
+// recorded state still naming the change's own commit. Asking for the move again
+// with that record recognises the state, puts the worktree back on the recorded
+// change, and makes the move again — rather than stranding the run for a person.
+// Both interrupted shapes are covered: the apply finished, and the apply never
+// began after the reset onto the target.
+func TestManagerReplayForRepairResumesAMoveNothingRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, interrupted := range []struct {
+		name  string
+		leave func(t *testing.T, manager *Manager, worktree Worktree, target string)
+	}{
+		{
+			name: "after the apply",
+			leave: func(t *testing.T, manager *Manager, worktree Worktree, target string) {
+				if _, err := manager.ReplayForRepair(context.Background(), worktree, ""); err != nil {
+					t.Fatalf("ReplayForRepair() error = %v", err)
+				}
+			},
+		},
+		{
+			name: "between the reset and the apply",
+			leave: func(t *testing.T, _ *Manager, worktree Worktree, target string) {
+				runGit(t, worktree.Path, "reset", "--hard", "--quiet", target)
+			},
+		},
+	} {
+		t.Run(interrupted.name, func(t *testing.T) {
+			t.Parallel()
+			repository := newRepository(t)
+			manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+			worktree, err := manager.Create(context.Background(), CreateRequest{
+				RunID: testRunID, WorkItemID: "yoyodyne-conflict", BaseRef: "main", TargetBranch: "main",
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeFile(t, worktree.Path, "README.txt", "this run's answer\n")
+			writeFile(t, repository, "README.txt", "somebody else's answer\n")
+			runGit(t, repository, "add", "README.txt")
+			runGit(t, repository, "commit", "-m", "conflicting target change")
+			target := gitLine(t, repository, "rev-parse", "refs/heads/main")
+			refused, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+			if !errors.Is(err, ErrRebaseConflict) {
+				t.Fatalf("RebaseOntoTarget() error = %v, want ErrRebaseConflict", err)
+			}
+			// The record the caller holds: the change's commit on the old base.
+			worktree.HarnessCommit = refused.HeadCommit
+			interrupted.leave(t, manager, worktree, target)
+
+			moved, err := manager.ReplayForRepair(context.Background(), worktree, "")
+			if err != nil {
+				t.Fatalf("ReplayForRepair() over an unrecorded move error = %v", err)
+			}
+			if moved.BaseCommit != target || moved.HeadCommit != target {
+				t.Fatalf("moved = %#v, want the change based on the target at %q", moved, target)
+			}
+			content := readFile(t, worktree.Path, "README.txt")
+			if strings.Count(content, "<<<<<<<") != 1 || !strings.Contains(content, "this run's answer") || !strings.Contains(content, "somebody else's answer") {
+				t.Fatalf("README.txt = %q, want the conflict applied once over the target", content)
+			}
+		})
 	}
 }
 

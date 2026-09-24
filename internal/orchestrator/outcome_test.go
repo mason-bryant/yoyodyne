@@ -102,6 +102,9 @@ func TestEveryEndingTheHarnessHandsToAPersonIsReadBackAsStopped(t *testing.T) {
 					return nil
 				}, approveVerdict)
 				pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+				// A conflict goes to its own developer while an attempt is left, so the
+				// ending handed to a person is the one with none.
+				pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
 				return pipeline, store, tracker
 			},
 		},

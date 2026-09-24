@@ -3318,6 +3318,10 @@ func (partialWorktreeManager) RebaseOntoTarget(context.Context, gitworktree.Work
 	return gitworktree.Rebase{}, errors.New("partial worktree cannot be replayed")
 }
 
+func (partialWorktreeManager) ReplayForRepair(context.Context, gitworktree.Worktree, string) (gitworktree.Rebase, error) {
+	return gitworktree.Rebase{}, errors.New("partial worktree cannot be replayed")
+}
+
 func (partialWorktreeManager) CleanupIntegrated(context.Context, gitworktree.CleanupRequest) (gitworktree.Cleanup, error) {
 	return gitworktree.Cleanup{}, errors.New("partial worktree cannot be cleaned up")
 }
@@ -6396,8 +6400,9 @@ func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
 	}
 }
 
-// A replay that conflicts is the one case the harness must not resolve. It
-// blocks with both sides intact rather than choosing between them.
+// A replay that conflicts is the one case the harness must not resolve. With no
+// repair attempt left to hand it back to its developer, it blocks with both
+// sides intact rather than choosing between them.
 func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	t.Parallel()
 
@@ -6415,6 +6420,7 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 		return nil
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err == nil || !strings.Contains(err.Error(), "cannot be replayed onto the moved integration target") {
@@ -6450,6 +6456,18 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
 		t.Fatalf("worktree HEAD = %q, want the recorded harness commit %q", head, state.HarnessCommit)
 	}
+	// The conflict stays on the record, unmoved, so a repair granted afterwards
+	// hands the same developer the same disagreement rather than leaving a re-run
+	// as the only way on.
+	if state.ReplayConflict == nil || state.ReplayConflict.Moved || state.ReplayConflict.TargetBranch != "main" {
+		t.Fatalf("recorded conflict = %#v, want the refused replay kept and not yet moved", state.ReplayConflict)
+	}
+	if want := []string{"docs/design.md"}; strings.Join(state.ReplayConflict.Paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("conflicted paths = %v, want %v", state.ReplayConflict.Paths, want)
+	}
+	if !strings.Contains(tracker.blockReason, "The replay stopped on: docs/design.md") || !strings.Contains(tracker.blockReason, "Repair attempts: 0 of 0 permitted") {
+		t.Fatalf("blocker does not name the conflict and the spent budget: %q", tracker.blockReason)
+	}
 }
 
 // The conflict half of yoyodyne-ifd.349's shape through the pipeline: an item
@@ -6478,6 +6496,9 @@ func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(
 		return nil
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	// No repair attempt is left to hand the conflict back to the developer, so the
+	// run stops on it: the shape this test is about.
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
 	// Two rounds already spent across the item's earlier runs and a repair grant
 	// of one standing on an earlier stoppage, so the item is committed to three
 	// of the cap's four before this run reaches its reviewer.
@@ -6528,6 +6549,101 @@ func TestAReplayConflictAfterApprovalChargesNothingAndLeavesTheApprovalStanding(
 	// override.
 	if _, err := store.Triage().RecordRerun(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRerun, outcome.RunID), time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() after the approved-then-conflicted run = %v, want it permitted without an override", err)
+	}
+}
+
+// yoyodyne-ifd.132: an approved change whose replay conflicts is handed back to
+// the developer that wrote it, in the session it already has, rather than ending
+// the run. The change is moved onto the target with the disagreement left as
+// Git's markers, the developer settles it, and the settlement passes through the
+// same gate as any repair — the checks again and a fresh independent verdict —
+// before it is promoted. The cost is one repair attempt, not a fresh run.
+func TestAReplayConflictIsReconciledByItsOwnDeveloperAndLands(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	var reconciliationPrompt string
+	var markersSeen bool
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		design := filepath.Join(request.WorkingDirectory, "docs", "design.md")
+		if attempts == 1 {
+			if err := os.WriteFile(design, []byte("this run's answer\n"), 0o600); err != nil {
+				return err
+			}
+			// The target moves onto the same line while the change is out.
+			writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+			runPipelineGit(t, repository, "add", "docs/design.md")
+			runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+			return nil
+		}
+		// The continuation: the worktree already sits on the target with both
+		// answers between Git's markers, and this developer decides what the file
+		// says.
+		reconciliationPrompt = request.Prompt
+		content, err := os.ReadFile(design)
+		if err != nil {
+			return err
+		}
+		markersSeen = strings.Contains(string(content), "<<<<<<<") &&
+			strings.Contains(string(content), "this run's answer") &&
+			strings.Contains(string(content), "somebody else's answer")
+		return os.WriteFile(design, []byte("both answers, reconciled\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Blocked || outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("Run() outcome = %#v, closed = %t; want the reconciled change promoted", outcome, tracker.closed)
+	}
+	if !markersSeen {
+		t.Fatal("the developer was not handed the change moved onto the target with the conflict left in it")
+	}
+	for _, want := range []string{"Integration conflict: repair required", "repair attempt 1 of 2", "docs/design.md"} {
+		if !strings.Contains(reconciliationPrompt, want) {
+			t.Fatalf("reconciliation prompt does not say %q:\n%s", want, reconciliationPrompt)
+		}
+	}
+	// The same developer session was continued rather than a fresh one started.
+	var developerRequests, reviews int
+	for _, request := range provider.requests {
+		switch request.Role {
+		case domain.RoleDeveloper:
+			developerRequests++
+			if developerRequests == 2 && request.SessionID != "developer-session" {
+				t.Fatalf("the reconciliation ran in session %q, want the developer's own session continued", request.SessionID)
+			}
+		case domain.RoleReviewer:
+			reviews++
+		}
+	}
+	// The approval given before the conflict described the old diff, so the
+	// reconciled change earned its own verdict.
+	if developerRequests != 2 || reviews != 2 {
+		t.Fatalf("developer invoked %d time(s), reviewer %d; want one reconciliation and a fresh verdict on it", developerRequests, reviews)
+	}
+	if content := readPipelineFile(t, repository, filepath.Join("docs", "design.md")); content != "both answers, reconciled\n" {
+		t.Fatalf("target content = %q, want the developer's reconciliation", content)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.RepairAttempts != 1 || state.IntegrationRetries != 1 || state.ReplayConflict != nil {
+		t.Fatalf("state = attempts %d, retries %d, conflict %#v; want one attempt spent and the conflict settled", state.RepairAttempts, state.IntegrationRetries, state.ReplayConflict)
+	}
+	// Neither verdict asked for repair, so the item's round budget is untouched.
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds charged = %d, want none for a conflict nobody judged", counters.ReviewRounds)
 	}
 }
 

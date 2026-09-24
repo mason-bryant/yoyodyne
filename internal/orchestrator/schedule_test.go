@@ -122,14 +122,20 @@ func TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn(t *testing
 
 // The other half of the criterion, and the case concurrency is what makes
 // reachable at all: two runs started from the same base, both approved, both
-// changing the same line. One of them promotes; the other finds its target moved,
-// cannot replay onto it, and is blocked with everything preserved. Nothing is
-// forced, and the target branch carries exactly the winner's change.
+// changing the same line. One of them promotes; the other finds its target
+// moved and cannot replay onto it, and the conflict goes back to the developer
+// that wrote the losing change rather than to a person. It settles it in its own
+// session and lands too.
+//
+// The harness still chooses nothing. What reaches the target is what the loser's
+// own developer decided, judged again by the checks and by an independent
+// reviewer before it was promoted — which is the difference between resolving a
+// conflict and forcing one.
 //
 // Which of the two wins is decided by the promotion lease and is deliberately
-// not asserted: what matters is that exactly one did and the loser was stopped
-// rather than resolved.
-func TestSchedulerBlocksTheLoserOfAConflictRatherThanForcingIt(t *testing.T) {
+// not asserted: what matters is that exactly one promoted first and the other
+// reconciled onto it.
+func TestSchedulerReturnsAConflictToTheLoserRatherThanForcingIt(t *testing.T) {
 	t.Parallel()
 
 	harness := newRealScheduleHarness(t, 2, "yoyodyne-alpha", "yoyodyne-beta")
@@ -138,7 +144,15 @@ func TestSchedulerBlocksTheLoserOfAConflictRatherThanForcingIt(t *testing.T) {
 	// contended one rather than a fast-forward onto work it already had.
 	harness.developersMeet(2)
 	harness.develop = func(workItemID, worktree string) error {
-		return os.WriteFile(filepath.Join(worktree, "shared.txt"), []byte(workItemID+" wrote this\n"), 0o600)
+		shared := filepath.Join(worktree, "shared.txt")
+		// A worktree that already holds Git's markers is the continuation: the
+		// loser has been moved onto the winner's change and is being asked to
+		// reconcile with it. This developer settles it by keeping both answers,
+		// which is a decision it makes rather than one anything made for it.
+		if existing, err := os.ReadFile(shared); err == nil && strings.Contains(string(existing), "<<<<<<<") {
+			return os.WriteFile(shared, []byte(withoutConflictMarkers(string(existing))), 0o600)
+		}
+		return os.WriteFile(shared, []byte(workItemID+" wrote this\n"), 0o600)
 	}
 
 	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
@@ -149,50 +163,64 @@ func TestSchedulerBlocksTheLoserOfAConflictRatherThanForcingIt(t *testing.T) {
 		t.Fatalf("started = %d run(s), want both items pulled: %s", len(schedule.Started), schedule.Render())
 	}
 
-	var promoted, blocked *Started
+	var reconciled *Started
 	for index := range schedule.Started {
 		started := &schedule.Started[index]
-		switch {
-		case started.Outcome.Integration != nil:
-			promoted = started
-		case started.Outcome.Blocked:
-			blocked = started
+		if started.Outcome.Blocked || started.Outcome.Integration == nil {
+			t.Fatalf("%s did not land: %s", started.WorkItemID, schedule.Render())
+		}
+		if started.Outcome.RepairAttempts > 0 {
+			reconciled = started
 		}
 	}
-	if promoted == nil || blocked == nil {
-		t.Fatalf("outcomes = %s, want exactly one promotion and one blocked run", schedule.Render())
+	if reconciled == nil {
+		t.Fatalf("neither run reconciled anything, so nothing contended: %s", schedule.Render())
 	}
-	if blocked.Failure == "" {
-		t.Fatalf("%s was blocked without a reason recorded", blocked.WorkItemID)
+	// One continuation, not a fresh run and not a person: the conflict cost the
+	// loser a single repair attempt.
+	if reconciled.Outcome.RepairAttempts != 1 {
+		t.Fatalf("%s spent %d repair attempt(s) on one conflict", reconciled.WorkItemID, reconciled.Outcome.RepairAttempts)
 	}
 
-	// The target branch carries the winner's change and nothing of the loser's:
-	// a promotion that had been forced through would show the other content, and
-	// one that had been resolved would show both.
+	// The target branch carries what the loser's developer settled on, which is
+	// both answers: a promotion that had been forced through would show one of
+	// them, and nothing here chose between them on anybody's behalf.
 	content, err := os.ReadFile(filepath.Join(harness.repository, "shared.txt"))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if string(content) != promoted.WorkItemID+" wrote this\n" {
-		t.Fatalf("shared.txt = %q, want exactly what %s promoted", content, promoted.WorkItemID)
+	for _, item := range []string{"yoyodyne-alpha", "yoyodyne-beta"} {
+		if !strings.Contains(string(content), item+" wrote this") {
+			t.Fatalf("shared.txt = %q, want the reconciliation the loser's developer made", content)
+		}
 	}
 
-	// The blocked run keeps everything it had, which is what makes the conflict
-	// somebody's to decide rather than something the harness threw away.
-	if blocked.Outcome.WorktreePath == "" || blocked.Outcome.WorktreeRemoved {
-		t.Fatalf("blocked run = %#v, want its worktree preserved for whoever picks the conflict up", blocked.Outcome)
+	// And neither item was handed to a person, which is the whole saving.
+	for _, started := range schedule.Started {
+		item, err := harness.Show(context.Background(), started.WorkItemID)
+		if err != nil {
+			t.Fatalf("Show() error = %v", err)
+		}
+		if item.Status == "blocked" {
+			t.Fatalf("%s was blocked: %q", item.ID, item.Notes)
+		}
 	}
-	if blocked.Outcome.Branch == "" || blocked.Outcome.BranchRemoved {
-		t.Fatalf("blocked run = %#v, want its branch preserved", blocked.Outcome)
+}
+
+// withoutConflictMarkers is how the fake developer above settles a conflict:
+// both sides kept, Git's markers dropped. It is what a developer asked to
+// reconcile does in the simplest case, done simply enough to assert on.
+func withoutConflictMarkers(conflicted string) string {
+	var kept []string
+	for _, line := range strings.Split(conflicted, "\n") {
+		switch {
+		case strings.HasPrefix(line, "<<<<<<<"), strings.HasPrefix(line, "======="), strings.HasPrefix(line, ">>>>>>>"):
+		case line == "":
+		default:
+			kept = append(kept, line)
+		}
 	}
-	// And the blocker reached the tracker, which is where the decision is owed.
-	item, err := harness.Show(context.Background(), blocked.WorkItemID)
-	if err != nil {
-		t.Fatalf("Show() error = %v", err)
-	}
-	if item.Status != "blocked" {
-		t.Fatalf("%s status = %q, want the conflict recorded on the work item", item.ID, item.Status)
-	}
+	return strings.Join(kept, "\n") + "\n"
 }
 
 // A capacity of one -- the default -- serializes the work: three items still all

@@ -856,17 +856,20 @@ var notAStep = map[string]string{
 	// promotion is one operation that takes the lease, checks the remote, moves the
 	// branch and merges the request — so the parts of a registered step are not
 	// separately orderable and must not become so.
-	"attemptDevelopment":      "one provider invocation inside candidate.develop",
-	"commitAttempt":           "records what one developer invocation left in the worktree, inside candidate.develop",
-	"attemptReview":           "one provider invocation inside candidate.review",
-	"recordReviewVerdict":     "records a verdict against the item, charging a round where it sent the work back, inside candidate.review",
-	"gateProtectedPaths":      "the scope refusal candidate.check makes before it spends a suite",
-	"gateSelfVerification":    "the execution-evidence refusal candidate.check makes before it spends a suite",
-	"settleRemoteTarget":      "the pre-promotion remote check inside candidate.integrate",
-	"publishIntegration":      "the merge candidate.integrate asks the forge for once the promotion stands",
-	"repair":                  "records one repair attempt and re-enters candidate.develop with the findings",
-	"prepareIntegrationRetry": "replays a change whose promotion lost its race, so candidate.integrate can be re-earned",
-	"verifyHandback":          "checks a resumed run still has the change it preserved",
+	"attemptDevelopment":         "one provider invocation inside candidate.develop",
+	"commitAttempt":              "records what one developer invocation left in the worktree, inside candidate.develop",
+	"attemptReview":              "one provider invocation inside candidate.review",
+	"recordReviewVerdict":        "records a verdict against the item, charging a round where it sent the work back, inside candidate.review",
+	"gateProtectedPaths":         "the scope refusal candidate.check makes before it spends a suite",
+	"gateSelfVerification":       "the execution-evidence refusal candidate.check makes before it spends a suite",
+	"settleRemoteTarget":         "the pre-promotion remote check inside candidate.integrate",
+	"publishIntegration":         "the merge candidate.integrate asks the forge for once the promotion stands",
+	"repair":                     "records one repair attempt and re-enters candidate.develop with the findings",
+	"prepareIntegrationRetry":    "replays a change whose promotion lost its race, so candidate.integrate can be re-earned",
+	"moveOntoTargetForRepair":    "puts a change whose replay conflicted onto the target for its developer to reconcile, which is the setup of the repair candidate.develop then performs",
+	"reconcilingPublishedBranch": "reads whether candidate.develop's publication replaces the published branch rather than extending it",
+	"republishRebase":            "replaces the published run branch with the one the local branch now carries, inside candidate.develop's publication",
+	"verifyHandback":             "checks a resumed run still has the change it preserved",
 
 	// The declarative path. These step the workflow instance a run is observed
 	// through and are the one group here that is not part of the delivery at all:

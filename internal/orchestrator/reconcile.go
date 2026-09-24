@@ -1479,6 +1479,9 @@ func renderReconcileBlockerNotes(state runstate.State, observation gitworktree.O
 	if state.PathRefusal != nil {
 		lines = append(lines, "Refused protected paths: "+strings.Join(state.PathRefusal.Paths, ", "))
 	}
+	if state.ReplayConflict != nil {
+		lines = append(lines, "Unreconciled replay conflict against: "+state.ReplayConflict.TargetBranch)
+	}
 	if state.ReviewSummary != "" {
 		lines = append(lines, "Last review summary: "+state.ReviewSummary)
 	}

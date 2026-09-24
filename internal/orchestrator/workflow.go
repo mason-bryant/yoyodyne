@@ -115,11 +115,17 @@ func deliveryGrant() (workflow.Grant, error) {
 // spent are two outcomes here -- which is the only way a definition can say that
 // a spent budget goes somewhere else.
 var deliveryAnswers = map[string][]string{
-	"work-item.claim":     {"claimed", "unavailable"},
-	"candidate.develop":   {"produced", "reissued", "relaunches-spent", "stopped"},
-	"candidate.check":     {"failed", "failed-unrepaired", "passed", "refused", "refused-unrepaired", "unrunnable"},
-	"candidate.review":    {"approved", "changes-requested", "stopped", "unresolved"},
-	"candidate.integrate": {"conflicted", "contended", "integrated", "superseded"},
+	"work-item.claim":   {"claimed", "unavailable"},
+	"candidate.develop": {"produced", "reissued", "relaunches-spent", "stopped"},
+	"candidate.check":   {"failed", "failed-unrepaired", "passed", "refused", "refused-unrepaired", "unrunnable"},
+	"candidate.review":  {"approved", "changes-requested", "stopped", "unresolved"},
+	// "reconciling" is a replay conflict handed back to the developer that wrote
+	// the change, which re-earns the whole gate from the developer's own state.
+	// No definition this build ships routes it yet — the built-in and the
+	// repository's own copy are held to one digest, and the copy is a protected
+	// path — so a run that takes it records a divergence rather than an
+	// observation, which is the honest account of a path the definition lacks.
+	"candidate.integrate": {"conflicted", "contended", "integrated", "reconciling", "superseded"},
 	// One outcome, because the run distinguishes nothing here: a promotion whose
 	// merge the forge only queued leaves the item open for a later sweep to close,
 	// and the run goes on to exactly the same next step either way. Where the two
