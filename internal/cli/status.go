@@ -133,7 +133,7 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	spend := flags.Bool("spend", false, "report what was spent, grouped by the local day it was spent on")
 	latest := flags.Bool("latest", false, "with --follow, move to a later stream when one starts")
 	lines := flags.Int("lines", defaultStreamLines, "replay this many recorded events first (0 replays the whole log)")
-	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, exchanges, or all (default all)")
+	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, sides, exchanges, or all (default all)")
 	includeAll := flags.Bool("all", false, "include the thinking-token events the default leaves out")
 	raw := flags.Bool("raw", false, "emit each event exactly as it was recorded")
 	positional, err := parseArguments(flags, args)
@@ -247,6 +247,10 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	if err != nil {
 		return reportStatusFailure(stdout, stderr, *jsonOutput, err)
 	}
+	// What each run that stopped left is looked for in the repository rather than
+	// read off its removal flags, so this listing says what is there — and says
+	// it looked — in the words the docket and the hold use for the same run.
+	readmodel.LookForSummaries(context.Background(), statusRemains(*configPath), store, history.Runs)
 	// The item's triage record is read only when an item was named, and it is
 	// read whatever the listing found: an item whose runs were all cleaned up
 	// still has a record of what triage gave it, and that is exactly the reader
@@ -370,6 +374,17 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), nil
 }
 
+// statusRemains is the repository the listing asks what a stopped run left,
+// where the configuration names one. Nil is kept as no observer, which the look
+// answers from the record and says so.
+func statusRemains(configPath string) readmodel.Remains {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return nil
+	}
+	return standingRemains(resolved)
+}
+
 // flagGiven reports whether an option was actually on the command line, which
 // is the only way to tell a default from a choice for an option whose default
 // is not its zero value.
@@ -477,7 +492,7 @@ func reportStreamStatus(ctx context.Context, mode statusMode, options streamOpti
 // number of local days to cover or the thing to price. A purely numeric one is
 // the count, because an operator asking for a fortnight would not otherwise have
 // a way to say so. An id prefix can be all digits too — ids are hex — so one
-// that is has to be given with its `run-`, `chat-`, `review-`, or `exchange-`
+// that is has to be given with its `run-`, `chat-`, `review-`, `side-`, or `exchange-`
 // prefix to be read as an id rather than as days. Naming something prices it
 // whatever day it ran on: the window is for a report that has to choose what to
 // show, and an id has already chosen.
@@ -490,7 +505,7 @@ func spendWindow(named string) (int, string, error) {
 	}
 	days, err := strconv.Atoi(named)
 	if err != nil || days <= 0 {
-		return 0, "", fmt.Errorf("%q is neither a positive number of days nor the id of a run, conversation, branch review, or exchange", named)
+		return 0, "", fmt.Errorf("%q is neither a positive number of days nor the id of a run, conversation, branch review, side thread, or exchange", named)
 	}
 	return days, "", nil
 }
@@ -1103,6 +1118,20 @@ func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
 	if !run.Status.Terminal() || run.Outcome == runstate.OutcomeSucceeded {
 		return
 	}
+	// Where the repository was asked, what it said is what is printed, and how
+	// it was established beside it: a branch checked and there and a branch a
+	// record says nothing removed are different claims, and run-838ffc48 was
+	// decided about on the second while its branch held the approved change.
+	if found := run.Found; found != nil && found.Recorded() {
+		if run.Branch != "" {
+			fmt.Fprintf(writer, "  branch (%s): %s\n", found.BranchState(), run.Branch)
+		}
+		if run.WorktreePath != "" {
+			fmt.Fprintf(writer, "  worktree (%s): %s\n", found.WorktreeState(), run.WorktreePath)
+		}
+		printPreservedDetail(writer, run)
+		return
+	}
 	if run.Branch != "" {
 		if run.BranchRemoved {
 			fmt.Fprintf(writer, "  branch already removed: %s\n", run.Branch)
@@ -1117,10 +1146,14 @@ func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
 			fmt.Fprintf(writer, "  preserved worktree: %s\n", run.WorktreePath)
 		}
 	}
-	// The session and the findings are said only where the change survives. A
-	// session that continues work nothing holds any more continues nothing, and
-	// findings about a change that is gone are a reading list rather than
-	// something to act on.
+	printPreservedDetail(writer, run)
+}
+
+// printPreservedDetail names the session and the findings, which are said only
+// where the change survives. A session that continues work nothing holds any
+// more continues nothing, and findings about a change that is gone are a
+// reading list rather than something to act on.
+func printPreservedDetail(writer io.Writer, run runstate.RunSummary) {
 	if !run.Preserved() {
 		return
 	}
@@ -1230,7 +1263,7 @@ func renderRunState(run runstate.RunSummary) string {
 		state += ", integrated"
 	}
 	if run.Status.Terminal() && run.Outcome != runstate.OutcomeSucceeded {
-		state += ", " + run.Artifacts().Describe()
+		state += ", " + run.DescribeRemains()
 	}
 	if run.Outstanding && run.Status.Terminal() {
 		state += ", outstanding"
@@ -1328,9 +1361,10 @@ whether the records could be read. Settling what an interrupted run left behind
 is `+"`yoyo reconcile`"+`.
 
 --follow, --events, --list, and --spend read the event stream a run, a
-conversation, and a branch review each record, rather than the run records. It
-is the same question asked of all three -- is this alive, what is it doing, and
-what did it cost -- so every one of them covers all three and the default never
+conversation, a branch review, and a side thread each record, rather than the
+run records. It is the same question asked of all four -- is this alive, what
+is it doing, and what did it cost -- so every one of them covers all four and
+the default never
 asks which kind you meant; --kind narrows it when that is what you want. There,
 the id names a stream or a unique prefix of one rather than a work item.
 
@@ -1339,7 +1373,8 @@ day's group closing with that day's spend and today's coming last: what an
 operator budgets against is what today cost, and the day they mean is the one
 their own clock is keeping. What counts on a day is each invocation rather than
 the log it was recorded in, so a conversation open for a fortnight appears under
-every day it spent on. The exchanges the roles conducted are priced beside the
+every day it spent on. A side thread's rows name the conversation it was opened
+beside, which is whose the money was. The exchanges the roles conducted are priced beside the
 streams, each round on the day it was answered, and narrowed out with the
 streams when --kind names one of them. A number asks for a different count of
 days; naming a stream or an exchange prices that one whatever day it ran on.
@@ -1368,7 +1403,7 @@ Live options:
   --spend           report what was spent, by the local day it was spent on
   --latest          with --follow, move to a later stream when one starts
   --lines <n>       replay this many recorded events first (default 50; 0 the whole log)
-  --kind <kind>     runs, chats, reviews, exchanges (--spend only), or all (default all)
+  --kind <kind>     runs, chats, reviews, sides, exchanges (--spend only), or all (default all)
   --all             include the thinking-token events the default leaves out
   --raw             emit each event exactly as it was recorded`)
 }

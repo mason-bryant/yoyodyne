@@ -38,7 +38,7 @@ func TestStatusListsEveryKindOfStream(t *testing.T) {
 	// An empty answer names the directory it read, because the state root comes
 	// from the environment and a true answer about the wrong directory is the one
 	// failure this surface cannot afford.
-	if !strings.Contains(stdout, "no runs, conversations, or branch reviews are recorded under "+filepath.Join(stateRoot, "products", "yoyodyne")) {
+	if !strings.Contains(stdout, "no runs, conversations, branch reviews, or side threads are recorded under "+filepath.Join(stateRoot, "products", "yoyodyne")) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
@@ -120,11 +120,11 @@ func TestStatusEmptyAnswerNamesTheKindsItWasAskedAbout(t *testing.T) {
 			t.Fatalf("%v answered for the unnarrowed question: stdout = %q, stderr = %q", query.args, stdout, stderr)
 		}
 	}
-	// The unnarrowed spend question names all four kinds, because it covers all
-	// four; the unnarrowed listing names the three it lists.
+	// The unnarrowed spend question names every kind, because it covers every
+	// one; the unnarrowed listing names only the kinds it lists.
 	stdout, _, _ := runCLI(t, "status", "--spend", "nothing-named-this", "--config", configPath)
 	_, stderr, _ := runCLI(t, "status", "--spend", "nothing-named-this", "--config", configPath)
-	if !strings.Contains(stdout+stderr, `no run, conversation, branch review, or exchange matching "nothing-named-this"`) {
+	if !strings.Contains(stdout+stderr, `no run, conversation, branch review, side thread, or exchange matching "nothing-named-this"`) {
 		t.Fatalf("an unnarrowed spend query answered stdout = %q, stderr = %q", stdout, stderr)
 	}
 	// A narrowed kind with streams recorded but nothing spent in the window is the
@@ -148,7 +148,7 @@ func TestStatusSpendGroupsByTheDayItWasSpent(t *testing.T) {
 	// A machine that has recorded nothing says so, rather than reporting an empty
 	// week and inviting a wider window that would be just as empty.
 	stdout, _, code := runCLI(t, "status", "--spend", "--config", configPath)
-	if code != 0 || !strings.Contains(stdout, "no runs, conversations, branch reviews, or exchanges are recorded under "+stateRoot) {
+	if code != 0 || !strings.Contains(stdout, "no runs, conversations, branch reviews, side threads, or exchanges are recorded under "+stateRoot) {
 		t.Fatalf("code = %d, stdout = %q", code, stdout)
 	}
 	// A machine that has recorded something but spent nothing in the days asked
@@ -235,7 +235,7 @@ func TestStatusSpendGroupsByTheDayItWasSpent(t *testing.T) {
 	// A stream named but not recorded is a question that could not be asked,
 	// rather than a machine that spent nothing.
 	_, stderr, code = runCLI(t, "status", "--spend", "chat-nothing", "--config", configPath)
-	if code != 1 || !strings.Contains(stderr, "no run, conversation, branch review, or exchange matching") {
+	if code != 1 || !strings.Contains(stderr, "no run, conversation, branch review, side thread, or exchange matching") {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
 	}
 }

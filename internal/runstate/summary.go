@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // RunOutcome is what became of a run, in the fixed vocabulary every listing
@@ -206,6 +208,11 @@ type RunSummary struct {
 	WorktreePath    string `json:"worktree_path,omitempty"`
 	BranchRemoved   bool   `json:"branch_removed,omitempty"`
 	WorktreeRemoved bool   `json:"worktree_removed,omitempty"`
+	// Found is what the repository held of the branch and the worktree when the
+	// listing was made, where the listing looked. It is what a listing says about
+	// preservation in place of the removal flags above, which are what a cleanup
+	// remembered to write rather than what is there.
+	Found *triage.Found `json:"found,omitempty"`
 	// ProviderSessionID is the developer session preserved with the change, which
 	// is what a continuation resumes in rather than deriving the work a second
 	// time. It is named for the same reason the artifacts are.
@@ -350,9 +357,34 @@ func (r RunSummary) Artifacts() Artifacts {
 	}
 }
 
-// Preserved reports the run's change surviving the run. It is the artifacts'
-// own answer, kept here because a summary is what most callers hold.
-func (r RunSummary) Preserved() bool { return r.Artifacts().Preserved() }
+// Preserved reports the run's change surviving the run: what the repository
+// held where the listing looked, and the artifacts' own answer where it did not.
+func (r RunSummary) Preserved() bool {
+	if r.Found != nil {
+		return r.Found.Holds()
+	}
+	return r.Artifacts().Preserved()
+}
+
+// DescribeRemains is what remains of the run's change in the words a listing
+// says it in. Where the repository was asked it says so, and what it found;
+// where it was not, it says the record's answer and that nothing looked, so a
+// flag is never read out as a check.
+func (r RunSummary) DescribeRemains() string {
+	found := r.Found
+	switch {
+	case found == nil || !found.Recorded():
+		return r.Artifacts().Describe()
+	case found.Unknown:
+		return "work possibly preserved, not checked"
+	case !found.Looked():
+		return r.Artifacts().Describe() + ", not checked"
+	case found.Holds():
+		return "work preserved, checked"
+	default:
+		return "work gone, checked"
+	}
+}
 
 // CostKnown reports a run the recorded evidence could actually price.
 func (r RunSummary) CostKnown() bool { return r.UnknownCost == "" }

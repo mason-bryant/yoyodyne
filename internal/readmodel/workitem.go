@@ -24,6 +24,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // ErrNoSuchWorkItem is the tracker holding nothing under the id asked for. It
@@ -64,6 +65,10 @@ type WorkItemSources struct {
 	// wiring gap that is not there.
 	Runs        Histories
 	RunsProblem string
+	// Remains is the repository the card asks what a finished run left, so the
+	// card says what is there rather than what the run's removal flags say. Nil
+	// answers from the record, and the card says nothing looked.
+	Remains Remains
 	// TrackerTimeout bounds the tracker command, so an unresponsive tracker
 	// costs this answer rather than hanging the surface that asked.
 	TrackerTimeout time.Duration
@@ -119,13 +124,16 @@ type ItemRun struct {
 	// nothing.
 	InFlight  bool `json:"in_flight"`
 	Preserved bool `json:"preserved"`
-	// Remains is what the record says survives of the change, in the three
-	// phrases every surface uses: work preserved, work removed, or no artifacts
-	// recorded. It is empty for a run in flight, which holds everything it has.
-	Remains           string `json:"remains,omitempty"`
-	Branch            string `json:"branch,omitempty"`
-	WorktreePath      string `json:"worktree_path,omitempty"`
-	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	// Remains is what survives of the change, in the words `yoyo status` says
+	// it in: what the repository held when the card was read, and whether it was
+	// looked for. It is empty for a run in flight, which holds everything it has.
+	Remains string `json:"remains,omitempty"`
+	// Found is the look itself: the branch and the checkout, each there or not,
+	// and when that was asked.
+	Found             *triage.Found `json:"found,omitempty"`
+	Branch            string        `json:"branch,omitempty"`
+	WorktreePath      string        `json:"worktree_path,omitempty"`
+	ProviderSessionID string        `json:"provider_session_id,omitempty"`
 	// Failure is the run's own reason for ending, where it gave one. It is the
 	// reason and never the verdict: what became of the run is Outcome.
 	Failure     string        `json:"failure,omitempty"`
@@ -170,14 +178,14 @@ func ReadWorkItem(ctx context.Context, sources WorkItemSources, id string) (Work
 		AcceptanceCriteria: found.AcceptanceCriteria,
 		Notes:              found.Notes,
 	}
-	item.Run, item.RunProblem = readLatestRun(sources, found.ID, now)
+	item.Run, item.RunProblem = readLatestRun(ctx, sources, found.ID, now)
 	return item, nil
 }
 
 // readLatestRun is the item's most recent run, summarized and priced by the run
 // history's own derivation — the one `yoyo status <item>` prints from — so the
 // card's outcome, phase, remains, and cost are the terminal's words.
-func readLatestRun(sources WorkItemSources, id string, now time.Time) (*ItemRun, string) {
+func readLatestRun(ctx context.Context, sources WorkItemSources, id string, now time.Time) (*ItemRun, string) {
 	if sources.Runs == nil {
 		if sources.RunsProblem != "" {
 			return nil, "the runs could not be opened: " + sources.RunsProblem
@@ -190,6 +198,12 @@ func readLatestRun(sources WorkItemSources, id string, now time.Time) (*ItemRun,
 	}
 	if len(history.Runs) == 0 {
 		return nil, ""
+	}
+	// The run's change is looked for in the repository, through the run's own
+	// record, as `yoyo status` looks for it — where the store can list what it
+	// holds, which the run store always can.
+	if recorded, lists := sources.Runs.(Recorded); lists {
+		LookForSummaries(ctx, sources.Remains, recorded, history.Runs[:1])
 	}
 	latest := history.Runs[0]
 	run := &ItemRun{
@@ -211,7 +225,8 @@ func readLatestRun(sources WorkItemSources, id string, now time.Time) (*ItemRun,
 		run.Elapsed = now.Sub(latest.StartedAt)
 	} else {
 		run.Preserved = latest.Preserved()
-		run.Remains = latest.Artifacts().Describe()
+		run.Remains = latest.DescribeRemains()
+		run.Found = latest.Found
 	}
 	return run, ""
 }

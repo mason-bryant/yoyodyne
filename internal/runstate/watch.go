@@ -344,6 +344,74 @@ type WatchTransition struct {
 	// because the entry stays in it. An unknown field is ignored by the same
 	// reader, so what an older one loses is the distinction and not the log.
 	Restarting bool `json:"restarting,omitempty"`
+	// DispatchWait is a dispatch this session started waiting out a tracker failure
+	// before it has claimed anything, recorded as the wait is taken. It is the one
+	// entry here that is not a transition of the session at all: the session is
+	// exactly as it was, and what the entry says is that one of the dispatches it
+	// started is holding a developer slot with no run record to say so on.
+	//
+	// It is the fact that was missing after yoyodyne-ifd.428.6. The tracker read a
+	// dispatch makes before it claims an item is waited out for up to the recovery
+	// window, and nothing was written while it waited, so a slot held for two hours
+	// that way looked from every surface exactly like a hung process.
+	//
+	// An entry carrying one is a note rather than a transition, and every fold of
+	// this log into what a session is doing reads past it; see Note. It is written
+	// as a watching entry because that is what an older reader, which knows nothing
+	// of the field, will take it for — and a session with a dispatch in flight is
+	// one choosing work.
+	DispatchWait *DispatchWait `json:"dispatch_wait,omitempty"`
+}
+
+// Note reports an entry that says something about a dispatch this session
+// started rather than about the session itself, which is what every fold of the
+// log into a session's state reads past. A pre-claim wait is written from the
+// dispatch's own goroutine while the session goes on polling, so taking one as
+// the session's latest word would report a session idle over an empty queue as
+// one still choosing, for as long as nothing else it did was news.
+func (t WatchTransition) Note() bool { return t.DispatchWait != nil }
+
+// DispatchWait is one wait a dispatch took out on a tracker failure before it
+// claimed anything: which item it was dispatched for, which boundary failed,
+// which retry this is, how long it waits, and the failure it is waiting out. It
+// is the shape a run's own Retry takes, counted the same way, because it is the
+// same wait on the same rule, recorded where a dispatch with no run can record
+// it.
+type DispatchWait struct {
+	WorkItemID   string    `json:"work_item_id"`
+	Boundary     string    `json:"boundary"`
+	Attempt      int       `json:"attempt"`
+	DelaySeconds int64     `json:"delay_seconds"`
+	At           time.Time `json:"at"`
+	Failure      string    `json:"failure,omitempty"`
+}
+
+// Until is when the wait ends and the dispatch asks the tracker again.
+func (w DispatchWait) Until() time.Time {
+	return w.At.Add(time.Duration(w.DelaySeconds) * time.Second)
+}
+
+func (w DispatchWait) validate() error {
+	var problems []error
+	if err := domain.ValidateIdentifier("dispatch wait work item id", w.WorkItemID); err != nil {
+		problems = append(problems, err)
+	}
+	if w.Boundary == "" {
+		problems = append(problems, errors.New("a dispatch wait names the boundary it is waiting out"))
+	}
+	if w.Attempt < 1 {
+		problems = append(problems, fmt.Errorf("a dispatch wait is retry %d, which is not a retry", w.Attempt))
+	}
+	if w.DelaySeconds < 0 {
+		problems = append(problems, fmt.Errorf("a dispatch wait of %d seconds is not a wait", w.DelaySeconds))
+	}
+	if w.At.IsZero() {
+		problems = append(problems, errors.New("a dispatch wait records when it was taken"))
+	}
+	if len(w.Failure) > MaxWatchReasonBytes {
+		problems = append(problems, fmt.Errorf("a dispatch wait's failure is %d bytes, which exceeds the %d byte bound", len(w.Failure), MaxWatchReasonBytes))
+	}
+	return errors.Join(problems...)
 }
 
 func (t WatchTransition) Validate() error {
@@ -445,6 +513,17 @@ func (t WatchTransition) Validate() error {
 	// under way that nothing is going to make.
 	if t.Restarting && t.State != WatchStopped {
 		problems = append(problems, fmt.Errorf("a %s transition cannot be a restart, which is a thing only a stop is", t.State))
+	}
+	// A dispatch wait is written only as a watching entry, which is what an older
+	// reader will take it for; on any other state it would tell that reader the
+	// session had braked, idled, or stopped when it had done nothing of the kind.
+	if t.DispatchWait != nil {
+		if t.State != WatchWatching {
+			problems = append(problems, fmt.Errorf("a %s entry cannot carry a dispatch's wait, which is written only as a watching one", t.State))
+		}
+		if err := t.DispatchWait.validate(); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -714,16 +793,19 @@ func (s *WatchStore) Scan() ([]WatchTransition, []SkippedLine, error) {
 // Latest is the last transition recorded, which is where a session got to. A
 // product nobody has watched has none, which is reported as an absence rather
 // than as a session in some default state: never having watched and having
-// stopped watching are different facts.
+// stopped watching are different facts. A note about a dispatch is not where the
+// session got to, so it is read past.
 func (s *WatchStore) Latest() (WatchTransition, bool, error) {
 	transitions, err := s.List()
 	if err != nil {
 		return WatchTransition{}, false, err
 	}
-	if len(transitions) == 0 {
-		return WatchTransition{}, false, nil
+	for index := len(transitions) - 1; index >= 0; index-- {
+		if !transitions[index].Note() {
+			return transitions[index], true, nil
+		}
 	}
-	return transitions[len(transitions)-1], true, nil
+	return WatchTransition{}, false, nil
 }
 
 func decodeWatchTransition(data []byte) (WatchTransition, error) {

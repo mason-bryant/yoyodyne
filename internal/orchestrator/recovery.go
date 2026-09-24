@@ -78,14 +78,22 @@ func recoveringValue[T any](ctx context.Context, a *activeRun, boundary string, 
 // outright, and for a resume that is a run left in flight that nothing picked up
 // until somebody asked for it again.
 //
-// Nothing is recorded, because there is nothing to record it on: no run has been
-// reserved, and the run a resume is about belongs to whichever process holds its
-// lease rather than to this one. That is the whole of what this gives up against
-// the recording rule the run's own boundaries follow, and it costs nothing to
-// give up here: a dispatch that dies mid-window claimed nothing and left nothing
-// behind, so what a fresh window buys is one more attempt rather than a wait
+// Nothing is recorded against a run, because there is none to record it on: no
+// run has been reserved, and the run a resume is about belongs to whichever
+// process holds its lease rather than to this one. What a run's record buys that
+// matters here — a window a restarted process does not spend again — costs
+// nothing to give up: a dispatch that dies mid-window claimed nothing and left
+// nothing behind, so a fresh window buys one more attempt rather than a wait
 // somebody has already paid for. The window and the intervals are the same, so
 // the store gets asked the same way wherever a run meets it.
+//
+// What is recorded is that the wait is being taken, where a watch session started
+// the dispatch: each wait goes onto the session's watch log before it is slept,
+// with the boundary, the attempt it precedes, and the failure it waits out. Up to
+// two hours of a held slot with nothing written anywhere read on every surface
+// exactly as a hung process does, which is what yoyodyne-ifd.428.14 ended. A
+// dispatch nobody's session started — `yoyo run` at a terminal — has somebody
+// watching it already, and records nothing.
 func (p Pipeline) readWorkItem(ctx context.Context, workItemID string) (beads.WorkItem, error) {
 	var waited time.Duration
 	for attempt := 1; ; attempt++ {
@@ -98,12 +106,42 @@ func (p Pipeline) readWorkItem(ctx context.Context, workItemID string) (beads.Wo
 			return item, fmt.Errorf("the tracker kept failing on something a later attempt could have survived, and %d retr(ies) over %s did not outlast it: %w",
 				attempt-1, waited.Round(time.Second), err)
 		}
+		dispatchWaited(ctx, runstate.DispatchWait{
+			WorkItemID:   workItemID,
+			Boundary:     runstate.RetryDependencyRead,
+			Attempt:      attempt,
+			DelaySeconds: int64(delay / time.Second),
+			At:           p.clock().Now(),
+			Failure:      boundedFailureDetail(err.Error()),
+		})
 		if sleepErr := p.sleep(ctx, delay); sleepErr != nil {
 			// The dispatch is over — cancelled, or out of time — so the read is left
 			// as it failed rather than asked again under a context that has ended.
 			return item, err
 		}
 		waited += delay
+	}
+}
+
+// dispatchWaitsKey carries, on a dispatch's context, where the watch session that
+// started it records a wait the dispatch takes before it has claimed anything.
+type dispatchWaitsKey struct{}
+
+// withDispatchWaits is a dispatch's context carrying where its waits are
+// recorded. It travels on the context rather than on the pipeline because the
+// session that starts a dispatch is the scheduler and the pipeline is built by
+// whoever wired the start, and the context is the one thing both hand along.
+func withDispatchWaits(ctx context.Context, record func(runstate.DispatchWait)) context.Context {
+	return context.WithValue(ctx, dispatchWaitsKey{}, record)
+}
+
+// dispatchWaited records one pre-claim wait where the dispatch's session asked
+// for them, and nowhere where it did not. Recording is the session's to do and
+// never fails the dispatch: a wait that could not be written costs its
+// visibility, not the work.
+func dispatchWaited(ctx context.Context, wait runstate.DispatchWait) {
+	if record, wired := ctx.Value(dispatchWaitsKey{}).(func(runstate.DispatchWait)); wired && record != nil {
+		record(wait)
 	}
 }
 

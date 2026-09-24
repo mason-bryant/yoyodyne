@@ -1531,6 +1531,14 @@ type State struct {
 	// run whose work the target does not carry and every run that cleaned up after
 	// its own promotion.
 	BranchSweptAt *time.Time `json:"branch_swept_at,omitempty"`
+	// ReleaseCorrectedAt is when the convergence sweep told this run's work item
+	// that the claim audit had given it back without saying the run's change was
+	// still on its branch or in its checkout. A release note written before the
+	// audit looked in the repository said only that nothing was working on the
+	// item, and on 2026-09-23 that was read as run-838ffc48 having preserved
+	// nothing while its branch held the approved change. It is here so the
+	// correction is made once rather than on every sweep.
+	ReleaseCorrectedAt *time.Time `json:"release_corrected_at,omitempty"`
 	// PreservedWorkRef names the ref carrying whatever this run left uncommitted
 	// in its checkout, written when the sweep retired that checkout and had
 	// something to move out of it first. It is deliberately not a branch: a branch

@@ -85,7 +85,7 @@ func TestTheFourNightsAreAllDeadClaims(t *testing.T) {
 		},
 	}
 	for name, night := range nights {
-		dead := DeadClaims([]Claim{night.claim}, night.runs, auditNoon, 0, 0)
+		dead := DeadClaims([]Claim{night.claim}, night.runs, auditNoon, 0, 0, nil)
 		if len(dead) != 1 {
 			t.Fatalf("%s: DeadClaims() = %+v, want the claim read as dead", name, dead)
 		}
@@ -111,7 +111,7 @@ func TestAClaimWithALiveRunBehindItIsLeftAlone(t *testing.T) {
 	t.Parallel()
 
 	live := []runstate.State{inFlight("run-live", "yoyodyne-ifd.9", time.Minute)}
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Working")}, live, auditNoon, 0, 0); len(dead) != 0 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Working")}, live, auditNoon, 0, 0, nil); len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want a live run to keep its claim", dead)
 	}
 	// And an item whose newest run is alive keeps it even though an earlier
@@ -120,7 +120,7 @@ func TestAClaimWithALiveRunBehindItIsLeftAlone(t *testing.T) {
 		ended("run-first", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour),
 		inFlight("run-second", "yoyodyne-ifd.9", time.Minute),
 	}
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Working")}, together, auditNoon, 0, 0); len(dead) != 0 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Working")}, together, auditNoon, 0, 0, nil); len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want a retried item with a live run to keep its claim", dead)
 	}
 }
@@ -149,7 +149,7 @@ func TestARunWaitingToBeContinuedKeepsItsClaimHoweverQuietItIs(t *testing.T) {
 	} {
 		run := inFlight("run-parked", "yoyodyne-ifd.9", 30*time.Hour)
 		park(&run)
-		dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Parked")}, []runstate.State{run}, auditNoon, 0, 0)
+		dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Parked")}, []runstate.State{run}, auditNoon, 0, 0, nil)
 		if len(dead) != 0 {
 			t.Fatalf("%s: DeadClaims() = %+v, want a run owed a continuation to keep its claim", name, dead)
 		}
@@ -162,10 +162,10 @@ func TestAClaimIsNotDeadUntilItHasBeenQuietPastTheThreshold(t *testing.T) {
 	t.Parallel()
 
 	runs := []runstate.State{ended("run-fresh", "yoyodyne-ifd.9", runstate.StatusFailed, time.Minute)}
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Just ended")}, runs, auditNoon, 0, 0); len(dead) != 0 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Just ended")}, runs, auditNoon, 0, 0, nil); len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want a run that ended a minute ago to be left alone", dead)
 	}
-	past := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Just ended")}, runs, auditNoon, 30*time.Second, 0)
+	past := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Just ended")}, runs, auditNoon, 30*time.Second, 0, nil)
 	if len(past) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want the same claim dead once the threshold is shorter than the silence", past)
 	}
@@ -182,7 +182,7 @@ func TestARunKilledAfterARepairRoundIsStillADeadClaim(t *testing.T) {
 	repaired := inFlight("run-repaired", "yoyodyne-ifd.264", 9*time.Hour)
 	repaired.RepairAttempts = 2
 	repaired.Phase = runstate.PhaseReviewing
-	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.264", "Round once already")}, []runstate.State{repaired}, auditNoon, 0, 0)
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.264", "Round once already")}, []runstate.State{repaired}, auditNoon, 0, 0, nil)
 	if len(dead) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want a killed run read as dead however many repair rounds it took", dead)
 	}
@@ -197,7 +197,7 @@ func TestAClaimOverWorkThatAlreadyLandedIsNotGivenBack(t *testing.T) {
 
 	promoted := ended("run-landed", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour)
 	promoted.Integration = &runstate.Integration{TargetBranch: "main", TargetCommit: "abc1234"}
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Landed")}, []runstate.State{promoted}, auditNoon, 0, 0); len(dead) != 0 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Landed")}, []runstate.State{promoted}, auditNoon, 0, 0, nil); len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want an item whose change landed left for reconciliation to close", dead)
 	}
 }
@@ -226,14 +226,14 @@ func TestAClaimOverAnApprovedChangeTheEnvironmentStoppedIsNotGivenBack(t *testin
 		RecordedAt: auditNoon.Add(-9 * time.Hour),
 	}
 
-	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "The duplicated one")}, []runstate.State{stopped}, auditNoon, 0, 0)
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "The duplicated one")}, []runstate.State{stopped}, auditNoon, 0, 0, nil)
 	if len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want an approved change the environment stopped left for `yoyo triage resume`", dead)
 	}
 	// And a stop whose branch is gone is nothing anybody can resume, so the claim
 	// is the dead one it looks like: there is no change left to start over.
 	stopped.BranchRemoved, stopped.WorktreeRemoved = true, true
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "Swept")}, []runstate.State{stopped}, auditNoon, 0, 0); len(dead) != 1 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "Swept")}, []runstate.State{stopped}, auditNoon, 0, 0, nil); len(dead) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want the claim given back once nothing is left to resume", dead)
 	}
 }
@@ -258,13 +258,13 @@ func TestAClaimOverAChangeStillOnItsBranchIsNotGivenBack(t *testing.T) {
 		run.Branch = "yoyodyne/yoyodyne-ifd-9/holding"
 		run.WorktreePath = "/state/worktrees/yoyodyne-ifd-9-holding"
 		ending(&run)
-		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Still on a branch")}, []runstate.State{run}, auditNoon, 0, 0); len(dead) != 0 {
+		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Still on a branch")}, []runstate.State{run}, auditNoon, 0, 0, nil); len(dead) != 0 {
 			t.Fatalf("%s: DeadClaims() = %+v, want the claim kept over a change still on its branch", name, dead)
 		}
 		// And the same ending with its change swept keeps nothing: there is no
 		// change left to start over, so the claim is the dead one it looks like.
 		run.BranchRemoved, run.WorktreeRemoved = true, true
-		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Swept")}, []runstate.State{run}, auditNoon, 0, 0); len(dead) != 1 {
+		if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Swept")}, []runstate.State{run}, auditNoon, 0, 0, nil); len(dead) != 1 {
 			t.Fatalf("%s: DeadClaims() = %+v, want the claim given back once nothing of the change survives", name, dead)
 		}
 	}
@@ -281,7 +281,7 @@ func TestAKilledRunHoldingAHalfFinishedChangeIsStillADeadClaim(t *testing.T) {
 	killed := inFlight("run-killed", "yoyodyne-ifd.209.7", 9*time.Hour)
 	killed.Branch = "yoyodyne/yoyodyne-ifd-209-7/killed"
 	killed.WorktreePath = "/state/worktrees/yoyodyne-ifd-209-7-killed"
-	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.209.7", "Killed mid-change")}, []runstate.State{killed}, auditNoon, 0, 0)
+	dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.209.7", "Killed mid-change")}, []runstate.State{killed}, auditNoon, 0, 0, nil)
 	if len(dead) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want a killed process read as dead however much of its change is on disk", dead)
 	}
@@ -294,7 +294,7 @@ func TestAClaimWithNoRunBehindItIsNobodysToGiveBack(t *testing.T) {
 	t.Parallel()
 
 	other := []runstate.State{ended("run-elsewhere", "yoyodyne-ifd.8", runstate.StatusSucceeded, 9*time.Hour)}
-	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Somebody's own")}, other, auditNoon, 0, 0); len(dead) != 0 {
+	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Somebody's own")}, other, auditNoon, 0, 0, nil); len(dead) != 0 {
 		t.Fatalf("DeadClaims() = %+v, want a claim with no recorded run left alone", dead)
 	}
 }
@@ -306,12 +306,12 @@ func TestWhatBecameOfTheRunTellsTheTwoDeathsApart(t *testing.T) {
 	t.Parallel()
 
 	over := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Ended")},
-		[]runstate.State{ended("run-over", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour)}, auditNoon, 0, 0)
+		[]runstate.State{ended("run-over", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour)}, auditNoon, 0, 0, nil)
 	if len(over) != 1 || !strings.Contains(over[0].Because, "ended") {
 		t.Fatalf("Because = %q, want a run that ended said as one", because(over))
 	}
 	killed := DeadClaims([]Claim{claimed("yoyodyne-ifd.9", "Killed")},
-		[]runstate.State{inFlight("run-killed", "yoyodyne-ifd.9", 9*time.Hour)}, auditNoon, 0, 0)
+		[]runstate.State{inFlight("run-killed", "yoyodyne-ifd.9", 9*time.Hour)}, auditNoon, 0, 0, nil)
 	if len(killed) != 1 || !strings.Contains(killed[0].Because, "the process holding it is gone") {
 		t.Fatalf("Because = %q, want a killed process said as one", because(killed))
 	}

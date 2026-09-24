@@ -173,9 +173,13 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 		ProviderWindow: readmodel.WaitingOnProvider(sessions),
 		ProviderOutage: outage,
 		ProviderAway:   providerAway,
-		Watched:        len(sessions) > 0,
-		Threshold:      c.threshold(),
-		Now:            now,
+		// A dispatch waiting out the tracker before it claims anything, as the
+		// session that started it recorded: it holds a slot with no run to say so,
+		// and for up to the recovery window looks from here like a session that hung.
+		TrackerWaits: readmodel.WaitingOnTracker(sessions, now),
+		Watched:      len(sessions) > 0,
+		Threshold:    c.threshold(),
+		Now:          now,
 	}
 	if activity.Unexplained() {
 		// The one reading here that costs a process. Everything above is derived

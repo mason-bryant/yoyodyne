@@ -80,6 +80,13 @@ const (
 	// reported this as a session finding nothing to start would be sending somebody
 	// to look at a queue that is fine.
 	ReasonProviderWindow Reason = "provider"
+	// ReasonTrackerWait is a dispatch a live session started that is waiting out a
+	// tracker failure before it has claimed anything. It is distinct from an idle
+	// session for the reason the window is: the session found work and started it,
+	// and the dispatch asks the tracker again on its own clock, so a reader told
+	// the session had found nothing to start would be sent to look at a queue that
+	// is fine.
+	ReasonTrackerWait Reason = "tracker"
 	// ReasonSessionIdle is a live session that is choosing nothing. It is distinct
 	// from having no session at all because an operator does an entirely different
 	// thing about it, and because telling them to start a session they are already
@@ -103,6 +110,7 @@ func Reasons() []Reason {
 		ReasonProviderAway,
 		ReasonNoCapacity,
 		ReasonProviderWindow,
+		ReasonTrackerWait,
 		ReasonSessionIdle,
 		ReasonNoWatchSession,
 		ReasonUnwatched,
@@ -132,6 +140,8 @@ func (r Reason) Whose() string {
 		return "nobody's — a slot frees as a run in flight finishes"
 	case ReasonProviderWindow:
 		return "nobody's — the harness asks again when the provider's usage window lifts"
+	case ReasonTrackerWait:
+		return "nobody's — the dispatch asks the tracker again on its own, and hands the item to a person only once the recovery window is spent"
 	case ReasonSessionIdle:
 		return "the operator's — a queue with ready work and an idle session is a stall rather than a rest"
 	case ReasonNoWatchSession, ReasonUnwatched:
@@ -331,10 +341,11 @@ func WhyNothingStarts(conditions Conditions) Stall {
 // choosing at all — which is the state the overnight was in and the one nothing
 // else says.
 //
-// A session that recorded itself waiting out the provider's usage window is
-// answered ahead of the plain idle one, because the two look identical from
-// every other record and mean opposite things: one is a queue nobody is pulling
-// and the other is a queue the provider will not let anybody pull yet.
+// A session that recorded itself waiting out the provider's usage window, or one
+// whose dispatch is waiting out the tracker, is answered ahead of the plain idle
+// one, because each looks identical to it from every other record and means the
+// opposite: one is a queue nobody is pulling, and the others are a queue the
+// provider will not let anybody pull yet or one already being pulled from.
 func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 	if len(sessions) == 0 {
 		return Stall{
@@ -358,6 +369,17 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 				Reason: ReasonProviderWindow,
 				Says:   window.Says(),
 				Since:  window.Since,
+			}
+		}
+		// A session idle because the slot it would fill is held by its own dispatch,
+		// waiting out the tracker before it claims anything, has found work rather
+		// than none. The oldest wait is the one said, because it is the one that has
+		// held its slot longest.
+		if waiting := WaitingOnTracker(sessions, now); len(waiting) > 0 {
+			return Stall{
+				Reason: ReasonTrackerWait,
+				Says:   waiting[0].Says(),
+				Since:  waiting[0].At,
 			}
 		}
 		return Stall{

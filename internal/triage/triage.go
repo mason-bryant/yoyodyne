@@ -232,10 +232,16 @@ type Artifacts struct {
 	TargetBranch string `json:"target_branch,omitempty"`
 	BaseCommit   string `json:"base_commit,omitempty"`
 	// BranchRemoved and WorktreeRemoved are the harness's own record of the two
-	// cleanup steps, so an entry never sends somebody after an artifact the
-	// harness already removed.
+	// cleanup steps. They are kept for the entries written before Found existed,
+	// and an entry that carries Found is never rendered from them: a flag is what
+	// a cleanup remembered to write, which is how run-838ffc48 came to be decided
+	// about as having preserved nothing while its branch held the approved change.
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
+	// Found is what the repository held of the branch and the worktree when the
+	// entry was last written — as the run stopped, and again every time the
+	// docket is built for somebody to read — and it is what the entry says.
+	Found *Found `json:"found,omitempty"`
 	// DeveloperSession is the provider session the stopped run's developer was
 	// working in. It is an artifact of the run in the way the branch and the
 	// worktree are — a continuation resumes it rather than starting a developer
@@ -1197,6 +1203,11 @@ func (e Entry) Validate() error {
 			problems = append(problems, errors.New("session_resumable: a preserved worktree is required, because it is what a continued developer carries on in"))
 		}
 	}
+	if e.Artifacts.Found != nil {
+		if err := e.Artifacts.Found.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("artifacts: found: %w", err))
+		}
+	}
 	if e.IntegrationStop != nil {
 		if strings.TrimSpace(e.IntegrationStop.Cause) == "" {
 			problems = append(problems, errors.New("integration_stop: the cause is required, because it is what says the environment stopped the change rather than a verdict"))
@@ -1879,23 +1890,37 @@ func (e Entry) item() string {
 
 func (e Entry) renderArtifacts() string {
 	var rendered strings.Builder
+	found := e.Artifacts.Found
+	worktreeGone := e.Artifacts.WorktreeRemoved
+	if found != nil {
+		worktreeGone = !found.Unknown && !found.WorktreeThere
+	}
 	if e.Artifacts.Branch != "" {
-		state := "preserved"
-		if e.Artifacts.BranchRemoved {
-			state = "removed"
+		// What the repository held when this entry was last written, where it was
+		// looked for. An entry written before the look existed says what its
+		// run's record said and that nothing looked, so it is never read as a check.
+		state := "preserved as the run's record says, not checked"
+		switch {
+		case found != nil:
+			state = found.BranchState()
+		case e.Artifacts.BranchRemoved:
+			state = "removed as the run's record says, not checked"
 		}
 		fmt.Fprintf(&rendered, "      Branch (%s): %s\n", state, e.Artifacts.Branch)
 	}
 	if e.Artifacts.WorktreePath != "" {
-		state := "preserved"
-		if e.Artifacts.WorktreeRemoved {
-			state = "removed"
+		state := "preserved as the run's record says, not checked"
+		switch {
+		case found != nil:
+			state = found.WorktreeState()
+		case e.Artifacts.WorktreeRemoved:
+			state = "removed as the run's record says, not checked"
 		}
 		fmt.Fprintf(&rendered, "      Worktree (%s): %s\n", state, e.Artifacts.WorktreePath)
 	}
 	if e.Artifacts.DeveloperSession != "" {
 		state := "preserved"
-		if e.Artifacts.WorktreeRemoved {
+		if worktreeGone {
 			// The session is the provider's and nothing here removes one, but there
 			// is nowhere left to continue it: what a continued developer works in is
 			// the checkout, and a retired one is what a resumption has nothing to

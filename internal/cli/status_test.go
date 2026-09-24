@@ -79,11 +79,14 @@ func TestStatusReportsFailedRunsWithTheirReasons(t *testing.T) {
 		"2 of 2 shown",
 		failed.RunID,
 		"yoyodyne-ifd.2.7",
-		// The word the operator misread is gone: this run's item is back with a
-		// person and every line of its change is still there.
-		"[stopped, reviewing, work preserved]",
-		"preserved branch: yoyodyne/yoyodyne-ifd.2.7/0123abcd",
-		"preserved worktree: /state/worktrees/yoyodyne-ifd-2-7",
+		// The listing looks in the repository rather than reading the run's
+		// flags, and this fixture's branch is not one the repository would own,
+		// so the look is refused and the listing says it could not check rather
+		// than calling the change preserved on the record's word.
+		"[stopped, reviewing, work possibly preserved, not checked]",
+		"branch (not checked: the repository could not be asked",
+		"): yoyodyne/yoyodyne-ifd.2.7/0123abcd",
+		"): /state/worktrees/yoyodyne-ifd-2-7",
 		"reason: independent review requires repair",
 		"$8.91",
 		"yoyodyne-ifd.41",

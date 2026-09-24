@@ -441,8 +441,8 @@ func TestARenderedEntryCarriesTheEvidenceSomebodyDecidesOn(t *testing.T) {
 		"Finding [blocker] (feature.txt:1): add the missing file",
 		"Failing check: make test (exit 1)",
 		"FAIL\tinternal/thing",
-		"Branch (preserved): yoyodyne/task/abc",
-		"Worktree (preserved): /state/worktrees/task",
+		"Branch (preserved as the run's record says, not checked): yoyodyne/task/abc",
+		"Worktree (preserved as the run's record says, not checked): /state/worktrees/task",
 		"Integration target: main",
 		"3 of 4 review round(s) used",
 		"2 repair attempt(s) spent",
@@ -474,7 +474,8 @@ func TestARenderedEntryNamesTheItemInWordsWhereTheRunRecordedThem(t *testing.T) 
 
 // An artifact the harness already removed is named as removed rather than
 // omitted: a development manager sent after a worktree that is gone finds that
-// out by going there, which is the errand the docket exists to remove.
+// out by going there, which is the errand the docket exists to remove. An entry
+// written before the repository was looked in says its answer is the record's.
 func TestARenderedEntrySaysWhichArtifactsAreStillThere(t *testing.T) {
 	t.Parallel()
 
@@ -484,8 +485,46 @@ func TestARenderedEntrySaysWhichArtifactsAreStillThere(t *testing.T) {
 		WorktreePath: "/state/worktrees/task", WorktreeRemoved: true,
 	}
 	rendered := entry.Render()
-	if !strings.Contains(rendered, "Branch (removed)") || !strings.Contains(rendered, "Worktree (removed)") {
+	if !strings.Contains(rendered, "Branch (removed as the run's record says, not checked)") ||
+		!strings.Contains(rendered, "Worktree (removed as the run's record says, not checked)") {
 		t.Fatalf("rendered entry describes removed artifacts as preserved:\n%s", rendered)
+	}
+}
+
+// An entry that carries what the repository held says that, and never the flags
+// beside it: run-838ffc48's flags and its branch disagreed, and the branch was
+// the one holding the approved change.
+func TestARenderedEntrySaysWhatTheRepositoryHeldOverTheFlags(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 9, 23, 5, 0, 0, 0, time.UTC)
+	entry := stoppedRunEntry()
+	entry.Artifacts = Artifacts{
+		Branch: "yoyodyne/task/abc", BranchRemoved: true,
+		WorktreePath: "/state/worktrees/task", WorktreeRemoved: true,
+		DeveloperSession: "session-1",
+		Found: &Found{
+			At: at, Branch: "yoyodyne/task/abc", WorktreePath: "/state/worktrees/task",
+			BranchThere: true,
+		},
+	}
+	rendered := entry.Render()
+	for _, want := range []string{
+		"Branch (checked and there at 2026-09-23T05:00:00Z): yoyodyne/task/abc",
+		"Worktree (checked and NOT there at 2026-09-23T05:00:00Z): /state/worktrees/task",
+		"Developer session (preserved, with no checkout left to continue it in)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Branch (removed") {
+		t.Fatalf("an entry that looked rendered the removal flag:\n%s", rendered)
+	}
+
+	entry.Artifacts.Found = &Found{At: at, Branch: "yoyodyne/task/abc", Unknown: true, Unchecked: "the repository could not be asked (boom)"}
+	if rendered := entry.Render(); !strings.Contains(rendered, "Branch (not checked: the repository could not be asked (boom))") {
+		t.Fatalf("a look that failed is not said as one:\n%s", rendered)
 	}
 }
 

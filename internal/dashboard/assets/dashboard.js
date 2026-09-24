@@ -756,7 +756,7 @@
 
   // ---- section 4: throughput and cost ------------------------------------
 
-  var kindNouns = { run: "runs", conversation: "conversations", review: "branch reviews", exchange: "exchanges" };
+  var kindNouns = { run: "runs", conversation: "conversations", review: "branch reviews", side: "side threads", exchange: "exchanges" };
 
   function figureRow(label, value, className) {
     var row = el("div", "figure-row" + (className ? " " + className : ""));

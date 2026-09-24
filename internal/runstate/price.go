@@ -494,6 +494,125 @@ func (s *Store) ExchangeSpend() ExchangeSpend {
 	return spend
 }
 
+// SideStreamSpend is what this product's side conversations have cost, in all
+// and by the conversation each was opened beside. A side thread is an agent's
+// own provider session, invoked turn after turn, and nothing it spends is in any
+// run's log or any conversation's, so a total that did not read these would be
+// short by exactly what the side threads cost.
+//
+// It is attributed to a conversation and never to a work item, for the reason a
+// conversation turn is not: the thread it was opened beside is long-lived and
+// discusses whatever it is discussing that day.
+type SideStreamSpend struct {
+	// Streams is how many side threads the figure covers and Invocations how many
+	// provider invocations they came to between them.
+	Streams     int        `json:"streams,omitempty"`
+	Invocations int        `json:"invocations,omitempty"`
+	CostUSD     float64    `json:"cost_usd"`
+	Tokens      TokenUsage `json:"tokens"`
+	// Conversations splits the same figure by the main conversation each thread
+	// was opened beside, in identifier order. A thread whose record could not be
+	// read is still priced from its log, and lands under an empty conversation
+	// rather than under one it may not belong to.
+	Conversations []ConversationSideSpend `json:"conversations,omitempty"`
+	// Unreadable counts the side threads whose event log could not be read. They
+	// are left out of the figure rather than counted as nothing, and while this
+	// is non-zero the figure is a lower bound.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Unknown says why: the first log's reason, or the directory's own where the
+	// side threads could not even be listed.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// ConversationSideSpend is what the side threads opened beside one conversation
+// cost.
+type ConversationSideSpend struct {
+	Conversation string  `json:"conversation,omitempty"`
+	Streams      int     `json:"streams"`
+	Invocations  int     `json:"invocations"`
+	CostUSD      float64 `json:"cost_usd"`
+}
+
+// Known reports a figure every recorded side thread is in.
+func (s SideStreamSpend) Known() bool { return s.Unreadable == 0 && s.Unknown == "" }
+
+// Enumerated reports side threads that could at least be counted, which is what
+// separates a floor from no figure at all.
+func (s SideStreamSpend) Enumerated() bool { return s.Streams > 0 || s.Unreadable > 0 }
+
+// Recorded reports that there is something to say: side threads to price, or a
+// reason there is no figure for them.
+func (s SideStreamSpend) Recorded() bool { return s.Streams > 0 || !s.Known() }
+
+// SideStreamSpend prices this product's side conversations from their own event
+// logs, by the same reader `yoyo status --spend` prices every stream with, so
+// the two surfaces cannot disagree about what one thread cost. Like
+// ExchangeSpend it never fails: a log that cannot be read is counted and left
+// out, and the threads beside it are still priced.
+func (s *Store) SideStreamSpend() SideStreamSpend {
+	sides := s.sideStreams()
+	listed, err := os.ReadDir(sides.Root())
+	if errors.Is(err, os.ErrNotExist) {
+		return SideStreamSpend{}
+	}
+	if err != nil {
+		return SideStreamSpend{Unknown: fmt.Sprintf("read side stream directory: %v", err)}
+	}
+	var spend SideStreamSpend
+	byConversation := make(map[string]*ConversationSideSpend)
+	for _, entry := range listed {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, eventLogSuffix) {
+			continue
+		}
+		id := strings.TrimSuffix(name, eventLogSuffix)
+		scanned, err := scanStreamLog(filepath.Join(sides.Root(), name), StreamSide, true)
+		if err != nil {
+			spend.Unreadable++
+			if spend.Unknown == "" {
+				spend.Unknown = fmt.Sprintf("side stream %s: %v", id, err)
+			}
+			continue
+		}
+		conversation := ""
+		if recorded, err := sides.Load(id); err == nil {
+			conversation = recorded.Conversation
+		}
+		part, seen := byConversation[conversation]
+		if !seen {
+			part = &ConversationSideSpend{Conversation: conversation}
+			byConversation[conversation] = part
+		}
+		spend.Streams++
+		part.Streams++
+		for _, invocation := range scanned.invocations {
+			spend.Invocations++
+			spend.CostUSD += invocation.CostUSD
+			spend.Tokens.Merge(invocation.Usage)
+			part.Invocations++
+			part.CostUSD += invocation.CostUSD
+		}
+	}
+	conversations := make([]string, 0, len(byConversation))
+	for conversation := range byConversation {
+		conversations = append(conversations, conversation)
+	}
+	sort.Strings(conversations)
+	for _, conversation := range conversations {
+		spend.Conversations = append(spend.Conversations, *byConversation[conversation])
+	}
+	return spend
+}
+
+// sideStreams is this product's side stream store, reached from the run store's
+// own root for the reason the exchange store is.
+func (s *Store) sideStreams() *SideStreamStore {
+	return &SideStreamStore{
+		root:      filepath.Join(filepath.Dir(s.root), "sidestreams"),
+		productID: s.productID,
+	}
+}
+
 // exchanges is this product's exchange store. Exchanges sit beside the runs
 // rather than inside them, so the store is reached from the run store's own root
 // rather than from a state root every caller of the read model would otherwise

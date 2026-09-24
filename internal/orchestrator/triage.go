@@ -86,6 +86,7 @@ package orchestrator
 // twice for it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -97,6 +98,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -176,7 +178,12 @@ type Docketer struct {
 	// is here because an item dispatch declined to start has no run to take it
 	// from, not because the product is a thing this decides.
 	ProductID domain.ProductID
-	Clock     execution.Clock
+	// Remains is the repository an entry asks what the stopped run left, as the
+	// entry is written and again every time the docket is built for somebody to
+	// read. Nil answers from the run's own record, and the entry says nothing
+	// looked rather than passing the record off as a check.
+	Remains readmodel.Remains
+	Clock   execution.Clock
 }
 
 // DocketBuild is what one build found: the docket as it now stands, and how
@@ -274,7 +281,38 @@ func (d Docketer) Build() (DocketBuild, error) {
 	listable, unlisted := listableDocket(entries, now)
 	problems = append(problems, d.joinDecisions(listable, publicationsOf(recorded))...)
 	open, closed := openDocket(listable, now)
+	d.lookAgain(open, recorded)
 	return DocketBuild{Entries: open, Added: added, Closed: closed + unlisted}, errors.Join(problems...)
+}
+
+// lookAgain puts what the repository holds now onto every open entry whose run
+// left a branch or a worktree. An entry is written once, as the work stops, and
+// read by the development manager hours or days later; what it said about the
+// branch then is not what she decides on, so the build she reads is the moment
+// it is looked for again. Nothing is written back: the entry on the log keeps
+// what was found when it was recorded, and the reading carries what is there.
+func (d Docketer) lookAgain(entries []triage.Entry, recorded []runstate.State) {
+	byID := make(map[string]runstate.State, len(recorded))
+	for _, state := range recorded {
+		byID[state.RunID] = state
+	}
+	for index := range entries {
+		entry := &entries[index]
+		if entry.Artifacts.Branch == "" && entry.Artifacts.WorktreePath == "" {
+			continue
+		}
+		state, known := byID[entry.RunID]
+		if !known {
+			continue
+		}
+		found := d.look(state)
+		entry.Artifacts.Found = &found
+	}
+}
+
+// look is what the repository holds of one run's change, asked now.
+func (d Docketer) look(state runstate.State) triage.Found {
+	return readmodel.Looking(context.Background(), d.Remains, d.now)(state)
 }
 
 // listableDocket is every entry the docket might list, and how many it will
@@ -532,10 +570,11 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 	if err := d.validate(); err != nil {
 		return false, err
 	}
-	if !stoppedRun(state) && !preservedDeath(state) {
+	found := d.look(state)
+	if !stoppedRun(state) && !diedHolding(state, found) {
 		return false, nil
 	}
-	entry, err := d.stoppedRunEntry(state, d.now())
+	entry, err := d.stoppedRunEntry(state, d.now(), found)
 	if err != nil {
 		return false, err
 	}
@@ -839,7 +878,7 @@ func (d Docketer) entriesFor(state runstate.State, now time.Time, already standi
 	var entries []triage.Entry
 	var problems []error
 	if stoppedRun(state) && already.dockets(triage.Key(triage.ClassStoppedRun, state.RunID), stoppedAt(state)) {
-		entry, err := d.stoppedRunEntry(state, now)
+		entry, err := d.stoppedRunEntry(state, now, d.look(state))
 		if err != nil {
 			problems = append(problems, err)
 		} else {
@@ -957,11 +996,19 @@ func stoppedRun(state runstate.State) bool {
 //
 // The three conditions the death itself carries are runstate.DiedInItsOwnProcess,
 // asked there rather than restated here because the hold the pull reads asks the
-// same question of the same record; what is added here is the artifacts test,
-// which the docket answers from the run's own flags at the moment of the death
-// and the hold answers by looking in the repository.
+// same question of the same record; what is added here is the artifacts test.
+// preservedDeath answers it from the run's own flags, and is what the carry-out
+// guards ask of a stoppage already docketed; diedHolding answers it from the
+// repository, and is what decides whether a death is docketed at all, as the
+// hold decides it.
 func preservedDeath(state runstate.State) bool {
 	return state.DiedInItsOwnProcess() && state.Artifacts().Preserved()
+}
+
+// diedHolding is preservedDeath with the artifacts test answered by a look in
+// the repository.
+func diedHolding(state runstate.State, found triage.Found) bool {
+	return state.DiedInItsOwnProcess() && found.Holds()
 }
 
 // unstartedRun reports a run that died before it took its work item.
@@ -1075,7 +1122,7 @@ func stoppedAt(state runstate.State) time.Time {
 	return state.UpdatedAt
 }
 
-func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.Entry, error) {
+func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time, found triage.Found) (triage.Entry, error) {
 	counters, err := d.recordedCounters(state, publicationRearms{})
 	if err != nil {
 		return triage.Entry{}, err
@@ -1094,11 +1141,11 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		// this a stoppage. Every other entry has a blocker that says the same thing
 		// in the words the work item carries, and printing the failure beside it
 		// would be the same fact twice on every ordinary stoppage.
-		Failure:         docketFailure(state),
+		Failure:         docketFailure(state, found),
 		Summary:         docketSummary(state),
 		Findings:        docketFindings(state.ReviewFindingDetails),
 		Check:           docketCheck(state.CheckFailure),
-		Artifacts:       docketArtifacts(state),
+		Artifacts:       docketArtifacts(state, found),
 		Environmental:   docketEnvironmental(state.Environmental),
 		IntegrationStop: docketIntegrationStop(state.IntegrationStop),
 		// Whether the session this run stopped in can simply be carried on is read
@@ -1197,7 +1244,7 @@ func (d Docketer) escalationEntry(state runstate.State, now time.Time) (triage.E
 			// which is the silence the whole verb exists to end.
 			Reason: runstate.RecordEscalationReason(state.EscalationReason()),
 		},
-		Artifacts:     docketArtifacts(state),
+		Artifacts:     docketArtifacts(state, d.look(state)),
 		Environmental: docketEnvironmental(state.Environmental),
 		Counters:      counters,
 	}
@@ -1235,7 +1282,7 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 		RecordedAt:    now.UTC(),
 		Summary:       docketSummary(state),
 		Findings:      docketFindings(state.ReviewFindingDetails),
-		Artifacts:     docketArtifacts(state),
+		Artifacts:     docketArtifacts(state, d.look(state)),
 		Publication: &triage.Publication{
 			Number: published.Number,
 			URL:    published.URL,
@@ -1496,8 +1543,8 @@ func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environ
 // today; it stays because the entry must not depend on that having happened, and
 // a stoppage refused at the docket is one the development manager never hears
 // about, which is the silence this whole path exists to end.
-func docketFailure(state runstate.State) string {
-	if state.Blocker != "" || !preservedDeath(state) {
+func docketFailure(state runstate.State, found triage.Found) string {
+	if state.Blocker != "" || !diedHolding(state, found) {
 		return ""
 	}
 	return runstate.RecordFailure(state.Failure)
@@ -1520,8 +1567,11 @@ func docketCheck(failure *runstate.CheckFailure) *triage.Check {
 	return &triage.Check{Command: failure.Command, ExitCode: failure.ExitCode, Output: failure.Output}
 }
 
-func docketArtifacts(state runstate.State) triage.Artifacts {
+func docketArtifacts(state runstate.State, found triage.Found) triage.Artifacts {
 	artifacts := triage.Artifacts{
+		// What the repository held as the entry was written, which is what the
+		// entry says; the flags beside it are kept for what reads them as a record.
+		Found:           &found,
 		Branch:          state.Branch,
 		WorktreePath:    state.WorktreePath,
 		TargetBranch:    state.TargetBranch,

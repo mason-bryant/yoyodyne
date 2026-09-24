@@ -95,6 +95,12 @@ type ReconcileStore interface {
 	LoadWorkflowInstance(instanceID string) (runstate.WorkflowInstance, error)
 }
 
+// ReconcileReleases is the record of claims the audit gave back, read. It is
+// satisfied by runstate.ClaimStore.
+type ReconcileReleases interface {
+	List() ([]runstate.ReleasedClaim, error)
+}
+
 // Reconciler settles the runs an interrupted process left behind. It compares
 // durable run state against what the repository and the work tracker actually
 // show, and then either finishes the run's own remaining step or records a
@@ -120,7 +126,12 @@ type Reconciler struct {
 	// manager. It is optional: a sweep wired without one settles runs exactly as
 	// it would have, and what it settled is still on the work item.
 	Docket *Docketer
-	Clock  execution.Clock
+	// Releases is the claim audit's record of the claims it gave back, which the
+	// convergence sweep reads to correct a release that did not say its run's
+	// change was still on a branch. Optional: a sweep wired without it corrects
+	// nothing and converges exactly as it did.
+	Releases ReconcileReleases
+	Clock    execution.Clock
 	// Sleep is the wait between two attempts at a boundary that failed on
 	// something a later attempt may survive. It is here for the reason the
 	// pipeline's is: a test must be able to take the backoff without taking the

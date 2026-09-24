@@ -391,6 +391,15 @@ type Standing struct {
 
 	Running        []RunningRun `json:"running"`
 	RunningProblem string       `json:"running_problem,omitempty"`
+	// Dispatching is every dispatch a watch session started that is waiting out a
+	// tracker failure before it has claimed anything, as WaitingOnTracker reads it
+	// from the watch log. Such a dispatch holds a developer slot with no run
+	// record, so it is on no list above, and it is said on the running line
+	// because that is where a reader looks for what is holding the slots.
+	// DispatchingProblem is a watch log that could not be read for them, said
+	// under the line rather than in place of it: the runs above were read.
+	Dispatching        []DispatchWait `json:"dispatching,omitempty"`
+	DispatchingProblem string         `json:"dispatching_problem,omitempty"`
 	// DeveloperSlots is every configured developer slot with the run in it, in
 	// slot order, where some slot prefers a label; nil otherwise. The running
 	// line names the free ones with their preference under itself, and a run's
@@ -491,6 +500,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 
 	running, runningProblem := readRunning(sources, now)
 	standing.Running, standing.RunningProblem = running, runningProblem
+	standing.Dispatching, standing.DispatchingProblem = readDispatching(sources, now)
 	// Which slot each run occupies, and which slots are free, from the reading
 	// the scheduler makes. It is read only where a slot prefers a label, and
 	// only where the runs could be read: a slot said to be free over runs
@@ -667,6 +677,24 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 		return running[first].RunID < running[second].RunID
 	})
 	return running, ""
+}
+
+// readDispatching is the dispatches standing in a wait on the tracker. A reading
+// wired with no watch log has none to report, which is every reading from before
+// a session could record one.
+func readDispatching(sources Sources, now time.Time) ([]DispatchWait, string) {
+	if sources.Sessions == nil {
+		return nil, ""
+	}
+	sessions, err := sources.Sessions.List()
+	if err != nil {
+		return nil, fmt.Sprintf("whether a dispatch is waiting out the tracker could not be read: %v", err)
+	}
+	waiting := WaitingOnTracker(sessions, now)
+	if len(waiting) == 0 {
+		return nil, ""
+	}
+	return waiting, ""
 }
 
 // readSlots is which developer slot each run in flight occupies and which are
@@ -1056,10 +1084,15 @@ func Live(sessions []runstate.WatchTransition) []runstate.WatchTransition {
 }
 
 // alive folds a watch log to the last transition of each session and keeps the
-// ones a caller counts as still going, newest first.
+// ones a caller counts as still going, newest first. A note about one of a
+// session's dispatches is not a transition of the session, so it is read past;
+// see runstate.WatchTransition.Note.
 func alive(sessions []runstate.WatchTransition, keep func(runstate.WatchState) bool) []runstate.WatchTransition {
 	last := make(map[string]runstate.WatchTransition, len(sessions))
 	for _, transition := range sessions {
+		if transition.Note() {
+			continue
+		}
 		if recorded, seen := last[transition.SessionID]; seen && recorded.At.After(transition.At) {
 			continue
 		}

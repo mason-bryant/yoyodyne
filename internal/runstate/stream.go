@@ -2,14 +2,19 @@ package runstate
 
 // Reading the event streams the harness is writing right now.
 //
-// A run, a conversation, and a branch review each record a normalized event
-// stream, and each keeps it beside its own records rather than among the
-// others'. It is the same question being asked of all three — is this alive,
-// what is it doing, and what did it cost — so this reads all three as one
+// A run, a conversation, a branch review, and a side conversation each record a
+// normalized event stream, and each keeps it beside its own records rather than
+// among the others'. It is the same question being asked of all four — is this
+// alive, what is it doing, and what did it cost — so this reads all four as one
 // collection and nothing that asks it has to say which kind it meant.
 //
-// An inter-role exchange is the fourth thing priced and the only one never
-// followed: its record is the thread itself, revised as it goes, rather than a
+// A side conversation is priced here beside the conversation it was opened from
+// rather than folded into it: its terminals are in a log of its own, and every
+// row it yields names that conversation, so what a thread nobody was watching
+// spent is in every total and still says whose it was.
+//
+// An inter-role exchange is priced beside the streams and is the only thing
+// never followed: its record is the thread itself, revised as it goes, rather than a
 // stream of events, so it appears in the spend report and in no other answer.
 // What two roles spent asking each other is money the harness spent, and a
 // total without it is short.
@@ -49,18 +54,21 @@ const (
 	StreamRun          StreamKind = "run"
 	StreamConversation StreamKind = "conversation"
 	StreamReview       StreamKind = "review"
+	// StreamSide is a side conversation: a bounded thread an agent holds beside
+	// its main conversation, with a log and a record of its own.
+	StreamSide StreamKind = "side"
 	// StreamExchange is an inter-role exchange, which has no event stream: it is
 	// priced beside the other three and never listed or followed.
 	StreamExchange StreamKind = "exchange"
 )
 
-// EveryStreamKind is the three kinds that record a stream, which is what a
-// query that names none covers: asking whether anything is alive should never
-// have required saying which kind of alive was meant.
-var EveryStreamKind = []StreamKind{StreamRun, StreamConversation, StreamReview}
+// EveryStreamKind is the kinds that record a stream, which is what a query that
+// names none covers: asking whether anything is alive should never have
+// required saying which kind of alive was meant.
+var EveryStreamKind = []StreamKind{StreamRun, StreamConversation, StreamReview, StreamSide}
 
 // EveryPricedKind is everything the spend report covers when nothing was
-// narrowed: the three streams and the exchanges beside them.
+// narrowed: the streams and the exchanges beside them.
 var EveryPricedKind = append(append([]StreamKind{}, EveryStreamKind...), StreamExchange)
 
 // Followable reports a kind that records an event stream.
@@ -84,6 +92,9 @@ const (
 	// ExchangeOpen is an exchange still being conducted; a closed one reports
 	// its outcome in the one word `yoyo exchange` says it in.
 	ExchangeOpen = "open"
+	// SideStreamOpen is a side conversation its agent is still holding; one that
+	// has ended reports the outcome its record ends with.
+	SideStreamOpen = "open"
 	// StreamStatusUnknown is a stream whose record could not be read. It is
 	// stated rather than guessed at: a run whose state file is gone is not a run
 	// in some particular state.
@@ -108,6 +119,10 @@ type Stream struct {
 	// here — the stream something happened in most recently, which is the one an
 	// operator who named nothing meant.
 	Updated time.Time `json:"updated"`
+	// Conversation is the main conversation a side stream was opened beside, and
+	// is empty on every other kind and on a side stream whose record could not
+	// be read.
+	Conversation string `json:"conversation,omitempty"`
 }
 
 // Dated reports a stream whose opening moment could be read. One that could not
@@ -115,14 +130,15 @@ type Stream struct {
 // dropped.
 func (s Stream) Dated() bool { return !s.StartedAt.IsZero() }
 
-// StreamStore reads the event streams of all three kinds under one product, and
-// the exchanges beside them. It composes the stores that own them rather than
+// StreamStore reads the event streams of every kind under one product, and the
+// exchanges beside them. It composes the stores that own them rather than
 // reaching into their directories, so a layout only one of them knows about
 // stays that store's.
 type StreamStore struct {
 	runs          *Store
 	conversations *ConversationStore
 	reviews       *BranchReviewStore
+	sides         *SideStreamStore
 	exchanges     *ExchangeStore
 }
 
@@ -139,11 +155,15 @@ func NewStreamStore(root string, productID domain.ProductID) (*StreamStore, erro
 	if err != nil {
 		return nil, err
 	}
+	sides, err := NewSideStreamStore(root, productID)
+	if err != nil {
+		return nil, err
+	}
 	exchanges, err := NewExchangeStore(root, productID)
 	if err != nil {
 		return nil, err
 	}
-	return &StreamStore{runs: runs, conversations: conversations, reviews: reviews, exchanges: exchanges}, nil
+	return &StreamStore{runs: runs, conversations: conversations, reviews: reviews, sides: sides, exchanges: exchanges}, nil
 }
 
 // Root is the product's own directory, which is where every kind of stream
@@ -155,7 +175,7 @@ func (s *StreamStore) Root() string { return filepath.Dir(s.runs.Root()) }
 
 // StreamQuery selects which recorded streams an answer is about.
 type StreamQuery struct {
-	// Kinds narrows the answer to some of the three. Empty covers all of them,
+	// Kinds narrows the answer to some of the kinds. Empty covers all of them,
 	// and a kind that records no stream contributes nothing to a listing.
 	Kinds []StreamKind
 	// Match keeps only the streams whose id contains it, which is what makes a
@@ -180,8 +200,9 @@ func (q StreamQuery) kinds() []StreamKind {
 
 // List reports the selected streams, newest first. A product that has only ever
 // chatted has no runs directory, one that has only ever run has no
-// conversations directory, and one whose branches have never been reviewed has
-// no branch-reviews directory; any one of those on its own is a product with
+// conversations directory, one whose branches have never been reviewed has no
+// branch-reviews directory, and one whose agents have never held a side thread
+// has no sidestreams directory; any one of those on its own is a product with
 // streams rather than an error, so an absent directory contributes nothing.
 //
 // It reads the directory, not the logs: every entry is stat'd, the newest are
@@ -263,6 +284,8 @@ func (s *StreamStore) root(kind StreamKind) string {
 		return s.conversations.Root()
 	case StreamReview:
 		return s.reviews.Root()
+	case StreamSide:
+		return s.sides.Root()
 	default:
 		return s.runs.Root()
 	}
@@ -338,8 +361,38 @@ func (s *StreamStore) describe(entry streamEntry, current map[string]Conversatio
 		if scanned.reviewed {
 			stream.Status = ReviewFinished
 		}
+	case StreamSide:
+		s.describeSide(&stream, &scanned)
 	}
 	return stream, scanned, nil
+}
+
+// describeSide reads what a side stream's own record says about it: whether it
+// is still held, when it opened, and the conversation it was opened beside,
+// which is what its spend is attributed to. The record is authoritative over the
+// log for all three, as a run's state file is. A terminal that named no role is
+// the role the record says holds the thread, because nothing else writes into a
+// side stream's log — the same reason a branch review's terminals are the
+// reviewer's.
+//
+// A record that cannot be read leaves the stream unknown and unattributed rather
+// than dropped: the log still says what it cost, and that money was spent.
+func (s *StreamStore) describeSide(stream *Stream, scanned *streamScan) {
+	recorded, err := s.sides.Load(stream.ID)
+	if err != nil {
+		return
+	}
+	stream.Status = SideStreamOpen
+	if !recorded.Open() {
+		stream.Status = string(recorded.Outcome)
+	}
+	stream.StartedAt = recorded.OpenedAt
+	stream.Conversation = recorded.Conversation
+	for index := range scanned.invocations {
+		if scanned.invocations[index].Role == "" {
+			scanned.invocations[index].Role = recorded.Role
+		}
+	}
 }
 
 // conversationStatus says what a conversation is doing. A conversation has no
@@ -547,7 +600,7 @@ const UndatedDay = "undated"
 
 // SpendQuery selects what a spend report covers.
 type SpendQuery struct {
-	// Kinds narrows the report. Empty covers the three streams and the exchanges
+	// Kinds narrows the report. Empty covers every stream and the exchanges
 	// beside them; naming any kind covers only what was named, so somebody who
 	// asked what the runs cost is answered about the runs.
 	Kinds []StreamKind
@@ -589,6 +642,9 @@ type SpendRow struct {
 	StreamID string     `json:"id"`
 	Kind     StreamKind `json:"kind"`
 	Status   string     `json:"status"`
+	// Conversation is the main conversation a side stream's row was spent beside,
+	// carried from the stream so the row says whose thread the money went on.
+	Conversation string `json:"conversation,omitempty"`
 	// At is the moment the row is shown and ordered at. On the day the work
 	// opened it is when it opened, which is what that column has always said; on
 	// a later day it is the first invocation of that day, because there is
@@ -926,7 +982,7 @@ func spendByDay(stream Stream, invocations []Invocation) []SpendRow {
 		}
 		row, seen := rows[day]
 		if !seen {
-			row = &SpendRow{Day: day, StreamID: stream.ID, Kind: stream.Kind, Status: stream.Status, At: invocation.At, Usage: &TokenUsage{}}
+			row = &SpendRow{Day: day, StreamID: stream.ID, Kind: stream.Kind, Status: stream.Status, Conversation: stream.Conversation, At: invocation.At, Usage: &TokenUsage{}}
 			if day == openedOn {
 				row.At = stream.StartedAt
 			}
