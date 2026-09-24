@@ -3,7 +3,9 @@ package watchdog
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,7 +81,7 @@ func TestTheDeadWindowIsNoticedAndRecordedOnce(t *testing.T) {
 // What makes it visible is that the silence is dated from the runs rather than
 // from the session's account of itself: a poll that started nothing is not a
 // start, so a session can say it is watching all night without moving the moment
-// this is measured from. That is `readmodel.LastStart`, and it is pinned here
+// this is measured from. That is `readmodel.LastHeld`, and it is pinned here
 // because the whole justification for taking the reading from inside the loop
 // rests on it.
 func TestALiveSessionStillPollingAndStartingNothingIsAStall(t *testing.T) {
@@ -444,6 +446,131 @@ func TestACheckMissingASourceRefusesRatherThanDeciding(t *testing.T) {
 	}
 }
 
+// The false alarm from stalls.jsonl on 2026-09-24, replayed. The watch filled
+// every free slot in one pull and the runs took more than an hour, so when the
+// batch ended there was an instant with nothing in flight and a last start over
+// an hour old. The watch read a stall at that instant, just before the pull
+// that filled the slots, twenty times running. One example: opened 13:33:31
+// after a last start at 11:39:45. A slot was free for seconds, not an hour.
+func TestABatchEndingJustBeforeThePullThatRefillsItOpensNoStall(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(27)
+	lastStart := time.Date(2026, 9, 24, 11, 39, 45, 0, time.UTC)
+	reading := time.Date(2026, 9, 24, 13, 33, 31, 0, time.UTC)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", lastStart.Add(-time.Minute))
+	// Three runs started in one pull, and all of them ended seconds before the
+	// reading.
+	for slot := 0; slot < 3; slot++ {
+		harness.recordEnded(t, runstate.StatusSucceeded, lastStart, reading.Add(-time.Duration(6+slot)*time.Second))
+	}
+
+	// The reading at the instant nothing is in flight: the last start is nearly
+	// two hours old, and the last end is seconds ago.
+	harness.now = reading
+	got := harness.check(t)
+	if got.Stalled() || got.Opened != nil {
+		t.Fatalf("Check() = %+v, want no stall from slots that were free for seconds", got)
+	}
+	if !got.Silence.Since.Equal(reading.Add(-6 * time.Second)) {
+		t.Fatalf("Silence.Since = %s, want the last run end %s rather than the last start",
+			got.Silence.Since, reading.Add(-6*time.Second))
+	}
+
+	// And the pull that follows, starting a run at the same second.
+	harness.record(t, runstate.StatusRunning, reading)
+	if got := harness.check(t); got.Stalled() {
+		t.Fatalf("Check() = %+v, want no stall once the pull has started a run", got)
+	}
+	if events := harness.recorded(t); len(events) != 0 {
+		t.Fatalf("List() = %+v, want no stall recorded across the whole replay", events)
+	}
+}
+
+// The other half: a line whose slots stayed free for the whole threshold after
+// its last run ended, over ready work and with nothing accounting for it, is
+// still a stall, and it is dated from that end.
+func TestSlotsFreeForTheWholeThresholdAfterTheLastEndAreAStall(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(4)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	ended := moment.Add(90 * time.Minute)
+	harness.recordEnded(t, runstate.StatusSucceeded, moment, ended)
+
+	harness.now = ended.Add(readmodel.DefaultStallThreshold - time.Minute)
+	if got := harness.check(t); got.Stalled() {
+		t.Fatalf("Check() = %+v, want nothing inside the threshold after the last end", got)
+	}
+	harness.now = ended.Add(readmodel.DefaultStallThreshold + time.Minute)
+	got := harness.check(t)
+	if got.Opened == nil {
+		t.Fatalf("Check() = %+v, want slots free for the whole threshold read as a stall", got)
+	}
+	if !got.Opened.Since.Equal(ended) || got.Opened.Ready != 4 {
+		t.Fatalf("the record says since %s over %d ready, want %s and 4", got.Opened.Since, got.Opened.Ready, ended)
+	}
+}
+
+// Two readers take this reading, the watching session and the reconcile sweep,
+// each in its own process with its own handle on the stall log. Over one
+// standing stall, their readings together write one record, whichever reads
+// first and however closely together they read.
+func TestTheWatchAndTheSweepOverOneStandingStallWriteOneRecord(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	harness.now = moment.Add(readmodel.DefaultStallThreshold + time.Minute)
+
+	// The sweep's checker: the same records, opened separately, as a second
+	// process opens them.
+	sweep := *harness.checker
+	stalls, err := runstate.NewStallStore(harness.root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStallStore() error = %v", err)
+	}
+	sweep.Stalls = stalls
+
+	// Both at once, repeatedly, which is the ordering a check-then-append with
+	// nothing between them loses.
+	const rounds = 20
+	errs := make(chan error, 2*rounds)
+	var wait sync.WaitGroup
+	for round := 0; round < rounds; round++ {
+		for _, checker := range []Checker{*harness.checker, sweep} {
+			wait.Add(1)
+			go func(checker Checker) {
+				defer wait.Done()
+				_, err := checker.Check(context.Background())
+				errs <- err
+			}(checker)
+		}
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Check() error = %v", err)
+		}
+	}
+
+	events := harness.recorded(t)
+	if len(events) != 1 || !events[0].Open() {
+		t.Fatalf("List() = %+v, want one standing stall", events)
+	}
+	raw, err := os.ReadFile(harness.stalls.Path())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if lines := strings.Count(string(raw), "\n"); lines != 1 {
+		t.Fatalf("the stall log holds %d records, want exactly one for one opening:\n%s", lines, raw)
+	}
+}
+
 // harness is one product's durable records and a checker over them.
 type harness struct {
 	now     time.Time
@@ -591,6 +718,31 @@ func (h *harness) record(t *testing.T, status runstate.Status, at time.Time) {
 		state.Phase = runstate.PhaseComplete
 	}
 	if err := h.runs.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+}
+
+// recordEnded records a run that ended at a moment of its own, later than it
+// started, which is what a run that held its slot for a while looks like.
+func (h *harness) recordEnded(t *testing.T, status runstate.Status, started, ended time.Time) {
+	t.Helper()
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatalf("NewRunID() error = %v", err)
+	}
+	if err := h.runs.Create(runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.295",
+		Backend:       domain.BackendClaudeCode,
+		Status:        status,
+		Phase:         runstate.PhaseComplete,
+		StartedAt:     started,
+		UpdatedAt:     ended,
+		CompletedAt:   &ended,
+	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 }

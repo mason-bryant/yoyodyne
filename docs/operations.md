@@ -1538,8 +1538,8 @@ the preserved work, so replanning or re-running the item is not affected.
 
 The last reading the sweep takes — after every settlement above and before the
 one thing it continues, below — is whether anything is happening at all. When
-nothing has started for `--stall-after` — ten minutes by default — the tracker
-reports work ready, and no hold, no still-moving run and no provider usage window
+no developer run has started or ended for `--stall-after` — ten minutes by
+default — the tracker reports work ready, and no hold, no still-moving run and no provider usage window
 accounts for it, that is recorded against the product as a stall and said here:
 
 ```
@@ -2139,6 +2139,18 @@ scheduler that died from one that is wedged: a session whose last word was
 `stopped` wants starting, and one still claiming to be `watching` wants killing
 first.
 
+**The silence is measured from the last moment anything held a developer
+slot**: the later of the last run start and the last run end. That is the
+`from` in the first line. A slot is held for the whole of a run, so a run
+ending moves this moment on just as a run starting does. Until
+yoyodyne-ifd.428.19 it was measured from the last start alone, and that was
+wrong in one repeating way. The watch fills every free slot in one pull, and
+runs take more than an hour. So when a batch ended there was an instant with
+nothing in flight and a last start over an hour old. The watch read a stall at
+exactly that instant, a second before the pull that refilled the slots. On
+2026-09-24 the last twenty alarms were all that shape. A slot free for seconds
+before a pull is not a stall now. Slots free for the whole threshold still are.
+
 What the message that wakes somebody says beside that is the last poll's own
 account of the queue — "33 of the 47 admitted items are awaiting carry-out of
 decisions already recorded", and the next mover with it — which it reads from the
@@ -2176,6 +2188,11 @@ follows it, [continuing a usage-limit wait](#waiting-out-a-provider-usage-limit)
 whose deadline has passed. That ordering is why it is that sweep and not another: a
 killed run goes on saying it is in flight until the settling, and a phantom run
 counted as activity would silence this for exactly the crash it exists to catch.
+The two readings can land at the same moment. Each one reads the stall log and
+appends to it under one lock shared across processes, so a stall is opened by
+exactly one of them. The log then holds one line when a stall opens and one
+more when it closes, with the same event id. `yoyo status` and the channel read
+that pair as one stall.
 
 Reporting has nothing to do with either. A product that never turned Slack on
 records its stalls and reads them back here, and a product that did gets the same

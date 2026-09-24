@@ -140,28 +140,35 @@ func TestTheChoosersLastWordTellsADeadSchedulerFromAWedgedOne(t *testing.T) {
 	}
 }
 
-// The anchor is the runs' own start times, because that is the one fact a dead
-// process cannot have failed to write: it was written when the run started. A
-// product whose scheduler died before its first run has no run to anchor on, and
-// falls back to when it was first seen watching rather than to never.
-func TestTheAnchorIsTheLastRunStartAndFallsBackToBeingSeenAtAll(t *testing.T) {
+// The anchor is the runs' own start and end times, because those are facts a
+// dead process cannot have failed to write: each was written when it happened.
+// A product whose scheduler died before its first run has no run to anchor on,
+// and falls back to when it was first seen watching rather than to never.
+func TestTheAnchorIsTheLastRunStartOrEndAndFallsBackToBeingSeenAtAll(t *testing.T) {
 	t.Parallel()
 
 	first := moment
 	latest := moment.Add(2 * time.Hour)
 	runs := []runstate.State{{StartedAt: first}, {StartedAt: latest}}
-	if got := LastStart(runs, nil); !got.Equal(latest) {
-		t.Fatalf("LastStart() = %s, want the latest run start %s", got, latest)
+	if got := LastHeld(runs, nil); !got.Equal(latest) {
+		t.Fatalf("LastHeld() = %s, want the latest run start %s", got, latest)
+	}
+	// A run that started earlier and ended later than every start held its slot
+	// until it ended, so the end is the anchor.
+	ended := moment.Add(3 * time.Hour)
+	runs = append(runs, runstate.State{StartedAt: first, CompletedAt: &ended})
+	if got := LastHeld(runs, nil); !got.Equal(ended) {
+		t.Fatalf("LastHeld() = %s, want the latest run end %s", got, ended)
 	}
 	sessions := []runstate.WatchTransition{
 		transition(runstate.WatchWatching, moment.Add(-time.Hour)),
 		transition(runstate.WatchIdle, moment),
 	}
-	if got := LastStart(nil, sessions); !got.Equal(moment.Add(-time.Hour)) {
-		t.Fatalf("LastStart() = %s, want the earliest moment anything was seen watching", got)
+	if got := LastHeld(nil, sessions); !got.Equal(moment.Add(-time.Hour)) {
+		t.Fatalf("LastHeld() = %s, want the earliest moment anything was seen watching", got)
 	}
-	if got := LastStart(nil, nil); !got.IsZero() {
-		t.Fatalf("LastStart() = %s, want nothing observed reported as nothing", got)
+	if got := LastHeld(nil, nil); !got.IsZero() {
+		t.Fatalf("LastHeld() = %s, want nothing observed reported as nothing", got)
 	}
 }
 

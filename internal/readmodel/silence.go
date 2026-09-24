@@ -13,7 +13,7 @@ package readmodel
 // So this derives the absence instead. Not "what does the record say is
 // stopping the line" but "how long is it since anything actually started, and is
 // there anything at all that accounts for it" — a question answered from the
-// runs' own start times rather than from any process's account of itself, which
+// runs' own start and end times rather than from any process's account of itself, which
 // is why it survives the death of the process it is about. On 2026-09-01 that
 // was seven and a half hours of a dead watch that no surface reported and a
 // person eventually noticed.
@@ -82,8 +82,9 @@ const DefaultRunActivityWindow = time.Hour
 // a second reading is a second chance for one pass to report one machine two
 // ways.
 type Activity struct {
-	// Since is the last moment the harness demonstrably started a developer run.
-	// Where it has never started one, it is the earliest moment anything recorded
+	// Since is the last moment anything demonstrably held a developer slot: the
+	// later of the last run start and the last run end (see LastHeld). Where the
+	// harness has never started a run, it is the earliest moment anything recorded
 	// that a session was watching this product — which is the earliest point from
 	// which a failure to start anything means something. Zero is a harness nothing
 	// has ever observed, and nothing is concluded from it.
@@ -150,8 +151,8 @@ type Activity struct {
 // when, over how much ready work, and — where it has not — what accounts for it.
 type Silence struct {
 	Stalled bool `json:"stalled,omitempty"`
-	// Since is when the harness last started anything, which is what the age of
-	// the stall is measured from.
+	// Since is when anything last held a developer slot, whether by starting or
+	// by ending. The age of the stall is measured from it.
 	Since time.Time `json:"since,omitempty"`
 	// Ready is how much admitted work waited through it.
 	Ready int `json:"ready,omitempty"`
@@ -234,7 +235,7 @@ func (a Activity) explanation() string {
 	case a.Since.IsZero():
 		return "nothing is recorded that this product was ever choosing work"
 	case a.Now.Sub(a.Since) < a.threshold():
-		return "something started within the last " + a.threshold().String()
+		return "a developer run started or ended within the last " + a.threshold().String()
 	default:
 		return ""
 	}
@@ -315,19 +316,38 @@ func LastWord(sessions []runstate.WatchTransition) string {
 		stopped.At.UTC().Format(time.RFC3339)
 }
 
-// LastStart is the last moment the harness demonstrably started a developer run,
-// or — where it never has — the earliest moment anything recorded that a session
-// was watching this product.
+// LastHeld is the last moment anything demonstrably held a developer slot: the
+// later of the last run start and the last run end. Where no run has ever
+// started, it is the earliest moment anything recorded that a session was
+// watching this product.
+//
+// The end counts as well as the start because a slot is held for the whole of a
+// run, not only at its start. Dating the silence from the last start alone reads
+// a batch of runs that each took more than the threshold as a line that has
+// been quiet since the batch began. On 2026-09-24 the watch filled every free
+// slot in one pull, runs took more than an hour, and the moment the batch ended
+// there was an instant with nothing in flight and a last start over an hour old.
+// The watch read a stall at exactly that instant, just before the pull that
+// filled the slots again. That happened twenty times running, and the operator
+// learned to ignore the alarm. A slot free for seconds before a pull is not a
+// stall. A slot free for the whole threshold still is, because nothing moves
+// this reading on except a run starting or ending.
 //
 // The fallback is what makes a machine that has never started anything readable
 // at all. Without it a product whose scheduler died before its first run would
 // have no anchor and would therefore never be reported as stalled, which is the
 // case that most looks like the harness working.
-func LastStart(runs []runstate.State, sessions []runstate.WatchTransition) time.Time {
+func LastHeld(runs []runstate.State, sessions []runstate.WatchTransition) time.Time {
 	var latest time.Time
 	for _, run := range runs {
 		if run.StartedAt.After(latest) {
 			latest = run.StartedAt
+		}
+		// A run the record calls ended carries when it ended. A run still in flight
+		// carries none, and its hold is read from whether it is still moving
+		// (ActiveRuns) rather than from here.
+		if run.CompletedAt != nil && run.CompletedAt.After(latest) {
+			latest = *run.CompletedAt
 		}
 	}
 	if !latest.IsZero() {

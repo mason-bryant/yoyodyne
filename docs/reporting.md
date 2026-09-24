@@ -932,6 +932,16 @@ what to do about it — what the thing that chooses work last said before it wen
 silent, because a session whose last word was `stopped` wants starting and one
 still claiming to be watching wants killing first.
 
+"Nothing has started" is measured from the last moment anything held a
+developer slot: the later of the last run start and the last run end. The
+message's "for one hour" counts from that moment. A batch of runs ending a few
+seconds before the pull that refills the slots is therefore not a stall. Until
+yoyodyne-ifd.428.19 the measure was the last start alone, and the watch read a
+stall in exactly that gap every time a batch of long runs ended. On 2026-09-24
+the last twenty alarms were all that false alarm. A line whose slots stay free
+for the whole threshold is still one, and
+[the operations guide](operations.md#when-nothing-happened-at-all) has the rest.
+
 **The sink says it and does not notice it.** What notices is the harness's own
 loop — [`yoyo work --watch`](work.md#letting-the-harness-choose-the-work), on
 every pull and at most once per `--stall-after` — and
@@ -1030,7 +1040,10 @@ old is critical from its first word, and a restarted sink over a standing stall
 says it again rather than reading it past as history: the stall is the present
 state of the line, and a sink silent over it would be silent over the one thing
 it exists to say. A session and a sweep both reading the same standing stall
-still open nothing, because one stall at a time is the record's rule. The tracker
+still open nothing, because one stall at a time is the record's rule. Each
+reading checks for an open stall and records one under a single lock shared
+across processes, so the two readers cannot both open a stall at the same
+moment. The tracker
 behind it is asked once per reading and only where nothing else already accounts
 for the quiet — once per `--stall-after` in a watching session, once per sweep in
 `yoyo reconcile` — so an idle product spawns no `bd` storm; the waiting line above

@@ -620,7 +620,8 @@ func FromResident(resident Resident, severity report.Severity, at time.Time) Not
 // word was "stopped" wants starting, and one still claiming to be watching wants
 // killing first.
 type Stall struct {
-	// Since is when the harness last started anything.
+	// Since is when anything last held a developer slot: the later of the last
+	// run start and the last run end.
 	Since time.Time
 	// Ready is how much admitted work the tracker called ready through it.
 	Ready int
