@@ -198,16 +198,18 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 	}
 }
 
-// The size guard is asked with the cleanup failure rather than the failure or
-// the review summary, which the schema now bounds itself: a field the schema
-// refuses never reaches the encoder, and what is being measured here is the
-// encoder rather than the schema.
+// The size guard is asked with a label rather than with any text field, because
+// every free-text field on the record is now cut to its bound before it reaches
+// the encoder (see TestEveryStringFieldOnTheRunRecordIsBoundedOrStructured). A
+// label is an identifier the tracker supplies and nothing here bounds by length,
+// so it is still something only the encoder's guard stands in front of — which
+// is what is being measured here.
 func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
 	state := testState(t, StatusRunning)
-	state.CleanupFailure = strings.Repeat("x", maxEncodedStateBytes)
+	state.WorkItemLabels = []string{strings.Repeat("x", maxEncodedStateBytes)}
 	if err := store.Create(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Create() oversized state error = %v", err)
 	}
@@ -219,11 +221,11 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 		t.Fatalf("oversized create left a state file: %v", err)
 	}
 
-	state.CleanupFailure = ""
+	state.WorkItemLabels = nil
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() valid state error = %v", err)
 	}
-	state.CleanupFailure = strings.Repeat("x", maxEncodedStateBytes)
+	state.WorkItemLabels = []string{strings.Repeat("x", maxEncodedStateBytes)}
 	if err := store.Save(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
 		t.Fatalf("Save() oversized state error = %v", err)
 	}
@@ -231,15 +233,15 @@ func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() original state error = %v", err)
 	}
-	if loaded.CleanupFailure != "" {
-		t.Fatalf("oversized save replaced original state: cleanup failure bytes = %d", len(loaded.CleanupFailure))
+	if len(loaded.WorkItemLabels) != 0 {
+		t.Fatalf("oversized save replaced original state: labels = %d", len(loaded.WorkItemLabels))
 	}
 }
 
 // The bound on the recorded failure is the schema's, not a downstream reader's:
-// a reason too long to carry is cut where it is written, and a record that
-// somehow reaches the store uncut is refused by name rather than silently kept
-// for every reader after it to discover.
+// a reason too long to carry is cut where it is written, and the schema names a
+// record carrying one uncut rather than silently keeping it for every reader
+// after it to discover.
 func TestAnOversizedFailureIsRefusedBySchemaAndCutAtTheWrite(t *testing.T) {
 	t.Parallel()
 

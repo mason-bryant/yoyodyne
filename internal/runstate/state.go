@@ -943,27 +943,85 @@ func boundRecordedText(text string, limit int, cutNote string) string {
 	return strings.TrimRight(trimmed[:cut], "\n") + cutNote
 }
 
-// boundHistoricalText cuts the recorded reasons on a record that has just been
-// read to the bounds the schema holds them to now. It is the read half of the
-// rule the write halves above are the other side of — bound on write, tolerate
-// on read: a record written before one of these bounds existed can hold a field
-// longer than Validate accepts, and refusing it on the way in would make that
-// run unreadable rather than rendering the one field truncated. It is worse than
-// one lost record: every scan over the store walks every file, so one old record
-// the loader refuses is the whole history nobody can list.
+// MaxRecordedTextBytes bounds every free-text field on the run record that has
+// no bound of its own above. It is the docket's bound on a message, shared for
+// the reason the review summary's is: these are the fields a docket entry, a
+// notification, or a status line carries onward in the harness's own words, and
+// a bound that could drift from theirs is a reason recorded here and refused
+// there.
+const MaxRecordedTextBytes = triage.MaxMessageBytes
+
+// The note promises nothing about where the rest went, for the reason the
+// failure's does not: for most of these fields the record is the only copy.
+const recordedTextCutNote = "\n[cut; the rest of this was not recorded]"
+
+// recordedText is one free-text field of the run record and the bound it is
+// held to.
+type recordedText struct {
+	key     string
+	text    *string
+	limit   int
+	cutNote string
+}
+
+// recordedTexts is every free-text field on State, each with its bound. It is
+// the one list the bound is applied from — by the store on every write and every
+// read, and by Validate — so a field is bounded by being named here rather than
+// by every writer of it remembering to be.
+//
+// That is the lesson of three work items bounding three fields one at a time:
+// each moved the unbounded case onto the next field nobody had listed.
+// TestEveryStringFieldOnTheRunRecordIsBoundedOrStructured enumerates State's
+// string fields and fails on any that is neither here nor in its short list of
+// identifiers and enumerations, so a field added later is bounded or classified
+// on purpose and never unbounded by omission.
+func (s *State) recordedTexts() []recordedText {
+	return []recordedText{
+		{"work_item_title", &s.WorkItemTitle, MaxRecordedTextBytes, recordedTextCutNote},
+		{"workflow_divergence", &s.WorkflowDivergence, MaxRecordedTextBytes, recordedTextCutNote},
+		{"workflow_unobserved", &s.WorkflowUnobserved, MaxRecordedTextBytes, recordedTextCutNote},
+		{"developer_model_reason", &s.DeveloperModelReason, MaxRecordedTextBytes, recordedTextCutNote},
+		{"review_summary", &s.ReviewSummary, MaxReviewSummaryBytes, reviewSummaryCutNote},
+		// The landing reason is carried onward as an escalation's account, which
+		// is held to the blocker's bound, so it is held to that bound here too.
+		{"landing_reason", &s.LandingReason, MaxBlockerBytes, recordedTextCutNote},
+		{"landing_impediment_problem", &s.LandingImpedimentProblem, MaxRecordedTextBytes, recordedTextCutNote},
+		{"landing_problem", &s.LandingProblem, MaxRecordedTextBytes, recordedTextCutNote},
+		{"report_problem", &s.ReportProblem, MaxChannelProblemBytes, channelProblemCutNote},
+		{"amendment_problem", &s.AmendmentProblem, MaxChannelProblemBytes, channelProblemCutNote},
+		{"usage_limit_kind", &s.UsageLimitKind, MaxRecordedTextBytes, recordedTextCutNote},
+		{"publish_failure", &s.PublishFailure, MaxRecordedTextBytes, recordedTextCutNote},
+		{"failure", &s.Failure, MaxBlockerBytes, failureCutNote},
+		{"blocker", &s.Blocker, MaxBlockerBytes, blockerCutNote},
+		{"cleanup_failure", &s.CleanupFailure, MaxRecordedTextBytes, recordedTextCutNote},
+		{"completion_recording_failure", &s.CompletionRecordingFailure, MaxRecordedTextBytes, recordedTextCutNote},
+	}
+}
+
+// boundRecordedTexts cuts every free-text field on the record to its bound,
+// saying in the field that it was cut. It is applied on both sides of the store.
+//
+// On write it is what makes the bound hold for every writer: a reason is often
+// an error with a provider's or a forge's whole output folded into it, and a
+// record the store refused for one over-long field is a record that never lands
+// — a cleanup, a publication, or a stoppage nobody hears about. The writers that
+// cut their own field first (RecordFailure and the rest) still do, because the
+// in-memory copy they go on to carry elsewhere is not the one saved here.
+//
+// On read it is the tolerance half of bound on write, tolerate on read: a record
+// written before one of these bounds existed can hold a field longer than
+// Validate accepts, and refusing it on the way in would make that run unreadable
+// rather than rendering the one field truncated. It is worse than one lost
+// record: every scan over the store walks every file, so one old record the
+// loader refuses is the whole history nobody can list.
 //
 // It touches only a field that is actually over its bound, so it is a no-op over
-// everything the harness writes today and over every record that was already
-// within the bound when it was written.
-func (s *State) boundHistoricalText() {
-	if len(s.Failure) > MaxBlockerBytes {
-		s.Failure = RecordFailure(s.Failure)
-	}
-	if len(s.Blocker) > MaxBlockerBytes {
-		s.Blocker = RecordBlocker(s.Blocker)
-	}
-	if len(s.ReviewSummary) > MaxReviewSummaryBytes {
-		s.ReviewSummary = RecordReviewSummary(s.ReviewSummary)
+// every record already within its bounds.
+func (s *State) boundRecordedTexts() {
+	for _, field := range s.recordedTexts() {
+		if len(*field.text) > field.limit {
+			*field.text = boundRecordedText(*field.text, field.limit, field.cutNote)
+		}
 	}
 }
 
@@ -2222,11 +2280,10 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("refused_amendments[%d]: %w", index, err))
 		}
 	}
-	if len(s.ReportProblem) > MaxChannelProblemBytes {
-		problems = append(problems, fmt.Errorf("report_problem is %d bytes, which exceeds the %d byte bound", len(s.ReportProblem), MaxChannelProblemBytes))
-	}
-	if len(s.AmendmentProblem) > MaxChannelProblemBytes {
-		problems = append(problems, fmt.Errorf("amendment_problem is %d bytes, which exceeds the %d byte bound", len(s.AmendmentProblem), MaxChannelProblemBytes))
+	for _, field := range s.recordedTexts() {
+		if len(*field.text) > field.limit {
+			problems = append(problems, fmt.Errorf("%s is %d bytes, which exceeds the %d byte bound", field.key, len(*field.text), field.limit))
+		}
 	}
 	if s.ContextTruncation != nil {
 		if err := s.ContextTruncation.Validate(); err != nil {
@@ -2263,15 +2320,6 @@ func (s State) Validate() error {
 	problems = append(problems, s.validateSweepContinuations()...)
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
-	}
-	if len(s.Failure) > MaxBlockerBytes {
-		problems = append(problems, fmt.Errorf("failure is %d bytes, which exceeds the %d byte bound", len(s.Failure), MaxBlockerBytes))
-	}
-	if len(s.ReviewSummary) > MaxReviewSummaryBytes {
-		problems = append(problems, fmt.Errorf("review_summary is %d bytes, which exceeds the %d byte bound", len(s.ReviewSummary), MaxReviewSummaryBytes))
-	}
-	if len(s.Blocker) > MaxBlockerBytes {
-		problems = append(problems, fmt.Errorf("blocker is %d bytes, which exceeds the %d byte bound", len(s.Blocker), MaxBlockerBytes))
 	}
 	if s.IntegrationRetries < 0 {
 		problems = append(problems, errors.New("integration_retries cannot be negative"))

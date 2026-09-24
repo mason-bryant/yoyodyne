@@ -184,6 +184,7 @@ func (s *Store) Reserve(ctx context.Context, state State, maxConcurrent int) (*L
 	if state.Status != StatusPending {
 		return nil, fmt.Errorf("reserved run state must be pending, got %q", state.Status)
 	}
+	state.boundRecordedTexts()
 	if err := s.validateState(state); err != nil {
 		return nil, err
 	}
@@ -356,6 +357,9 @@ func acquireLease(ctx context.Context, file *os.File) (bool, error) {
 }
 
 func (s *Store) Create(state State) error {
+	// Every free-text field is cut to its bound on the way in rather than the
+	// record refused for it; see boundRecordedTexts.
+	state.boundRecordedTexts()
 	if err := s.validateState(state); err != nil {
 		return err
 	}
@@ -386,6 +390,7 @@ func (s *Store) Create(state State) error {
 }
 
 func (s *Store) Save(state State) error {
+	state.boundRecordedTexts()
 	if err := s.validateState(state); err != nil {
 		return err
 	}
@@ -481,7 +486,7 @@ func (s *Store) load(runID string, tolerateUnknownFields bool) (State, error) {
 	// below, because a bound the harness added is not a reason for a run somebody
 	// recorded to stop being readable — and the loader is walked by every scan, so
 	// refusing one old file is a whole history nobody can list.
-	state.boundHistoricalText()
+	state.boundRecordedTexts()
 	if err := s.validateState(state); err != nil {
 		return State{}, err
 	}
