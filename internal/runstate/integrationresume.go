@@ -13,8 +13,9 @@ package runstate
 // get one approved change onto the target, none of them for a verdict.
 //
 // So the stop is a durable fact on the run, written where the run fails from
-// the error that ended it — a dirty checkout by its sentinel, a transport that
-// did not answer by the recovery package's closed reading of the error — and a
+// the error that ended it — a dirty checkout by its sentinel, a replay the
+// harness killed by its own, a transport that did not answer by the recovery
+// package's closed reading of the error — and a
 // resumption is a continuation rather than an attempt: the run is made live
 // again at the promotion it stopped short of, with the approval it already had,
 // and the item's counters stay where the review left them. What leaves that path is a replay that conflicts, which is a

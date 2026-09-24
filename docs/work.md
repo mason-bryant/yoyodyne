@@ -336,7 +336,10 @@ independent review before trying again — up to
 approval never carries over, because the diff it approved is not the one that
 would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the
-blocker on the item says so.
+blocker on the item says so. A replay the harness itself killed — timed out,
+cancelled, or stalled — is not a conflict, although it leaves the same
+half-applied state: it is abandoned so the worktree is back on its branch, and
+recorded as the environmental stop below rather than handed to a person.
 
 **An environmental stop after approval costs nothing.** Not everything that
 stops an approved change short of the target branch is a verdict on it, and
@@ -346,8 +349,9 @@ under load on the way to it, a forge or a network that went away — each ends
 the run, and each is recorded on the run as an *integration stop*: which
 environmental cause it was, and which step the run was in. The cause is read
 from the error that ended the run rather than from the run's prose afterwards,
-in two ways: a dirty checkout by the sentinel the worktree manager declares,
-and a tracker, forge, or network that did not answer by the [recovery
+in three ways: a dirty checkout by the sentinel the worktree manager declares,
+a replay onto the moved target that the harness killed before it finished
+(`replay-killed`) by the one it declares for that, and a tracker, forge, or network that did not answer by the [recovery
 rule](operations.md#waiting-out-a-network-that-dropped)'s closed reading of the
 error — the same reading that decides what the harness waits out at the
 boundaries that have a window, applied to a step that has none. Nothing about

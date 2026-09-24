@@ -2845,11 +2845,16 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // classifies is one the harness would have asked again somewhere else, and a
 // failure it does not is one somebody has to look at. A replay that conflicted,
 // a target that diverged, and an approval that could not be shown independent
-// are all the second kind, and none of them reaches here.
+// are all the second kind, and none of them reaches here. A replay the harness
+// itself killed is the first kind, named by its own sentinel: it is never a
+// conflict, and it is returned only once the worktree is back on its branch
+// (yoyodyne-ifd.406).
 func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	switch {
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
+	case errors.Is(failure, gitworktree.ErrReplayKilled):
+		return runstate.CauseReplayKilled, true
 	case recovery.Recoverable(failure):
 		return runstate.CauseTransportFailure, true
 	default:

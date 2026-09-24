@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -1478,6 +1479,161 @@ func (r *refusingRebaseRunner) Run(ctx context.Context, command execution.Comman
 		}, nil
 	}
 	return r.delegate.Run(ctx, command, observer)
+}
+
+// A rebase the harness killed part-way is not a conflict, however it was
+// killed. It leaves the state directory a conflicted one does, and reading that
+// as a conflict sent an operator to settle one that did not exist. The replay is
+// abandoned, the worktree is put back on its branch, and the stop is reported as
+// the harness's rather than the change's.
+func TestManagerRebaseOntoTargetReportsAKilledReplayAsAStopNotAConflict(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		status  execution.ProcessStatus
+		caller  bool
+		stopped string
+	}{
+		{name: "timed out", status: execution.ProcessTimedOut, stopped: "timed out"},
+		{name: "stalled", status: execution.ProcessStalled, stopped: "stalled"},
+		{name: "cancelled by the caller", caller: true, stopped: "was cancelled"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := newRepository(t)
+			killing := &killingRebaseRunner{
+				delegate: execution.OSProcessRunner{},
+				marker:   filepath.Join(t.TempDir(), "picked"),
+				status:   tt.status,
+			}
+			manager, err := New(Options{Runner: killing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			worktree, err := manager.Create(context.Background(), CreateRequest{
+				RunID: testRunID, WorkItemID: "yoyodyne-killed", BaseRef: "main", TargetBranch: "main",
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeFile(t, worktree.Path, "work.txt", "developer work\n")
+			writeFile(t, repository, "concurrent.txt", "somebody else's work\n")
+			runGit(t, repository, "add", "concurrent.txt")
+			runGit(t, repository, "commit", "-m", "concurrent target change")
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.caller {
+				killing.cancelCaller = cancel
+			}
+			killing.armed = true
+			replay, err := manager.RebaseOntoTarget(ctx, worktree, "")
+			if !killing.killed {
+				t.Fatalf("the rebase was never killed part-way, so this test proved nothing: %v", err)
+			}
+			if !errors.Is(err, ErrReplayKilled) {
+				t.Fatalf("RebaseOntoTarget() error = %v, want ErrReplayKilled", err)
+			}
+			if errors.Is(err, ErrRebaseConflict) {
+				t.Fatalf("a killed replay was reported as a conflict: %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.stopped) {
+				t.Fatalf("RebaseOntoTarget() error = %v, want it to say the replay %s", err, tt.stopped)
+			}
+			if replay.HeadCommit == "" || replay.Moved() {
+				t.Fatalf("killed replay = %#v", replay)
+			}
+			if state := gitLine(t, worktree.Path, "rev-parse", "--git-path", "rebase-merge"); dirExists(filepath.Join(worktree.Path, state)) || dirExists(state) {
+				t.Fatalf("the killed replay's state directory survived: %q", state)
+			}
+			if branch := gitLine(t, worktree.Path, "rev-parse", "--abbrev-ref", "HEAD"); branch != worktree.Branch {
+				t.Fatalf("worktree is not on its branch after the killed replay: %q", branch)
+			}
+			if head := gitLine(t, worktree.Path, "rev-parse", "HEAD"); head != replay.HeadCommit {
+				t.Fatalf("worktree HEAD = %q, want the reported commit %q", head, replay.HeadCommit)
+			}
+			if status := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+				t.Fatalf("worktree is dirty after the killed replay: %q", status)
+			}
+
+			// Nothing about the change stopped it, so the same replay asked again
+			// goes through.
+			worktree.HarnessCommit = replay.HeadCommit
+			retried, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+			if err != nil {
+				t.Fatalf("RebaseOntoTarget() after a killed replay error = %v", err)
+			}
+			if !retried.Moved() {
+				t.Fatalf("RebaseOntoTarget() after a killed replay = %#v, want the change replayed", retried)
+			}
+		})
+	}
+}
+
+// killingRebaseRunner kills the first `git rebase` part-way through: after it
+// has applied the change and left its state directory, and while it is still
+// running. The rebase is made to hold there by an --exec step that sleeps and
+// marks the moment; the sleep ends by itself, so nothing outlives the
+// test however it ends. The kill is the runner's own process context being
+// cancelled, or the caller's when cancelCaller is set, and status is how a
+// runner-side kill is reported: the process dies the same way whichever budget
+// ended it.
+type killingRebaseRunner struct {
+	delegate     execution.ProcessRunner
+	marker       string
+	status       execution.ProcessStatus
+	cancelCaller context.CancelFunc
+	armed        bool
+	killed       bool
+}
+
+func (r *killingRebaseRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if !r.armed || !hasArgument(command.Args, "rebase") || hasArgument(command.Args, "--abort") {
+		return r.delegate.Run(ctx, command, observer)
+	}
+	r.armed = false
+	arguments := make([]string, 0, len(command.Args)+2)
+	for _, argument := range command.Args {
+		arguments = append(arguments, argument)
+		if argument == "rebase" {
+			// The sleep is started before the mark is made, so the kill never lands
+			// while the shell is still forking it.
+			arguments = append(arguments, "--exec", "sleep 30 & touch '"+r.marker+"'; wait")
+		}
+	}
+	command.Args = arguments
+	running, stop := context.WithCancel(ctx)
+	defer stop()
+	kill := stop
+	if r.cancelCaller != nil {
+		kill = r.cancelCaller
+	}
+	go func() {
+		for {
+			if _, err := os.Stat(r.marker); err == nil {
+				kill()
+				return
+			}
+			select {
+			case <-running.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	result, err := r.delegate.Run(running, command, observer)
+	if err != nil {
+		return result, err
+	}
+	if _, statErr := os.Stat(r.marker); statErr == nil && result.Status == execution.ProcessCancelled {
+		r.killed = true
+		if r.cancelCaller == nil {
+			result.Status = r.status
+		}
+	}
+	return result, nil
 }
 
 func dirExists(path string) bool {

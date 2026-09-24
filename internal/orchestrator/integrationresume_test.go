@@ -560,6 +560,26 @@ func TestOnlyARunResumedOnPurposeIsPickedUpAtItsPromotion(t *testing.T) {
 	}
 }
 
+// A replay the harness killed stops an approved change for the environment, in
+// the words the retry path wraps it in, and a replay that conflicted still does
+// not: the conflict is a person's, and nothing about it is resumable.
+func TestAKilledReplayIsAnIntegrationStopAndAConflictIsNot(t *testing.T) {
+	t.Parallel()
+
+	killed := fmt.Errorf("replay the change onto the moved integration target: %w",
+		fmt.Errorf("%w: replay yoyodyne/task onto main at abc123 timed out", gitworktree.ErrReplayKilled))
+	if cause, environmental := integrationStopCauseOf(killed); !environmental || cause != runstate.CauseReplayKilled {
+		t.Fatalf("integrationStopCauseOf(killed replay) = %q, %v; want %q", cause, environmental, runstate.CauseReplayKilled)
+	}
+	if !runstate.CauseReplayKilled.Valid() {
+		t.Fatalf("%q is not a cause the record accepts", runstate.CauseReplayKilled)
+	}
+	conflicted := fmt.Errorf("%w: replay yoyodyne/task onto main at abc123 failed with exit code 1: CONFLICT (content)", gitworktree.ErrRebaseConflict)
+	if cause, environmental := integrationStopCauseOf(conflicted); environmental {
+		t.Fatalf("integrationStopCauseOf(conflict) = %q; a conflict must never be an environmental stop", cause)
+	}
+}
+
 // timingOutTracker is a tracker whose Nth read dies the way a `bd` killed under
 // load does, which is the second of yoyodyne-ifd.309's two stops. It refuses
 // once and then answers, which is what the boundary's recovery window is for:
