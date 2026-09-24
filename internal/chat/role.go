@@ -98,6 +98,12 @@ type Authority struct {
 	// change and a worktree, and an opinion from one of them with none of that in
 	// front of it is worth less than the round it would cost.
 	Asks bool
+	// Memory is whether this role keeps a memory of its own: whether its turns
+	// are briefed with what it recorded earlier and whether it may record more.
+	// The management roles do; the developer and the reviewer do not, because
+	// their judgement is exercised inside runs that remember nothing between
+	// invocations, and accumulation and independence cannot live in one identity.
+	Memory bool
 }
 
 // MayAct reports whether this role may ask for one tracker action.
@@ -165,7 +171,8 @@ func buildAuthorities() map[domain.AgentRole]Authority {
 			Evaluations:    registry.Holds(role, capability.EvaluationRecord),
 			RepositoryReads: registry.Holds(role, capability.RepositoryRead) &&
 				registry.Holds(role, capability.RepositoryList),
-			Asks: registry.Holds(role, capability.ExchangeAsk),
+			Asks:   registry.Holds(role, capability.ExchangeAsk),
+			Memory: registry.Holds(role, capability.AgentContextMutate),
 		}
 	}
 	return built
@@ -279,6 +286,13 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Role:    authority.Role,
 			Refused: "a repository path to be read",
 			Reason:  "reading the repository by path is the management roles' — the product manager, the architect, and the development manager — and this role reasons over the evidence it was given",
+		}
+	}
+	if len(parsed.Memories) > 0 && !authority.Memory {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "a memory to be recorded",
+			Reason:  "a memory of one's own is kept by the management roles — the product manager, the architect, and the development manager — and this role's judgement is exercised inside runs, which remember nothing between invocations",
 		}
 	}
 	// An ask is refused above the tracker rather than beside it, because it is
@@ -499,6 +513,8 @@ Some turns carry changes other roles have proposed to documents you own. Each on
 
 ` + repositoryread.Contract + `
 
+` + memoryContract + `
+
 ` + exchange.AskingContract + `
 
 ` + reportClause
@@ -579,6 +595,8 @@ Recording the decision is what you do, and recording it is what causes it: the h
 The harness's own failure-storm brake holds intake when runs keep blocking with nothing landing between them, and the moment it trips it summons you — this conversation, your sweep fired ahead of its schedule — with the runs that blocked and the reason each did in the message that woke you. A summoned turn is your sweep with one thing added, and that thing comes first: decide what happens to the hold, and record it as a brake decision. "release" lifts it at the watching session's next poll: the line is fine, or what stopped it is dealt with. "probe" keeps it and starts one probe run now, which reopens intake if it lands and keeps it held — and summons you again, with the probe's own stoppage — if it blocks. "escalate" keeps it for the operator, and it is the only decision of yours under which a brake hold waits on a person: say why in the reason and report it at "warning" severity or above in the same reply, so it reaches them. The loop of a blocked probe summoning you again is bounded: the summons names which cycle it is and at what cycle the harness stops asking, and at that bound the harness escalates the hold to the operator itself, naming the cycles spent and what stopped the last probe — after which no further probe starts under it, a probe decision of yours is refused, and a release of yours still lifts it. Escalate sooner yourself wherever the evidence already says the hold is the operator's, rather than leaving it to the bound. Read the three stops before you decide. Three verdicts on three different changes are three items to triage and a line that is fine to release; three stops on one cause — the same check failing everywhere, a tool the machine has lost — are a machine somebody has to look at, and that is what escalating is for. If you record no decision, a probe run starts by itself once the configured cooldown has passed, and the hold is released or kept on what becomes of it. The runs themselves are triaged exactly as on any pass, entry by entry; a decision about a run does not decide the hold, and a brake decision does not decide a run. Environmental stops never trip the brake, so what tripped it is verdicts and check failures against changes that were present.
 
 A cap that refuses you is one you may cross yourself, ` + maxDelegatedCapCrossingsText + ` times per item and no more. "cross" names the budget that refused — the refusal prints it — and the reason you are crossing it, and it raises that one cap to exactly the ceiling the refusal named — one more than this item has spent against that budget, and no further: it buys nothing, spends none of the budgets above, and the decision it makes recordable is still a decision you record afterwards, in the same reply or a later one. The reason is required and a crossing without one is refused outright, because the reason is the whole of what this is: the operator delegated these crossings on the condition that each one is recorded on the item and reported to them as it happens, so they can overrule you while there is still something to undo. Cross when you would have escalated and been granted it — the evidence says the change is repairable, or the ground moved, and the only thing in the way is the count. Do not cross to buy another turn of an argument that is not going anywhere; that was always an escalation and still is. Past your ` + maxDelegatedCapCrossingsText + `, or for any ceiling beyond the one that permits the refused decision, the cap is the operator's again: escalate, naming the cap and why, and they cross it with "yoyo triage override". An override or a crossing written into the item's notes crosses nothing, because no guard reads notes; once a cap has been crossed, asking for the same decision again records it.
+
+` + memoryContract + `
 
 ` + exchange.AskingContract + `
 

@@ -51,14 +51,15 @@ func TestOnlyTheRolesThatHoldTheirOwnContextMayWriteIt(t *testing.T) {
 func TestRememberRecordsThroughTheStore(t *testing.T) {
 	t.Parallel()
 
-	write := &Write{Store: newStore(t), Revision: testRevision()}
+	store := newStore(t)
+	write := &Write{Store: store, Revision: testRevision()}
 	if err := write.Remember(context.Background()); err != nil {
 		t.Fatalf("Remember() error = %v", err)
 	}
 	if write.Recorded.Sequence != 1 {
 		t.Errorf("Recorded is revision %d, want the first", write.Recorded.Sequence)
 	}
-	memories, problems, err := write.Store.Memories("product-manager")
+	memories, problems, err := store.Memories("product-manager")
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
 	}
@@ -73,11 +74,12 @@ func TestARefusedRoleWritesNothing(t *testing.T) {
 	revision := testRevision()
 	revision.Agent = "reviewer"
 	revision.Role = domain.RoleReviewer
-	write := &Write{Store: newStore(t), Revision: revision}
+	store := newStore(t)
+	write := &Write{Store: store, Revision: revision}
 	if err := write.Remember(context.Background()); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Remember() error = %v, want ErrUnauthorized", err)
 	}
-	memories, _, err := write.Store.Memories("reviewer")
+	memories, _, err := store.Memories("reviewer")
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
 	}

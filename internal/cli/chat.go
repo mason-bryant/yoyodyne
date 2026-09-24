@@ -617,11 +617,11 @@ func prepareChat(ctx context.Context, role domain.AgentRole, agentName, configPa
 	if err != nil {
 		return preparedChat{}, err
 	}
-	// What this agent knows, read for the side conversations it held beside this
-	// one: each concluded side thread merges its substance in here, and this
-	// conversation's next turn is where that revision is read. The redaction values
-	// are the store's rather than this reader's — a store built without them is one
-	// nothing may be written through — and reading is all this wiring does.
+	// What this agent knows. A management role's turns are briefed from it and
+	// record what they conclude into it, through the context actions; every
+	// role's turns read from it what the side conversations held beside this one
+	// concluded. The redaction values are the store's, so what a turn writes is
+	// redacted before it reaches the disk, exactly as a side stream's merge is.
 	memories, err := runstate.NewMemoryStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
 	if err != nil {
 		return preparedChat{}, err
@@ -789,10 +789,11 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
 		Amendments: parts.amendments,
-		// The agent's own memory, read for what its side threads concluded. A side
-		// conversation never speaks into this one: what it worked out arrives as a
-		// memory revision naming the stream it came from, and anything it promised
-		// stays tentative until this thread ratifies it.
+		// The agent's own memory: what a management role recorded in earlier turns,
+		// briefed into each turn and written to by it, and what its side threads
+		// concluded. A side conversation never speaks into this one: what it worked
+		// out arrives as a memory revision naming the stream it came from, and
+		// anything it promised stays tentative until this thread ratifies it.
 		Memories: memories,
 		// How evidence from outside the repository is gathered on the role's
 		// behalf, bounded by what the operator configured. It is the harness's own

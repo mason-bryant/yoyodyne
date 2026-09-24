@@ -37,9 +37,9 @@ func TestASideThreadCannotTakeAnActionReservedToTheMainThread(t *testing.T) {
 					role, action)
 			}
 		}
-		if aside.Proposals || aside.Concerns || aside.Research || aside.Evaluations || aside.Asks {
-			t.Errorf("a %s side thread may propose=%v, raise a concern=%v, commission research=%v, record an evaluation=%v, or ask=%v; every one of those is an act the main thread ratifies",
-				role, aside.Proposals, aside.Concerns, aside.Research, aside.Evaluations, aside.Asks)
+		if aside.Proposals || aside.Concerns || aside.Research || aside.Evaluations || aside.Asks || aside.Memory {
+			t.Errorf("a %s side thread may propose=%v, raise a concern=%v, commission research=%v, record an evaluation=%v, ask=%v, or write memory=%v; every one of those is an act the main thread ratifies",
+				role, aside.Proposals, aside.Concerns, aside.Research, aside.Evaluations, aside.Asks, aside.Memory)
 		}
 		// What is not authority is untouched: a side thread is still this role, so
 		// it is still called what the role is called and still sent the role's own

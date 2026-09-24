@@ -221,6 +221,10 @@ func (refusingMemories) Live(string) ([]runstate.Memory, []runstate.MemoryProble
 	return nil, nil, errors.New("the memory directory is unreadable")
 }
 
+func (refusingMemories) Remember(context.Context, runstate.MemoryRevision) (runstate.MemoryRevision, error) {
+	return runstate.MemoryRevision{}, errors.New("the memory directory is unwritable")
+}
+
 func testSideStream(t *testing.T, conversation string) sidestream.Stream {
 	t.Helper()
 

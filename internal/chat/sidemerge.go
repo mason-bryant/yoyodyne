@@ -27,18 +27,21 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/agentcontext"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// Memories is what this agent knows, read for the merges its side threads wrote.
-// It is satisfied by *runstate.MemoryStore.
+// Memories is what this agent knows: read to brief its turns and for the merges
+// its side threads wrote, and written when a turn records something. It is
+// satisfied by *runstate.MemoryStore.
 //
-// It is a read and only a read. The agent-memory design keeps writing behind the
-// typed context actions and keeps the audit history on the operator's surfaces,
-// and a conversation that could write here would be a fourth door into a store
-// that has three.
+// The write is never made from here directly. The agent-memory design keeps
+// writing behind the typed context actions, so a turn's memory block is handed
+// to the registered `agent-context` actions with this as their store (memory.go),
+// and the audit history stays on the operator's surfaces.
 type Memories interface {
 	Live(agent string) ([]runstate.Memory, []runstate.MemoryProblem, error)
+	agentcontext.Store
 }
 
 // renderSideConversations carries this conversation's own concluded side threads

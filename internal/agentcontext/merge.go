@@ -243,6 +243,11 @@ func (c Conclusion) merge(ctx context.Context, store *runstate.MemoryStore) (run
 	if err != nil {
 		return runstate.MemoryRevision{}, err
 	}
+	// A nil store is refused here rather than handed on: wrapped in the Store
+	// interface it would no longer read as nil, and the write would reach it.
+	if store == nil {
+		return runstate.MemoryRevision{}, fmt.Errorf("merge side stream %s: agent-context.remember has no memory store to write to", c.Stream.ID)
+	}
 	write := &Write{Store: store, Revision: revision}
 	if err := write.Remember(ctx); err != nil {
 		return runstate.MemoryRevision{}, fmt.Errorf("merge side stream %s: %w", c.Stream.ID, err)

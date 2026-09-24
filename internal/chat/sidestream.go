@@ -54,6 +54,9 @@ func (a Authority) OnSideStream() Authority {
 	narrowed.RepositoryReads = a.RepositoryReads && sidestream.Permits(capability.RepositoryRead) &&
 		sidestream.Permits(capability.RepositoryList)
 	narrowed.Asks = a.Asks && sidestream.Permits(capability.ExchangeAsk)
+	// A side thread writes no memory of its own: what it worked out reaches the
+	// agent's memory once, as the merge the harness writes when it concludes.
+	narrowed.Memory = a.Memory && sidestream.Permits(capability.AgentContextMutate)
 	return narrowed
 }
 
