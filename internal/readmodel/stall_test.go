@@ -133,6 +133,66 @@ func TestAnIdleSessionIsNotToldToStartOne(t *testing.T) {
 	}
 }
 
+// A live session whose last poll could not read the store is not one that found
+// nothing to start. The queue was never read, so the line says the read is being
+// retried and names the harness, whose move it is, rather than sending the
+// operator to a queue nobody has seen.
+func TestASessionRetryingAFailedReadIsNotSaidAsIdle(t *testing.T) {
+	t.Parallel()
+	outage := runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment.Add(-time.Hour), Unreadable: true}
+	stall := WhyNothingStarts(Conditions{Sessions: held(
+		runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchWatching, At: moment.Add(-2 * time.Hour)},
+		outage,
+	)})
+	if stall.Reason != ReasonStoreUnreadable {
+		t.Fatalf("reason = %q (%q), want the failing read named as itself", stall.Reason, stall.Says)
+	}
+	if strings.Contains(stall.Says, "found nothing") || !strings.Contains(stall.Says, "reading it again") {
+		t.Fatalf("says %q, want the retried read rather than an empty queue", stall.Says)
+	}
+	if !stall.Since.Equal(outage.At) {
+		t.Fatalf("since = %s, want when the failing read was recorded", stall.Since)
+	}
+	if !strings.HasPrefix(stall.Reason.Whose(), "the harness's") {
+		t.Fatalf("whose = %q, want the harness's", stall.Reason.Whose())
+	}
+	if _, waiting := stall.Waiting(); waiting {
+		t.Fatal("a read the harness is retrying was put on the attention line as waiting on a person")
+	}
+
+	// Once a read succeeds and finds nothing, the idle line is back.
+	recovered := WhyNothingStarts(Conditions{Sessions: held(
+		outage,
+		runstate.WatchTransition{SessionID: "watch-1", State: runstate.WatchIdle, At: moment, Reason: "the backlog is empty"},
+	)})
+	if recovered.Reason != ReasonSessionIdle {
+		t.Fatalf("reason = %q, want an idle session once the read succeeded", recovered.Reason)
+	}
+}
+
+// Every surface that names where a session got to says a retried read as one,
+// rather than as the idle state it is recorded under.
+func TestSessionSaysARetriedReadAndARestartAsThemselves(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		transition runstate.WatchTransition
+		want       string
+	}{
+		{runstate.WatchTransition{State: runstate.WatchIdle}, "idle"},
+		{runstate.WatchTransition{State: runstate.WatchIdle, Unreadable: true}, "retrying a failed read of the harness's store"},
+		{runstate.WatchTransition{State: runstate.WatchStopped, Unreadable: true}, "stopped"},
+		{runstate.WatchTransition{State: runstate.WatchStopped, Restarting: true}, "stopped to restart into the build deployed over it"},
+	} {
+		if said := SessionSays(testCase.transition); said != testCase.want {
+			t.Fatalf("SessionSays(%+v) = %q, want %q", testCase.transition, said, testCase.want)
+		}
+	}
+	last := LastWord([]runstate.WatchTransition{{SessionID: "watch-1", State: runstate.WatchIdle, At: moment, Unreadable: true}})
+	if !strings.Contains(last, "retrying a failed read") {
+		t.Fatalf("last word = %q, want the retried read", last)
+	}
+}
+
 // A watch log that cannot be read is not a stall. A reason invented over a
 // record nobody could open is the confident emptiness every answer here is
 // written to avoid, so what is reported is that the question could not be asked.
