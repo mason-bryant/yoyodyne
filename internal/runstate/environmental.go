@@ -119,6 +119,23 @@ const (
 	// observed — no process, no ending, and the last moment the record moved — so
 	// nobody has to edit a run record by hand to end one of these.
 	CauseProcessVanished EnvironmentalCause = "process-vanished"
+	// CauseUsageWindow is a run the provider refused on an exhausted usage limit
+	// whose reset lies past what the run may still wait under
+	// execution.usage_limit_max_pause. The harness will not take that wait, and
+	// that is a decision about the wait rather than a verdict on anything: the
+	// window lifts on the provider's clock, and the run ends with its claim given
+	// back so the item is pulled again once it has.
+	//
+	// Twelve runs ended failed that way between 06:50 and 09:35 UTC on
+	// 2026-09-23 on one seven-day window resetting four days out, three of them
+	// tripped the intake brake, and every one blocked its item for a person who
+	// could do nothing about it (yoyodyne-ifd.428.17).
+	//
+	// It is the one cause settled without asking the worktree. The refusal ends
+	// the round before any check or reviewer has read what it holds, so whatever
+	// the refused invocation left there is preserved on the branch rather than
+	// delivered, and the round spends nothing whatever the worktree says.
+	CauseUsageWindow EnvironmentalCause = "usage-window"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -126,11 +143,19 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow:
 		return true
 	default:
 		return false
 	}
+}
+
+// EndsTheRoundUnjudged reports a cause that ends the round before anything
+// could judge what it holds, so the round is refused without the worktree
+// being asked whether it delivered. Only the provider's usage window does: see
+// CauseUsageWindow.
+func (c EnvironmentalCause) EndsTheRoundUnjudged() bool {
+	return c == CauseUsageWindow
 }
 
 // Title says what a cause is, the way somebody reading a docket entry or a
@@ -152,6 +177,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the tracker, the forge, or the network did not answer"
 	case CauseProcessVanished:
 		return "the process carrying the run was gone and no ending was ever recorded"
+	case CauseUsageWindow:
+		return "the provider's usage window refused it and resets past the maximum pause the harness will wait"
 	default:
 		return string(c)
 	}
@@ -195,6 +222,13 @@ type EnvironmentalRefusal struct {
 	// of or a check run against work that developer already wrote. Only the site
 	// can tell those apart, so only the site sets this.
 	NothingRan bool `json:"nothing_ran,omitempty"`
+	// ResetsAt is when the provider's usage window lifts, on a refusal by it: the
+	// provider's own reset where it named one, and the harness's next probe where
+	// it named none, which ResetUnknown then says. It is what the item waits out
+	// before it is pulled again, so every surface names it. Nothing else records
+	// one, because no other cause is a wait with an end.
+	ResetsAt     *time.Time `json:"resets_at,omitempty"`
+	ResetUnknown bool       `json:"reset_unknown,omitempty"`
 	// Settled says the round this cause belongs to has ended and the class was
 	// decided on it. It is what makes the settle one-shot: a cause recorded on a
 	// round the harness turned away without charging it is settled there and then,
@@ -253,6 +287,12 @@ func (r EnvironmentalRefusal) Validate() error {
 	if r.RecordedAt.IsZero() {
 		problems = append(problems, errors.New("recorded_at is required"))
 	}
+	if r.ResetsAt != nil && r.Cause != CauseUsageWindow {
+		problems = append(problems, fmt.Errorf("a reset is recorded only on a %s refusal, not on %q", CauseUsageWindow, r.Cause))
+	}
+	if r.ResetUnknown && r.ResetsAt == nil {
+		problems = append(problems, errors.New("a reset the provider did not name requires the probe recorded in its place"))
+	}
 	// Something given back is something that was classified, and a classification
 	// is something a settle made. A record the other way round could not have been
 	// written by the settle, which is the only thing that writes any of the three.
@@ -292,6 +332,9 @@ func (r EnvironmentalRefusal) Validate() error {
 // docket entry has room for a block and a thread line does not.
 func (r EnvironmentalRefusal) Describe() string {
 	named := fmt.Sprintf("%s (%s)", r.Cause, r.Cause.Title())
+	if said := r.ResetSays(); said != "" {
+		named = fmt.Sprintf("%s (%s; %s)", r.Cause, r.Cause.Title(), said)
+	}
 	switch {
 	case !r.Settled:
 		return fmt.Sprintf("environmental cause recorded: %s; the round it belongs to has not settled, so nothing has been decided about what it cost", named)
@@ -314,6 +357,19 @@ func (r EnvironmentalRefusal) Describe() string {
 	default:
 		return fmt.Sprintf("environmentally refused: %s, and it reached nothing that spends, so there was nothing to give back and this item stands where it did before the round", named)
 	}
+}
+
+// ResetSays names when a usage window lifts, in the words every surface uses
+// for it, and is empty on a refusal that recorded no reset.
+func (r EnvironmentalRefusal) ResetSays() string {
+	if r.ResetsAt == nil {
+		return ""
+	}
+	at := r.ResetsAt.UTC().Format(time.RFC3339)
+	if r.ResetUnknown {
+		return "the provider named no reset, so the harness asks again at " + at
+	}
+	return "the window resets at " + at
 }
 
 // roundHolder is the process credited with a round a settle was refused, in the

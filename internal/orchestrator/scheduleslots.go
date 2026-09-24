@@ -94,7 +94,11 @@ func (s Scheduler) eligibility(entry backlog.Entry, reading eligibilityReading) 
 		return passedOver, nil
 	}
 	if s.cooling(reading.tried, read.items[entry.ID]) {
-		poll.passTried(entry.ID, reading.tried[entry.ID].reason)
+		if recorded := reading.tried[entry.ID]; !recorded.until.IsZero() {
+			poll.passWindow(entry.ID, recorded.reason)
+		} else {
+			poll.passTried(entry.ID, recorded.reason)
+		}
 		return passedOver, nil
 	}
 	if _, busy := reading.occupied[entry.ID]; busy {

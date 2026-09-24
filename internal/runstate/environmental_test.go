@@ -229,6 +229,45 @@ func TestAnEnvironmentalRefusalIsHeldToWhatCouldHaveWrittenIt(t *testing.T) {
 	}
 }
 
+// A usage-window refusal names its reset wherever it is described, and a reset
+// is recorded on nothing else: no other cause is a wait with an end, so a reset
+// beside one would be a deadline nothing waits for.
+func TestAUsageWindowRefusalNamesItsReset(t *testing.T) {
+	t.Parallel()
+
+	resetsAt := time.Date(2026, 9, 27, 3, 0, 0, 0, time.UTC)
+	windowed := EnvironmentalRefusal{Cause: CauseUsageWindow, RecordedAt: time.Now(), ResetsAt: &resetsAt, Settled: true, Refused: true}
+	if err := windowed.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !CauseUsageWindow.EndsTheRoundUnjudged() || CauseDirtyPrimary.EndsTheRoundUnjudged() {
+		t.Fatal("only the usage window ends a round before anything judged it")
+	}
+	described := windowed.Describe()
+	for _, want := range []string{string(CauseUsageWindow), "the window resets at 2026-09-27T03:00:00Z", "stands where it did"} {
+		if !strings.Contains(described, want) {
+			t.Fatalf("Describe() = %q, want it to say %q", described, want)
+		}
+	}
+	unknown := windowed
+	unknown.ResetUnknown = true
+	if said := unknown.ResetSays(); !strings.Contains(said, "named no reset") || !strings.Contains(said, "2026-09-27T03:00:00Z") {
+		t.Fatalf("ResetSays() = %q, want the probe said as the harness's own", said)
+	}
+
+	for _, test := range []struct {
+		name   string
+		broken EnvironmentalRefusal
+	}{
+		{name: "a reset on another cause", broken: EnvironmentalRefusal{Cause: CauseDirtyPrimary, RecordedAt: time.Now(), ResetsAt: &resetsAt}},
+		{name: "an unknown reset with no probe", broken: EnvironmentalRefusal{Cause: CauseUsageWindow, RecordedAt: time.Now(), ResetUnknown: true}},
+	} {
+		if err := test.broken.Validate(); err == nil {
+			t.Errorf("Validate() accepted %s", test.name)
+		}
+	}
+}
+
 // Describe never claims an accounting that did not happen. The three readings
 // that would mislead an operator are the ones asserted: a round nothing has
 // decided about yet, a refusal that reached nothing to give back, and a refusal

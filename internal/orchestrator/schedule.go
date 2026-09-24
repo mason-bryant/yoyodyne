@@ -255,6 +255,10 @@ const (
 	// watch waits it out instead; a drain is a command somebody is waiting on the
 	// return of, and one that slept through a login would be one that hung.
 	ScheduleProviderAway = "the provider is answering nobody, so nothing more was chosen"
+	// ScheduleProviderWindow reports a drain that stopped because a recorded
+	// usage limit covers every model a developer's turn could end on, and the
+	// provider named a reset that has not come. A watch waits it out instead.
+	ScheduleProviderWindow = "the provider's usage window is closed for every developer model, so nothing more was chosen"
 	// ScheduleSpendUnreadable reports a bounded session that stopped because it
 	// could not tell what it had spent. A budget measured against evidence
 	// nobody can read is not a smaller budget, it is no budget at all, so the
@@ -641,6 +645,13 @@ type Pull struct {
 	// than being told when". Zero reads as the login's interval: a pull every
 	// poll.
 	OutageProbe time.Duration
+	// UsageLimits is the product's record of the provider refusing the harness for
+	// want of capacity, and Developers is every endpoint a developer's turn can
+	// end on. Both optional; see usageWindow. A pull wired without them learns a
+	// window only from a run that came back parked on one, which is what a session
+	// restarted inside a window never has.
+	UsageLimits readmodel.UsageLimits
+	Developers  []readmodel.AgentEndpoint
 	// Claims gives back the claims with nothing alive behind them. Optional; see
 	// ScheduleClaims.
 	Claims ScheduleClaims
@@ -968,6 +979,12 @@ type Schedule struct {
 	// the pass its wait between pulls and nothing else, so it is reported beside
 	// the pull rather than stopping it.
 	OutageProblem string `json:"outage_problem,omitempty"`
+	// UsageWindowResetsAt is when the provider said the recorded window that held
+	// this pass's last pull lifts, nil once no recorded window holds it.
+	// UsageWindowProblem names a record that could not be read, which the pull
+	// read past as though no window stood.
+	UsageWindowResetsAt *time.Time `json:"usage_window_resets_at,omitempty"`
+	UsageWindowProblem  string     `json:"usage_window_problem,omitempty"`
 	// ReleasedClaims is the claims this pass audited against the runs the harness
 	// has, found nothing alive behind, and gave back to the queue. It is on the
 	// schedule for the reason the started runs are: a pass that freed work somebody
@@ -1226,6 +1243,14 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		excluded, held := tried[started.WorkItemID]
 		if held {
 			excluded.reason = excludedBecause(*started)
+			// A run the provider's usage window stopped holds its item until the
+			// window resets and no longer. That is a wait with an end rather than a
+			// memory of having tried: the item is pulled again the moment the reset
+			// passes, and a run started before then is refused the same way.
+			excluded.until = time.Time{}
+			if resetsAt, windowed := usageWindowReset(started.Outcome); windowed {
+				excluded.until = resetsAt
+			}
 		}
 		// And the one ending that leaves no record anywhere else. A dispatch that
 		// failed before a run was reserved wrote nothing to the run store, so every
@@ -1574,6 +1599,27 @@ pulling:
 				break
 			}
 			if !awaitProvider(pull, account{reason: outage.Says(), running: running}) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
+		}
+		// A usage window the record says is closed over every model a developer's
+		// turn could end on is read here, for the reason the outage above is: it is
+		// nothing a person placed and nothing `yoyo release` lifts, and a pull made
+		// into it starts runs the provider refuses. It is read from the durable
+		// record at every pull rather than remembered, which is what makes a
+		// restarted session honour it from its first poll: on 2026-09-23 a session
+		// restarted over and over inside a seven_day window pulled fresh items into
+		// the same refusal each time, and one limit became twelve failed runs. It
+		// lifts at the reset the provider named, with nothing to release.
+		if closed, standing := s.usageWindow(&schedule, pull); standing {
+			if !s.Watching {
+				schedule.Stopped = ScheduleProviderWindow
+				break
+			}
+			said := account{reason: windowReason(closed.window, closed.found), running: running, window: closed.window}
+			if !awaitProvider(pull, said) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -2169,6 +2215,9 @@ func (s Scheduler) cooling(tried map[string]attempt, item beads.WorkItem) bool {
 	if !attempted {
 		return false
 	}
+	if !recorded.until.IsZero() {
+		return s.now().Before(recorded.until)
+	}
 	return !s.Watching || recorded.fingerprint == fingerprint(item)
 }
 
@@ -2184,6 +2233,19 @@ type attempt struct {
 	fingerprint string
 	title       string
 	reason      string
+	// until is when the exclusion lifts by itself, and zero for every exclusion
+	// but one: a run the provider's usage window stopped, which is held until the
+	// window resets and is then pulled again whatever became of the item.
+	until time.Time
+}
+
+// usageWindowReset is when the provider's usage window that stopped a run
+// resets, where that is what stopped it.
+func usageWindowReset(outcome Outcome) (time.Time, bool) {
+	if !stoppedByUsageWindow(outcome.Environmental) || outcome.Environmental.ResetsAt == nil {
+		return time.Time{}, false
+	}
+	return outcome.Environmental.ResetsAt.UTC(), true
 }
 
 // unstartedAttempt reports a start that failed with no run behind it: the
@@ -2203,6 +2265,10 @@ func unstartedAttempt(started Started) bool {
 // derived once, as the start settles, rather than by whoever reads the exclusion
 // later: the outcome is in hand here and nowhere afterwards.
 func excludedBecause(started Started) string {
+	if stoppedByUsageWindow(started.Outcome.Environmental) {
+		return fmt.Sprintf("run %s was stopped by the provider's usage window rather than by anything about the work, and the item was given back to the queue: %s",
+			started.Outcome.RunID, started.Outcome.Environmental.ResetSays())
+	}
 	switch {
 	case started.Declined != "":
 		return "this session started it and the work went to another process: " + started.Declined
@@ -2750,6 +2816,87 @@ func (s Scheduler) providerAway(ctx context.Context, schedule *Schedule, pull Pu
 	return outage, true
 }
 
+// recordedWindow is a usage window the durable record says is closed over
+// every developer model: the window itself, and what the session says it found.
+type recordedWindow struct {
+	window providerWindow
+	found  string
+}
+
+// usageWindow reads whether a recorded usage limit with a reset still to come
+// covers the model every developer's turn ends on, and reports the window where
+// one stands.
+//
+// It is the same reading the capacity hold takes of the same two records — the
+// usage-limit log and the runs parked on a limit — narrowed to the developer's
+// endpoints, and narrowed to refusals the provider named a reset for: a limit
+// with no reset is the unknown-reset probe's business, and a dispatch is how
+// that one is asked about. An endpoint whose turn can end on a model the record
+// does not refuse is one a run could be served on, so a single such endpoint
+// holds nothing.
+//
+// A pull wired without the log or the endpoints reads none, and a record that
+// cannot be read is said on the schedule and read past, for the reason the
+// outage reading gives: a session that stopped choosing work because it could
+// not open one file would be a worse failure than dispatching into a refusal.
+func (s Scheduler) usageWindow(schedule *Schedule, pull Pull) (recordedWindow, bool) {
+	schedule.UsageWindowResetsAt = nil
+	if pull.UsageLimits == nil || len(pull.Developers) == 0 {
+		return recordedWindow{}, false
+	}
+	refusals, err := pull.UsageLimits.List()
+	if err != nil {
+		schedule.UsageWindowProblem = fmt.Sprintf("whether a usage window is closed could not be read, so the pull was made as though none were: %v", err)
+		return recordedWindow{}, false
+	}
+	var runs []runstate.State
+	if pull.Runs != nil {
+		if incomplete, err := pull.Runs.Incomplete(); err == nil {
+			runs = incomplete
+		}
+	}
+	// Only refusals of a model a developer's turn can end on, or of no model
+	// named, are read: the reset said is the latest of these, and a refusal of
+	// some other role's model would otherwise lend the window its later reset.
+	developerModels := map[string]bool{}
+	for _, endpoint := range pull.Developers {
+		developerModels[strings.TrimSpace(endpoint.Model)] = true
+		developerModels[strings.TrimSpace(endpoint.Alternate)] = true
+	}
+	relevant := func(all []runstate.UsageLimitExhaustion) []runstate.UsageLimitExhaustion {
+		var kept []runstate.UsageLimitExhaustion
+		for _, refusal := range all {
+			if model := strings.TrimSpace(refusal.Model); model == "" || developerModels[model] {
+				kept = append(kept, refusal)
+			}
+		}
+		return kept
+	}
+	parked := relevant(readmodel.ParkedRunRefusals(runs))
+	now := s.now()
+	// No unknown-reset pause: only a reset the provider named makes a refusal
+	// stand here.
+	hold := readmodel.ReadCapacityHold(pull.Developers, nil, append(parked, relevant(refusals)...), now, 0)
+	if !hold.Holding || hold.ResetsAt.IsZero() || !now.Before(hold.ResetsAt) {
+		return recordedWindow{}, false
+	}
+	resetsAt := hold.ResetsAt.UTC()
+	schedule.UsageWindowResetsAt = &resetsAt
+	limit := "a usage limit"
+	if hold.Kind != "" {
+		limit = "the " + hold.Kind + " usage limit"
+	}
+	models := hold.Models
+	if len(hold.Alternates) > 0 {
+		models = hold.Alternates
+	}
+	return recordedWindow{
+		window: providerWindow{waiting: true, resetsAt: resetsAt},
+		found: fmt.Sprintf("the usage-limit record holds %s closed on %s until %s, which every developer turn ends on, so nothing is chosen until it lifts",
+			limit, strings.Join(models, " and "), resetsAt.Format(time.RFC3339)),
+	}, true
+}
+
 // escalate puts the oldest stopped run the development manager has not been
 // shown in front of her, and records what came back on the schedule.
 //
@@ -3229,14 +3376,26 @@ func (p *idlePoll) pass(id string, class runstate.PassedOverClass, role domain.A
 }
 
 // passTried records one item this session has already started and will not start
-// again, with what excluded it. It is the one class that carries a reason, and it
-// carries one because it is the only class whose cause is not somewhere a reader
-// can go and look: every other exclusion names a state of the item, the queue, or
-// the machine, and this one names an attempt only this process remembers.
+// again, with what excluded it. It is one of the two classes that carry a
+// reason, and both carry one because their cause is not somewhere a reader can go
+// and look: every other exclusion names a state of the item, the queue, or the
+// machine, and these name a run only this process remembers.
 func (p *idlePoll) passTried(id, reason string) {
 	p.passed = append(p.passed, readmodel.PassedOverItem{
 		ID:     id,
 		Class:  runstate.PassedOverAlreadyTried,
+		Reason: reason,
+	})
+}
+
+// passWindow records one item this session is holding until the provider's
+// usage window that stopped its run resets. It carries its reason for the reason
+// passTried does — only this process remembers the run — and it is a class of
+// its own because nothing about the item was tried and found wanting.
+func (p *idlePoll) passWindow(id, reason string) {
+	p.passed = append(p.passed, readmodel.PassedOverItem{
+		ID:     id,
+		Class:  runstate.PassedOverWaitingOnUsageWindow,
 		Reason: reason,
 	})
 }
@@ -3530,6 +3689,11 @@ func (w providerWindow) standing(now time.Time) bool {
 // for an operator hold, a directive, or work it depends on is waiting on
 // something the surfaces already say.
 func windowFrom(outcome Outcome) providerWindow {
+	// A run the window stopped rather than parked brought the same answer back,
+	// and the item it gave up waits on exactly that reset.
+	if resetsAt, windowed := usageWindowReset(outcome); windowed {
+		return providerWindow{waiting: true, resetsAt: resetsAt}
+	}
 	if !outcome.Paused || outcome.PauseCause != runstate.PauseUsageLimit {
 		return providerWindow{}
 	}

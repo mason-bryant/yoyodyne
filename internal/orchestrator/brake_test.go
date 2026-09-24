@@ -665,3 +665,117 @@ func TestTheBrakeSummonsNobodyOverTheOperatorsHold(t *testing.T) {
 		t.Fatalf("braked reason = %q, want the operator's hold reported as waiting on them", reason)
 	}
 }
+
+// A usage window resetting past the maximum pause stops every run the session
+// starts into it, and on 2026-09-23 three such stops in a row tripped the brake
+// at 07:32 over a window nobody could act on. Replayed here with the stop the
+// pipeline now makes of it — cancelled, its claim given back, and a settled
+// usage-window refusal naming the reset — the same three count toward nothing:
+// the brake stays open, no item is remembered as tried, and each is held only
+// until the window resets and is then pulled again by itself.
+func TestAUsageWindowStopCountsTowardNothingInAWatchingSession(t *testing.T) {
+	t.Parallel()
+
+	ids := []string{"yoyodyne-one", "yoyodyne-two", "yoyodyne-three"}
+	harness := newScheduleHarness(readyItems(ids...)...)
+	harness.blockedRuns = 3
+	harness.capacity = 3
+	reset := harness.now.Add(92 * time.Hour)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		if !h.clock().Before(reset) {
+			return h.complete(id), nil
+		}
+		// The item is not retired: its claim was given back, so it reads as ready
+		// at every pull, and only the session's own hold keeps it from being
+		// started straight back into the closed window.
+		resetsAt := reset
+		return Outcome{
+			RunID:          "run-" + id,
+			WorkItemID:     id,
+			Status:         runstate.StatusCancelled,
+			UsageLimitKind: "seven_day",
+			Failure:        "this run was refused by an exhausted seven_day usage limit and the harness will not wait for it: waiting until " + reset.Format(time.RFC3339) + " would take this run past the 6h0m0s maximum pause",
+			Environmental: &runstate.EnvironmentalRefusal{
+				Cause: runstate.CauseUsageWindow, RecordedAt: h.clock(), ResetsAt: &resetsAt,
+				Settled: true, Refused: true,
+			},
+		}, nil
+	}
+	harness.summon = func(*scheduleHarness, BrakeSummons, int) (Fired, error) {
+		return Fired{}, errors.New("nobody should be summoned over a usage window")
+	}
+	var beforeReset int
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		switch sleeps {
+		case 3:
+			// Three quiet polls inside the window, then the window resets.
+			beforeReset = len(h.pullOrder())
+			h.mu.Lock()
+			h.now = reset.Add(time.Minute)
+			h.mu.Unlock()
+		case 6:
+			return false
+		}
+		return true
+	}
+	sessions := &recordedSessions{}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Now: harness.clock}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	// Three stops in a row at a trip of three, and no hold.
+	if schedule.Braked != nil {
+		t.Fatalf("schedule braked on %#v, want a usage window counted toward nothing", schedule.Braked)
+	}
+	if _, held, _ := harness.Held(); held {
+		t.Fatal("intake is held over a usage window")
+	}
+	if len(harness.summonses) != 0 {
+		t.Fatalf("summoned %d time(s), want nobody summoned", len(harness.summonses))
+	}
+	if schedule.BlockedInARow != 0 {
+		t.Fatalf("blocked in a row = %d, want the window stops counted toward nothing", schedule.BlockedInARow)
+	}
+	if schedule.Failed() {
+		t.Fatalf("the pass reports a failure over stops nothing judged: %s", schedule.Render())
+	}
+	// Each item started once into the window and not again inside it, then once
+	// more after the reset, with nobody having changed anything about it.
+	if beforeReset != len(ids) {
+		t.Fatalf("starts inside the window = %d, want each item started once and then held: %v", beforeReset, harness.pullOrder())
+	}
+	if starts := len(harness.pullOrder()); starts != 2*len(ids) {
+		t.Fatalf("starts = %d, want each item pulled again once the window reset: %v", starts, harness.pullOrder())
+	}
+	// Inside the window the session named the wait and the reset, and held the
+	// items in the window's own class rather than as items already tried.
+	held := 0
+	for _, transition := range sessions.recorded() {
+		for _, group := range transition.passedOver.Groups {
+			// A run still going is passed over as already started, which is
+			// ordinary; one the window ended must never be.
+			if group.Class == runstate.PassedOverAlreadyTried {
+				for _, reason := range group.Reasons {
+					if !strings.Contains(reason, "has not ended yet") {
+						t.Fatalf("an item stopped by the window was remembered as tried: %#v", group)
+					}
+				}
+			}
+			if group.Class != runstate.PassedOverWaitingOnUsageWindow {
+				continue
+			}
+			held = max(held, group.Count)
+			if !transition.window || transition.windowResetsAt == nil || !transition.windowResetsAt.Equal(reset) {
+				t.Fatalf("transition window=%t resets=%v, want the session inside the window until %s", transition.window, transition.windowResetsAt, reset)
+			}
+			if !strings.Contains(transition.reason, reset.Format(time.RFC3339)) {
+				t.Fatalf("idle reason = %q, want the reset named", transition.reason)
+			}
+		}
+	}
+	if held != len(ids) {
+		t.Fatalf("at most %d item(s) held on the usage window, want all three once every run had ended: %#v", held, sessions.recorded())
+	}
+}

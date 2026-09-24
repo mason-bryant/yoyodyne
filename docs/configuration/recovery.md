@@ -138,11 +138,23 @@ run itself, in its own worktree and developer session, and the run's record
 says the sweep did; see
 [Waiting out a provider usage limit](../operations.md#waiting-out-a-provider-usage-limit).
 
-A reset time that is absent, unreadable, already in the past, or beyond what the
-run has left of `usage_limit_max_pause` stops the run with a blocker naming what
-refused it. A reset that is not in the future is refused deliberately: a limit
-still declining work while claiming it has already reset is not describing a
-wait, and honoring it would mean reissuing straight back into the same refusal.
+A reset time that is unreadable or already in the past stops the run with a
+blocker naming what refused it. A reset that is not in the future is refused
+deliberately: a limit still declining work while claiming it has already reset
+is not describing a wait, and honoring it would mean reissuing straight back
+into the same refusal.
+
+A reset beyond what the run has left of `usage_limit_max_pause` — including the
+probe a limit with no reset time would wait for — is a wait the harness will not
+take rather than anything a person has to decide, so it blocks nothing. The run
+ends cancelled as an environmental stop of cause `usage-window` that records the
+reset, gives its claim back so the item is ready again, and keeps its branch and
+worktree. It counts toward nothing: not the failure-storm brake, not the
+item's review rounds, repair grant, or re-run, and not a watching session's
+memory of what it has tried. A watching session holds the item only until the
+reset passes and then pulls it again by itself. The item's notes, the run's
+ending in `yoyo status` (and its `capacity_blocked` entry), and the channel all
+name the window and its reset.
 
 These three settings are not only a run's. A conversation turn you typed —
 `yoyo chat`, interactive or `--message` — waits out a refusing provider under

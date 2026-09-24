@@ -156,6 +156,13 @@ const (
 	// slot falls back to it once its label's work is exhausted — which is why it
 	// is named apart from a deferral.
 	PassedOverLeftForAnotherSlot PassedOverClass = "left for another developer slot"
+	// PassedOverWaitingOnUsageWindow is an item whose run this session started was
+	// stopped by the provider's usage window, with a reset later than the harness
+	// will wait. It is not an item already tried: nothing about it failed, and the
+	// session pulls it again by itself the moment the window resets. It is held
+	// until then only because a run started into a window still closed is refused
+	// the same way again.
+	PassedOverWaitingOnUsageWindow PassedOverClass = "waiting on the provider's usage window"
 )
 
 // PassedOverClasses is the whole taxonomy, in the order a pull meets them. A
@@ -176,6 +183,7 @@ func PassedOverClasses() []PassedOverClass {
 		PassedOverSequencedBehindWork,
 		PassedOverPrerequisiteUnmet,
 		PassedOverLeftForAnotherSlot,
+		PassedOverWaitingOnUsageWindow,
 	}
 }
 
