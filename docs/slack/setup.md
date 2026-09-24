@@ -214,7 +214,7 @@ for, so neither costs a reinstall. **The names are not configurable** — only t
 picture is: who speaks is a claim about who did the work, and that stays the
 harness's to make. The product each name carries is not a choice either; it is
 read from `product.id`.
-[`docs/configuration.md`](../configuration.md#avatars) has the whole of it.
+[`docs/configuration.md`](../configuration/agents.md#avatars) has the whole of it.
 
 Who may steer the harness from a thread is not part of this block. It comes from
 the top-level `operators` mapping, which is where the project says which humans
@@ -242,7 +242,7 @@ once per thread that this app does not know them, and the names in this mapping
 are who they are told to reach out to — so an entry with no grants is worth
 writing for a colleague who should be recognized without being able to steer
 anything. A mapping that names nobody says this to nobody.
-[`docs/configuration.md`](../configuration.md#operators) has the rest of the
+[`docs/configuration.md`](../configuration/agents.md#operators) has the rest of the
 mapping, including the other grant and the namespaces you can bind.
 
 > **Moved:** this used to be `operators` *inside* the `slack` block. It is not
@@ -292,7 +292,7 @@ prints is a token. It fails only on the third, which is the one outcome somebody
 has to do something about; a project reporting nowhere is healthy and says so.
 
 **The product's supervisor makes this start for you.** Enable the Slack service
-in the configuration's [`services`](../configuration.md#services) section and
+in the configuration's [`services`](../configuration/agents.md#services) section and
 [`yoyo start`](../operations.md#starting-the-product-and-stopping-it) starts
 the sink with the rest of the product — the same lease-checked start as above,
 from the same keychain items — and starts it again whenever it dies, within the
@@ -461,7 +461,7 @@ Into the work item's thread, as they happen:
 - the run starting, **carrying the reason that work item was selected**
 - the checks passing or failing
 - a change refused before its checks for touching a
-  [protected path](../configuration.md#protected-paths-in-a-developers-change)
+  [protected path](../configuration/artifacts.md#protected-paths-in-a-developers-change)
   the item does not grant, said by the developer as a `warning` for the reason a
   failing check is one — a repair round is being spent. It names the refused
   paths, what the item grants, and the `protected-path grant:` line that would
@@ -493,8 +493,8 @@ Into the work item's thread, as they happen:
   per window rather than again while one stands, where a window is the provider's
   own reset time or, for a refusal the provider never dated and for every missing
   version, `execution.usage_limit_unknown_reset_pause`. See
-  [serving a turn from a permitted alternate model](../configuration.md#serving-a-turn-from-a-permitted-alternate-model)
-  and [pinning an agent to a model version](../configuration.md#pinning-an-agent-to-a-model-version)
+  [serving a turn from a permitted alternate model](../configuration/recovery.md#serving-a-turn-from-a-permitted-alternate-model)
+  and [pinning an agent to a model version](../configuration/recovery.md#pinning-an-agent-to-a-model-version)
 - the blocker that stopped a run, if one did, said as `critical`
 - the run ending any other way — failed, cancelled, timed out — said in that word
   rather than in one word for all of them. A run the harness could not carry and
@@ -804,7 +804,7 @@ long nothing happened whatever the noticing cost.
 
 **And one thing is not about the work at all.** A project generated from a
 built-in template records what that template supplied, and
-[`yoyo config drift`](../configuration.md#extending-a-built-in-bundle) reports
+[`yoyo config drift`](../configuration/setup.md#extending-a-built-in-bundle) reports
 every value the template has improved since that this project never edited.
 `doctor` and `config validate` say the same thing as an aside — but all three are
 commands somebody runs, and a harness left running for a fortnight runs none of
@@ -1274,7 +1274,7 @@ everybody's conversation.
 ## Somebody this project does not know
 
 A channel has other people in it. Somebody whose Slack member id is bound to
-nobody in your [`operators`](../configuration.md#operators) mapping is told so,
+nobody in your [`operators`](../configuration/agents.md#operators) mapping is told so,
 once, in the words:
 
 ```text
@@ -1438,7 +1438,7 @@ launches a child with both exported and holds it to not seeing them.
 The same rule reaches a provider's own key: `ANTHROPIC_API_KEY` or
 `OPENAI_API_KEY` exported in the shell does not reach an invocation either. The
 provider authenticates from its own login, held in its provider home, which is
-what an [account](../configuration.md#provider-accounts) names — a key in the
+what an [account](../configuration/agents.md#provider-accounts) names — a key in the
 environment was never the supported way in, and now it is not a way in at all.
 
 What the harness cannot do is keep a token out of *its own* environment: a

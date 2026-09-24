@@ -31,7 +31,7 @@ import (
 // it; provider authentication is CLI-managed, by the provider's own login held
 // in its provider home, which is how the accounts machinery names an account in
 // the first place. A check whose tooling reads a variable not listed here does
-// not see it, and `docs/configuration.md` says so where checks are described.
+// not see it, and `docs/configuration/runs.md` says so where checks are described.
 
 // explicitEnvironmentNames are carried by exact name.
 var explicitEnvironmentNames = map[string]struct{}{

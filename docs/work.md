@@ -66,7 +66,7 @@ uses. An item grants an exception in its own text, on a line beginning
 rather than discovered in a diff. A grant admits the path and decides nothing
 about what goes into it, so the reviewer is told to read the item for the decided
 change behind each grant and to raise a finding when none is named.
-[Configuration](configuration.md#protected-paths-in-a-developers-change)
+[Configuration](configuration/artifacts.md#protected-paths-in-a-developers-change)
 has the details.
 
 The change is then gated on whether anybody ran it. A developer's reply records
@@ -85,7 +85,7 @@ spending the rest of its context against a wall, and one that ran and failed say
 the environment works and something else is red — so the run carries on and the
 configured checks report it. The check half is asked only of a change the
 declared checks would read, and
-[what a developer has to have run](configuration.md#what-a-developer-has-to-have-run)
+[what a developer has to have run](configuration/runs.md#what-a-developer-has-to-have-run)
 says how that line is drawn. What the developer executed is part of the
 reviewer's evidence either way.
 
@@ -274,7 +274,7 @@ not charged is a review round, and that is the cap's own rule rather than this
 class's — the cap counts only a verdict requiring repair against a change that
 was present, so a reviewer shown an empty diff charges the item nothing whatever
 it said, and what bounds a developer that delivers nothing is the run's repair
-budget it spends doing it. [What spends a round and what does not](configuration.md#what-spends-a-round-and-what-does-not)
+budget it spends doing it. [What spends a round and what does not](configuration/recovery.md#what-spends-a-round-and-what-does-not)
 states the whole rule. The diff that
 has to be empty is what **that round** added, which is not the same question as
 whether the worktree differs from the base commit: a round of a repair grant runs
@@ -454,7 +454,7 @@ of it, and nothing is spent — no worktree, no claim, no attempt. The refusal
 says the same thing admission's does, quoting the clause, so what a run refuses
 and what admission would have refused cannot come apart. Neither check reaches
 `.claude/settings.json` or `.claude/settings.local.json`, which stay
-[beyond any grant](configuration.md#protected-paths-in-a-developers-change)
+[beyond any grant](configuration/artifacts.md#protected-paths-in-a-developers-change)
 whatever an item says.
 
 ## What a landing claims
@@ -662,7 +662,7 @@ nothing, and a reviewer's hands nothing back, so it costs no repair attempt — 
 no review round against the item's cap either, because the cap counts only a
 verdict requiring repair and an escalation is the reviewer saying the item cannot
 be met rather than arguing with the change (see
-[what spends a round and what does not](configuration.md#what-spends-a-round-and-what-does-not)).
+[what spends a round and what does not](configuration/recovery.md#what-spends-a-round-and-what-does-not)).
 The run is recorded as having succeeded,
 because it did what it was for — recording it as a failure would count honesty
 about an unmeetable item in the same tally as a broken toolchain, and the
@@ -822,10 +822,10 @@ Eleven things keep an item out of a pass, and the pass accounts for them at two
 different grains. The first eight are named against the item, because nothing
 else would report that this particular item was passed over; the last three are
 facts about the pass rather than about any one item. The
-[configuration guide](configuration.md#scheduling-ready-work) lists the same
+[configuration guide](configuration/runs.md#scheduling-ready-work) lists the same
 eleven in the same order, and a test fails when the two lists differ:
 
-<!-- selection-rules: the same names, in the same order, as docs/configuration.md and docs/configuration/runs.md; internal/doclink/selectionrules_test.go holds them together -->
+<!-- selection-rules: the same names, in the same order, as docs/configuration/runs.md; internal/doclink/selectionrules_test.go holds them together -->
 1. **An unresolved directive** withholds the item until a person resolves the
    directive, and is named in the directive's own words.
 2. **Unfinished children that carry its execution** withhold a container while
@@ -910,7 +910,7 @@ take it — is passed over as **left for another developer slot** rather than as
 deferred, naming the slot and what it pulled ahead of the item: it waits on
 nothing about itself, and the next slot with no preference to come free takes
 it in the order, or the preferring slot does once its label's work is exhausted.
-[A developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label)
+[A developer slot that prefers a label](configuration/runs.md#a-developer-slot-that-prefers-a-label)
 is how a slot comes to prefer one. The other
 three — nothing reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
@@ -1137,7 +1137,7 @@ The configuration is re-read before every pull for the same reason: a capacity
 you raise or a priority you reorder mid-pass is picked up the next time it
 chooses, rather than at the next restart. Runs already in flight keep the
 configuration they started under.
-[Configuration](configuration.md#scheduling-ready-work) has the rest.
+[Configuration](configuration/runs.md#scheduling-ready-work) has the rest.
 
 **A pass also delivers stopped work into the development manager's
 conversation** — a run that failed independent review after every permitted
@@ -1165,7 +1165,7 @@ typing one of the two verbs. [Deciding what becomes of stopped
 work](conversation.md#deciding-what-becomes-of-stopped-work) is the decision
 side of it.
 
-**A pass also fires whichever [recurring task](configuration.md#recurring-tasks)
+**A pass also fires whichever [recurring task](configuration/agents.md#recurring-tasks)
 is due**, where a project has configured any — a role woken on a cadence to look
 at its own domain, rather than because something happened. At most one per pass,
 and every firing ends in a durable report that
@@ -1251,7 +1251,7 @@ refused nothing: what this refuses is a second session that stays open.
 
 The same lease is how the product's supervisor keeps a session watching. With
 the scheduler enabled in the configuration's
-[`services`](configuration.md#services) section,
+[`services`](configuration/agents.md#services) section,
 [`yoyo start`](operations.md#starting-the-product-and-stopping-it) starts
 `yoyo work --watch` as one part of the product and starts it again if it dies,
 within the supervisor's bounds; a session you started by hand before that is
@@ -1640,7 +1640,7 @@ order above. The reason is the two stalls this ended: on 2026-09-20 and again on
 2026-09-24 a local promotion onto the protected `main` the forge would not merge
 left `main` ahead of `origin`, and every later run collided with it until the
 checkout was reset by hand.
-[The configuration guide](configuration.md#a-protected-target-lands-through-its-pull-request)
+[The configuration guide](configuration/publishing.md#a-protected-target-lands-through-its-pull-request)
 has the whole of it.
 
 Merging belongs to `approvals.integration`, so the two settings compose rather
@@ -1648,4 +1648,4 @@ than imply one another. Publishing with `integration: human` opens the pull
 request and stops: nothing is merged, the run branch survives on the remote, and
 the worktree is preserved for you — which is what a `human` integration policy
 means. See the
-[configuration guide](configuration.md#publishing-through-pull-requests).
+[configuration guide](configuration/publishing.md#publishing-through-pull-requests).

@@ -611,7 +611,7 @@ recurring task to do it**, the way the development manager's sweep is
 configured; the harness ships the task as a commented example in the file `yoyo
 init` writes and enables nothing by itself, because which roles are woken and
 how often is a project's judgement rather than a release's.
-[Working the report pile on a cadence](configuration.md#working-the-report-pile-on-a-cadence)
+[Working the report pile on a cadence](configuration/agents.md#working-the-report-pile-on-a-cadence)
 is the entry and what it should say. A project that has not added it works the
 pile only when somebody opens a conversation with the product manager, which for
 a pile of hundreds is not often enough — that is the state this project was in
@@ -782,7 +782,7 @@ unattended pass every few minutes meets a running sink and does nothing — and 
 is safe on a machine running several harnesses, because whether a sink is
 running is asked of this product's lease rather than of the process table, where
 one project's `yoyo slack` answers for every project's. With the Slack service
-enabled in the [`services`](configuration.md#services) section, the product's
+enabled in the [`services`](configuration/agents.md#services) section, the product's
 supervisor makes that same start for you:
 [`yoyo start`](operations.md#starting-the-product-and-stopping-it) starts the
 sink with the rest of the product and starts it again whenever it dies, within
@@ -1078,7 +1078,7 @@ The one message about a brake hold that asks a person for something. On a
 machine that stays broken the brake's loop goes round — each blocked probe
 summons her again and restarts the cooldown — and nothing about it got louder
 unless she escalated it. After
-[`execution.brake_escalation_cycles`](configuration.md#watching-instead-of-draining)
+[`execution.brake_escalation_cycles`](configuration/runs.md#watching-instead-of-draining)
 of those cycles with no escalation of hers, the harness escalates the hold to
 the operators itself and says so **once, the moment the record shows it, sent
 to them directly and tagged to them by member id**, at `warning` severity:
@@ -1273,7 +1273,7 @@ state fitting neither class does not get one:
   **a value the project's template has improved that this project never edited**.
 
 The last of those is the comparison
-[`yoyo config drift`](configuration.md#extending-a-built-in-bundle)
+[`yoyo config drift`](configuration/setup.md#extending-a-built-in-bundle)
 prints and `doctor` and `config validate` say as an aside — every one of which is
 a command somebody has to run. A harness left running for a fortnight runs none
 of them, so a fix the template has since made to a persona sits unheard while the

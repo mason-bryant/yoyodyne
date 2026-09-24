@@ -55,7 +55,7 @@ type accountPool struct {
 	// spent means what this product spent on it. Two products on one machine
 	// sharing a subscription therefore bound it separately, and the operator's
 	// configuration is where that is stated — see the weekly_budget_usd note in
-	// docs/configuration.md. A budget read across products would need a ledger
+	// docs/configuration/agents.md. A budget read across products would need a ledger
 	// none of them owns, which is the thing this pool exists without.
 	runs *runstate.Store
 	// now is when the budget window is measured back from. It is a field because

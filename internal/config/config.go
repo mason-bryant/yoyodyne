@@ -210,7 +210,7 @@ type Product struct {
 	// A project that names none is shown none, and told so. The harness ships a
 	// set of its own for the repository it describes — see
 	// contextbundle.HarnessShippedDocumentation — and that set is deliberately
-	// not a default for anybody else: it is eight generic paths, and feeding an
+	// not a default for anybody else: it is fifteen generic paths, and feeding an
 	// adopting project's unrelated docs/work.md to its product manager labeled
 	// "what the product ships" is exactly the mistake a default would make.
 	ShippedDocumentation []string `yaml:"shipped_documentation,omitempty" json:"shipped_documentation,omitempty"`
@@ -380,7 +380,7 @@ type Execution struct {
 	//
 	// Setting it to `false` is the rollback to the legacy path, which is the
 	// same delivery with nothing observing it. It is one key and it is the whole
-	// of the rollback; docs/configuration.md says so where the default is
+	// of the rollback; docs/configuration/runs.md says so where the default is
 	// described.
 	//
 	// It is read once per run, when the run is created. A run already in flight

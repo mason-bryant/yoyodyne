@@ -1,43 +1,7 @@
-<!--
-Landed by yoyodyne-ifd.117.3, tranche 3 of the configuration.md split, with
-docs/configuration.md left intact. The link below into ../configuration.md
-resolves today and points at a section no tranche has a home for:
-
-  #waiting-out-a-network-that-dropped -> no row in docs/docs-map.md; it stays
-                                         in configuration.md until the map
-                                         gives it a home, which is why this
-                                         guide links out to a section that
-                                         sits between two of its own
-
-117.3 retargeted setup.md's #triage-thresholds and
-#waiting-out-a-provider-that-refuses to this guide when it landed.
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-Scope against docs/docs-map.md: the three sections the map's disposition table
-assigns this guide — Waiting out a provider that refuses, Relaunching a run
-the provider killed, and Triage thresholds — with their children. Two of those
-children have no row of their own, because the table was last reconciled on
-2026-08-24 and the file has grown since: Serving a turn from a permitted
-alternate model and Pinning an agent to a model version both sit under Waiting
-out a provider that refuses, so both go where their parent goes.
-
-Extracted from the docs/configuration.md beside this file, section for section,
-with the prose left word for word. The only edits are to links: a relative path
-out of docs/configuration/ gains a ../ prefix, and a link into a section the
-split has moved into a guide — one of this tranche's siblings or an earlier
-tranche's — is retargeted at that guide. Diffing
-this guide's body against lines 2948-3433 and 3795-4577 of that file shows those
-link lines and nothing else.
-
-Size: 1312 lines against the map's 513-line budget; the sections themselves
-grew after the map's counts were taken, Triage thresholds most of all.
--->
 # Configuring triage thresholds and provider waits
 
 What the harness does when a provider refuses, serves a turn from another
-model, or dies mid-run, and the thresholds that decide when a stalled run, a
+model, dies mid-run, or cannot be reached, and the thresholds that decide when a stalled run, a
 stuck merge, or a work item that has been given enough is escalated to you.
 
 [The configuration index](../configuration.md) lists the other guides.
@@ -199,7 +163,7 @@ named, spending `usage_limit_max_pause`. The rest are covered by
 them becomes a wait of the other kind once that budget is spent: a terminal
 `api_error` whose detail is plainly a dropped connection —
 `API Error: Connection closed mid-response` is the specimen — is then
-[waited out on the recovery window](../configuration.md#waiting-out-a-network-that-dropped) rather
+[waited out on the recovery window](#waiting-out-a-network-that-dropped) rather
 than blocking the item.
 
 `yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
@@ -465,8 +429,15 @@ refused a turn nobody asked it.
 
 A pin covers the same invocations failover does: the turns an agent takes as
 itself, its conversation and the rounds where another role asks it something. A
-run's developer and reviewer invocations ask for `model`. `yoyo agent list` says
-so for every pinned agent rather than leaving it to be assumed.
+run's invocations are not among them, and neither of them asks for the pin: the
+reviewer's asks for the reviewer agent's `model`, and the developer's asks for
+whichever selector the item's own labels chose under
+[`execution.developer_models`](runs.md#a-developer-model-chosen-by-the-items-label) —
+which is the developer agent's `model` for an item that mapping names no label
+of, and the mapped one otherwise. `yoyo agent list` says so for every pinned
+agent rather than leaving it to be assumed. A recurring task's pass is the
+agent's own turn and carries the pin, unless the task
+[names another model](agents.md#a-tasks-own-model), which carries none.
 
 ## Relaunching a run the provider killed
 
@@ -507,7 +478,7 @@ that dies mid-relaunch resumes against the budget it had rather than a fresh one
 
 Setting the bound to `0` buys no relaunches at all: the first provider death is
 the last, and the run stops there. It is **not** an opt-out of
-[waiting a dropped connection out](../configuration.md#waiting-out-a-network-that-dropped), which
+[waiting a dropped connection out](#waiting-out-a-network-that-dropped), which
 is a different rule and is not configured — a death that is plainly a reset
 connection is waited out on the recovery window at `0` exactly as it is at `2`,
 because what the operator ruled is that the harness never fails outright on
@@ -518,7 +489,7 @@ What happens once the budget is spent depends on what killed the invocation. A
 death nothing can classify stops the run and records a blocker on the work item
 naming the provider's own last message. A death that is plainly a dropped
 connection does not: it is
-[waited out and asked again](../configuration.md#waiting-out-a-network-that-dropped) past the
+[waited out and asked again](#waiting-out-a-network-that-dropped) past the
 budget, on the backoff every other transport failure gets, and only a run that
 spends that window as well stops. This budget is the right bound for provider
 weather nobody has classified; a reset connection is not that, and stopping on
@@ -539,6 +510,64 @@ fails the run as it always did; so does a 529, which is a wait rather than a
 relaunch, and so does any terminal the API did not report at all. The invocation
 ended twice is the one thing outside the API's own errors that still relaunches,
 because it is not a verdict on anything.
+
+## Waiting out a network that dropped
+
+A run touches somebody else's network at its most expensive moments: it pushes
+the run branch, opens and updates the pull request, reads where the remote target
+branch stands, asks the forge to merge, confirms the merge, deletes the merged
+branch, catches the local branch up, and makes every provider invocation over
+it. It ends by writing to the tracker, which is not a network but is a store
+other processes are writing to, and a `bd` too busy to run judges the work no
+more than a reset connection does.
+**A failure at one of those whose class says the next attempt may well succeed —
+a connection reset, a network drop, a transport-level refusal — is waited out and
+asked again rather than recorded as terminal.**
+
+The rule is the operator's, and what produced it is four runs killed in one day
+on 2026-09-03, each at its final publish or integrate step, each by one
+connection reset, each with the work already completed and some of it already
+reviewed. The
+[intake hold](runs.md#watching-instead-of-draining) then held the whole line three
+times, because the blocked runs came one after another.
+
+**There is nothing to configure.** The waits are Fibonacci seconds — 1s, 1s, 2s,
+3s, 5s, 8s, 13s — capped at half an hour and reaching that cap after about
+seventy minutes, and each boundary gets a two-hour window of its own, which is
+about twenty attempts. The numbers are the harness's and the same for every
+product, exactly as the [watching session's](runs.md#watching-instead-of-draining)
+retry of a tracker it could not read is: what they measure is how long a
+connection that comes back takes rather than anything about a project. Each
+boundary has its own window because a network that dropped a push says nothing
+about a merge.
+
+**Nothing that is an answer is waited on.** An authentication failure, a merge
+the forge refused, a protected branch whose requirements are unmet, a conflict,
+and any 4xx all earn the identical answer next time, so they are reported as
+promptly as they always were. So is a failure whose class the harness does not
+recognize: the set is deliberately small, and anything outside it keeps exactly
+the behavior it had. The full recoverable-versus-terminal taxonomy is the
+architect's, and this does not wait on it.
+
+**Every wait is recorded before it is taken**, on the run itself, with the
+boundary, which attempt it was, the interval, and the failure it waited out. So a
+process that dies mid-wait comes back to the window it had already spent rather
+than to a fresh one, and a run that waited a network out and finished says so on
+the work item rather than merely looking slow. A window that runs out escalates
+rather than going quiet: what the boundary would have produced is produced — an
+outstanding publication, a blocker on the item — with the attempts and the time
+in front of it.
+
+A role's conversation reaches the same store, and its calls are under the same
+rule with the same numbers: a triage decision, an admission, a note, a closure,
+and the reads that gate them are waited out and asked again, with one window per
+operator message shared by every call in it, each wait recorded on the
+conversation as a `tracker.retried` event, and only a call that spent the
+window reported the way it always was. Nothing about that is configured either.
+
+[Waiting out a network that dropped](../operations.md#waiting-out-a-network-that-dropped)
+in the operations guide is the same thing said for an operator reading a run,
+and says what the conversation shows on screen while it waits.
 
 ## Triage thresholds
 
@@ -763,10 +792,14 @@ budget, and an item with no rounds left never gets a grant to carry out at all.
 Five more things refuse it. The stopped run has to be really over, terminal and
 still standing on whichever of the two docketed it, read from the run's own
 record rather than from the docket
-entry. The run has to have recorded a repair input — a run whose provider kept
-refusing, whose replay conflicted, or that died before anything judged its work,
-never had a failure returned to its developer, so there is no repair loop to
-re-enter; a re-run is what those need. The preserved worktree has
+entry. The run has to have recorded a repair input, or be a stall — a run whose
+provider kept refusing, or whose replay conflicted, never had a failure returned
+to its developer and has no attempt to carry on with either; a re-run is what
+those need. A stall is continued rather than re-run: the harness is what stopped
+it, before anything judged the work, so what it is owed is the attempt it was
+stopped in, resumed in the session it stalled in — and the continuation counts
+no review round and no repair attempt, because a stall judges nothing. The
+preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
@@ -775,7 +808,10 @@ checkout the harness would call its own and that holds nothing passes the gate
 above and fails this one, and a developer handed the reviewer's findings and an
 empty directory delivers an empty repair or reinvents the change from them, with
 nothing in the run's record afterwards to tell either from a repair that went
-well. And the decision standing about the stoppage has to still be the repair:
+well. A stall is not held to that last one, for the reason the resumed run below
+exempts the same case: nothing was handed back to be about a change, and an
+empty worktree is what the attempt it is owed starts from.
+And the decision standing about the stoppage has to still be the repair:
 one decision stands per stopped run, and a re-run, an escalation, or a wait
 recorded in the repair's place released the rounds the repair had reserved (see
 [what spends a round and what does not](#what-spends-a-round-and-what-does-not)),

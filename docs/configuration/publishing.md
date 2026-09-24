@@ -1,34 +1,3 @@
-<!--
-Landed by yoyodyne-ifd.117.3, tranche 3 of the configuration.md split, with
-docs/configuration.md left intact. The link below into ../configuration.md
-resolves today and points at a section no tranche has a home for:
-
-  #waiting-out-a-network-that-dropped -> no row in docs/docs-map.md; it stays
-                                         in configuration.md until the map
-                                         gives it a home
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-Scope against docs/docs-map.md: both sections the map's disposition table
-assigns this guide — Publishing through pull requests, with its children, and
-Losing a race for the target branch. The row names three children and the file
-now has four; the map already names the fourth, Publishing from a fork, among
-the nine headings it has never seen, and it goes where its parent goes. Merge
-and removal semantics, which this guide's row once carried, moved to
-setup.md in the map's reconciliation and is not here.
-
-Extracted from the docs/configuration.md beside this file, section for section,
-with the prose left word for word. The only edits are to links: a relative path
-out of docs/configuration/ gains a ../ prefix, and a link into a section the
-split has moved into a guide — one of this tranche's siblings or an earlier
-tranche's — is retargeted at that guide. Diffing
-this guide's body against lines 2698-2947 and 3492-3532 of that file shows those
-link lines and nothing else.
-
-Size: 329 lines against the map's 226-line budget; the sections themselves
-grew after the map's counts were taken.
--->
 # Configuring publishing, branches, and promotion
 
 How a finished branch reaches the remote, what to do when you cannot push to
@@ -82,7 +51,7 @@ With both on, a run works like this:
    integration also gate the merge, and the remote target is checked again right
    before the call, so a target that moved in the meantime refuses the merge
    rather than having the forge reconcile it. That holds of a merge
-   [reissued after a dropped connection](../configuration.md#waiting-out-a-network-that-dropped)
+   [reissued after a dropped connection](recovery.md#waiting-out-a-network-that-dropped)
    too: the check is made again on each attempt rather than once in front of
    them, so what authorizes a merge made after a wait is a reading of the target
    taken after that wait.
@@ -263,7 +232,7 @@ whoever decides which history is right.
 If a promotion onto an unprotected target cannot be published — the forge is
 unreachable, the remote target moved, or the forge refused the merge — the run
 still succeeds and closes its item, and reports an *outstanding publication*. A forge that could not be reached
-is [waited out and asked again](../configuration.md#waiting-out-a-network-that-dropped) first, so
+is [waited out and asked again](recovery.md#waiting-out-a-network-that-dropped) first, so
 an outstanding publication over a dropped connection is one that went on being
 dropped rather than one reset the next attempt would have survived. The change is integrated where
 it counts; only its publication is unfinished, and it is reconciled by hand.

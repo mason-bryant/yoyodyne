@@ -69,7 +69,7 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 	// request under — orchestrator.Pipeline.publishes, which is exactly
 	// `approvals.publishing: automatic` and no other value: the only other mode,
 	// `human`, pushes nothing and opens nothing, as the approvals table in
-	// docs/configuration.md says. A project under it has no requests of the
+	// docs/configuration/publishing.md says. A project under it has no requests of the
 	// harness's on any forge, and a forge it may not even have is not read.
 	if parts.config.Approvals.Publishing == domain.ApprovalAutomatic {
 		trigger.Forge = forgehygiene.Sweeper{
@@ -476,7 +476,7 @@ reports around it.
 It is read-only. A sweep is written once and never revised, and nothing here
 fires one, retires one, or decides anything about what a pass found. Which tasks
 run, how often, and what they are told is configuration; see the recurring tasks
-section of docs/configuration.md.
+section of docs/configuration/agents.md.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

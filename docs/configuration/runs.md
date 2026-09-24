@@ -1,61 +1,9 @@
-<!--
-Landed by yoyodyne-ifd.117.3, tranche 3 of the configuration.md split, with
-docs/configuration.md left intact. The links below into ../configuration.md
-resolve today, and each points at a section this tranche did not move:
-
-  #recurring-tasks                    -> no row in docs/docs-map.md; it stays
-                                         in configuration.md until the map
-                                         gives it a home
-  #a-developer-slot-that-prefers-a-label
-                                      -> this guide's own section, linked back
-                                         deliberately (117.4): the replay test
-                                         const configurationGuide in
-                                         internal/orchestrator/scheduleslots_test.go
-                                         reads the developer-slot yaml out of
-                                         configuration.md, which still carries
-                                         the section, so the sentence under
-                                         that heading names that copy rather
-                                         than this one. The tranche that
-                                         reduces configuration.md to an index
-                                         takes the block with it and must
-                                         repoint the test at this file, or the
-                                         test fails on a heading that is gone.
-
-117.3 retargeted setup.md's #what-init-proposes-for-checks to this guide when
-it landed.
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-Scope against docs/docs-map.md: both sections the map's disposition table
-assigns this guide — Checks and Scheduling ready work — with their children.
-Four of those children have no row of their own, because the table was last
-reconciled on 2026-08-24 and the file has grown since: What a developer has to
-have run, What a check leaves running, The environment a check runs in, and A
-developer slot that prefers a label each sit under a section that has a row, so
-each goes where its parent goes, and the map already names the third among the
-nine headings it has never seen. Running a work item against the workflow
-definition, which follows Scheduling ready work in configuration.md, has no row
-and is nobody's child, so it stays there.
-
-Extracted from the docs/configuration.md beside this file, section for section.
-Most edits are to links: a relative path out of docs/configuration/ gains a ../
-prefix, and a link into a section the split has moved into a guide — one of
-this tranche's siblings or an earlier tranche's — is retargeted at that guide. One sentence of prose differs, and it is the
-replay-test sentence under A developer slot that prefers a label: in
-configuration.md it says the test reads the block "out of this document", which
-is true there and false here, so this copy names docs/configuration.md as the
-file the test actually reads. Diffing this guide's body against lines 1834-2527
-of that file shows those link lines, that sentence, and nothing else.
-
-Size: 758 lines against the map's 343-line budget; the sections themselves
-grew after the map's counts were taken.
--->
 # Configuring checks, scheduling, and what a run may spend
 
 The gate every run passes before it reaches review or integration, the
-environment those commands are given and what they may leave behind, and how
-ready work is picked up and how much of it runs at once.
+environment those commands are given and what they may leave behind, how
+ready work is picked up and how much of it runs at once, and the workflow
+definition a run executes.
 
 [The configuration index](../configuration.md) lists the other guides.
 
@@ -227,6 +175,57 @@ to refuse a shell an agent opened. A check the harness runs itself does not
 carry it: a check is the project's command, launched by the harness rather
 than by an agent.
 
+### The environment the harness's own Git and forge commands run in
+
+Every Git command the harness runs itself gets that same list, and for a reason
+of its own. Git runs hooks, and a hook is a program the repository supplies and
+the harness executes: `git worktree add` runs `post-checkout`, a ref update runs
+`reference-transaction`, and both of those live in `.git/hooks`, which every
+worktree the harness cuts shares. So a Git command that inherited the harness's
+environment handed whatever that environment carried to a program the harness
+never wrote — the Slack tokens included, by a path the run's own built
+environment says nothing about.
+
+**The forge credential is added to the forge commands and to nothing else.**
+Those are the `gh` invocations the harness makes and the Git commands that reach
+a remote — the push, the fetch, `ls-remote`, and the delete of a merged branch.
+They carry, on top of the list above, whichever of `GH_TOKEN`, `GITHUB_TOKEN`,
+`GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`,
+`GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, and
+`GIT_TERMINAL_PROMPT` the harness's own environment holds. Every local Git
+command — a diff, a ref update, a checkout, a `worktree add` — gets none of
+them, so the hooks those run have no forge credential to hand out. Handing every
+Git command a token so that the push would have one is exactly the arrangement
+this replaces.
+
+`SSH_AUTH_SOCK` is not on that second list and does not need to be: it is on the
+standing one above, so **a project whose remote is SSH pushes through the agent
+exactly as it always did** — every process the harness starts carries the socket,
+and the keys stay with the agent holding them. It is worth saying because the
+absence reads like an omission, and the cost of it actually being one would be
+every run stopping at integration on every installation with an SSH remote.
+
+### Which provider authentication is supported
+
+**A provider authenticates by its own login, held in its provider home, and by
+nothing else.** That is what the accounts machinery names an account by, and it
+is the only authentication an invocation the harness makes receives.
+
+A key exported in a shell — `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`OPENAI_API_KEY` — reaches none of them. It reads as a credential, so the
+allowlist drops it from every process the harness launches, exactly as it drops
+the Slack tokens. An installation that had been authenticating that way does not
+degrade: the provider refuses its next run.
+
+Three things say so before that run happens, and none of them is a gate.
+[`yoyo doctor`](../operations.md#which-provider-authentication-is-supported) reports
+it under `provider-authentication`, as a warning, with the login for this
+project's own provider as the remedy; `yoyo config validate` says it beside the
+validity answer, on standard error, and carries the variable names under
+`provider_keys` in its `--json`; and `yoyo slack` says it once when the sink
+starts, because the shell that starts a sink is usually the shell the harness
+was started from. All three name the variables and never their values.
+
 ### What `init` proposes for `checks`
 
 A project does not start from the empty list unless it has to. `yoyo init` reads
@@ -370,7 +369,7 @@ about any one item.
 [How work flows](../work.md#letting-the-harness-choose-the-work) lists the same
 eleven in the same order, and a test fails when the two lists differ:
 
-<!-- selection-rules: the same names, in the same order, as docs/work.md and docs/configuration.md; internal/doclink/selectionrules_test.go holds them together -->
+<!-- selection-rules: the same names, in the same order, as docs/work.md; internal/doclink/selectionrules_test.go holds them together -->
 1. **An unresolved directive** withholds the item until a person resolves the
    directive, and is named in the directive's own words.
 2. **Unfinished children that carry its execution** withhold a container while
@@ -537,14 +536,10 @@ Three things follow from a preference, in the order a pull applies them:
   slot with no preference, and its recorded reason says it fell back. The next
   reliability item admitted is pulled the next time slot 1 is free.
 
-A replay test in `internal/orchestrator` reads that block, loads it as a
-configuration, and drives the scheduler over it, so the example is held to doing
-what these three points say rather than described as doing it. The copy it reads
-is the one in
-[`docs/configuration.md`](../configuration.md#a-developer-slot-that-prefers-a-label)
-and not the one above, because the split has not reduced that document to an
-index yet and both still carry the section; the two blocks are identical, and
-the tranche that makes it an index points the test here.
+A replay test in `internal/orchestrator` reads the block above out of this
+document, loads it as a configuration, and drives the scheduler over it, so the
+example is held to doing what these three points say rather than described as
+doing it.
 
 Which slot a run is in is not written down; it is read off what is in flight
 against what the slots prefer, the same way every time, by the scheduler and by
@@ -563,6 +558,82 @@ another developer slot** rather than as deferred, naming the slot and what it
 pulled ahead of the item: the item waits on nothing about itself, and what
 takes it is the next slot with no preference to come free, or slot 1 once its
 label's work is exhausted.
+
+### A developer model chosen by the item's label
+
+The slot preference above says which work a seat pulls first. This says what
+that work costs to do. **Model spend follows the work rather than the role**: a
+documentation item and a change to the scheduler are both developer runs, and
+only one of them needs the developer's own model. `execution.developer_models`
+is how a project says so — the tracker's own labels, the ones
+[a slot prefers](#a-developer-slot-that-prefers-a-label), mapped to the model a
+run over such an item asks for:
+
+```yaml
+execution:
+  developer_models:
+    - label: docs
+      model: sonnet
+    - label: config
+      model: sonnet
+    - label: tests
+      model: sonnet
+```
+
+With that block, a run over an item labelled `docs` asks for `sonnet`, and an
+item carrying none of the three labels asks for the developer agent's own
+`model` exactly as every run did before the mapping existed. It is the
+operator's direction of 2026-09-19, taken off a seven-day reading in which
+developer runs on Opus were 64% of $1,431: the largest spend line is developer
+runs that do not all need the developer's model, and the label already says
+which do. The block is the operator's to paste into the project's own
+configuration by hand, because `.yoyodyne/` is a
+[protected path](artifacts.md#protected-paths-in-a-developers-change) no run may write, so
+a project whose file does not yet carry it runs every item on the developer's
+configured model.
+
+**One label per entry, and the order is the answer.** An item can carry two
+labels the mapping names, and what it takes is **the first entry in the
+mapping's own order** — the file's order, not the item's — so moving an entry
+up the list is how a project says which of two labels wins. That is why an
+entry names one label rather than a list: an entry preferring several would
+make "the first match" a question about which of *that entry's* labels matched
+first, which the file does not answer.
+
+**It is read once, when the run starts, and written onto the run.** The labels
+it is read against are the ones the item carried when it was pulled, which the
+run already records; the model it chose and **why it chose that one** are
+recorded beside them. Every developer invocation the run goes on to make — the
+first attempt, each repair, and anything a later process resumes — reads the
+model back off that record rather than resolving the mapping again, for the
+reason [the account](agents.md#pooling-work-across-several-accounts) is read back: a run
+that resolved it per invocation would move mid-flight the first time the file
+was edited under it. The reason is recorded for an unmapped item too, because
+an item nothing mapped and a mapping nobody read are two accounts of one model
+and only the record tells them apart.
+
+`yoyo status` names the model each running run is on as it always did, and the
+[cost log](agents.md#provider-accounts) records it per invocation, so what a kind of work
+costs is read off the same surfaces as before — a mapped run simply says
+`sonnet` where it used to say `opus`.
+
+**The reviewer's model is not reachable from here.** There is no key in this
+block that could name it, deliberately: a reviewer's posture is a safety
+property rather than a spend decision, and an independent verdict bought more
+cheaply is the one saving that costs the gate its meaning. The
+[account pool and the failover rules](recovery.md#serving-a-turn-from-a-permitted-alternate-model)
+apply to a mapped run unchanged, and so does everything else — a run on a
+mapped model is claimed, developed, checked, reviewed, and promoted exactly as
+any run is, under the same contract and the same authority table. Configuration
+selects the model and never widens what a role may do.
+
+**What the file refuses.** A label the tracker would not carry — anything but
+one identifier-shaped word, the same rule a slot's preference is held to. A
+`model` that cannot name a model, held to the rule every other configured
+selector is. And a label mapped twice, because the first match in the order is
+what an item takes, so a second entry for one label is a mapping the operator
+believes is active and that nothing will ever reach. All three are refused when
+the configuration loads, before anything is claimed.
 
 ### Watching instead of draining
 
@@ -588,7 +659,7 @@ preempted by any of it.
 An idle session costs one local tracker read per `work_poll` and asks no provider
 anything, so a queue that is empty overnight spends nothing — unless it has a
 stopped run to [deliver](../work.md#letting-the-harness-choose-the-work), or a
-[recurring task](../configuration.md#recurring-tasks) that has come due. Each of those is a turn and
+[recurring task](agents.md#recurring-tasks) that has come due. Each of those is a turn and
 is charged as one, so a project with an hourly task and an empty queue spends a
 turn an hour rather than nothing.
 
@@ -642,7 +713,7 @@ reason the attempt would go differently.
 from that cooldown: it is aimed at a broken machine rather than a broken item.
 That many runs blocking one after another, with nothing landing between them,
 holds intake — the same hold you would place — and the same poll summons the
-development manager's [sweep](../configuration.md#recurring-tasks) out of its cadence, with the
+development manager's [sweep](agents.md#recurring-tasks) out of its cadence, with the
 runs that blocked and the reason each blocked in the message that wakes her.
 Any run that lands clears the count, and `0` turns the brake off, leaving you as
 the only thing that holds intake. Only verdicts and check failures on a change
@@ -743,7 +814,7 @@ is a command you are waiting on the return of.
 **`--budget <usd>`** caps what one session spends, and everything it spends
 counts against it: the runs it starts, priced from the same recorded run evidence
 `yoyo cost` prices items from; the turns it takes delivering stopped work; and
-the turns a [recurring task](../configuration.md#recurring-tasks) takes when its cadence comes due.
+the turns a [recurring task](agents.md#recurring-tasks) takes when its cadence comes due.
 The last two are turns the session takes rather than runs it started, and they
 are counted for exactly that reason — a bound that quietly excluded what a quiet
 session spends would be the cap disappearing on the nights it matters most. It is
@@ -801,3 +872,177 @@ exactly like work happening behind your back, and holding intake — which stops
 having only if the thing that chooses actually consults it. Both halves are
 enforced rather than conventional: an item you name yourself is exempt from the
 hold, because naming it is you deciding it is the exception.
+
+## Running a work item against the workflow definition
+
+The delivery loop's sequence is also written down as data, in the two built-in
+workflow definitions this build ships — `delivery.yaml` for a project whose
+integration the harness takes, and `delivery-human-approval.yaml` for one where a
+person still approves it. **Every new run compiles the one its integration policy
+binds and executes it beside the run**, which is the default and takes no
+configuration at all. A project that wants its own sequence
+[writes one and owns it whole](#the-definition-is-the-projects-to-own).
+
+What "executes" means here is exact, and it is worth being plain about: the
+definition resolves where the run goes next and records it. It does not perform
+anything. What runs a work item is the same Go control flow it always was — the
+run claims the item, invokes the developer, runs the checks, buys the verdict and
+takes the promotion lease exactly as it always has — and the conversion that
+moves the performing too is a later step with its own configuration.
+
+A new run records a **workflow instance** beside its own record, standing on the
+definition's first state, and every boundary the run crosses is put to the
+definition: the state the run just performed, the outcome it produced, and the
+transition the definition resolves from them. The doors the definition holds are
+the registered delivery steps with their bodies replaced by nothing at all, so
+delivery is untouched and what the instance costs is one small file write per
+boundary.
+
+### The definition is the project's to own
+
+The built-in is the default and not the only option. A project that wants its own
+sequence writes it beside its personas, under the same configuration directory,
+named for the workflow it replaces:
+
+```
+.yoyodyne/workflows/delivery.yaml                  # automatic integration
+.yoyodyne/workflows/delivery-human-approval.yaml   # a person still approves
+```
+
+Which of the two a run reads is the integration policy above, exactly as it is
+for the built-ins: a project whose `approvals.integration` is `automatic` binds
+`delivery`, and one where it is not binds `delivery-human-approval`. A project
+that keeps neither file runs what this build ships, which is what every project
+did before this existed and still takes no configuration at all.
+
+**Nothing is merged between the two.** A project that writes one owns the whole
+sequence from then on — the states, the transitions, the terminals — which is the
+only arrangement where reading the file tells you what its runs execute. The
+other side of that is the cost: a later Yoyodyne that improves the built-in does
+not reach a project that ejected a copy, so the copy is worth a header saying
+where it came from. Yoyodyne's own repository keeps one — `.yoyodyne/workflows/delivery.yaml`
+here is the built-in verbatim, adopted so that this project runs the arrangement
+it ships, and a test holds the two to the same content digest so that editing one
+and not the other fails rather than passing quietly.
+
+**What a copy can change is the sequence and nothing else.** It selects among the
+actions this build registered — `work-item.claim`, `candidate.develop`,
+`candidate.check`, `candidate.review`, `candidate.integrate`, `run.complete` and
+`run.clean-up` — and each action's authority is declared in Go, so no file can
+make a run do anything the built-in could not. A state selecting an action
+nothing registers, a transition to a destination that does not exist, an outcome
+the step it selected never produces, a file answering to another workflow's name,
+or a key the schema does not describe: each is refused, all of them are reported
+together, and the file is refused whole.
+
+The gate is not among the things a file can rearrange away. A definition that can
+reach the promotion without a state that runs the checks and a state that buys an
+independent verdict between the last write of the change and the promotion is
+refused at compile, whatever order it puts its states in. Configuration selects
+the sequence; it cannot make a guarantee optional.
+
+**A copy that is wrong stops the run before it claims anything.** The refusal
+names the file and the defect, and nothing falls back to the built-in — a run
+that quietly executed a sequence nobody chose, under a name the project had
+already used for something else, is the failure this location exists to prevent.
+Refusing it costs nothing: no work item has been claimed, no worktree exists, and
+no provider has been paid.
+
+A run already in flight is treated differently, because by then the work is under
+way and what is broken is only the watching. Such a run finishes exactly as it
+would have and records a `workflow_divergence` naming the file, which is the same
+thing it records when a definition is edited under an instance already running
+it: an instance keeps the digest it pinned and is never migrated, so an edit — a
+correct one included — stops the observation of the runs already going and
+reaches the next one.
+
+**The rollback is one key.** A project that wants the legacy path — the same
+delivery with nothing observing it — writes:
+
+```yaml
+execution:
+  declarative_delivery: false   # the rollback; the default is true
+```
+
+That is the whole of it. It reaches new runs only: everything already in flight
+finishes on whatever it started on, in both directions, which is the section
+below. `yoyo config show --effective` prints the value that applies and
+`--origins` names the file it came from, so a rollback is something you can
+confirm rather than assume.
+
+Three fields on the run say what happened:
+
+- `workflow_instance_id` names the instance, and a run carrying one is a run
+  executing the definition. It is written when the run is created and never
+  afterwards.
+- `workflow_unobserved` is why a run has none although its project asked for
+  one: the definition could not be built, or the instance could not be created.
+  The run delivers as it would have and what is lost is the watching. Without
+  it, such a run reads like a rolled-back one and is counted as one the
+  definition agreed with.
+- `workflow_divergence` is why the run stopped being observed: the definition
+  sent it somewhere it did not go, refused an outcome it produced, could not be
+  stepped at all, or had no outcome for the way the run ended. A run carrying one
+  is a run to read before the definition is trusted with anything, which is still
+  ahead of it.
+
+  That last case is what keeps the record honest. A run can end by a route no
+  definition expresses — a review that ended without a verdict and without the
+  operator's stop, a `complete` that failed, a worktree that could not be cut
+  before the first attempt — and none of those is observed, deliberately, because
+  naming the nearest outcome would record the run ending somewhere it did not. So
+  the instance is left standing where the two last agreed, and a run that reaches
+  a terminal status with its instance still mid-graph records the gap itself as
+  the divergence, naming the state it stopped in.
+
+  That holds however the run reaches its terminal. A run its own process ends
+  records it there; a run whose process died and is settled by `yoyo reconcile`
+  has the same gap recorded by the sweep, in the same words, whether the
+  settlement completes it, blocks it, or fails it. The completed case is the one
+  worth naming: the work lands and the item is settled on it, so a run whose observation
+  stopped halfway would otherwise read exactly like one that walked the
+  definition to the end.
+
+  **What is recorded is the gap, not the settlement.** A process that died can
+  still have left its instance on a terminal — an ending the definition has an
+  outcome for is stepped before the process stops writing — and such a run is
+  settled carrying no divergence, on every one of those three settlements. That
+  is the recorded baseline's blocked trace:
+  `reconciliation-blocks-a-run-interrupted-while-developing` stops writing as the
+  developer's attempt ends, the developer's ending sends its instance to
+  `abandoned`, and the sweep blocks the run with nothing to record. An empty
+  divergence there is the observation having finished rather than the sweep
+  having missed it, which is why it is measured rather than left to be read off
+  an absent field.
+
+All three are on the run's summary, so `yoyo status <beads-id>` and its `--json`
+carry them like every other fact about a run, and a divergence and an unobserved
+run each get a line there. Neither is a reason a run ended: the run delivered
+exactly as it would have, and what diverged or went unwatched is the observation.
+
+Two divergences are already known and expected, and both are interrupted
+processes rather than anything about the work. A run interrupted while its
+reviewer was being asked resumes at the checks rather than at the review, because
+a resumed run re-earns the whole gate, and no definition has a transition from
+the review back to the check; such a run records a divergence naming both. A
+process killed inside integration is settled by the sweep as succeeded with its
+instance still standing in `integrate`, and records the gap that leaves. (That
+is a local promotion; a process killed while landing through a pull request is
+settled on the forge's answer instead, as
+[a protected target lands through its pull request](publishing.md#a-protected-target-lands-through-its-pull-request)
+says.) Both are
+left as divergences deliberately — the definition is missing a path the pipeline
+takes, and an observation that quietly agreed with itself would be worth nothing.
+
+**The default and the rollback both reach new runs only.** Whether a run is
+observed is settled once, when the run is reserved, and read back off the run's
+own record by every later process. So a run already in flight when you roll back
+keeps being observed to its terminal, and a run started under a rollback you have
+since undone carries on to its own terminal with no instance and nothing watching
+it. There is no migration in either direction, which is the same rule an
+in-flight instance is held to when the definition itself changes: it keeps
+running the definition it was pinned to, or it stops being stepped and says so.
+
+That is the price of the rollback, and it is worth stating plainly: writing
+`declarative_delivery: false` does not stop the runs that are already going. It
+decides what the next one does.
