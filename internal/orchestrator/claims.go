@@ -35,6 +35,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // ClaimTracker is the tracker access one claim audit needs: giving one item
@@ -91,7 +92,12 @@ type ClaimAuditor struct {
 	// Window is how long a run's own record may go unmoved before it stops
 	// counting as alive. Zero takes readmodel.DefaultRunActivityWindow.
 	Window time.Duration
-	Clock  execution.Clock
+	// Remains is the repository the audit asks whether the run behind a claim
+	// left its change on a branch or in a checkout, which is both what keeps the
+	// claim standing and what the release says on the item. Nil answers from the
+	// run's own record, and the release says nothing looked.
+	Remains readmodel.Remains
+	Clock   execution.Clock
 }
 
 // ClaimSweep is what one audit did: the claims it gave back, and the ones it
@@ -164,8 +170,9 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 		recorded[run.RunID] = run
 	}
 	now := a.clock().Now()
+	look := readmodel.Looking(ctx, a.Remains, func() time.Time { return now })
 	var sweep ClaimSweep
-	for _, dead := range readmodel.DeadClaims(claims, runs, now, a.Threshold, a.Window) {
+	for _, dead := range readmodel.DeadClaims(claims, runs, now, a.Threshold, a.Window, look) {
 		if saidAlready(alreadyReleased, dead) {
 			// This claim has been given back once already and the tracker still shows
 			// it claimed. Releasing it again would be the same act said twice — and,
@@ -183,6 +190,10 @@ func (a ClaimAuditor) Audit(ctx context.Context, claimed []beads.WorkItem) (Clai
 			Since:         dead.Since,
 			Because:       dead.Because,
 			ReleasedAt:    now,
+		}
+		if dead.Found.Recorded() {
+			found := dead.Found
+			released.Found = &found
 		}
 		// The run's own record is settled first, because it is the half that
 		// actually frees the item: a record still saying in flight fills a developer
@@ -323,9 +334,29 @@ func saidAlready(released []runstate.ReleasedClaim, dead readmodel.DeadClaim) bo
 // It is written onto the item because that is where the next attempt at the work
 // reads: a developer who finds a worktree from a run nobody finished should be
 // told the harness gave the item back rather than left to infer it.
+//
+// It says what the run left, as the repository had it when the claim was given
+// back, because "nothing was working on it" is a statement about processes and
+// was read as one about the change: on 2026-09-23 the development manager
+// crossed a cap on yoyodyne-ifd.432.10 reasoning that run-838ffc48 held no
+// preserved change, from a release that said nothing either way while the run's
+// branch held the approved change.
 func releaseNotes(released runstate.ReleasedClaim) string {
-	return fmt.Sprintf("The harness gave this item back to the queue at %s: %s. Nothing was working on it, so it was released to be pulled again.",
+	note := fmt.Sprintf("The harness gave this item back to the queue at %s: %s. Nothing was working on it, so it was released to be pulled again.",
 		released.ReleasedAt.UTC().Format(time.RFC3339), released.Because)
+	if released.Found == nil {
+		return note
+	}
+	return note + "\nWhat the run left: " + released.Found.Describe() + "." + releasedChangeAdvice(*released.Found)
+}
+
+// releasedChangeAdvice is the one sentence a release adds where the run's change
+// is still there: that a fresh run should start from it rather than beside it.
+func releasedChangeAdvice(found triage.Found) string {
+	if !found.Holds() {
+		return ""
+	}
+	return " That change is still there; a run started for this item should pick it up rather than derive it again."
 }
 
 func (a ClaimAuditor) clock() execution.Clock {

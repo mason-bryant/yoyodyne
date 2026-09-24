@@ -420,7 +420,9 @@ func TestGatherCarriesTheTriageDocketToTheDevelopmentManager(t *testing.T) {
 		"## Triage docket",
 		"[stopped run]",
 		"the repair budget was spent",
-		"Branch (preserved): yoyodyne/task/abc",
+		// Wired without a repository, the entry says its answer is the record's
+		// rather than passing the flags off as a look.
+		"Branch (there as the run's record says, not checked: nothing was wired to look in the repository): yoyodyne/task/abc",
 	} {
 		if !strings.Contains(briefing.Text, required) {
 			t.Fatalf("briefing is missing %q:\n%s", required, briefing.Text)

@@ -2308,6 +2308,28 @@ nothing owes it a move, which is the whole failure the audit exists for. What
 tells them apart is the ending on the record rather than what is in the
 worktree.
 
+Whether the change is still there is asked of the repository as the audit reads
+the claim — the run's branch and its checkout, looked for — and never of the
+run's removal flags, which are what a cleanup remembered to write. A look that
+could not be made keeps the claim. And every release says on the item what the
+look found, because "nothing was working on it" is a sentence about processes
+and was read as one about the change: on 2026-09-23 the development manager
+crossed yoyodyne-ifd.432.10's re-run cap reasoning that run-838ffc48 had left no
+preserved change, from a release that said nothing either way, while the run's
+branch held the approved change. A release now reads:
+
+```text
+The harness gave this item back to the queue at 2026-09-23T01:43:04Z: its run run-838ffc48… ended cancelled at 2026-09-23T01:01:32Z and the claim outlived it. Nothing was working on it, so it was released to be pulled again.
+What the run left: branch yoyodyne/yoyodyne-ifd-432-10/838ffc48 (checked and there at 2026-09-23T01:43:04Z); worktree …/yoyodyne-ifd-432-10-838ffc48 (checked and NOT there at 2026-09-23T01:43:04Z). That change is still there; a run started for this item should pick it up rather than derive it again.
+```
+
+A release written before the audit looked says none of that, so
+[the convergence sweep](#recovering-interrupted-runs) corrects it: where a
+released claim's run still has its branch standing and the release did not say
+so, the sweep appends a correction to the item naming the branch, the commit it
+is at, and why it is kept, and records on the run that it did, so the item is
+told once. `yoyo reconcile` prints the branch as kept with its item corrected.
+
 Each release is
 [sent to the operators once](reporting.md#reporting-into-slack), in the item's
 own thread, as the degraded harness it is. It is said once and never repeated:
@@ -2367,12 +2389,12 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
-run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved] $4.62
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved, checked] $4.62
   selected by the operator: the operator ran this item by name from the command line
   ran under default, configuration cfg-9f2c41ab7e05, harness 9870df6a1b2c
   reason: the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)
-  preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
-  preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
+  branch (checked and there at 2026-08-16T19:40:02Z): yoyodyne/yoyodyne-ifd.1.7/19dc9dff
+  worktree (checked and there at 2026-08-16T19:40:02Z): /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
   preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
@@ -2411,13 +2433,21 @@ for itself before anything contradicted it. `--json` shows both — a `status` o
 `succeeded` beside an `outcome` of `stopped` — and the outcome is what became of
 the work.
 
-Beside it, every run that did not succeed says what remains: `work preserved`,
-`work removed` where the harness recorded removing the artifacts, or `no
-artifacts recorded` where the record names neither. The preserved branch,
-worktree, and developer session are then named under the run, so looking at the
-change is not a trip through the run's JSON for a path. A successful run removes
-what it made by design, so it says nothing about preservation at all; a run still
-in flight holds everything it has.
+Beside it, every run that did not succeed says what remains, and it says it
+from the repository rather than from the run's removal flags: the listing looks
+for the run's branch and its checkout as it is printed. `work preserved, checked`
+is either of them found there, `work gone, checked` is neither, and `no
+artifacts recorded` is a record that names neither. Where the repository could
+not be asked, the listing says so — `work possibly preserved, not checked`, with
+the reason on the artifact lines — rather than reading the flags out as though
+they were a look; a flag is what a cleanup remembered to write, and on
+2026-09-23 run-838ffc48's flags said removed while its branch held the approved
+change. The branch, the worktree, and the developer session are then named under
+the run, each with what the look found and when, so looking at the change is not
+a trip through the run's JSON for a path. `--json` carries the same answer as
+each run's `found`. A successful run removes what it made by design, so it says
+nothing about preservation at all; a run still in flight holds everything it
+has.
 
 The third phrase states an absence rather than claiming the run made nothing —
 the same discipline as the `selected: no reason recorded` and `an account the
@@ -2426,7 +2456,7 @@ an empty field into a reassurance is the failure this one exists to remove. In
 practice it is a run that broke before it got a worktree, which is also why the
 second run above has no phase between the two words: the phase is only recorded
 once the worktree exists, so any run carrying one has a branch and a worktree and
-reports `work preserved` or `work removed` with the paths underneath.
+reports what the look found of them with the paths underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
@@ -2756,10 +2786,13 @@ entry of a grouping, the card shows the item whole under plain labels: **Id**,
 is never mistaken for a field the page did not read, and prose keeps its line
 breaks. **Run** is the run the harness last made for the item, in the words
 `yoyo status <item>` lists it in: `in flight — developing, 12m elapsed, $3.41
-so far` for one still going; `preserved: stopped, reviewing — work preserved`
-for one that ended with its change still on a branch or in a checkout; and
-otherwise that nothing is in flight or preserved and what the latest run came
-to, `work removed` or `no artifacts recorded`. Under the line are the run's id
+so far` for one still going; `preserved: stopped, reviewing — work preserved,
+checked` for one that ended with its change still on a branch or in a checkout;
+and otherwise that nothing is in flight or preserved and what the latest run
+came to, `work gone, checked` or `no artifacts recorded`. What survives is
+looked for in the repository as the card is read, exactly as `yoyo status` looks
+for it, rather than read off the run's removal flags; a look that could not be
+made says `not checked` and why. Under the line are the run's id
 and when it started and ended, its cost or `cost unknown` and why, the reason it
 gave for ending, and the branch, worktree, and developer session it preserved.
 An item never run says `none is recorded`; run records that could not be

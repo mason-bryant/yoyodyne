@@ -248,6 +248,9 @@ func workItemSources(configPath string) (readmodel.WorkItemSources, error) {
 		sources.RunsProblem = err.Error()
 	} else {
 		sources.Runs = store
+		// The repository, so the card says what a finished run left from a look
+		// rather than from the run's removal flags.
+		sources.Remains = standingRemains(resolved)
 	}
 	return sources, nil
 }

@@ -755,6 +755,21 @@ something has to remember to write, and on 2026-09-19 the product manager's
 repair cleared yoyodyne-ifd.372 on one while the item's own notes still said the
 run's branch and worktree were checked and there.
 
+**The same look is what every surface says preservation from.** The hold, the
+[claim audit](operations.md#claims-with-nothing-working-on-them) and the note a
+release writes on the item, the triage docket entry — as the run stops, and again
+each time the docket is built into the development manager's context — `yoyo
+status`, and the dashboard's item card all ask the repository for the run's
+branch and checkout at the moment they write, and each says which it found and
+when: `checked and there`, `checked and NOT there`, or `not checked` with the
+reason. None of them reads the removal flags as an answer. On 2026-09-23
+run-838ffc48's flags said its artifacts were gone and the claim audit released
+yoyodyne-ifd.432.10 saying only that nothing was working on it; the development
+manager crossed the item's re-run cap reasoning the run had preserved nothing,
+while its branch held the approved change. A release written before the audit
+looked is corrected by the convergence sweep, which appends to the item the
+branch it found standing, once.
+
 **A run that ended `failed` holding its change is held exactly as one that ended
 `stopped` is.** The two look different in a listing and are the same fact to a
 reader: a run that fails inside its own process deliberately hands nobody a

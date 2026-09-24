@@ -745,6 +745,10 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 			Runs:      parts.store,
 			Releases:  parts.releasedClaims,
 			ProductID: parts.config.Product.ID,
+			// The repository, asked what the run behind a claim left: it is what
+			// keeps a claim over a surviving change standing, and what the release
+			// says on the item, in the words the hold uses about the same run.
+			Remains: remainsOf(parts),
 		},
 		// The close of a conversation-carried item whose design has landed. It is
 		// wired into the pull for the reason the audit is: the landing is a

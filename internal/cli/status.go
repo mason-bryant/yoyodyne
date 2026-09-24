@@ -247,6 +247,10 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	if err != nil {
 		return reportStatusFailure(stdout, stderr, *jsonOutput, err)
 	}
+	// What each run that stopped left is looked for in the repository rather than
+	// read off its removal flags, so this listing says what is there — and says
+	// it looked — in the words the docket and the hold use for the same run.
+	readmodel.LookForSummaries(context.Background(), statusRemains(*configPath), store, history.Runs)
 	// The item's triage record is read only when an item was named, and it is
 	// read whatever the listing found: an item whose runs were all cleaned up
 	// still has a record of what triage gave it, and that is exactly the reader
@@ -368,6 +372,17 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 	// beside them: "three review rounds" says nothing about whether this item is
 	// nearly out of them.
 	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), nil
+}
+
+// statusRemains is the repository the listing asks what a stopped run left,
+// where the configuration names one. Nil is kept as no observer, which the look
+// answers from the record and says so.
+func statusRemains(configPath string) readmodel.Remains {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return nil
+	}
+	return standingRemains(resolved)
 }
 
 // flagGiven reports whether an option was actually on the command line, which
@@ -1103,6 +1118,20 @@ func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
 	if !run.Status.Terminal() || run.Outcome == runstate.OutcomeSucceeded {
 		return
 	}
+	// Where the repository was asked, what it said is what is printed, and how
+	// it was established beside it: a branch checked and there and a branch a
+	// record says nothing removed are different claims, and run-838ffc48 was
+	// decided about on the second while its branch held the approved change.
+	if found := run.Found; found != nil && found.Recorded() {
+		if run.Branch != "" {
+			fmt.Fprintf(writer, "  branch (%s): %s\n", found.BranchState(), run.Branch)
+		}
+		if run.WorktreePath != "" {
+			fmt.Fprintf(writer, "  worktree (%s): %s\n", found.WorktreeState(), run.WorktreePath)
+		}
+		printPreservedDetail(writer, run)
+		return
+	}
 	if run.Branch != "" {
 		if run.BranchRemoved {
 			fmt.Fprintf(writer, "  branch already removed: %s\n", run.Branch)
@@ -1117,10 +1146,14 @@ func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
 			fmt.Fprintf(writer, "  preserved worktree: %s\n", run.WorktreePath)
 		}
 	}
-	// The session and the findings are said only where the change survives. A
-	// session that continues work nothing holds any more continues nothing, and
-	// findings about a change that is gone are a reading list rather than
-	// something to act on.
+	printPreservedDetail(writer, run)
+}
+
+// printPreservedDetail names the session and the findings, which are said only
+// where the change survives. A session that continues work nothing holds any
+// more continues nothing, and findings about a change that is gone are a
+// reading list rather than something to act on.
+func printPreservedDetail(writer io.Writer, run runstate.RunSummary) {
 	if !run.Preserved() {
 		return
 	}
@@ -1230,7 +1263,7 @@ func renderRunState(run runstate.RunSummary) string {
 		state += ", integrated"
 	}
 	if run.Status.Terminal() && run.Outcome != runstate.OutcomeSucceeded {
-		state += ", " + run.Artifacts().Describe()
+		state += ", " + run.DescribeRemains()
 	}
 	if run.Outstanding && run.Status.Terminal() {
 		state += ", outstanding"

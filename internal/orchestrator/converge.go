@@ -138,6 +138,15 @@ type BranchSweep struct {
 	// gone either way, and what needs acting on is that every reader of that run
 	// will go on being told its change is preserved on it.
 	RecordProblem string `json:"record_problem,omitempty"`
+	// ReleaseCorrected reports a branch still standing whose work item the claim
+	// audit had given back without saying so, and which this sweep told. It is
+	// the correction run-838ffc48 needed: its release said nothing was working on
+	// yoyodyne-ifd.432.10 and nothing about the approved change on its branch,
+	// and was read as the run having preserved nothing.
+	ReleaseCorrected bool `json:"release_corrected,omitempty"`
+	// ItemProblem is that correction failing to reach the item, or to be recorded
+	// on the run so it is made once.
+	ItemProblem string `json:"item_problem,omitempty"`
 }
 
 // Converge brings the primary checkout and the local branches onto what the
@@ -182,8 +191,9 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 		}
 	}
 	convergence.Registrations = r.pruneRegistrations(ctx)
+	released := r.releasedClaims()
 	for _, state := range recorded {
-		sweep, swept := r.sweepBranch(ctx, state)
+		sweep, swept := r.sweepBranch(ctx, state, released)
 		if swept {
 			convergence.Branches = append(convergence.Branches, sweep)
 		}
@@ -446,7 +456,7 @@ func (r Reconciler) catchUp(ctx context.Context, targetBranch string) gitworktre
 // destroyed. It is taken under the run's own lease so the deletion and the
 // record of it are one act rather than a write against a snapshot something else
 // has moved on from.
-func (r Reconciler) sweepBranch(ctx context.Context, recorded runstate.State) (BranchSweep, bool) {
+func (r Reconciler) sweepBranch(ctx context.Context, recorded runstate.State, released map[string]runstate.ReleasedClaim) (BranchSweep, bool) {
 	if recorded.Outstanding() || recorded.Branch == "" || recorded.TargetBranch == "" {
 		return BranchSweep{}, false
 	}
@@ -504,6 +514,11 @@ func (r Reconciler) sweepBranch(ctx context.Context, recorded runstate.State) (B
 	sweep.Commit = removal.Commit
 	sweep.Removed = removal.Removed
 	sweep.Kept = removal.Kept
+	// A branch still standing is the one case a release could have misstated, so
+	// it is the one case asked about it.
+	if !removal.Removed {
+		sweep.ReleaseCorrected, sweep.ItemProblem = r.correctRelease(ctx, state, released, removal)
+	}
 	// A record that already says the branch is gone needs no second writing. That
 	// is a run whose own cleanup removed it and whose branch something put back —
 	// the leftover this sweep exists for — and the record was right both times.
@@ -511,6 +526,81 @@ func (r Reconciler) sweepBranch(ctx context.Context, recorded runstate.State) (B
 		sweep.RecordProblem = r.recordSweptBranch(state)
 	}
 	return sweep, true
+}
+
+// releasedClaims is every claim the audit gave back, keyed by the item and the
+// run whose death left it. A log that cannot be read corrects nothing, and the
+// sweep carries on: the correction is a note, and the branch it is about is
+// standing either way.
+func (r Reconciler) releasedClaims() map[string]runstate.ReleasedClaim {
+	if r.Releases == nil {
+		return nil
+	}
+	listed, err := r.Releases.List()
+	if err != nil {
+		return nil
+	}
+	released := make(map[string]runstate.ReleasedClaim, len(listed))
+	for _, record := range listed {
+		released[releaseKey(record.WorkItemID, record.RunID)] = record
+	}
+	return released
+}
+
+func releaseKey(workItemID, runID string) string { return workItemID + "\x00" + runID }
+
+// correctRelease tells a work item that the claim audit gave it back without
+// saying that the run behind the claim still had its change on a branch, and
+// reports whether it did and what stopped it where it could not.
+//
+// A release written before the audit looked in the repository said only that
+// nothing was working on the item. That is a statement about processes, and it
+// was read as one about the change: yoyodyne-ifd.432.10's re-run budget was
+// crossed on the reasoning that run-838ffc48 left no preserved change, while its
+// branch held the approved change at 8b06428b. So wherever a release left the
+// branch out, or said it was not there, and the branch is standing now, the item
+// is told once — and the run's record says it was, under the lease this sweep
+// already holds, so the next sweep does not say it again.
+func (r Reconciler) correctRelease(ctx context.Context, state runstate.State, released map[string]runstate.ReleasedClaim, removal gitworktree.Removal) (bool, string) {
+	release, found := released[releaseKey(state.WorkItemID, state.RunID)]
+	if !found || state.ReleaseCorrectedAt != nil || removal.Commit == "" {
+		return false, ""
+	}
+	if release.Found != nil && release.Found.Looked() && release.Found.BranchThere {
+		return false, ""
+	}
+	recordCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := r.Tracker.RecordOutcome(recordCtx, state.WorkItemID, renderReleaseCorrection(state, release, removal, r.clock().Now())); err != nil {
+		return false, fmt.Sprintf(
+			"the branch of run %s is standing and %s was given back without being told so, and could not be told now: %v",
+			state.RunID, state.WorkItemID, err)
+	}
+	corrected := r.clock().Now()
+	state.ReleaseCorrectedAt = &corrected
+	state.UpdatedAt = corrected
+	if err := r.Store.Save(state); err != nil {
+		return true, fmt.Sprintf(
+			"%s was told that run %s's branch is standing, and the run's record could not say so, so the next sweep will tell it again: %v",
+			state.WorkItemID, state.RunID, err)
+	}
+	return true, ""
+}
+
+// renderReleaseCorrection is what the item is told: which release it corrects,
+// what the repository holds, and what that means for the next run of the item.
+func renderReleaseCorrection(state runstate.State, release runstate.ReleasedClaim, removal gitworktree.Removal, now time.Time) string {
+	lines := []string{
+		fmt.Sprintf("Correction: the harness gave this item back to the queue at %s over run %s and did not say that the run's change was still there. It is.",
+			release.ReleasedAt.UTC().Format(time.RFC3339), state.RunID),
+		"Run: " + state.RunID,
+		fmt.Sprintf("Branch: %s (checked and there at %s, at %s)", state.Branch, now.UTC().Format(time.RFC3339), removal.Commit),
+	}
+	if removal.Kept != "" {
+		lines = append(lines, "Why it is kept: "+removal.Kept)
+	}
+	lines = append(lines, "Anything read off that release as the run having left no preserved change is wrong: the branch above holds what the run committed, and a run of this item should start from it rather than derive it again.")
+	return strings.Join(lines, "\n")
 }
 
 // recordSweptBranch writes the deletion onto the run it belongs to, and reports

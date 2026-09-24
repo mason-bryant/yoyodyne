@@ -10,6 +10,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // The five stoppages the 2026-09-04 reading named as the ones an audit must pass
@@ -591,12 +592,14 @@ func (f failingDecisions) Counters(string) (runstate.TriageCounters, error) {
 // asRecorded looks at nothing and answers from each run's own record, which is
 // what every fixture above that predates the look was written against. The
 // tests below are the ones about the look itself.
-func asRecorded(run runstate.State) survival {
+func asRecorded(run runstate.State) triage.Found {
 	recorded := run.Artifacts()
-	return survival{Found: gitworktree.Survival{
-		BranchExists:    recorded.Branch != "" && !recorded.BranchRemoved,
-		WorktreePresent: recorded.WorktreePath != "" && !recorded.WorktreeRemoved,
-	}}
+	return triage.Found{
+		Branch:        run.Branch,
+		WorktreePath:  run.WorktreePath,
+		BranchThere:   recorded.Branch != "" && !recorded.BranchRemoved,
+		WorktreeThere: recorded.WorktreePath != "" && !recorded.WorktreeRemoved,
+	}
 }
 
 // remainsOf is a repository that holds exactly the artifacts it lists, by run,
@@ -644,7 +647,7 @@ func TestAStoppedRunIsHeldOnWhatTheRepositoryHoldsRatherThanItsRecord(t *testing
 		[]runstate.State{sweptOnRecord, preservedOnRecord},
 		nil,
 		nothingDecided,
-		lookingFor(context.Background(), repository),
+		Looking(context.Background(), repository, nil),
 	)
 
 	reason := heldReason(t, held, "yoyodyne-ifd.372")
@@ -688,7 +691,7 @@ func TestAStoppedRunWhoseChangeCouldNotBeLookedForIsHeldAsPreserved(t *testing.T
 		[]runstate.State{swept},
 		nil,
 		nothingDecided,
-		lookingFor(context.Background(), failingRemains{errors.New("worktree base commit is invalid")}),
+		Looking(context.Background(), failingRemains{errors.New("worktree base commit is invalid")}, nil),
 	)
 	reason := heldReason(t, held, "yoyodyne-ifd.372")
 	for _, want := range []string{"run-192522d8", "could not be checked", "worktree base commit is invalid", "may still be there"} {
@@ -710,7 +713,7 @@ func TestAReadingWithNothingWiredToLookAnswersFromTheRecordAndSaysSo(t *testing.
 		[]runstate.State{preservedRun("run-48216ea9", "yoyodyne-ifd.275", stopped)},
 		nil,
 		nothingDecided,
-		lookingFor(context.Background(), nil),
+		Looking(context.Background(), nil, nil),
 	)
 	reason := heldReason(t, held, "yoyodyne-ifd.275")
 	for _, want := range []string{"its change is preserved", "as its record says", "nothing having been wired to look"} {
@@ -742,7 +745,7 @@ func TestAStoppedRunWithARecordedContinuationIsHeldWithNothingSurviving(t *testi
 			Decision: runstate.TriageDecisionRepair, RunID: "run-192522d8",
 		}},
 	}})
-	held := heldForAPerson([]runstate.State{swept}, nil, continued, lookingFor(context.Background(), gone))
+	held := heldForAPerson([]runstate.State{swept}, nil, continued, Looking(context.Background(), gone, nil))
 	reason := heldReason(t, held, "yoyodyne-ifd.372")
 	for _, want := range []string{"run-192522d8", "not yet carried out", "carrying that decision out"} {
 		if !strings.Contains(reason, want) {
@@ -755,7 +758,7 @@ func TestAStoppedRunWithARecordedContinuationIsHeldWithNothingSurviving(t *testi
 
 	// And the same run with nothing decided about it holds nothing, which is what
 	// separates a continuation from a stoppage whose change is simply gone.
-	released := heldForAPerson([]runstate.State{swept}, nil, nothingDecided, lookingFor(context.Background(), gone))
+	released := heldForAPerson([]runstate.State{swept}, nil, nothingDecided, Looking(context.Background(), gone, nil))
 	if reason, ok := released.Reason("yoyodyne-ifd.372"); ok {
 		t.Errorf("with nothing decided and nothing surviving the item is held for %q, want nothing holding it", reason)
 	}

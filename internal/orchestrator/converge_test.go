@@ -198,7 +198,7 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 	// The branch carries nothing the target does not, because the round wrote
 	// nothing for the harness to commit onto it — which is what earns the
 	// deletion.
-	sweep, swept := reconciler.sweepBranch(context.Background(), retired)
+	sweep, swept := reconciler.sweepBranch(context.Background(), retired, nil)
 	if !swept || !sweep.Removed || sweep.Kept != "" || sweep.Failure != "" || sweep.RecordProblem != "" {
 		t.Fatalf("sweep = %#v, swept = %t, want the branch deleted and written down", sweep, swept)
 	}
@@ -216,7 +216,7 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 	}
 	// Asking again says there was nothing there, so a sweep that runs on every
 	// pass does not report the same long-gone branch forever.
-	if again, swept := reconciler.sweepBranch(context.Background(), recorded); swept {
+	if again, swept := reconciler.sweepBranch(context.Background(), recorded, nil); swept {
 		t.Fatalf("sweep = %#v, want a branch that is already gone reported as nothing to do", again)
 	}
 }

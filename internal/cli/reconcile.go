@@ -743,6 +743,13 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 			fmt.Fprintf(stderr, "%s not removed: %s\n", branch.Branch, branch.Failure)
 		case branch.Removed:
 			fmt.Fprintf(stdout, "%s removed: %s is already in %s\n", branch.Branch, branch.Commit, branch.TargetBranch)
+		case branch.ItemProblem != "":
+			fmt.Fprintf(stderr, "%s kept, and its item not corrected: %s\n", branch.Branch, branch.ItemProblem)
+		case branch.ReleaseCorrected:
+			// A release that did not say this branch was standing was read as the run
+			// having preserved nothing; the item has now been told otherwise.
+			fmt.Fprintf(stdout, "%s kept at %s, and %s told its claim was given back while the branch held the run's change\n",
+				branch.Branch, branch.Commit, branch.WorkItemID)
 		}
 	}
 }

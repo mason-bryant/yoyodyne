@@ -24,11 +24,13 @@ package readmodel
 // the same work.
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // DefaultDeadClaimThreshold is how long a claim may have nothing alive behind it
@@ -75,6 +77,12 @@ type DeadClaim struct {
 	// written around. It is what tells a run the harness finished from a process
 	// somebody killed, and the two want different things done about them.
 	Because string `json:"because,omitempty"`
+	// Found is what the repository held of that run's branch and worktree when
+	// the audit read the claim, which the release says on the item: a release
+	// that said only that nothing was working on the item was read, on
+	// 2026-09-23, as run-838ffc48 having preserved nothing while its branch held
+	// the approved change.
+	Found triage.Found `json:"found"`
 }
 
 // DeadClaims reports the claims that have nothing alive behind them.
@@ -94,7 +102,14 @@ type DeadClaim struct {
 // stillHeld. A claim there is not a claim nothing is working on: it is the one
 // thing saying an item whose change is on a branch is spoken for, and a release
 // buys a fresh run started over the top of it.
-func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold, within time.Duration) []DeadClaim {
+//
+// Whether the change is still there is look's answer: the repository, asked as
+// the audit reads, which is the answer the pull's hold gives about the same run.
+// A nil look answers from the run's own record and says so on the claim.
+func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold, within time.Duration, look Look) []DeadClaim {
+	if look == nil {
+		look = Looking(context.Background(), nil, func() time.Time { return now })
+	}
 	if threshold <= 0 {
 		threshold = DefaultDeadClaimThreshold
 	}
@@ -128,7 +143,8 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 		// And an item whose latest run ended holding its change is not work to be
 		// started again either. The claim is the one thing saying so, and the pull's
 		// hold reads the same endings: see stillHeld.
-		if stillHeld(latest) {
+		found := look(latest)
+		if stillHeld(latest, found) {
 			continue
 		}
 		dead = append(dead, DeadClaim{
@@ -137,6 +153,7 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 			RunID:      latest.RunID,
 			Since:      since,
 			Because:    whatBecameOfIt(latest, since),
+			Found:      found,
 		})
 	}
 	return dead
@@ -166,18 +183,16 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 // All three ask whether the change survived, and none of them holds a claim
 // without it: a stoppage whose branch is gone leaves nothing for a fresh run to
 // strand, and an integration stop whose branch is gone is one nothing can resume
-// at all. It is asked of the record here where the pull's hold looks in the
-// repository, and that is the conservative direction for this reader and only
-// for this one: a record that says the branch is gone releases the claim exactly
-// as it did before, and a record that says it is there holds it — so a flag
-// nobody updated costs a claim left standing rather than a change run over.
+// at all. It is asked of the repository, as the pull's hold asks it, and a look
+// that could not be made holds the claim — so a repository nobody could read
+// costs a claim left standing rather than a change run over.
 //
 // A run that has not ended is never one of these. Its record is what fills a
 // developer slot and its claim is what keeps the item out of every pull, and
 // leaving both standing on a process that is gone is the failure the audit
 // exists for.
-func stillHeld(run runstate.State) bool {
-	if !run.Status.Terminal() || !run.Artifacts().Preserved() {
+func stillHeld(run runstate.State, found triage.Found) bool {
+	if !run.Status.Terminal() || !found.Holds() {
 		return false
 	}
 	return run.IntegrationStop != nil ||

@@ -564,6 +564,10 @@ func docketerFrom(parts components) *orchestrator.Docketer {
 		// Which product an entry belongs to, for the one entry that is not made
 		// from a run record and so has no run to read it off.
 		ProductID: parts.config.Product.ID,
+		// The repository, asked what a stopped run left as its entry is written
+		// and as the docket is built for the development manager to read, so an
+		// entry never states preservation off the run's removal flags.
+		Remains: remainsOf(parts),
 	}
 }
 
@@ -599,7 +603,19 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 		// process that made it never got to record still reaches the development
 		// manager.
 		Docket: docketerFrom(parts),
+		// The claims the audit gave back, so a release that did not say its run's
+		// change was still on a branch is corrected on the item by the sweep.
+		Releases: releasesOf(parts),
 	}
+}
+
+// releasesOf is the released-claim log where these parts have one, kept as no
+// reader rather than an interface holding nil.
+func releasesOf(parts components) orchestrator.ReconcileReleases {
+	if parts.releasedClaims == nil {
+		return nil
+	}
+	return parts.releasedClaims
 }
 
 // supervisionLoopFrom wires one pass of the management loop over parts that are

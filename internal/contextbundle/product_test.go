@@ -1531,8 +1531,17 @@ func docketEntry(runID, item string) triage.Entry {
 		RecordedAt:    time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
 		Blocker:       "Yoyodyne stopped this item: the repair budget was spent.",
 		Findings:      []triage.Finding{{Severity: "blocker", Message: "add the missing file", File: "feature.txt", Line: 1}},
-		Artifacts:     triage.Artifacts{Branch: "yoyodyne/task/abc", WorktreePath: "/state/worktrees/task"},
-		Counters:      triage.Counters{ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2},
+		Artifacts: triage.Artifacts{
+			Branch: "yoyodyne/task/abc", WorktreePath: "/state/worktrees/task",
+			// What the docket found in the repository as it was built, which is what
+			// the development manager reads rather than the run's removal flags.
+			Found: &triage.Found{
+				At:     time.Date(2026, 8, 19, 12, 5, 0, 0, time.UTC),
+				Branch: "yoyodyne/task/abc", WorktreePath: "/state/worktrees/task",
+				BranchThere: true, WorktreeThere: true,
+			},
+		},
+		Counters: triage.Counters{ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2},
 	}
 }
 
@@ -1557,7 +1566,7 @@ func TestAssembleProductCarriesTheTriageDocket(t *testing.T) {
 		"[stopped run] 2026-08-19T12:00:00Z on yoyodyne-task",
 		"Blocker: Yoyodyne stopped this item: the repair budget was spent.",
 		"Finding [blocker] (feature.txt:1): add the missing file",
-		"Branch (preserved): yoyodyne/task/abc",
+		"Branch (checked and there at 2026-08-19T12:05:00Z): yoyodyne/task/abc",
 		"3 of 4 review round(s) used",
 	} {
 		if !strings.Contains(bundle.Text, required) {

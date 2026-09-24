@@ -36,6 +36,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // ReleasedClaimSchemaVersion is 1 and has never changed.
@@ -74,6 +75,14 @@ type ReleasedClaim struct {
 	// thing whoever reads this has to decide between.
 	Because    string    `json:"because,omitempty"`
 	ReleasedAt time.Time `json:"released_at"`
+	// Found is what the repository held of that run's branch and worktree when
+	// the claim was given back, looked for rather than read off the run's
+	// removal flags. The release says it on the item, because a release that
+	// said only that nothing was working on the item was read on 2026-09-23 as
+	// run-838ffc48 having preserved nothing while its branch held the approved
+	// change. A record written before this existed carries none, which is what
+	// the convergence sweep's correction reads.
+	Found *triage.Found `json:"found,omitempty"`
 }
 
 func (c ReleasedClaim) Validate() error {
@@ -92,6 +101,11 @@ func (c ReleasedClaim) Validate() error {
 	}
 	if len(c.Because) > MaxReleasedClaimDetailBytes {
 		problems = append(problems, fmt.Errorf("because is %d bytes, which exceeds the %d byte bound", len(c.Because), MaxReleasedClaimDetailBytes))
+	}
+	if c.Found != nil {
+		if err := c.Found.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("found: %w", err))
+		}
 	}
 	return errors.Join(problems...)
 }
