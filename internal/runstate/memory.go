@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,8 +59,9 @@ import (
 // here or whether this satisfies the ruling is the architect's to settle rather
 // than this comment's, and it has been put to them; what makes the answer cheap
 // either way is that a revision is already the unit a store would hold, so a
-// database would replace the three functions at the foot of this file — the read,
-// the append, and the roll — and nothing above them.
+// database would replace the functions at the foot of this file — the read, the
+// append, the roll, and the tip a write reads instead of the history — and
+// nothing above them.
 //
 // It lives beside the conversations rather than in a package of its own for the
 // consolidation the design requires: the two are the same state root, the same
@@ -538,6 +541,11 @@ type MemoryStore struct {
 	// so a test can drive the roll without writing four megabytes to reach it;
 	// every store the harness builds gets MaxMemoryLogBytes.
 	rollAt int64
+	// observeRead is told every read a write or a listing makes of an agent's
+	// files, by file name and bytes. It is a field only so a test can hold a write
+	// to reading its tip rather than its history; every store the harness builds
+	// leaves it nil.
+	observeRead func(file string, read int64)
 }
 
 // NewMemoryStore builds the store for one product. The values are what must not
@@ -607,33 +615,18 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	if err != nil {
 		return MemoryRevision{}, err
 	}
-	recorded, problems, err := s.recorded(revision.Agent)
+	// What the write is worked out from is the agent's tip — the last number of
+	// every memory and the live set — rather than its history, so the cost of a
+	// write is the size of what the agent knows now and not of everything it has
+	// ever known. The history is read only where the tip is missing or no longer
+	// matches it, and then the tip is rebuilt from it and says so.
+	tip, err := s.tip(revision.Agent, path)
 	if err != nil {
 		return MemoryRevision{}, err
 	}
-	// A history with a line nobody can read is a history this refuses to append to.
-	// The listing tolerates one because a reader is owed what there is; a writer
-	// must not, because the sequence it is about to assign is worked out from what
-	// it could read, and a revision it could not read may be the one it is
-	// numbering after.
-	//
-	// The torn end of the live log is the exception, and the only one. Every line
-	// is written whole with its newline in one append, so bytes after the last
-	// newline are an append that never finished — a write whose caller was never
-	// told it succeeded, and so never a revision anybody numbered after. Refusing
-	// over it would turn one crash into an agent locked out of its memory for good.
-	var unreadable []MemoryProblem
-	for _, problem := range problems {
-		if !problem.Torn {
-			unreadable = append(unreadable, problem)
-		}
-	}
-	if len(unreadable) > 0 {
-		return MemoryRevision{}, fmt.Errorf("%s cannot be written while %d of its lines will not decode: %s", revision.Agent, len(unreadable), unreadable[0])
-	}
 
-	revision.Sequence = nextMemorySequence(recorded, revision.Memory)
-	if err := s.checkContinuity(recorded, revision); err != nil {
+	revision.Sequence = tip.next(revision.Memory)
+	if err := tip.checkContinuity(revision); err != nil {
 		return MemoryRevision{}, err
 	}
 	if err := revision.Validate(); err != nil {
@@ -647,7 +640,7 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	if len(encoded) > maxEncodedMemoryRevisionBytes {
 		return MemoryRevision{}, fmt.Errorf("the encoded revision is %d bytes, limit is %d", len(encoded), maxEncodedMemoryRevisionBytes)
 	}
-	if err := s.affordable(recorded, revision); err != nil {
+	if err := tip.affordable(revision); err != nil {
 		return MemoryRevision{}, err
 	}
 	// The torn end is mended before the roll as well as before the append, so an
@@ -659,37 +652,366 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	// The roll happens before the append rather than after it, so the log a write
 	// lands in is one that had room for it, and so the size that triggers a roll is
 	// never a size the log actually reached.
-	if err := s.rollIfFull(revision.Agent, path, recorded, len(encoded)); err != nil {
+	if err := s.rollIfFull(revision.Agent, path, tip, len(encoded)); err != nil {
 		return MemoryRevision{}, err
 	}
 	if err := s.append(path, encoded); err != nil {
 		return MemoryRevision{}, err
 	}
+	// The revision is on the disk from here on, so nothing below may report it as
+	// not written: a caller told otherwise would write it again under the next
+	// number. A tip that fails to follow it is left disagreeing with the log it
+	// was recorded against, and the next write rebuilds it and says why.
+	tip.record(revision)
+	_ = s.recordTip(revision.Agent, path, tip, encoded)
 	return revision, nil
+}
+
+// memoryTip is what a write needs to know about an agent's history, recorded
+// beside the log so a write reads it instead of the history: the last number each
+// memory has taken, and the current revision of every memory still live.
+//
+// It is derived and never the record. The log and the archives rolled off it are
+// the history, and the tip is only ever trusted while it matches them: it carries
+// the size of the live log it was recorded against, the digest of that log's last
+// line, and how many archives there were, and a write that finds any of them
+// changed — a crash between the append and the tip, a line added by hand, an
+// archive moved away — rebuilds the tip from the whole history rather than
+// numbering from something stale. Checking that costs a stat, a directory listing,
+// and one line, whatever the agent's age.
+//
+// What it holds is bounded by what the agent knows rather than by how long it has
+// known it: the live set is held to the live budget, and a head is one small entry
+// per memory the agent has ever named. The heads include retired memories, whose
+// history leaves the live log at the next roll, because a retired name that is
+// written again has to continue its numbering rather than start it over.
+type memoryTip struct {
+	SchemaVersion int                   `json:"schema_version"`
+	ProductID     domain.ProductID      `json:"product_id"`
+	Agent         string                `json:"agent"`
+	Heads         map[string]memoryHead `json:"heads"`
+	// Live is the current revision of every memory not retired, in the order the
+	// listing reads them, which is also the order a roll carries them across in.
+	Live []MemoryRevision `json:"live"`
+	Log  memoryTipLog     `json:"log"`
+	// Rebuilt is the last time the tip was rebuilt from the history and why, kept
+	// until the next rebuild so the record of one outlives the write that made it.
+	Rebuilt *memoryTipRebuild `json:"rebuilt,omitempty"`
+}
+
+// memoryHead is one memory as a write needs it: what it is, what it is about, the
+// last number it took, and whether that revision retired it.
+type memoryHead struct {
+	Continuity MemoryContinuity `json:"continuity"`
+	Subject    string           `json:"subject,omitempty"`
+	Sequence   int              `json:"sequence"`
+	Retired    bool             `json:"retired,omitempty"`
+}
+
+// memoryTipLog is the history a tip was recorded against, in the few facts that
+// can be checked without reading it.
+type memoryTipLog struct {
+	Size           int64  `json:"size"`
+	LastLineBytes  int    `json:"last_line_bytes,omitempty"`
+	LastLineSHA256 string `json:"last_line_sha256,omitempty"`
+	Archives       int    `json:"archives"`
+	LastArchive    string `json:"last_archive,omitempty"`
+}
+
+type memoryTipRebuild struct {
+	At      time.Time `json:"at"`
+	Because string    `json:"because"`
+}
+
+// tip is the agent's recorded tip where it still matches the history, and a tip
+// rebuilt from the history where it does not.
+func (s *MemoryStore) tip(agent, path string) (*memoryTip, error) {
+	tip, because, err := s.loadTip(agent, path)
+	if err != nil {
+		return nil, err
+	}
+	if tip != nil {
+		return tip, nil
+	}
+	return s.rebuildTip(agent, because)
+}
+
+// loadTip reads the recorded tip and checks it against the history it was
+// recorded after. It returns the tip where the two agree, and otherwise why they
+// do not, which is what the rebuild records. A history that has never been
+// written has no tip to disagree with, and it is the one case that returns
+// neither.
+func (s *MemoryStore) loadTip(agent, path string) (*memoryTip, string, error) {
+	size, err := s.logSize(agent, path)
+	if err != nil {
+		return nil, "", err
+	}
+	archives, err := s.archivePaths(agent)
+	if err != nil {
+		return nil, "", err
+	}
+	tipPath, err := s.tipPath(agent)
+	if err != nil {
+		return nil, "", err
+	}
+	stored, err := os.ReadFile(tipPath)
+	if errors.Is(err, os.ErrNotExist) {
+		if size == 0 && len(archives) == 0 {
+			return nil, "", nil
+		}
+		return nil, "no tip was recorded for this history", nil
+	}
+	if err != nil {
+		return nil, fmt.Sprintf("the tip could not be read: %v", err), nil
+	}
+	s.observe(tipPath, int64(len(stored)))
+	tip, err := s.decodeTip(agent, stored)
+	if err != nil {
+		return nil, fmt.Sprintf("the tip would not decode: %v", err), nil
+	}
+	if tip.Log.Size != size {
+		return nil, fmt.Sprintf("the live log is %d bytes and the tip was recorded against %d", size, tip.Log.Size), nil
+	}
+	lastArchive := ""
+	if len(archives) > 0 {
+		lastArchive = filepath.Base(archives[len(archives)-1])
+	}
+	if tip.Log.Archives != len(archives) || tip.Log.LastArchive != lastArchive {
+		return nil, fmt.Sprintf("there are %d archives ending at %q and the tip was recorded against %d ending at %q",
+			len(archives), lastArchive, tip.Log.Archives, tip.Log.LastArchive), nil
+	}
+	if size > 0 {
+		digest, err := s.lastLineDigest(path, size, tip.Log.LastLineBytes)
+		if err != nil {
+			return nil, "", fmt.Errorf("read the end of the %s memory log: %w", agent, err)
+		}
+		if digest != tip.Log.LastLineSHA256 {
+			return nil, "the live log does not end in the line the tip was recorded after", nil
+		}
+	}
+	return tip, "", nil
+}
+
+// rebuildTip works the tip out from the whole history, which is what a write read
+// every time before there was a tip to read instead.
+//
+// A history with a line nobody can read is a history this refuses to rebuild
+// from, and so one the write refuses to append to. The listing tolerates one
+// because a reader is owed what there is; a writer must not, because the sequence
+// it is about to assign is worked out from what it could read, and a revision it
+// could not read may be the one it is numbering after.
+//
+// The torn end of the live log is the exception, and the only one. Every line is
+// written whole with its newline in one append, so bytes after the last newline
+// are an append that never finished — a write whose caller was never told it
+// succeeded, and so never a revision anybody numbered after. Refusing over it
+// would turn one crash into an agent locked out of its memory for good. A torn
+// end always leaves the log a size no tip was recorded at, so it always arrives
+// here rather than past a tip that could not see it.
+func (s *MemoryStore) rebuildTip(agent, because string) (*memoryTip, error) {
+	recorded, problems, err := s.recorded(agent)
+	if err != nil {
+		return nil, err
+	}
+	var unreadable []MemoryProblem
+	for _, problem := range problems {
+		if !problem.Torn {
+			unreadable = append(unreadable, problem)
+		}
+	}
+	if len(unreadable) > 0 {
+		return nil, fmt.Errorf("%s cannot be written while %d of its lines will not decode: %s", agent, len(unreadable), unreadable[0])
+	}
+	tip := &memoryTip{
+		SchemaVersion: MemorySchemaVersion,
+		ProductID:     s.productID,
+		Agent:         agent,
+		Heads:         map[string]memoryHead{},
+	}
+	for _, memory := range assemble(recorded) {
+		current := memory.Current()
+		tip.Heads[memory.Name] = memoryHead{
+			Continuity: memory.Continuity,
+			Subject:    memory.Subject,
+			Sequence:   current.Sequence,
+			Retired:    current.Retired,
+		}
+		if !current.Retired {
+			tip.Live = append(tip.Live, current)
+		}
+	}
+	if because != "" {
+		tip.Rebuilt = &memoryTipRebuild{At: time.Now().UTC(), Because: because}
+	}
+	return tip, nil
+}
+
+func (s *MemoryStore) decodeTip(agent string, stored []byte) (*memoryTip, error) {
+	decoder := json.NewDecoder(bytes.NewReader(stored))
+	decoder.DisallowUnknownFields()
+	var tip memoryTip
+	if err := decoder.Decode(&tip); err != nil {
+		return nil, err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	if tip.SchemaVersion != MemorySchemaVersion {
+		return nil, fmt.Errorf("schema_version must be %d", MemorySchemaVersion)
+	}
+	if tip.Agent != agent || tip.ProductID != s.productID {
+		return nil, fmt.Errorf("the tip belongs to agent %s of product %s", tip.Agent, tip.ProductID)
+	}
+	if tip.Heads == nil {
+		tip.Heads = map[string]memoryHead{}
+	}
+	live := 0
+	for name, head := range tip.Heads {
+		if err := domain.ValidateIdentifier("memory", name); err != nil {
+			return nil, err
+		}
+		if head.Sequence < 1 || !head.Continuity.Valid() {
+			return nil, fmt.Errorf("the head of %s is not one a write could have recorded", name)
+		}
+		if !head.Retired {
+			live++
+		}
+	}
+	// The live set and the heads are two views of one thing, so a tip where they
+	// part company is one nothing wrote.
+	if live != len(tip.Live) {
+		return nil, fmt.Errorf("%d memories are live by their heads and %d are in the live set", live, len(tip.Live))
+	}
+	for _, revision := range tip.Live {
+		if err := revision.Validate(); err != nil {
+			return nil, err
+		}
+		head, known := tip.Heads[revision.Memory]
+		if revision.Agent != agent || revision.ProductID != s.productID || !known || head.Retired ||
+			head.Sequence != revision.Sequence || head.Continuity != revision.Continuity || head.Subject != revision.Subject {
+			return nil, fmt.Errorf("the live revision %d of %s is not its memory's head", revision.Sequence, revision.Memory)
+		}
+	}
+	if tip.Log.Size < 0 || (tip.Log.Size > 0 && (tip.Log.LastLineBytes < 1 || int64(tip.Log.LastLineBytes) > tip.Log.Size)) {
+		return nil, errors.New("the tip names no log it could have been recorded against")
+	}
+	return &tip, nil
+}
+
+// lastLineDigest is the digest of the last so many bytes of the live log, read
+// from its end, so checking a tip reads one line of the log and never the rest.
+func (s *MemoryStore) lastLineDigest(path string, size int64, length int) (string, error) {
+	if length < 1 || int64(length) > size || length > maxEncodedMemoryRevisionBytes {
+		return "", nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	last := make([]byte, length)
+	if _, err := file.ReadAt(last, size-int64(length)); err != nil {
+		return "", err
+	}
+	s.observe(path, int64(length))
+	return memoryLineDigest(last), nil
+}
+
+func memoryLineDigest(line []byte) string {
+	sum := sha256.Sum256(line)
+	return hex.EncodeToString(sum[:])
+}
+
+// recordTip writes the tip as it stands after a write whose last line was the
+// one given, stamped with the history it now matches.
+func (s *MemoryStore) recordTip(agent, path string, tip *memoryTip, last []byte) error {
+	size, err := s.logSize(agent, path)
+	if err != nil {
+		return err
+	}
+	archives, err := s.archivePaths(agent)
+	if err != nil {
+		return err
+	}
+	tip.Log = memoryTipLog{
+		Size:           size,
+		LastLineBytes:  len(last),
+		LastLineSHA256: memoryLineDigest(last),
+		Archives:       len(archives),
+	}
+	if len(archives) > 0 {
+		tip.Log.LastArchive = filepath.Base(archives[len(archives)-1])
+	}
+	encoded, err := json.Marshal(tip)
+	if err != nil {
+		return fmt.Errorf("encode the %s memory tip: %w", agent, err)
+	}
+	tipPath, err := s.tipPath(agent)
+	if err != nil {
+		return err
+	}
+	confined, err := repowrite.NewRoot(s.root)
+	if err != nil {
+		return fmt.Errorf("resolve the memory directory: %w", err)
+	}
+	// Replaced whole rather than appended to, so a reader finds the tip before
+	// this write or the one after it and never half of one; and a tip lost to a
+	// crash is only a tip the next write rebuilds.
+	if _, err := confined.WriteFile(filepath.Base(tipPath), append(encoded, '\n')); err != nil {
+		return fmt.Errorf("record the %s memory tip: %w", agent, err)
+	}
+	return nil
+}
+
+// next is the number the memory's next revision takes: one past the last it took,
+// wherever in the history that revision now lies.
+func (t *memoryTip) next(name string) int {
+	return t.Heads[name].Sequence + 1
 }
 
 // checkContinuity refuses a revision that would make one memory two different
 // things. A memory's name is how an operator asks about it, so a name that meant
 // the agent's own knowledge yesterday and one work item today is a history nobody
 // can read.
-func (s *MemoryStore) checkContinuity(recorded []MemoryRevision, revision MemoryRevision) error {
-	for _, earlier := range recorded {
-		if earlier.Memory != revision.Memory {
-			continue
-		}
-		if earlier.Continuity != revision.Continuity || earlier.Subject != revision.Subject {
-			return fmt.Errorf("%s is already recorded as %s memory %q and this revision makes it %s memory %q",
-				revision.Memory, earlier.Continuity, earlier.Subject, revision.Continuity, revision.Subject)
-		}
+func (t *memoryTip) checkContinuity(revision MemoryRevision) error {
+	head, known := t.Heads[revision.Memory]
+	if known && (head.Continuity != revision.Continuity || head.Subject != revision.Subject) {
+		return fmt.Errorf("%s is already recorded as %s memory %q and this revision makes it %s memory %q",
+			revision.Memory, head.Continuity, head.Subject, revision.Continuity, revision.Subject)
 	}
 	// Compacting names revisions of this memory, so a number that belongs to no
 	// revision is refused here rather than left as provenance pointing at nothing.
+	// The store numbers every memory from one without a gap, so the revisions a
+	// memory has are exactly the numbers up to its head.
 	for _, compacted := range revision.Compacts {
-		if !memoryHasSequence(recorded, revision.Memory, compacted) {
+		if compacted < 1 || compacted > head.Sequence {
 			return fmt.Errorf("%s has no revision %d to compact", revision.Memory, compacted)
 		}
 	}
 	return nil
+}
+
+// record moves the tip past one revision written: its memory's head, and the
+// live set with the memory's current revision replaced, added, or — where the
+// revision retired it — taken out.
+func (t *memoryTip) record(revision MemoryRevision) {
+	t.Heads[revision.Memory] = memoryHead{
+		Continuity: revision.Continuity,
+		Subject:    revision.Subject,
+		Sequence:   revision.Sequence,
+		Retired:    revision.Retired,
+	}
+	live := t.Live[:0]
+	for _, current := range t.Live {
+		if current.Memory != revision.Memory {
+			live = append(live, current)
+		}
+	}
+	if !revision.Retired {
+		live = append(live, revision)
+	}
+	sort.SliceStable(live, func(i, j int) bool { return memoryBefore(live[i], live[j]) })
+	t.Live = live
 }
 
 // affordable is the budget, asked of the write that is about to happen.
@@ -705,13 +1027,15 @@ func (s *MemoryStore) checkContinuity(recorded []MemoryRevision, revision Memory
 // are measured the same way — a compaction that replaces four revisions with one
 // smaller one is affordable exactly when the result fits, and a retirement almost
 // always is.
-func (s *MemoryStore) affordable(recorded []MemoryRevision, revision MemoryRevision) error {
+func (t *memoryTip) affordable(revision MemoryRevision) error {
 	live := 0
-	for _, memory := range assemble(append(append([]MemoryRevision{}, recorded...), revision)) {
-		if memory.Retired() {
-			continue
+	for _, current := range t.Live {
+		if current.Memory != revision.Memory {
+			live += len(current.Text)
 		}
-		live += len(memory.Current().Text)
+	}
+	if !revision.Retired {
+		live += len(revision.Text)
 	}
 	if live > MaxMemoryLiveBytes {
 		return fmt.Errorf("%w: %s would know %d bytes and the budget is %d; compact or retire a memory first",
@@ -735,7 +1059,10 @@ func (s *MemoryStore) affordable(recorded []MemoryRevision, revision MemoryRevis
 // still current has nothing superseded to set aside, and renaming it would leave a
 // fresh log the same size as the one it replaced. That case is bounded by the live
 // budget instead, which is what actually holds it down.
-func (s *MemoryStore) rollIfFull(agent, path string, recorded []MemoryRevision, incoming int) error {
+//
+// What it carries across is the tip's live set, so a roll reads nothing of the log
+// it sets aside.
+func (s *MemoryStore) rollIfFull(agent, path string, tip *memoryTip, incoming int) error {
 	stored, err := s.logSize(agent, path)
 	if err != nil {
 		return err
@@ -743,7 +1070,7 @@ func (s *MemoryStore) rollIfFull(agent, path string, recorded []MemoryRevision, 
 	if stored+int64(incoming) <= s.rollAt {
 		return nil
 	}
-	seed, err := currentMemoryLines(recorded)
+	seed, err := currentMemoryLines(tip.Live)
 	if err != nil {
 		return err
 	}
@@ -775,13 +1102,10 @@ func (s *MemoryStore) rollIfFull(agent, path string, recorded []MemoryRevision, 
 // currentMemoryLines is the current revision of every memory still live, encoded
 // as the lines a fresh log opens with. A retired memory is not carried across: its
 // history is in the archive, which is where a retired memory's history belongs.
-func currentMemoryLines(recorded []MemoryRevision) ([][]byte, error) {
+func currentMemoryLines(live []MemoryRevision) ([][]byte, error) {
 	var lines [][]byte
-	for _, memory := range assemble(recorded) {
-		if memory.Retired() {
-			continue
-		}
-		encoded, err := encodeMemoryRevision(memory.Current())
+	for _, current := range live {
+		encoded, err := encodeMemoryRevision(current)
 		if err != nil {
 			return nil, err
 		}
@@ -818,9 +1142,10 @@ func (s *MemoryStore) Memories(agent string) ([]Memory, []MemoryProblem, error) 
 
 // recorded is every revision this store holds for one agent, oldest file first:
 // the archives in the order they were rolled off, and then the live log. It is
-// what both the listing and the writer read, so a sequence the writer assigns
-// counts the archived revisions too and can never reuse a number that is already
-// in the history.
+// what the listing reads, and what a writer's tip is rebuilt from where the tip is
+// missing or disagrees with it, so a sequence the writer assigns counts the
+// archived revisions too and can never reuse a number that is already in the
+// history.
 func (s *MemoryStore) recorded(agent string) ([]MemoryRevision, []MemoryProblem, error) {
 	path, err := s.logPath(agent)
 	if err != nil {
@@ -930,34 +1255,22 @@ func assemble(recorded []MemoryRevision) []Memory {
 		memories = append(memories, *memory)
 	}
 	sort.SliceStable(memories, func(i, j int) bool {
-		if memories[i].Continuity != memories[j].Continuity {
-			return memories[i].Continuity == MemoryContinuityAgent
-		}
-		if memories[i].Subject != memories[j].Subject {
-			return memories[i].Subject < memories[j].Subject
-		}
-		return memories[i].Name < memories[j].Name
+		return memoryBefore(memories[i].Current(), memories[j].Current())
 	})
 	return memories
 }
 
-func nextMemorySequence(recorded []MemoryRevision, name string) int {
-	next := 1
-	for _, revision := range recorded {
-		if revision.Memory == name && revision.Sequence >= next {
-			next = revision.Sequence + 1
-		}
+// memoryBefore is the order memories are read in, decided by what the memories
+// are rather than by any one revision of them: every revision of a memory has the
+// same continuity, subject, and name.
+func memoryBefore(a, b MemoryRevision) bool {
+	if a.Continuity != b.Continuity {
+		return a.Continuity == MemoryContinuityAgent
 	}
-	return next
-}
-
-func memoryHasSequence(recorded []MemoryRevision, name string, sequence int) bool {
-	for _, revision := range recorded {
-		if revision.Memory == name && revision.Sequence == sequence {
-			return true
-		}
+	if a.Subject != b.Subject {
+		return a.Subject < b.Subject
 	}
-	return false
+	return a.Memory < b.Memory
 }
 
 // read is one of an agent's log files as it sits on disk. A line that will not
@@ -978,13 +1291,15 @@ func (s *MemoryStore) read(path, agent string, live bool) ([]MemoryRevision, []M
 		return nil, nil, fmt.Errorf("open the %s memory log: %w", agent, err)
 	}
 	defer file.Close()
+	counted := &countingReader{reader: file}
+	defer func() { s.observe(path, counted.read) }()
 
 	log := filepath.Base(path)
 	var (
 		revisions []MemoryRevision
 		problems  []MemoryProblem
 	)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(counted)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedMemoryRevisionBytes)
 	// The split is the ordinary line split, watched for the one token it hands back
 	// without a newline after it: the last line of a file that does not end in one.
@@ -1109,14 +1424,33 @@ func (s *MemoryStore) append(path string, encoded []byte) error {
 // lines that read, and nothing that was ever on the disk is lost. A crash between
 // the copy and the cut leaves the tail in place to be set aside again by the next
 // write, which costs a second copy of a fragment and never the fragment.
+//
+// A log that ends in a newline, which is every log no crash has touched, costs
+// this its last byte; only a torn one is read whole.
 func (s *MemoryStore) mendTail(agent, path string) error {
-	stored, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	size, err := s.logSize(agent, path)
+	if err != nil || size == 0 {
+		return err
 	}
+	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("read the %s memory log: %w", agent, err)
 	}
+	last := make([]byte, 1)
+	_, err = file.ReadAt(last, size-1)
+	file.Close()
+	if err != nil {
+		return fmt.Errorf("read the end of the %s memory log: %w", agent, err)
+	}
+	s.observe(path, 1)
+	if last[0] == '\n' {
+		return nil
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read the %s memory log: %w", agent, err)
+	}
+	s.observe(path, int64(len(stored)))
 	if len(stored) == 0 || stored[len(stored)-1] == '\n' {
 		return nil
 	}
@@ -1180,10 +1514,12 @@ func (s *MemoryStore) lockAgent(ctx context.Context, agent string) (func(), erro
 // name with a number in it, so the archives of one agent sort into the order they
 // were rolled and no archive is ever read as a live log. A torn end set aside is
 // numbered the same way and carries no `.jsonl` at all, because what it holds is
-// by definition not a line anything can read.
+// by definition not a line anything can read. The tip a write reads in place of
+// the history ends in `.memory.tip.json`, which no listing mistakes for a log.
 const (
 	memoryLogSuffix     = ".memory.jsonl"
 	memoryLockSuffix    = ".memory.lock"
+	memoryTipSuffix     = ".memory.tip.json"
 	memoryArchiveMiddle = ".memory.archive-"
 	memoryArchiveFormat = "%s" + memoryArchiveMiddle + "%04d.jsonl"
 	memoryTornMiddle    = ".memory.torn-"
@@ -1330,4 +1666,30 @@ func (s *MemoryStore) lockPath(agent string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(s.root, agent+memoryLockSuffix), nil
+}
+
+func (s *MemoryStore) tipPath(agent string) (string, error) {
+	if err := domain.ValidateIdentifier("agent", agent); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, agent+memoryTipSuffix), nil
+}
+
+// observe reports bytes read from one of an agent's files to a test watching what
+// a write costs. Every store the harness builds watches nothing.
+func (s *MemoryStore) observe(path string, read int64) {
+	if s.observeRead != nil {
+		s.observeRead(filepath.Base(path), read)
+	}
+}
+
+type countingReader struct {
+	reader io.Reader
+	read   int64
+}
+
+func (c *countingReader) Read(buffer []byte) (int, error) {
+	read, err := c.reader.Read(buffer)
+	c.read += int64(read)
+	return read, err
 }

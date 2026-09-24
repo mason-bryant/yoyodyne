@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -263,6 +264,235 @@ func TestARolledStoreStillCompactsAndRetires(t *testing.T) {
 	// provenance the design requires of one.
 	if got := memories[0].Revisions[6].Compacts; len(got) != 6 {
 		t.Errorf("the compaction names %v, want the six revisions it replaced", got)
+	}
+}
+
+// TestAWriteReadsTheTipRatherThanTheHistory is the cost of a write held to what
+// the agent knows now rather than to how long it has known it. An agent grows
+// through several rolls, one of its memories retired early enough that its last
+// number lives only in an archive, and a write afterwards reads no archive, reads
+// the same bounded amount however many rolls lie behind it, and still numbers
+// every memory as the whole history would.
+func TestAWriteReadsTheTipRatherThanTheHistory(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	store.rollAt = 2000
+	retired := testMemoryRevision()
+	retired.Memory = "what-stopped-being-true"
+	for _, retiring := range []bool{false, true} {
+		retired.Retired = retiring
+		if _, err := store.Remember(context.Background(), retired); err != nil {
+			t.Fatalf("Remember() %s error = %v", retired.Memory, err)
+		}
+	}
+	grow := func(rolls int) {
+		t.Helper()
+		for round := 0; ; round++ {
+			archives, err := store.archivePaths("product-manager")
+			if err != nil {
+				t.Fatalf("archivePaths() error = %v", err)
+			}
+			if len(archives) >= rolls {
+				return
+			}
+			revision := testMemoryRevision()
+			revision.Text = fmt.Sprintf("round %d: %s", round, strings.Repeat("z", 300))
+			if _, err := store.Remember(context.Background(), revision); err != nil {
+				t.Fatalf("Remember() on round %d error = %v", round, err)
+			}
+		}
+	}
+	// costOfAWrite is what one write reads, file by file.
+	costOfAWrite := func() (map[string]int64, MemoryRevision) {
+		t.Helper()
+		read := map[string]int64{}
+		store.observeRead = func(file string, bytes int64) { read[file] += bytes }
+		defer func() { store.observeRead = nil }()
+		revision := testMemoryRevision()
+		revision.Text = "the operator reads reports at leisure, however old this agent is"
+		recorded, err := store.Remember(context.Background(), revision)
+		if err != nil {
+			t.Fatalf("Remember() error = %v", err)
+		}
+		return read, recorded
+	}
+	total := func(read map[string]int64) (sum int64) {
+		for _, bytes := range read {
+			sum += bytes
+		}
+		return sum
+	}
+
+	grow(3)
+	young, _ := costOfAWrite()
+	grow(9)
+	old, recorded := costOfAWrite()
+	for _, read := range []map[string]int64{young, old} {
+		for file := range read {
+			if strings.Contains(file, memoryArchiveMiddle) {
+				t.Fatalf("a write read the archive %s: %v", file, read)
+			}
+		}
+		// The tip is one live memory and one retired head, and the log is checked
+		// by its last line and its last byte, so a write reads a few kilobytes.
+		if got := total(read); got > 8<<10 {
+			t.Fatalf("a write read %d bytes (%v), want the tip and one line", got, read)
+		}
+	}
+	if total(old) > total(young)+64 {
+		t.Errorf("a write after nine rolls read %d bytes and after three %d; the cost is growing with the history", total(old), total(young))
+	}
+
+	// The whole history is still what the read surface returns, numbered as it
+	// was written, across every archive and the log.
+	memories, problems, err := store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Memories() reported %v", problems)
+	}
+	var kept Memory
+	for _, memory := range memories {
+		if memory.Name == "how-the-operator-reads" {
+			kept = memory
+		}
+	}
+	if len(kept.Revisions) != recorded.Sequence {
+		t.Fatalf("the memory has %d revisions and the last write was numbered %d", len(kept.Revisions), recorded.Sequence)
+	}
+	for index, revision := range kept.Revisions {
+		if revision.Sequence != index+1 {
+			t.Fatalf("revision %d is numbered %d; a number was reused or skipped", index, revision.Sequence)
+		}
+	}
+
+	// A retired memory's last number is in an archive and no longer in the log,
+	// and a write that names it again continues from it rather than starting over.
+	// Every archive is overwritten with unreadable bytes of the same size first, so
+	// a write that read one would be refused rather than quietly right.
+	archives, err := store.archivePaths("product-manager")
+	if err != nil {
+		t.Fatalf("archivePaths() error = %v", err)
+	}
+	for _, archive := range archives {
+		info, err := os.Stat(archive)
+		if err != nil {
+			t.Fatalf("stat %s: %v", archive, err)
+		}
+		if err := os.WriteFile(archive, []byte(strings.Repeat("#", int(info.Size()))), 0o600); err != nil {
+			t.Fatalf("overwrite %s: %v", archive, err)
+		}
+	}
+	revived := testMemoryRevision()
+	revived.Memory = "what-stopped-being-true"
+	again, err := store.Remember(context.Background(), revived)
+	if err != nil {
+		t.Fatalf("Remember() a retired memory again error = %v", err)
+	}
+	if again.Sequence != 3 {
+		t.Errorf("the retired memory written again is numbered %d, want 3 after its two archived revisions", again.Sequence)
+	}
+}
+
+// TestAMissingOrDisagreeingTipIsRebuiltAndSaysSo is the tip held to the history it
+// stands for. It is derived, so where it is missing, will not decode, or was
+// recorded against a log that has since changed, a write rebuilds it from the
+// history rather than numbering from it, and the rebuilt tip records why.
+func TestAMissingOrDisagreeingTipIsRebuiltAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	tipPath := filepath.Join(store.Root(), "product-manager.memory.tip.json")
+	readTip := func() memoryTip {
+		t.Helper()
+		stored, err := os.ReadFile(tipPath)
+		if err != nil {
+			t.Fatalf("read the tip: %v", err)
+		}
+		var tip memoryTip
+		if err := json.Unmarshal(stored, &tip); err != nil {
+			t.Fatalf("decode the tip: %v", err)
+		}
+		return tip
+	}
+	write := func() MemoryRevision {
+		t.Helper()
+		recorded, err := store.Remember(context.Background(), testMemoryRevision())
+		if err != nil {
+			t.Fatalf("Remember() error = %v", err)
+		}
+		return recorded
+	}
+
+	// An agent with no history has no tip to disagree with, so its first write
+	// records one without calling it a rebuild.
+	write()
+	if tip := readTip(); tip.Rebuilt != nil || tip.Heads["how-the-operator-reads"].Sequence != 1 {
+		t.Fatalf("the first tip is %+v, want revision 1 recorded and no rebuild", tip)
+	}
+	write()
+	if tip := readTip(); tip.Rebuilt != nil {
+		t.Fatalf("a tip that matched its history was rebuilt: %+v", tip.Rebuilt)
+	}
+
+	cases := []struct {
+		name    string
+		disturb func()
+		because string
+	}{
+		{"missing", func() {
+			if err := os.Remove(tipPath); err != nil {
+				t.Fatalf("remove the tip: %v", err)
+			}
+		}, "no tip was recorded"},
+		{"undecodable", func() {
+			if err := os.WriteFile(tipPath, []byte("{not a tip}"), 0o600); err != nil {
+				t.Fatalf("overwrite the tip: %v", err)
+			}
+		}, "would not decode"},
+		// A revision on the log the tip never heard of: a crash between the append
+		// and the tip, or a line put there by hand. It is history, so it is counted.
+		{"behind the log", func() {
+			unrecorded := testMemoryRevision()
+			unrecorded.Sequence = readTip().Heads["how-the-operator-reads"].Sequence + 1
+			encoded, err := encodeMemoryRevision(unrecorded)
+			if err != nil {
+				t.Fatalf("encodeMemoryRevision() error = %v", err)
+			}
+			appendToMemoryLog(t, filepath.Join(store.Root(), "product-manager.memory.jsonl"), encoded)
+		}, "the live log is"},
+	}
+	for _, each := range cases {
+		memories, _, err := store.Memories("product-manager")
+		if err != nil {
+			t.Fatalf("Memories() error = %v", err)
+		}
+		want := memories[0].Current().Sequence + 1
+		each.disturb()
+		if each.name == "behind the log" {
+			want++
+		}
+		recorded := write()
+		if recorded.Sequence != want {
+			t.Errorf("%s: the write is numbered %d, want %d from the history", each.name, recorded.Sequence, want)
+		}
+		tip := readTip()
+		if tip.Rebuilt == nil || !strings.Contains(tip.Rebuilt.Because, each.because) {
+			t.Errorf("%s: the tip records rebuild %+v, want one saying %q", each.name, tip.Rebuilt, each.because)
+		}
+		if tip.Heads["how-the-operator-reads"].Sequence != recorded.Sequence {
+			t.Errorf("%s: the rebuilt tip heads at %d, want %d", each.name, tip.Heads["how-the-operator-reads"].Sequence, recorded.Sequence)
+		}
+	}
+
+	// A write past a tip that matches carries the last rebuild's account forward,
+	// so the record of one outlives the write that made it.
+	before := readTip().Rebuilt
+	write()
+	if after := readTip().Rebuilt; after == nil || after.Because != before.Because {
+		t.Errorf("the rebuild's account was %+v and is now %+v", before, after)
 	}
 }
 

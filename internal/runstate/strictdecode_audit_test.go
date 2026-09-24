@@ -80,6 +80,7 @@ var strictSites = map[string]strictSite{
 	"internal/runstate/sweep.go:(*SweepStore).load":                       {strictWriter, "a recurring task's claim is read to be taken or released"},
 	"internal/runstate/triage.go:(*TriageStore).load":                     {strictWriter, "the triage counters are read, incremented, and saved back"},
 	"internal/runstate/sidestream.go:(*SideStreamStore).Load":             {strictWriter, "a side stream is read to be answered and settled; its listing counts the per-agent bound"},
+	"internal/runstate/memory.go:(*MemoryStore).decodeTip":                {strictWriter, "a memory tip is read only by the write it numbers, under the agent's lock, and one that will not decode is rebuilt from the history rather than refused"},
 
 	// Gates: a refusal the caller declines to proceed on and reports.
 	"internal/runstate/hold.go:(*OperatorHoldStore).Held":                 {strictValidator, "a hold nobody can read is never spent through as though it were absent; the read model reports it as a problem and the sink reads it past"},
