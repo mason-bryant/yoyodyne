@@ -21,6 +21,8 @@
     "remains": "work preserved",
     "branch": "yoyodyne/yoyodyne-ifd-150/a17c9b40",
     "failure": "the provider refused the review on an exhausted usage limit (five_hour) and the pause budget is spent",
+    "stop_class": "provider",
+    "reason": "provider: the provider refused the review on an exhausted usage limit (five_hour) and the pause budget is spent",
     "started_at": "2026-09-18T18:02:00Z",
     "completed_at": "2026-09-19T02:12:00Z",
     "cost_usd": 7.05

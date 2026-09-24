@@ -116,7 +116,7 @@ func TestReadWorkItemSaysWhatTheLatestRunCameTo(t *testing.T) {
 	preserved := &fakeHistories{runs: []runstate.RunSummary{{
 		RunID: "run-stopped", Status: runstate.StatusFailed, Outcome: runstate.OutcomeStopped, Phase: runstate.PhaseReviewing,
 		StartedAt: moment.Add(-2 * time.Hour), CompletedAt: &completed, Branch: "yoyodyne/x", WorktreePath: "/tmp/x", ProviderSessionID: "sess-1",
-		Failure: "the reviewer asked for repair", UnknownCost: "its event log is gone",
+		Failure: "the reviewer asked for repair", StopClass: runstate.StopReview, UnknownCost: "its event log is gone",
 	}}}
 	item, err := ReadWorkItem(context.Background(), WorkItemSources{Tracker: tracker, Runs: preserved, Now: func() time.Time { return moment }}, "yoyodyne-ifd.1")
 	if err != nil {
@@ -126,6 +126,11 @@ func TestReadWorkItemSaysWhatTheLatestRunCameTo(t *testing.T) {
 	if run == nil || run.InFlight || !run.Preserved || run.Remains != "work preserved" || run.Outcome != runstate.OutcomeStopped || run.Failure != "the reviewer asked for repair" ||
 		run.UnknownCost != "its event log is gone" || run.CompletedAt == nil || run.Elapsed != 0 || run.ProviderSessionID != "sess-1" {
 		t.Fatalf("a stopped run with its change preserved reads as %+v", run)
+	}
+	// The reason is the one `yoyo status` prints: the gate that stopped the run
+	// first, then the run's own words.
+	if run.StopClass != runstate.StopReview || run.Reason != "review: the reviewer asked for repair" {
+		t.Fatalf("the stopped run's reason reads as %q under class %q", run.Reason, run.StopClass)
 	}
 
 	removed := &fakeHistories{runs: []runstate.RunSummary{{

@@ -1197,8 +1197,8 @@
       facts.push("run " + run.run_id + ", started " + dayAndClock(run.started_at) + (run.completed_at ? ", ended " + dayAndClock(run.completed_at) : ""));
       facts.push(run.unknown_cost ? "cost unknown (" + run.unknown_cost + ")" : "cost " + money(run.cost_usd || 0));
     }
-    if (run.failure) {
-      facts.push("reason: " + run.failure);
+    if (run.reason) {
+      facts.push("reason: " + run.reason);
     }
     if (run.branch) {
       facts.push("branch: " + run.branch);

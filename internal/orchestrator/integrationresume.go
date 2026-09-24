@@ -476,6 +476,7 @@ func (r IntegrationResumer) supersedeOnRun(prior runstate.State, reason string) 
 	resumed.IntegrationStop = nil
 	resumed.Blocker = ""
 	resumed.Failure = ""
+	resumed.StopClass = ""
 	// The environmental refusal on the record belongs to the round that ended;
 	// that round settled and was paid back, and the promotion this resumes is not
 	// a round at all. It is carried onto the resumption above rather than lost.

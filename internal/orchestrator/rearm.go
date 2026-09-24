@@ -360,6 +360,9 @@ func (r Rearmer) repeat(ctx context.Context, runID, targetBranch string, checked
 	published.MergeQueued = true
 	state.PullRequest = &published
 	state.PublishFailure = ""
+	if state.StopClass == runstate.StopPublish {
+		state.StopClass = ""
+	}
 	state.Blocker = ""
 	state.UpdatedAt = r.now()
 	if err := r.Runs.Save(state); err != nil {

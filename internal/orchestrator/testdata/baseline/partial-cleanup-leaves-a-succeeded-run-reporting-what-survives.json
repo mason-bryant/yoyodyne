@@ -50,6 +50,7 @@
         "review_summary": "the change matches the acceptance criteria",
         "run_id": "run-0123456789abcdef0123456789abcdef",
         "status": "succeeded",
+        "stop_class": "cleanup",
         "summary": "implemented the work item",
         "verification": {
           "checks": [
@@ -109,6 +110,7 @@
     "schema_version": 1,
     "started_at": "\u003ctime\u003e",
     "status": "succeeded",
+    "stop_class": "cleanup",
     "target_branch": "main",
     "updated_at": "\u003ctime\u003e",
     "verification": {

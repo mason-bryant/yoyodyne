@@ -1,7 +1,12 @@
 package orchestrator
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -110,6 +115,100 @@ func TestTheDurableSchemaStoresEveryLandingADeveloperCanClaim(t *testing.T) {
 				claimed.Discharges(), stored.LandingDischarges())
 		}
 	}
+}
+
+// The stop vocabulary is kept in one place rather than two, so what is held
+// together here is different: the list the durable schema validates against and
+// the constants the pipeline writes. A class declared and left off the list is
+// refused at the save of a run that has already stopped — the one write that
+// says why — and a class on the list that the schema then drops is a stop every
+// surface prints without its first word. The list is also pinned, because every
+// surface prints these words and a reader who learned them should not find one
+// renamed under them.
+func TestTheDurableSchemaStoresEveryStopClassThePipelineRecords(t *testing.T) {
+	t.Parallel()
+
+	want := []runstate.StopClass{"checks", "review", "integration", "publish", "cleanup",
+		"recording", "provider", "environmental", "cancelled", "harness"}
+	if got := runstate.StopClasses(); !slices.Equal(got, want) {
+		t.Fatalf("the stop vocabulary is %v, pinned as %v; changing it is changing a word every surface prints, so change both", got, want)
+	}
+
+	// Every constant of the type is on the list, read from the source that
+	// declares them so a constant nobody listed is found by this rather than by a
+	// refused save.
+	declared := declaredStopClasses(t)
+	if len(declared) == 0 {
+		t.Fatal("no StopClass constant was found, so this compared nothing")
+	}
+	for name, value := range declared {
+		if !slices.Contains(want, runstate.StopClass(value)) {
+			t.Errorf("runstate.%s = %q is a stop class the durable schema does not store", name, value)
+		}
+	}
+
+	for _, class := range want {
+		// Checked through a state a run actually saves, so the vocabulary is held
+		// where it crosses rather than only where it is listed.
+		state := runstate.State{StopClass: class}
+		if err := state.Validate(); err != nil && strings.Contains(err.Error(), "stop_class is invalid") {
+			t.Errorf("a stored %q stop class is refused: %v", class, err)
+		}
+		// And every class leads the reason the way every surface prints it.
+		if reason := runstate.StopReason(class, "what happened"); !strings.HasPrefix(reason, string(class)+": ") {
+			t.Errorf("StopReason(%q) = %q, want the class as its first word", class, reason)
+		}
+	}
+	unknown := runstate.State{StopClass: "somebody"}
+	if err := unknown.Validate(); err == nil || !strings.Contains(err.Error(), "stop_class is invalid") {
+		t.Errorf("a stop class nothing recognizes was stored: %v", err)
+	}
+}
+
+// declaredStopClasses is every constant of type StopClass the runstate package
+// declares, by name, with its value.
+func declaredStopClasses(t *testing.T) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob("../runstate/*.go")
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	declared := map[string]string{}
+	fileSet := token.NewFileSet()
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("ParseFile(%s) error = %v", path, err)
+		}
+		for _, decl := range parsed.Decls {
+			general, ok := decl.(*ast.GenDecl)
+			if !ok || general.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range general.Specs {
+				value := spec.(*ast.ValueSpec)
+				typed, ok := value.Type.(*ast.Ident)
+				if !ok || typed.Name != "StopClass" {
+					continue
+				}
+				for i, name := range value.Names {
+					literal, ok := value.Values[i].(*ast.BasicLit)
+					if !ok {
+						t.Fatalf("runstate.%s is not declared as a literal, so its value cannot be checked here", name.Name)
+					}
+					unquoted, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatalf("runstate.%s: %v", name.Name, err)
+					}
+					declared[name.Name] = unquoted
+				}
+			}
+		}
+	}
+	return declared
 }
 
 // The execution vocabulary is the third kept in two places, and it is held

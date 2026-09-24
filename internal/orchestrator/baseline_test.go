@@ -168,6 +168,55 @@ func TestBaselineDocumentDisclosesEveryFieldNoTraceHolds(t *testing.T) {
 	}
 }
 
+// TestBaselineTracesEveryStopClass holds the baseline to recording each gate a
+// run can stop at, as the stop_class a trace carries. A class no trace holds is
+// a stop a parity harness would never compare, and it is checked by the field's
+// own values rather than by the names collected below, because several of the
+// classes are also words the traces use for other things.
+func TestBaselineTracesEveryStopClass(t *testing.T) {
+	t.Parallel()
+
+	recorded, err := filepath.Glob(filepath.Join(baselineDirectory, "*.json"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	traced := map[string]bool{}
+	for _, path := range recorded {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		var trace any
+		if err := json.Unmarshal(content, &trace); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", path, err)
+		}
+		baselineCollectField(trace, "stop_class", traced)
+	}
+	for _, class := range runstate.StopClasses() {
+		if !traced[string(class)] {
+			t.Errorf("no baseline trace records stop_class %q; drive a scenario that stops there", class)
+		}
+	}
+}
+
+// baselineCollectField is every string value a trace holds under one key,
+// wherever in the trace that key appears.
+func baselineCollectField(value any, field string, into map[string]bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if text, ok := nested.(string); ok && key == field {
+				into[text] = true
+			}
+			baselineCollectField(nested, field, into)
+		}
+	case []any:
+		for _, nested := range typed {
+			baselineCollectField(nested, field, into)
+		}
+	}
+}
+
 // baselineRecordedNames is every key and every string value in every recorded
 // trace. Values count as well as keys because what the document names is not
 // always a field -- `provider_stop` and `timed_out` are values a field carries --
@@ -291,6 +340,21 @@ func baselineScenarios() []baselineScenario {
 			name:    "partial-cleanup-leaves-a-succeeded-run-reporting-what-survives",
 			freezes: "Cleanup that removed one artifact and not the other leaves the run succeeded and the item closed, reports each artifact separately, and names only the one that actually survives.",
 			drive:   baselinePartialCleanup,
+		},
+		{
+			name:    "outstanding-publication-leaves-a-succeeded-run-naming-it",
+			freezes: "A promotion the forge could not confirm is an outstanding publication rather than a failed run: the run succeeds, the item closes, and the record names the publication as what the run stopped short of, in stop_class publish beside the failure it names.",
+			drive:   baselineOutstandingPublication,
+		},
+		{
+			name:    "completion-record-that-arrives-late-says-so",
+			freezes: "A run whose artifacts were all removed and whose terminal record the store refused twice stays succeeded with nothing reported outstanding, and the late write that lands carries why it was late in completion_recording_failure and stop_class recording.",
+			drive:   baselineCompletionRecordedLate,
+		},
+		{
+			name:    "environment-refusing-the-probe-ends-the-run-as-environmental",
+			freezes: "A developer that could not start its probe at all ends the run on its first reply, before the checks and the reviewer, with the refusal recorded as environmental and stop_class environmental rather than as anything the change did.",
+			drive:   baselineEnvironmentRefusedProbe,
 		},
 		{
 			name:    "server-overload-pause-reissues-the-same-attempt",
@@ -711,6 +775,56 @@ func baselinePartialCleanup(t *testing.T) *baselineFixture {
 	}
 	fixture.invoke(t, "run", pipeline)
 	return fixture
+}
+
+func baselineOutstandingPublication(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	remote := addBareRemote(t, fixture.repository)
+	provider := roleBackend(baselineImplements, approveVerdict)
+	// The forge takes the branch and the pull request and then cannot say what
+	// became of the merge, which is the publication left outstanding.
+	forge := &fakeForge{remote: remote, stateErr: errors.New("the forge is unreachable")}
+	fixture.invoke(t, "run", publishing(fixture.automatic(t, provider, []string{"test -f feature.txt"}), forge))
+	return fixture
+}
+
+func baselineCompletionRecordedLate(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	provider := roleBackend(baselineImplements, approveVerdict)
+	// The terminal write and its retry are refused, and the late write after them
+	// lands, so what survives is the record that says it arrived late.
+	refusing := &briefOutageStore{StateStore: fixture.store, at: runstate.PhaseComplete, refusals: 2}
+	fixture.invoke(t, "run", automatic(fixture.pipelineOver(t, refusing, provider, []string{"test -f feature.txt"}), provider))
+	if refusing.refusals != 0 {
+		t.Fatal("the scenario never refused the terminal record it was driving")
+	}
+	return fixture
+}
+
+func baselineEnvironmentRefusedProbe(t *testing.T) *baselineFixture {
+	fixture := newBaselineFixture(t, baselineItem())
+	provider := roleBackend(baselineImplements, approveVerdict)
+	provider.developerFinalText = "I cannot run anything in this worktree.\n\n" +
+		verificationBlock(`{"probe":{"command":"make build","outcome":"refused","detail":"could not start /bin/sh: operation not permitted"}}`)
+	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
+	return fixture
+}
+
+// briefOutageStore refuses a fixed number of saves of a state at one phase and
+// takes every save after them, which is a store that was briefly unavailable
+// rather than one that went away.
+type briefOutageStore struct {
+	StateStore
+	at       runstate.Phase
+	refusals int
+}
+
+func (s *briefOutageStore) Save(state runstate.State) error {
+	if state.Phase == s.at && s.refusals > 0 {
+		s.refusals--
+		return errors.New("state store is unavailable")
+	}
+	return s.StateStore.Save(state)
 }
 
 func baselineServerOverloadPause(t *testing.T) *baselineFixture {

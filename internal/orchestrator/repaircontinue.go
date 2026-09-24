@@ -719,6 +719,8 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 	// The failure the run ended on describes the stoppage this supersedes, and a
 	// run that is going again has not failed.
 	continued.Failure = ""
+	// Which gate stopped it goes with the failure, for the same reason.
+	continued.StopClass = ""
 	// The environmental refusal on the record belongs to the round this
 	// supersedes, and that round has already settled and been paid back. Leaving
 	// it would make the next round inherit a classification it has not earned, and

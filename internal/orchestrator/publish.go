@@ -633,6 +633,8 @@ func (a *activeRun) catchUpTarget(ctx context.Context, targetBranch string) {
 func (a *activeRun) recordPublishFailure(cause error) {
 	a.outcome.PublishFailure = cause.Error()
 	a.state.PublishFailure = a.outcome.PublishFailure
+	a.outcome.StopClass = runstate.StopPublish
+	a.state.StopClass = a.outcome.StopClass
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		a.outcome.PublishFailure = errors.Join(cause, fmt.Errorf("record the outstanding publication: %w", err)).Error()

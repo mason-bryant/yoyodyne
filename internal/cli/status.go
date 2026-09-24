@@ -989,20 +989,26 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		recorded(run.ConfigRevision, "a configuration the record does not name"),
 		recorded(shortBuild(run.Build), "a build the record does not name"))
 	printed := true
-	for _, reason := range []struct {
+	// The reason leads with the class that stopped the run, so which gate stopped
+	// it is read off the record rather than inferred from whichever evidence is
+	// printed below it. Where the reason borrowed its words from one of the three
+	// accounts of a succeeded run, that account is not printed a second time.
+	reason := run.Reason()
+	if reason != "" {
+		fmt.Fprintf(writer, "  reason: %s\n", singleLine(reason))
+	}
+	for _, account := range []struct {
 		label string
 		text  string
 	}{
-		{label: "reason", text: run.Failure},
 		{label: "outstanding publication", text: run.PublishFailure},
 		{label: "outstanding cleanup", text: run.CleanupFailure},
 		{label: "completion recorded late", text: run.CompletionRecordingFailure},
 	} {
-		if reason.text == "" {
+		if account.text == "" || reason == runstate.StopReason(run.StopClass, account.text) {
 			continue
 		}
-		fmt.Fprintf(writer, "  %s: %s\n", reason.label, singleLine(reason.text))
-		printed = true
+		fmt.Fprintf(writer, "  %s: %s\n", account.label, singleLine(account.text))
 	}
 	// An approved change the environment stopped is said beside its reason,
 	// because the reason alone reads as a failed piece of work and sends an

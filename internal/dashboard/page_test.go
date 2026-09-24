@@ -642,7 +642,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"waiting on: the development manager", `data-item="yoyodyne-ifd.150"`,
 			`<h2 id="card-heading" class="popup-title">Triage names the phase a run stopped in</h2>`,
 			`<p class="card-run-preserved">preserved: stopped, reviewing — work preserved</p>`,
-			"reason: the reviewer asked for repair 3 times",
+			"reason: review: the reviewer asked for repair 3 times",
 			`<dd class="card-none">none</dd>`,
 			"cost $18.62",
 		},

@@ -318,6 +318,39 @@ func parityScenarios() []parityScenario {
 			terminal: "delivered",
 		},
 		{
+			// An outstanding publication does not change the path: the promotion
+			// landed and the forge's silence is reported beside it.
+			trace:    "outstanding-publication-leaves-a-succeeded-run-naming-it",
+			workflow: DeliveryWorkflowID,
+			steps:    promoted,
+			terminal: "delivered",
+		},
+		{
+			// A completion record that arrived late is a cleanup the definition
+			// sees as unfinished, which is how the pipeline observes it.
+			trace:    "completion-record-that-arrives-late-says-so",
+			workflow: DeliveryWorkflowID,
+			steps: []parityStep{
+				{parityClaim, "claimed"},
+				{parityDevelop, "produced"},
+				{parityCheck, "passed"},
+				{parityReview, "approved"},
+				{parityIntegrate, "integrated"},
+				{parityComplete, "completed"},
+				{parityCleanUp, "partial"},
+			},
+			terminal: "delivered",
+		},
+		{
+			trace:    "environment-refusing-the-probe-ends-the-run-as-environmental",
+			workflow: DeliveryWorkflowID,
+			steps: []parityStep{
+				{parityClaim, "claimed"},
+				{parityDevelop, "stopped"},
+			},
+			terminal: "abandoned",
+		},
+		{
 			trace:    "transient-provider-death-relaunches-without-charging-the-developer",
 			workflow: DeliveryWorkflowID,
 			steps:    reissuedThenPromoted,

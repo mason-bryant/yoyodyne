@@ -391,6 +391,32 @@ that survives, or a removal that could not be confirmed — `worktree_removed` a
 `branch_removed` tell those apart), and `completion_recording_failure` (the final
 record arrived late).
 
+Beside the status and the outcome a stopped run records **`stop_class`**, which
+gate stopped it, written by the pipeline where it stopped the run and printed by
+`yoyo status` and the read model as the first word of the reason. The classes
+are a closed list:
+
+| Class | Written by |
+| --- | --- |
+| `checks` | A check that kept failing or could not run, a refused path, or execution evidence never recorded, each once the repair budget is spent |
+| `review` | Findings the repair budget could not resolve, or an approval whose independence could not be shown |
+| `integration` | A target branch that kept moving, a replay that conflicts, a local and remote target that diverged, or a promotion refused |
+| `publish` | A developer branch that could not be published, a promotion whose pull request the record does not hold, and — on a succeeded run — beside `publish_failure` |
+| `cleanup` | Beside `cleanup_failure` on a succeeded run |
+| `recording` | The outcome, the closure, or the terminal state of a run whose work was done that could not be written, and beside `completion_recording_failure` on a succeeded run |
+| `provider` | A provider death past the relaunch budget, a failed or unusable developer or reviewer invocation, a stop on time with nothing to continue from, or a refusal whose wait the harness cannot decide |
+| `environmental` | Any stop whose round carries an unsettled environmental refusal, whichever gate it reached |
+| `cancelled` | Any stop recorded `cancelled`, whichever gate it reached |
+| `harness` | A stop none of the above classified: the harness's own step around the work |
+
+The environment and a cancellation are decided first, because each is true of
+the run whichever gate it met them at; past those, the class the stopping site
+gave wins. The evidence fields — `check_failure`, `path_refusal`,
+`review_findings` — are what a repair was handed and are never the class: all
+three can be on the record of a run the provider killed. A run settled by a
+reconciliation sweep rather than by its own pipeline records no class, and a
+re-entered or resumed run clears the class its stop left.
+
 An **environmental** refusal is the one stoppage that leaves the item's budgets
 where they were: the environment refused the round rather than the work failing,
 so a caller that reported the blocker without it would say the item had spent a
@@ -467,6 +493,9 @@ re-closing or re-blocking an item is exactly what a sweep must not do.
 | `operator-stop-cancels-the-run-and-preserves-its-work` | The `cancelled` terminal, taken at a provider-call boundary before a verdict is bought |
 | `verdict-fields-the-schema-does-not-name-are-recorded-as-drift` | The `review.drift` event, and a verdict acted on without what the schema does not define |
 | `partial-cleanup-leaves-a-succeeded-run-reporting-what-survives` | `cleanup_failure` on a succeeded run, with each artifact reported separately |
+| `outstanding-publication-leaves-a-succeeded-run-naming-it` | `publish_failure` on a succeeded run whose merge the forge could not confirm, and `stop_class` `publish` |
+| `completion-record-that-arrives-late-says-so` | `completion_recording_failure` on a succeeded run whose terminal record the store refused twice, carried by the late write that landed, and `stop_class` `recording` |
+| `environment-refusing-the-probe-ends-the-run-as-environmental` | A developer that could not start its probe ending the run on its first reply, as an environmental refusal and `stop_class` `environmental` |
 | `transient-provider-death-relaunches-without-charging-the-developer` | The relaunch budget spending no repair attempt |
 | `transient-deaths-spend-the-relaunch-budget-and-block` | The relaunch budget's bound, for a death whose class the harness does not recognize |
 | `recoverable-death-carries-on-past-the-relaunch-budget` | A dropped connection waited out past the spent relaunch budget, with each wait recorded on the run |
@@ -491,10 +520,12 @@ is unmeasured. Most of these are asserted somewhere in
 
 **Whole paths.**
 
-- The publishing half — `pull_request`, queued merges, the remote target, the
-  `publish_failure` report, `publish_skipped` (which only a run that asked to
-  publish and could not ever carries, so the scenarios here leave it empty), and
-  the catch-up after a forge merge. It has its own assertions in
+- Most of the publishing half — queued merges, the remote target,
+  `publish_skipped` (which only a run that asked to publish and could not ever
+  carries, so the scenarios here leave it empty), and the catch-up after a forge
+  merge. One trace publishes, and only as far as a merge the forge could not
+  confirm: it holds the pull request and the outstanding publication, and none
+  of the rest. The rest has its own assertions in
   `internal/orchestrator/publish_test.go`.
 - **Four of the ten `retries` boundaries.** The boundaries are the ten
   `runstate.Retry*` constants, counted as constants rather than as call sites —
@@ -561,16 +592,14 @@ is unmeasured. Most of these are asserted somewhere in
   attempt, so both are untraced together. It is left untraced deliberately: what
   such a run records includes how long the check ran, which is the machine rather
   than the behavior.
-- `completion_recording_failure`, which is a succeeded run whose final record
-  arrived late.
 - `workflow_unobserved`, which is why a run that was to be observed has no
   instance. No trace here holds it and none ever can: a trace whose run was
   eligible for observation and carries it is refused rather than recorded, which
   is the point of the field. `internal/orchestrator/declarative_test.go` asserts
   both halves — the run recording it and delivering anyway, and the recorder
   refusing the trace.
-- The environmental classification of a refused round, and the budgets it hands
-  back.
+- The budgets an environmental refusal hands back. The classification itself is
+  traced, on a first round that had nothing to hand back.
 - `usage_limit_paused_seconds` reaching `execution.usage_limit_max_pause`, and
   the blocker a usage limit with an unusable reset time produces.
 - `usage_limit_paused_since` and `usage_limit_reset_unknown`, which are on the

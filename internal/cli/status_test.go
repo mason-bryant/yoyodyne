@@ -183,6 +183,65 @@ func TestStatusNarrowsToOneItemAndSaysWhatALimitLeftOut(t *testing.T) {
 	}
 }
 
+// Which gate stopped a run is the first word of its reason, so a run the
+// provider killed with a check failure still on its record reads as the
+// provider's stop, and a succeeded run whose completion record arrived late
+// says so as its reason without the same words printed twice.
+func TestStatusLeadsTheReasonWithTheClassThatStoppedTheRun(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  2,
+		Recorded: 2,
+		Runs: []runstate.RunSummary{
+			{
+				RunID:       "run-0123456789abcdef0123456789abcdef",
+				WorkItemID:  "yoyodyne-ifd.90",
+				Status:      runstate.StatusFailed,
+				Outcome:     runstate.OutcomeStopped,
+				Phase:       runstate.PhaseDeveloping,
+				StartedAt:   completedAt,
+				CompletedAt: &completedAt,
+				Failure:     "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es): signal: killed",
+				StopClass:   runstate.StopProvider,
+				FailingCheck: &runstate.CheckFailure{
+					Command:  "make test",
+					ExitCode: 2,
+				},
+			},
+			{
+				RunID:                      "run-fedcba9876543210fedcba9876543210",
+				WorkItemID:                 "yoyodyne-ifd.173",
+				Status:                     runstate.StatusSucceeded,
+				Outcome:                    runstate.OutcomeSucceeded,
+				Phase:                      runstate.PhaseComplete,
+				StartedAt:                  completedAt,
+				CompletedAt:                &completedAt,
+				Integrated:                 true,
+				WorktreeRemoved:            true,
+				BranchRemoved:              true,
+				CompletionRecordingFailure: "save completed run state after cleanup: disk full",
+				StopClass:                  runstate.StopRecording,
+			},
+		},
+	}, "", false)
+	rendered := out.String()
+	for _, want := range []string{
+		"reason: provider: the provider ended this run without judging the work",
+		"failing check: make test exited 2",
+		"reason: recording: save completed run state after cleanup: disk full",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+	if strings.Contains(rendered, "completion recorded late:") {
+		t.Fatalf("the late completion record was printed again beside the reason it already is: %q", rendered)
+	}
+}
+
 // The bookkeeping failures are recorded apart from the run's own so neither can
 // masquerade as the other, and the listing has to keep them apart: an
 // outstanding cleanup on an integrated run is not a piece of work that failed.

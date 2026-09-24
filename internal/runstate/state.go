@@ -1942,6 +1942,18 @@ type State struct {
 	// folded into it, and a reason nothing downstream can carry is a stoppage that
 	// validates here and then reaches nobody.
 	Failure string `json:"failure,omitempty"`
+	// StopClass is which gate stopped the run, written by the pipeline where it
+	// stopped it: at every blocker and every failure it records, and beside a
+	// publication, a cleanup, or a completion record a succeeded run could not
+	// finish. It is what every surface prints as the first word of the reason, so a
+	// run the provider killed while a check failure was still on its record reads
+	// as the provider's stop rather than the check's.
+	//
+	// It is a classification of the stop and never of the outcome: Outcome() says
+	// what became of the run, and a succeeded run can carry a class naming what it
+	// stopped short of. Absent is a run nothing stopped, or a record written before
+	// the field existed or settled by a sweep rather than by its pipeline.
+	StopClass StopClass `json:"stop_class,omitempty"`
 	// Blocker is the durable blocker exactly as it was recorded on the work item
 	// when this run stopped on something no further attempt of the harness could
 	// resolve. The tracker holds the authoritative copy; this one is kept because
@@ -2146,6 +2158,9 @@ func (s State) Validate() error {
 	}
 	if s.LandingOutcome != "" && !slices.Contains(landingOutcomes, s.LandingOutcome) {
 		problems = append(problems, errors.New("landing_outcome is invalid"))
+	}
+	if s.StopClass != "" && !s.StopClass.Valid() {
+		problems = append(problems, errors.New("stop_class is invalid"))
 	}
 	// A claim with no account of itself is the half of the record that would be
 	// read afterwards, so an outcome without one is refused here rather than

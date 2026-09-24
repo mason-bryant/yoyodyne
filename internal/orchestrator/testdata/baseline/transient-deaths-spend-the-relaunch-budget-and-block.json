@@ -26,6 +26,7 @@
         "provider_session_id": "developer-session",
         "run_id": "run-0123456789abcdef0123456789abcdef",
         "status": "failed",
+        "stop_class": "provider",
         "summary": "API Error: the provider ended this invocation and named no reason for it",
         "transient_relaunches": 2,
         "verification": {
@@ -66,6 +67,7 @@
     "schema_version": 1,
     "started_at": "\u003ctime\u003e",
     "status": "failed",
+    "stop_class": "provider",
     "target_branch": "main",
     "transient_relaunches": 2,
     "updated_at": "\u003ctime\u003e",

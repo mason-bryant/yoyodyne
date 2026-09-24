@@ -253,6 +253,9 @@ type RunSummary struct {
 	// that a run failed or stopped is a second classification the listing it
 	// prints beside will contradict.
 	Failure string `json:"failure,omitempty"`
+	// StopClass is which gate stopped the run, exactly as State.StopClass records
+	// it. Reason is how a surface prints it, as the first word of the reason.
+	StopClass StopClass `json:"stop_class,omitempty"`
 	// FailingCheck is the deterministic check that was still failing when the
 	// record was last written. It is what a repair attempt was handed, so on a
 	// failed run it is usually the thing behind the reason rather than a second
@@ -339,6 +342,27 @@ type RunSummary struct {
 // that the work did not land, which is what somebody looking for the runs that
 // went wrong is asking about, and each of them records why it ended.
 func (r RunSummary) Failed() bool { return endedBadly(r.Status, r.Outcome) }
+
+// Reason is why the run stopped, with the class that stopped it as the first
+// word. The words are the run's own failure where it recorded one, and otherwise
+// the account of whatever its class names that a succeeded run stopped short of —
+// the publication, the cleanup, or the completion record — so a run whose only
+// account is one of those still says why it stopped. It is empty for a run that
+// recorded neither a class nor a failure.
+func (r RunSummary) Reason() string {
+	reason := r.Failure
+	if strings.TrimSpace(reason) == "" {
+		switch r.StopClass {
+		case StopPublish:
+			reason = r.PublishFailure
+		case StopCleanup:
+			reason = r.CleanupFailure
+		case StopRecording:
+			reason = r.CompletionRecordingFailure
+		}
+	}
+	return StopReason(r.StopClass, reason)
+}
 
 // Artifacts is what this summary says survives of the run's change.
 func (r RunSummary) Artifacts() Artifacts {
@@ -455,6 +479,7 @@ func (s *Store) summarize(state State) RunSummary {
 		ConfigRevision:      state.ConfigRevision,
 		Build:               state.Build,
 		Failure:             state.Failure,
+		StopClass:           state.StopClass,
 		ReportProblem:       state.ReportProblem,
 		AmendmentProblem:    state.AmendmentProblem,
 		PublishFailure:      state.PublishFailure,

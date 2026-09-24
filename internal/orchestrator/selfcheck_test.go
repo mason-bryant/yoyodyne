@@ -129,6 +129,9 @@ func TestAProbeTheEnvironmentRefusedEndsTheRunNamingIt(t *testing.T) {
 	if !strings.Contains(recorded.Environmental.Detail, "argument limit") {
 		t.Errorf("the refusal does not say what refused: %q", recorded.Environmental.Detail)
 	}
+	if recorded.StopClass != runstate.StopEnvironmental || outcome.StopClass != runstate.StopEnvironmental {
+		t.Errorf("stop class = %q on the record and %q on the outcome, want the environment named as what stopped the run", recorded.StopClass, outcome.StopClass)
+	}
 }
 
 // A probe that ran and came back red is the opposite finding, and the harness

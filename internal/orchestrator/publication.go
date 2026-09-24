@@ -841,6 +841,11 @@ func (r Reconciler) recordSettledPublication(ctx context.Context, state *runstat
 	handedBack := state.MergeDrop != nil && strings.TrimSpace(state.Blocker) != ""
 	state.PullRequest = &published
 	state.PublishFailure = ""
+	// A publication that settled is no longer what stopped the run, so the class
+	// that named it goes with the failure it named.
+	if state.StopClass == runstate.StopPublish {
+		state.StopClass = ""
+	}
 	if handedBack {
 		state.Blocker = ""
 	}

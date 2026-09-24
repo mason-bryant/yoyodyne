@@ -128,11 +128,17 @@ type ItemRun struct {
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
 	// Failure is the run's own reason for ending, where it gave one. It is the
 	// reason and never the verdict: what became of the run is Outcome.
-	Failure     string        `json:"failure,omitempty"`
-	StartedAt   time.Time     `json:"started_at"`
-	CompletedAt *time.Time    `json:"completed_at,omitempty"`
-	Elapsed     time.Duration `json:"elapsed,omitempty"`
-	CostUSD     float64       `json:"cost_usd"`
+	Failure string `json:"failure,omitempty"`
+	// StopClass is which gate stopped the run, as its record names it, and Reason
+	// is the reason as every surface prints it: that class as its first word, then
+	// the run's own words. Reason is the run history's derivation, so the card and
+	// `yoyo status` cannot word one stop two ways.
+	StopClass   runstate.StopClass `json:"stop_class,omitempty"`
+	Reason      string             `json:"reason,omitempty"`
+	StartedAt   time.Time          `json:"started_at"`
+	CompletedAt *time.Time         `json:"completed_at,omitempty"`
+	Elapsed     time.Duration      `json:"elapsed,omitempty"`
+	CostUSD     float64            `json:"cost_usd"`
 	// UnknownCost says why there is no figure rather than reporting one of
 	// zero: a run whose evidence is gone did not cost nothing.
 	UnknownCost string `json:"unknown_cost,omitempty"`
@@ -202,6 +208,8 @@ func readLatestRun(sources WorkItemSources, id string, now time.Time) (*ItemRun,
 		WorktreePath:        latest.WorktreePath,
 		ProviderSessionID:   latest.ProviderSessionID,
 		Failure:             latest.Failure,
+		StopClass:           latest.StopClass,
+		Reason:              latest.Reason(),
 		StartedAt:           latest.StartedAt,
 		CompletedAt:         latest.CompletedAt,
 		CostUSD:             latest.CostUSD,

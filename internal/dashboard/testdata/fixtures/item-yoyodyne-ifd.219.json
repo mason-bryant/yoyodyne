@@ -21,6 +21,8 @@
     "remains": "work removed",
     "branch": "yoyodyne/yoyodyne-ifd-219/2c8f4a6e",
     "failure": "create isolated worktree: primary checkout is not ready for integration",
+    "stop_class": "environmental",
+    "reason": "environmental: create isolated worktree: primary checkout is not ready for integration",
     "started_at": "2026-09-17T08:30:00Z",
     "completed_at": "2026-09-17T08:30:40Z",
     "cost_usd": 0,

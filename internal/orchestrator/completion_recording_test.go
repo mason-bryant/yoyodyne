@@ -41,6 +41,9 @@ func TestTheCompletionRecordingFailureIsPersistedWhenTheLateWriteLands(t *testin
 	if outcome.CompletionRecordingFailure != cause.Error() {
 		t.Fatalf("outcome failure = %q, want the cause alone when the late write landed", outcome.CompletionRecordingFailure)
 	}
+	if len(store.saved) != 1 || store.saved[0].StopClass != runstate.StopRecording {
+		t.Fatalf("saved = %#v, want the late write to name the completion record as what the run stopped short of", store.saved)
+	}
 	if len(store.saved) != 1 || store.saved[0].CompletionRecordingFailure != cause.Error() {
 		t.Fatalf("saved = %#v, want one record carrying the failure text", store.saved)
 	}

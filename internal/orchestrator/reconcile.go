@@ -985,6 +985,9 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 	// Nothing is left to remove, so the run is complete and the outstanding
 	// cleanup marker the interrupted process left is no longer true.
 	state.CleanupFailure = ""
+	if state.StopClass == runstate.StopCleanup {
+		state.StopClass = ""
+	}
 	state.Phase = runstate.PhaseComplete
 	state.UpdatedAt = r.clock().Now()
 	if err := r.Store.Save(state); err != nil {
