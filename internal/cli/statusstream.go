@@ -294,6 +294,10 @@ func streamKindName(kind runstate.StreamKind, plural bool) string {
 
 type spendOutput struct {
 	Report runstate.SpendReport `json:"spend"`
+	// Sweeps is the recurring tasks' part of the conversations the report prices,
+	// by task and by the model each pass ran on. It is a share of the report's
+	// conversation spend rather than an addition to it.
+	Sweeps []runstate.SweepModelSpend `json:"sweeps,omitempty"`
 	statusHolds
 	Error string `json:"error,omitempty"`
 }
@@ -303,7 +307,7 @@ type spendOutput struct {
 // reads today and asked to keep: a day per group, that day's spend closing it,
 // the most recent day last where the eye already is, and the split under the
 // total saying how much of it was each kind of work.
-func reportSpend(store *runstate.StreamStore, options streamOptions, holds statusHolds, now time.Time, jsonOutput bool, stdout, stderr io.Writer) int {
+func reportSpend(store *runstate.StreamStore, sweeps *runstate.SweepStore, options streamOptions, holds statusHolds, now time.Time, jsonOutput bool, stdout, stderr io.Writer) int {
 	report, err := store.Spend(runstate.SpendQuery{
 		Kinds: options.kinds,
 		Match: options.match,
@@ -313,11 +317,12 @@ func reportSpend(store *runstate.StreamStore, options streamOptions, holds statu
 	if err != nil {
 		return reportStreamFailure(stdout, stderr, jsonOutput, spendOutput{Error: err.Error()}, err)
 	}
+	scheduled := sweepSpend(sweeps, options, report, stderr)
 	if jsonOutput {
 		if report.Rows == nil {
 			report.Rows = []runstate.SpendRow{}
 		}
-		return writeJSON(stdout, stderr, spendOutput{Report: report, statusHolds: holds})
+		return writeJSON(stdout, stderr, spendOutput{Report: report, Sweeps: scheduled, statusHolds: holds})
 	}
 	if report.Empty() {
 		// Something named but not found is a question that could not be asked,
@@ -349,8 +354,65 @@ func reportSpend(store *runstate.StreamStore, options streamOptions, holds statu
 	}
 	printSpendRows(stdout, report, now)
 	printSpendTotals(stdout, report)
+	printSweepSpend(stdout, scheduled)
 	printUnreadableExchanges(stdout, report)
 	return 0
+}
+
+// sweepSpend is the recurring tasks' part of what the report prices, over the
+// report's own window. It is read only where the report covers conversations
+// and names nothing in particular, because a pass is conversation turns: a
+// report of the runs, or of one named stream, has no pass in it to attribute. A
+// record that cannot be read costs the attribution and never the report.
+func sweepSpend(sweeps *runstate.SweepStore, options streamOptions, report runstate.SpendReport, stderr io.Writer) []runstate.SweepModelSpend {
+	if sweeps == nil || options.match != "" {
+		return nil
+	}
+	covered := len(options.kinds) == 0
+	for _, kind := range options.kinds {
+		if kind == runstate.StreamConversation {
+			covered = true
+		}
+	}
+	if !covered {
+		return nil
+	}
+	recorded, unreadable, err := sweeps.List()
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: the recurring tasks' records could not be read to the end, so their spend below covers only what was: %v\n", err)
+	}
+	if len(unreadable) > 0 {
+		fmt.Fprintf(stderr, "warning: %d line(s) of the sweep log could not be read, so the recurring tasks' spend below is a floor\n", len(unreadable))
+	}
+	return runstate.SweepSpend(recorded, report.Oldest)
+}
+
+// The recurring task table's columns: the task, the model its passes ran on,
+// how many passes and turns, and what they cost.
+const (
+	sweepSpendHeader = "%-32s %-24s %6s %6s %10s\n"
+	sweepSpendRow    = "%-32s %-24s %6d %6d %10s\n"
+)
+
+// printSweepSpend says what each recurring task cost and on which model. Its
+// passes are turns of the role's own conversation and are already in the
+// conversations figure above, so this splits that figure rather than adding to
+// it: it is how a routine cadence on a cheaper model is told from the decisions
+// beside it on the role's own.
+func printSweepSpend(writer io.Writer, rows []runstate.SweepModelSpend) {
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Fprintln(writer)
+	fmt.Fprintln(writer, "recurring tasks, by the model each pass ran on (part of the conversations above, not in addition to them):")
+	fmt.Fprintf(writer, sweepSpendHeader, "task", "model", "passes", "turns", "USD")
+	for _, row := range rows {
+		model := row.Model
+		if model == "" {
+			model = "(not recorded)"
+		}
+		fmt.Fprintf(writer, sweepSpendRow, row.Task, model, row.Passes, row.Turns, fmt.Sprintf("$%.2f", row.CostUSD))
+	}
 }
 
 // The id column is as wide as the widest id there is, which is an exchange's: a

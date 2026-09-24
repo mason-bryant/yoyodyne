@@ -497,8 +497,21 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // itself on the refusal — the next cadence, the next pull — and one that slept
 // through the window would hold the scheduler that took it for hours.
 func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh, attended bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
+	return openChatOnModel(ctx, role, agentName, configPath, "", fresh, attended, stderr)
+}
+
+// openChatOnModel is openChat with the turns this session takes asking for model
+// rather than the agent's own, where model is not empty. It is how a recurring
+// task that names its own model is served: the same conversation, account,
+// failover, and authority, on the task's model for the turns it takes. Nothing
+// about the conversation's durable record is changed by it, so the next session
+// opened on the conversation asks for the agent's model again.
+func openChatOnModel(ctx context.Context, role domain.AgentRole, agentName, configPath, model string, fresh, attended bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
 	prepared, err := prepareChat(ctx, role, agentName, configPath, stderr)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := prepared.onModel(model); err != nil {
 		return nil, nil, err
 	}
 	hold, err := prepared.claim(ctx, attended, stderr)
@@ -531,6 +544,44 @@ type preparedChat struct {
 	store    *runstate.ConversationStore
 	memories *runstate.MemoryStore
 	identity runstate.ConversationIdentity
+	// model is the selector this session's turns ask for in place of the agent's
+	// own, and empty for every session but a recurring task's that named one.
+	model string
+}
+
+// onModel has this session's turns ask for model rather than the agent's own. An
+// empty model leaves the agent's, which is every conversation but a recurring
+// task's that names one. The selector is held to the rule the agent's own is,
+// because it reaches the provider's command line exactly as that one does.
+func (p *preparedChat) onModel(model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	if err := config.ValidateModelSelector(model); err != nil {
+		return fmt.Errorf("%s agent %s turn %s", p.identity.Role, p.name, err)
+	}
+	p.model = model
+	return nil
+}
+
+// requestedModel is the family selector this session's turns ask for.
+func (p preparedChat) requestedModel() string {
+	if p.model != "" {
+		return p.model
+	}
+	return p.agent.Model
+}
+
+// modelVersion is the pinned version this session's turns ask for. A pin is a
+// version of the agent's own model family, so a session asking for another
+// model carries none: a pin to one family's version asked for under another
+// family's alias would be a request for neither.
+func (p preparedChat) modelVersion() string {
+	if p.model != "" && p.model != strings.TrimSpace(p.agent.Model) {
+		return ""
+	}
+	return p.parts.config.AgentModelVersion(p.name)
 }
 
 // prepareChat resolves everything a conversation with the role needs that does
@@ -697,6 +748,13 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 	// named no alternate provider resolves to nothing at all, which is failover
 	// within its own provider behaving exactly as it did.
 	failover := conversationFailover(cfg, parts.stateRoot, name, processRunner, stderr)
+	// A session asking for the model the agent's alternate names, on the agent's
+	// own provider, has no alternate: failing over to the endpoint whose window
+	// just closed is a second refusal rather than an alternate, which is the
+	// reason the configuration refuses an agent that names its own model there.
+	if p.model != "" && failover.backend == nil && strings.TrimSpace(failover.model) == p.model {
+		failover = conversationAlternate{}
+	}
 
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
@@ -844,12 +902,14 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// change binary while it lives — which is the whole reason a conversation
 		// somebody leaves open for days is worth stamping.
 		Build: buildinfo.Commit(),
-		Model: agent.Model,
+		// The agent's configured model, or the recurring task's where the task
+		// names its own for the turns it takes.
+		Model: p.requestedModel(),
 		// The exact version of that family this agent's turns ask for, empty for
 		// every agent that pins none — which leaves the alias above floating, as it
 		// always has. A version the provider has not got is served by the alias and
 		// the substitution is recorded, so a pin never stops the agent.
-		ModelVersion: cfg.AgentModelVersion(name),
+		ModelVersion: p.modelVersion(),
 		// The one alternate this agent's turn may be served by while the model above
 		// has no capacity, empty for every agent that has not enabled failover. It
 		// belongs to the agent's own block for the reason its account does: which

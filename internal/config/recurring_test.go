@@ -84,6 +84,52 @@ func TestRecurringTaskCannotGrantAuthority(t *testing.T) {
 	}
 }
 
+// A task may name the model its turns ask for, and one that does not leaves the
+// role's own model in charge — which is every task written before the key.
+func TestRecurringTaskNamesItsOwnModel(t *testing.T) {
+	t.Parallel()
+
+	cfg := loadProject(t, strings.Replace(projectWithSweep, "    max_turns: 4\n", "    max_turns: 4\n    model: sonnet\n", 1), nil).Config
+	task, err := cfg.RecurringTaskNamed("development-manager-sweep")
+	if err != nil {
+		t.Fatalf("RecurringTaskNamed() error = %v", err)
+	}
+	if task.ModelSelector() != "sonnet" {
+		t.Errorf("model = %q, want the configured sonnet", task.ModelSelector())
+	}
+
+	unnamed, err := loadProject(t, projectWithSweep, nil).Config.RecurringTaskNamed("development-manager-sweep")
+	if err != nil {
+		t.Fatalf("RecurringTaskNamed() error = %v", err)
+	}
+	if unnamed.ModelSelector() != "" {
+		t.Errorf("model = %q, want none named, so the role's model applies", unnamed.ModelSelector())
+	}
+}
+
+// The task's model is held to the rule an agent's model is, and refused with the
+// same reason, so a selector that could never name a model is found at load
+// rather than on the first firing.
+func TestRecurringTaskModelIsValidatedAsAnAgentsModelIs(t *testing.T) {
+	t.Parallel()
+
+	for name, model := range map[string]string{
+		"two words":           "    model: \"son net\"\n",
+		"a flag":              "    model: \"--sonnet\"\n",
+		"longer than allowed": "    model: " + strings.Repeat("s", MaxModelSelectorBytes+1) + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadProjectError(t, strings.Replace(projectWithSweep, "    max_turns: 4\n", "    max_turns: 4\n"+model, 1), nil)
+			if err == nil {
+				t.Fatalf("a recurring task whose model is %s loaded", name)
+			}
+			if !strings.Contains(err.Error(), `recurring task "development-manager-sweep" model selector`) {
+				t.Errorf("error = %v, want it to name the task and the agent model rule's reason", err)
+			}
+		})
+	}
+}
+
 func TestRecurringTaskRefusesWhatCouldNeverRun(t *testing.T) {
 	t.Parallel()
 

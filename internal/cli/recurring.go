@@ -103,6 +103,10 @@ type roleConversation struct {
 	// session that started with a warning says so where the operator running it
 	// can see it.
 	stderr io.Writer
+	// open is how the conversation is opened for a turn, and nil for every
+	// trigger but a test's: it is openChatOnModel then, which is the operator's own
+	// way into the conversation with the task's model for the turn.
+	open func(ctx context.Context, role domain.AgentRole, model string) (*chat.Session, *runstate.ConversationHold, error)
 }
 
 // Wake puts one message into a role's conversation and reads the account it gave
@@ -117,8 +121,12 @@ type roleConversation struct {
 // An answer with no sweep block is not a failed turn. The role answered; what is
 // lost is the structure, which the caller says out loud rather than losing the
 // turn over.
-func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, message string) (orchestrator.Turn, error) {
-	session, lease, err := openChat(ctx, role, "", r.configPath, false, false, r.errors())
+//
+// A task that names its own model has this turn ask for it, and only this turn:
+// the conversation, its account, and its failover are the role's, and the next
+// message anybody else sends into it asks for the role's model again.
+func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, model, message string) (orchestrator.Turn, error) {
+	session, lease, err := r.opener()(ctx, role, model)
 	if err != nil {
 		return orchestrator.Turn{}, fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
@@ -128,15 +136,26 @@ func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, messa
 	// The conversation and what the turn cost are carried whichever way it went: a
 	// turn that failed still happened in a conversation somebody can go and read,
 	// and the provider charged for it exactly as it charges for one that answered.
+	evidence := session.Evidence()
 	turn := orchestrator.Turn{
-		ConversationID: session.Evidence().ConversationID,
+		ConversationID: evidence.ConversationID,
 		CostUSD:        session.TurnCostUSD(),
+		Model:          servingModel(evidence),
 	}
 	if err != nil {
 		return turn, notWoken(err)
 	}
 	turn.Result, turn.ResultProblem = readSweep(role, reply.Text)
 	return turn, nil
+}
+
+// servingModel is the model a turn ran on: the alternate that served it where
+// the provider moved it, and the model it asked for otherwise.
+func servingModel(evidence chat.Evidence) string {
+	if served := strings.TrimSpace(evidence.ServedModel); served != "" {
+		return served
+	}
+	return strings.TrimSpace(evidence.RequestedModel)
 }
 
 // readSweep reads the account a role gave of its pass out of what it answered,
@@ -178,6 +197,15 @@ func notWoken(err error) error {
 		return fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
 	return err
+}
+
+func (r roleConversation) opener() func(context.Context, domain.AgentRole, string) (*chat.Session, *runstate.ConversationHold, error) {
+	if r.open != nil {
+		return r.open
+	}
+	return func(ctx context.Context, role domain.AgentRole, model string) (*chat.Session, *runstate.ConversationHold, error) {
+		return openChatOnModel(ctx, role, "", r.configPath, model, false, false, r.errors())
+	}
 }
 
 func (r roleConversation) errors() io.Writer {
@@ -354,6 +382,9 @@ func renderSweep(recorded runstate.Sweep) string {
 	if recorded.CostUSD > 0 {
 		fmt.Fprintf(&rendered, ", $%.4f", recorded.CostUSD)
 	}
+	if recorded.Model != "" {
+		fmt.Fprintf(&rendered, ", on %s", recorded.Model)
+	}
 	rendered.WriteString("\n")
 	// A summoned pass is said as one before anything it found: it is the pass
 	// that ran because the line stopped, and a reader scanning the log for why
@@ -410,6 +441,11 @@ needs no attention. Below them come the pass's summary and what it found, each
 finding with what the role did about it -- fixed, filed, consulted, or left --
 and the work it filed for the root cause. A fix that filed nothing is named as
 one, which is the whole of what a run of these reports is read for.
+
+Each pass's header names the model its turns ran on: the task's own where it
+names one with "model", the role's configured model where it does not, and the
+alternate where the provider moved the turn. "yoyo status --spend" sums the
+same records by task and model.
 
 On a development manager's pass some findings are the harness's own: the open
 pull requests the forge is holding for work that is closed, or for a branch the

@@ -480,7 +480,15 @@ func reportStreamStatus(ctx context.Context, mode statusMode, options streamOpti
 	case statusListsStreams:
 		return listStreams(store, options, holds, jsonOutput, stdout, stderr)
 	case statusPricesStreams:
-		return reportSpend(store, options, holds, time.Now(), jsonOutput, stdout, stderr)
+		// The recurring tasks' own records, which are what say which of a
+		// conversation's turns a schedule took and on which model. A store that
+		// cannot be opened costs the report that attribution and nothing else.
+		sweeps, err := runstate.NewSweepStore(roots.stateRoot, roots.productID)
+		if err != nil {
+			fmt.Fprintf(stderr, "warning: the recurring tasks' records could not be opened, so their spend is not attributed: %v\n", err)
+			sweeps = nil
+		}
+		return reportSpend(store, sweeps, options, holds, time.Now(), jsonOutput, stdout, stderr)
 	default:
 		// --json is refused for these two before anything is resolved, so by here
 		// there is nothing left to decide about the shape of what they emit.
