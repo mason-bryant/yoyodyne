@@ -30,10 +30,11 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	force := flags.Bool("force", false, "overwrite files that already exist")
 	external := flags.Bool("external", false, "write the configuration outside the repository, where only this machine reads it")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "init does not accept positional arguments")
 		return 2
 	}

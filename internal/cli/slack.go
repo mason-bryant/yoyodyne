@@ -66,10 +66,11 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, vers
 	// that a launcher passing it starts a sink rather than failing to parse, and it
 	// says where the number went rather than being quietly ignored.
 	stallAfter := flags.Duration("stall-after", 0, "retired: the threshold moved to the commands that notice a stall, yoyo work --watch and yoyo reconcile")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "slack does not accept positional arguments")
 		printSlackUsage(stderr)
 		return 2
@@ -189,10 +190,11 @@ func ensureSlackSink(ctx context.Context, args []string, stdout, stderr io.Write
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "slack ensure does not accept positional arguments")
 		printSlackUsage(stderr)
 		return 2

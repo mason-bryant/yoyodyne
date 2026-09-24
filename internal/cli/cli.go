@@ -114,10 +114,11 @@ func runVersion(args []string, stdout, stderr io.Writer, version string) int {
 	flags := flag.NewFlagSet("version", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "version does not accept positional arguments")
 		return 2
 	}
@@ -155,10 +156,11 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "config validate does not accept positional arguments")
 		return 2
 	}
@@ -265,10 +267,11 @@ func runConfigDrift(args []string, stdout, stderr io.Writer) int {
 	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	all := flags.Bool("all", false, "print every compared value, including the ones neither side moved")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "config drift does not accept positional arguments")
 		return 2
 	}
@@ -355,10 +358,11 @@ func runConfigBaseline(args []string, stdout, stderr io.Writer) int {
 	from := flags.String("from", config.BuiltinV1, "the bundle to record as this project's template")
 	force := flags.Bool("force", false, "replace a baseline that is already there")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "config baseline does not accept positional arguments")
 		return 2
 	}
@@ -493,10 +497,11 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	effective := flags.Bool("effective", false, "print the effective configuration after inheritance")
 	origins := flags.Bool("origins", false, "print where every effective value came from")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "config show does not accept positional arguments")
 		return 2
 	}
@@ -569,10 +574,12 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 // before the flags that describe what is being done to it is how anybody types
 // it, and what the usage text and the documentation say to type.
 //
-// Every command that takes an id parses through here rather than calling Parse
-// itself, because an ordering that works for one command and not the next is
-// worse than one that never worked: the operator learns the rule from the
-// command they happened to type first.
+// Every command parses through here rather than calling Parse itself, including
+// the ones that take no positional argument, because an ordering that works for
+// one command and not the next is worse than one that never worked: the
+// operator learns the rule from the command they happened to type first.
+// TestEveryCommandParsesThroughTheSharedHelper reads this package's source and
+// fails on a command that calls Parse any other way.
 func parseArguments(set *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	remaining := args

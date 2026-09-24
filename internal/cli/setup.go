@@ -121,10 +121,11 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	channel := flags.String("slack-channel", "", "Slack channel to report into, which is also how the optional Slack walk is answered without being asked")
 	assumeYes := flags.Bool("yes", false, "answer every question setup asks with the answer it proposes")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON, asking nothing and, without --yes, changing nothing")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "setup does not accept positional arguments: it sets up one project")
 		printSetupUsage(stderr)
 		return 2

@@ -70,10 +70,11 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// one that does not decide.
 	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before this session records that the harness has stopped")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "work does not accept positional arguments")
 		printWorkUsage(stderr)
 		return 2

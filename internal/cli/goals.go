@@ -585,10 +585,11 @@ type hookDecisionOutput struct {
 func guardNotesReplacement(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("goals guard", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "goals guard does not accept positional arguments; the tool call it decides is read from stdin")
 		return 2
 	}
@@ -995,10 +996,11 @@ func newGoalsFlags(name string, stderr io.Writer) *goalsFlags {
 }
 
 func (f *goalsFlags) parse(args []string) (int, bool) {
-	if err := f.set.Parse(args); err != nil {
+	positional, err := parseArguments(f.set, args)
+	if err != nil {
 		return 2, false
 	}
-	if f.set.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)
 		printGoalsUsage(f.set.Output())
 		return 2, false

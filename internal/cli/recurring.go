@@ -225,10 +225,11 @@ func readSweeps(args []string, stdout, stderr io.Writer) int {
 	task := flags.String("task", "", "show only this recurring task's sweeps (default: all of them)")
 	limit := flags.Int("limit", defaultRenderedSweeps, "show this many of the most recent sweeps, or 0 for every one recorded")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "sweeps does not accept positional arguments: name a task with --task")
 		printSweepsUsage(stderr)
 		return 2
