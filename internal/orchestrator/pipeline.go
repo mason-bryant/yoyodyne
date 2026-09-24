@@ -1756,15 +1756,27 @@ func resumesAnExistingChange(state runstate.State) bool {
 // was a re-run, which discards both the session and the uncommitted work.
 //
 // A stall judges nothing, which is why the continuation it authorizes is not a
-// repair round: what the run is owed is the attempt the harness stopped it in,
-// resumed in the same session at the point it stalled.
+// repair round: what the run is owed is the step the harness stopped it in,
+// resumed at the point it stalled.
 //
-// It is deliberately the exact complement of resumesAnExistingChange for a run
-// stopped mid-attempt, because the two have to agree: a continuation this
-// admitted and that gate then refused would spend the item's grant on a run the
-// pipeline stops at its first step. Every other phase is a run that completed a
-// developer attempt, and what the steps past it judge is the change that attempt
-// made.
+// That step is not always the developer's. A run whose provider stalled in its
+// review, or whose process went at its checks, has completed a developer
+// attempt, and what it is owed is that step asked again on the change the
+// attempt left — the review re-read, or the checks re-run — with no developer
+// attempt and nothing handed back. Before this only a stall in the developing
+// phase was admitted, so a first attempt whose reviewer stalled left a re-run as
+// the only decision, and a re-run discards the branch the finished attempt
+// produced.
+//
+// Which of the two a stall is decides what the resumed run is held to, and it
+// is read from the same phase resumesAnExistingChange reads, because the two
+// have to agree: a continuation this admitted and that gate then refused would
+// spend the item's grant on a run the pipeline stops at its first step. A stall
+// mid-attempt is owed that attempt, so it is admitted only where nothing was
+// handed back — a run carrying a failure is a repair's — and its worktree need
+// not hold anything yet. A stall past the attempt is admitted whatever the run
+// recorded before it, because what it stalled in judges the change as it now
+// stands, and its worktree has to hold that change exactly as a repair's does.
 func continuableStall(state runstate.State) bool {
 	if state.Environmental == nil || state.Environmental.Cause != runstate.CauseProcessVanished {
 		return false
@@ -1784,7 +1796,22 @@ func continuableStall(state runstate.State) bool {
 	if state.WorktreeRemoved || state.BranchRemoved {
 		return false
 	}
-	return state.Phase == runstate.PhaseDeveloping && !handedBackRepair(state)
+	switch state.Phase {
+	case runstate.PhaseDeveloping:
+		return !handedBackRepair(state)
+	case runstate.PhaseChecking, runstate.PhaseReviewing:
+		return true
+	default:
+		return false
+	}
+}
+
+// stallResumesPastTheAttempt reports a continuable stall whose run had already
+// completed its developer attempt: one stopped at its checks or its review. What
+// it is continued at is that step, on the change it has, rather than at a
+// developer attempt it does not need.
+func stallResumesPastTheAttempt(state runstate.State) bool {
+	return continuableStall(state) && state.Phase != runstate.PhaseDeveloping
 }
 
 // owedARepair reports a stopped run a repair would continue rather than replace:
