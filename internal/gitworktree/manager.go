@@ -476,11 +476,12 @@ type ChangeDiff struct {
 	OmittedFiles   []OmittedFile `json:"omitted_files,omitempty"`
 	// DeletedFiles are the files whose diff is nothing but removed lines and
 	// that are described at the base commit rather than rendered as a removal
-	// diff: every file the change deletes whole, and a file it reduces by removal
-	// alone whose diff the patch bound had no room for. A removal carries no new
-	// content to judge, so what a reader needs of one is that it happened and
-	// what the file was, and none of them is counted against the bound or omitted
-	// by it (yoyodyne-ifd.429.7).
+	// diff: every file the change deletes whole, and every file it reduces by
+	// removal alone that did not fit in what the bound had left once every other
+	// file was placed. A removal carries no new content to judge, so what a
+	// reader needs of one is that it happened and what the file was, and none of
+	// them displaces another file from the bound or is omitted by it
+	// (yoyodyne-ifd.429.7).
 	DeletedFiles []DeletedFile `json:"deleted_files,omitempty"`
 	Truncated    bool          `json:"truncated"`
 	// Files is the tree listing of the change: every path it touches against
@@ -884,7 +885,8 @@ type DeletedFile struct {
 	Path string `json:"path"`
 	// Whole reports that the change deletes the file outright. Otherwise the file
 	// is still there at the tip, reduced by removed lines alone, and the diff that
-	// removes them is what the patch bound had no room for.
+	// removes them did not fit in what the patch bound had left once every other
+	// file was placed.
 	Whole bool `json:"whole"`
 	// BaseCommit is the commit the file is described at, which is where it can be
 	// opened whole as `git show <base>:<path>`.
@@ -1449,6 +1451,7 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	// The file-count bound and the accounting below are over new files alone: a
 	// tracked file the bound names is not one the untracked half owes.
 	newFiles, omittedNew := 0, 0
+	var reductions []reduction
 	for _, candidate := range candidates {
 		size, regular, err := m.untrackedSize(path, candidate.path)
 		if err != nil {
@@ -1492,13 +1495,15 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 			return nil
 		}
 		if candidate.tracked {
-			// A removal is described at the base rather than rendered: always for a
-			// file deleted whole, whose diff is its old content and nothing else, and
-			// for a file reduced by removal alone where the diff would otherwise be
-			// kept out — one that fits is still shown, since which lines went is what
-			// a reviewer of a partial reduction reads.
-			if whole, removed, ok := removalOnly(candidate.patch); ok &&
-				(whole || len(candidate.patch) > remaining) {
+			// A file deleted whole is described at the base rather than rendered:
+			// its diff is its old content and nothing else. A file reduced by removal
+			// alone is set aside and placed after every other file, so it is spent
+			// only against what they leave and can never push one of them out.
+			if whole, removed, ok := removalOnly(candidate.patch); ok {
+				if !whole {
+					reductions = append(reductions, reduction{candidate: candidate, removed: removed})
+					continue
+				}
 				deleted, described, err := m.describeRemoval(ctx, worktree.BaseCommit, candidate, whole, removed, func() (int64, string, error) {
 					if !regular {
 						return size, "", nil
@@ -1566,6 +1571,29 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 		if err != nil {
 			return ChangeDiff{}, err
 		}
+	}
+	// The reductions set aside above are shown whole from what the bound has
+	// left, and described at the base where it has too little: which lines went
+	// is what a reviewer of a partial reduction reads when there is room, and
+	// where there is not the reduction spends nothing and refuses nothing.
+	for _, set := range reductions {
+		if len(set.candidate.patch) <= remaining {
+			patch.WriteString(set.candidate.patch)
+			remaining -= len(set.candidate.patch)
+			continue
+		}
+		deleted, err := m.describeReduction(ctx, worktree.BaseCommit, set, func() (int64, string, error) {
+			size, regular, err := m.untrackedSize(path, set.candidate.path)
+			if err != nil || !regular {
+				return size, "", err
+			}
+			digest, err := m.fileDigest(path, set.candidate.path)
+			return size, digest, err
+		})
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		changes.DeletedFiles = append(changes.DeletedFiles, deleted)
 	}
 	if accounted := len(changes.UntrackedFiles) + omittedNew; accounted != len(untracked) {
 		return ChangeDiff{}, fmt.Errorf("assembled change accounts for %d of %d new files; a file dropped without being named is not reviewable",
@@ -1934,6 +1962,27 @@ func (m *Manager) describeRemoval(ctx context.Context, baseCommit string, candid
 		}
 	}
 	return deleted, true, nil
+}
+
+// reduction is a tracked file whose diff is removed lines alone and that the
+// file remains after, held back until every other file has been placed.
+type reduction struct {
+	candidate patchCandidate
+	removed   int
+}
+
+// describeReduction describes a reduction the bound had no room left for. The
+// base always carries a blob for a file whose diff removes lines of text, so a
+// reduction that cannot be described is refused rather than dropped unnamed.
+func (m *Manager) describeReduction(ctx context.Context, baseCommit string, set reduction, atTip func() (int64, string, error)) (DeletedFile, error) {
+	deleted, described, err := m.describeRemoval(ctx, baseCommit, set.candidate, false, set.removed, atTip)
+	if err != nil {
+		return DeletedFile{}, err
+	}
+	if !described {
+		return DeletedFile{}, fmt.Errorf("%s is reduced from base commit %s, which holds no blob for it; a removal that cannot be described is not reviewable", set.candidate.path, baseCommit)
+	}
+	return deleted, nil
 }
 
 // orderForPresentation puts the candidates in the order the patch presents

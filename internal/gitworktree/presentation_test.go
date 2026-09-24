@@ -495,7 +495,8 @@ func numberedLines(prefix string, from, to int) string {
 
 // A file the change deletes whole is described at the base commit rather than
 // rendered as the removal of all of it, and a file reduced by removal alone is
-// described the same way once its diff would not fit. yoyodyne-ifd.117.4 cut
+// described the same way where it does not fit in what every other file left of
+// the bound — and shown whole where it does. yoyodyne-ifd.117.4 cut
 // docs/configuration.md by 378,605 bytes, the removal diff outgrew the
 // 262,144-byte bound, and the omission of a document refused the approval
 // however sound the reduction was. A file rewritten in part is not a removal and
@@ -539,7 +540,7 @@ func TestARemovalIsDescribedAtItsBaseRatherThanOmitted(t *testing.T) {
 		byPath[file.Path] = file
 	}
 	if len(byPath) != 2 {
-		t.Fatalf("deleted files = %#v, want the deletion and the reduction", changes.DeletedFiles)
+		t.Fatalf("deleted files = %#v, want the deletion and the large reduction", changes.DeletedFiles)
 	}
 	whole := byPath["docs/deleted.md"]
 	if !whole.Whole || whole.BaseCommit != base || whole.BaseBytes != int64(len(deleted)) ||
@@ -562,8 +563,9 @@ func TestARemovalIsDescribedAtItsBaseRatherThanOmitted(t *testing.T) {
 		t.Errorf("described reduction = %q", described)
 	}
 
-	// Neither removal is in the patch or among the omissions; the small removal
-	// fits, so which line it took is still shown; the rewrite is still bounded.
+	// Neither large removal is in the patch or among the omissions; the small
+	// reduction fits in what the bound has left, so which line it took is still
+	// shown; the rewrite is still bounded.
 	for _, path := range []string{"docs/deleted.md", "docs/reduced.md"} {
 		if strings.Contains(changes.Patch, "a/"+path) {
 			t.Errorf("%s is rendered in the patch", path)
@@ -641,4 +643,57 @@ func TestRemovalOnlyReadsTheDiff(t *testing.T) {
 			t.Errorf("%s: removalOnly() = %t, %d, %t, want %t, %d, %t", name, whole, removed, ok, test.whole, test.removed, test.ok)
 		}
 	}
+}
+
+// A reduction that would fit in the bound displaces nothing from it. Rendered in
+// its place in the order, a reduction of most of the bound is placed ahead of a
+// source file that sorts after it, and that file is then kept out and refuses
+// the approval: the failure the rule exists to remove, reached by a reduction
+// that fits rather than one that does not. Placed after every other file, it is
+// spent only against what they leave, and here it is described.
+func TestARemovalThatFitsSpendsNoneOfTheBound(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	lines := DefaultMaxDiffBytes * 3 / 4 / 40
+	reduced := numberedLines("reduced", 0, lines+10)
+	writeFile(t, repository, "docs/a-reduced.md", reduced)
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "the document")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-ifd.429.7", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "docs/a-reduced.md", numberedLines("reduced", 0, 10))
+	code := numberedLines("// code", 0, DefaultMaxDiffBytes/2/40)
+	writeFile(t, worktree.Path, "internal/z/code.go", code)
+	worktree.HarnessCommit = harnessCommit(t, worktree.Path, "yoyodyne: reduce the document and add the code")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if len(changes.DeletedFiles) != 1 || changes.DeletedFiles[0].Path != "docs/a-reduced.md" || changes.DeletedFiles[0].RemovedLines != lines {
+		t.Fatalf("deleted files = %#v, want the reduction described", changes.DeletedFiles)
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Fatalf("the reduction spent the bound: omitted = %#v", changes.OmittedFiles)
+	}
+	sectionFor(t, changes.Patch, "internal/z/code.go")
+	if problems := changes.UnreviewableOmissions(); len(problems) != 0 {
+		t.Errorf("unreviewable = %v", problems)
+	}
+
+	// The branch's accumulated change follows the same rule.
+	branch := gitLine(t, worktree.Path, "rev-parse", "--abbrev-ref", "HEAD")
+	accumulated, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: branch, BaseRef: "main"}, DiffLimits{})
+	if err != nil {
+		t.Fatalf("BranchChanges() error = %v", err)
+	}
+	if len(accumulated.Changes.DeletedFiles) != 1 || accumulated.Changes.Truncated || len(accumulated.Changes.OmittedFiles) != 0 {
+		t.Fatalf("branch: deleted = %#v, omitted = %#v, want the reduction described and nothing omitted",
+			accumulated.Changes.DeletedFiles, accumulated.Changes.OmittedFiles)
+	}
+	sectionFor(t, accumulated.Changes.Patch, "internal/z/code.go")
 }

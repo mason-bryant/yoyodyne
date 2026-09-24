@@ -256,6 +256,7 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 	orderForPresentation(candidates)
 	var patch strings.Builder
 	remaining := maxTotalBytes
+	var reductions []reduction
 	omit := func(candidate patchCandidate, reason OmissionReason, bound int64) error {
 		// The size and the digest come from one read of the tree entry, so what
 		// the listing says a reader can open at the tip is bound to exact content
@@ -274,10 +275,14 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 		return nil
 	}
 	for _, candidate := range candidates {
-		// A removal is described at the base rather than rendered, by the rule a
-		// worktree's change follows: a file deleted whole always, and one reduced
-		// by removal alone where its diff does not fit.
-		if whole, removed, ok := removalOnly(candidate.patch); ok && (whole || len(candidate.patch) > remaining) {
+		// A removal follows the rule a worktree's change does: a file deleted
+		// whole is described at the base, and one reduced by removal alone is set
+		// aside and placed from what every other file leaves of the bound.
+		if whole, removed, ok := removalOnly(candidate.patch); ok {
+			if !whole {
+				reductions = append(reductions, reduction{candidate: candidate, removed: removed})
+				continue
+			}
 			deleted, described, err := m.describeRemoval(ctx, baseCommit, candidate, whole, removed, func() (int64, string, error) {
 				return m.blobEntry(ctx, headCommit, candidate.path)
 			})
@@ -304,6 +309,20 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 		if err != nil {
 			return ChangeDiff{}, err
 		}
+	}
+	for _, set := range reductions {
+		if len(set.candidate.patch) <= remaining {
+			patch.WriteString(set.candidate.patch)
+			remaining -= len(set.candidate.patch)
+			continue
+		}
+		deleted, err := m.describeReduction(ctx, baseCommit, set, func() (int64, string, error) {
+			return m.blobEntry(ctx, headCommit, set.candidate.path)
+		})
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		changes.DeletedFiles = append(changes.DeletedFiles, deleted)
 	}
 	changes.Patch = patch.String()
 	return changes, nil

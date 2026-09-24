@@ -161,11 +161,12 @@ A file the change deletes whole is never shown as the diff removing it, which is
 the file's whole content with a minus on each line: it is named above the patch
 as deleted whole, with its size and its `git-blob:` digest at the base commit and
 where the whole of it can be opened there, as `git show <base>:<path>`. A file
-whose diff is nothing but removed lines is described the same way — with what is
-left of it at the tip beside it — once that diff would not fit in what the bound
-has left; one that fits is still shown, because which lines went is what a
-reviewer of a partial reduction reads. Neither counts against the bound or is an
-omission, so neither refuses the approval; the reviewer is told to judge each
+whose diff is nothing but removed lines is placed after every other file, whatever
+its class: it is shown whole where what the bound has left holds it, because which
+lines went is what a reviewer of a partial reduction reads, and described the same
+way as a deletion — with what is left of it at the tip beside it — where it does
+not. Neither ever displaces another file from the bound or is an omission, so
+neither can refuse the approval, directly or by pushing a source or test file out; the reviewer is told to judge each
 removal against the item's stated reason for it, and to raise a finding where the
 item names none. A file rewritten in part — any added line — is unchanged by
 this and still rendered, or omitted, under the bound. `yoyodyne-ifd.117.4` is why:
