@@ -2,10 +2,15 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -234,4 +239,92 @@ func TestReportsRefusesArgumentsItCannotHonor(t *testing.T) {
 	if !strings.Contains(stderr, "does not accept positional arguments") {
 		t.Fatalf("stderr = %q", stderr)
 	}
+}
+
+// A report is a claim about the build that filed it, so the listing says how far
+// that build is behind the target branch — counted in the product's repository
+// against a real history, the way the channel counts a watch session's build.
+// A report from before reports carried a build says so rather than reading as
+// current, and a build the repository never held is named as uncounted.
+func TestTheReportsListingSaysHowFarEachReportsBuildIsBehind(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+
+	project := t.TempDir()
+	git(t, project, "init", "-b", "main")
+	git(t, project, "config", "user.name", "Yoyodyne Test")
+	git(t, project, "config", "user.email", "yoyodyne@example.invalid")
+	commit(t, project, "first")
+	filedFrom := strings.TrimSpace(gitOutput(t, project, "rev-parse", "HEAD"))
+	commit(t, project, "the fix")
+	commit(t, project, "another")
+	configPath := filepath.Join(project, config.DirectoryName, config.FileName)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(validConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store, err := runstate.NewReportStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewReportStore() error = %v", err)
+	}
+	for i, build := range []string{filedFrom, "", "fedcba9876543210fedcba9876543210fedcba98"} {
+		if err := store.Append(report.Report{
+			SchemaVersion: report.SchemaVersion,
+			ID:            fmt.Sprintf("report-0123456789abcdef0123456789abcde%d", i),
+			Role:          "developer",
+			RunID:         fmt.Sprintf("run-0123456789abcdef0123456789abcde%d", i),
+			Build:         build,
+			ProductID:     "yoyodyne",
+			RepositoryID:  "yoyodyne",
+			Severity:      report.SeverityNote,
+			Message:       "the invariants index is reported as unreadable",
+			RecordedAt:    time.Date(2026, 9, 22, 9, i, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	stdout, stderr, code := runCLI(t, "reports", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("reports code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"(run-0123456789abcdef0123456789abcde0, build " + filedFrom[:12] + ", 2 change(s) behind the target branch)",
+		"(run-0123456789abcdef0123456789abcde1, no build recorded)",
+		"(run-0123456789abcdef0123456789abcde2, build fedcba987654, not counted against the target branch)",
+		"1 build(s) could not be counted against the target branch",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout is missing %q:\n%s", want, stdout)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "reports", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("reports --json code = %d, stderr = %q", code, stderr)
+	}
+	var decoded reportsOutput
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if decoded.Reports[0].Build != filedFrom || decoded.Builds[filedFrom].Behind != 2 {
+		t.Fatalf("reports = %#v, builds = %#v, want the build and its count carried as data", decoded.Reports[0], decoded.Builds)
+	}
+	if decoded.Builds["fedcba9876543210fedcba9876543210fedcba98"].Problem == "" {
+		t.Fatalf("builds = %#v, want the unheld build to say why it was not counted", decoded.Builds)
+	}
+}
+
+func gitOutput(t *testing.T, repository string, args ...string) string {
+	t.Helper()
+
+	output, err := exec.Command("git", append([]string{"-C", repository}, args...)...).Output()
+	if err != nil {
+		t.Fatalf("git %v error = %v", args, err)
+	}
+	return string(output)
 }

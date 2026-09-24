@@ -729,6 +729,15 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// The collected reports are the same pile the runs fill, read and written
 		// from here because this conversation is where the operator already is.
 		Reports: parts.reports,
+		// And what counts a report's build against the target branch, asked of the
+		// product's repository exactly as `yoyo reports` and the channel ask it, so
+		// a report from a build that predates a fix says so before the product
+		// manager admits work from it.
+		Builds: repositoryDeployments{
+			repository: repository,
+			runner:     processRunner,
+			timeout:    chatTrackerTimeout,
+		},
 		// The same directives every run reads before it commits to work. One
 		// recorded from this conversation is not this conversation's: it belongs
 		// to the product, and it reaches runs in other processes exactly as it

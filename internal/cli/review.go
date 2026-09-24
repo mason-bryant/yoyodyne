@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -153,6 +154,7 @@ func branchReviewerFrom(parts components, model string) orchestrator.BranchRevie
 		Repository:   parts.repository,
 		Config:       cfg,
 		StateRoot:    parts.stateRoot,
+		Build:        buildinfo.Commit(),
 		RedactValues: parts.redactValues,
 	}
 }

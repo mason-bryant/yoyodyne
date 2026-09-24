@@ -184,7 +184,19 @@ type Report struct {
 	RunID string `json:"run_id"`
 	// WorkItemID is the item the reporter was working on. It is absent for a
 	// conversation, which has no assigned work rather than an unknown one.
-	WorkItemID   string           `json:"work_item_id,omitempty"`
+	WorkItemID string `json:"work_item_id,omitempty"`
+	// Build is the repository revision of the harness that invocation executed:
+	// the one a run's record pins, or the one the conversation is held by. A
+	// report is a claim about the build that produced it rather than about the
+	// tree, and without this a report about a defect fixed since reads exactly
+	// like one about a live defect — which is how one already fixed on the main
+	// line was admitted as fresh work twice more, each costing a run to find the
+	// fix already there.
+	//
+	// It is absent from every report filed before reports carried it, and from
+	// one filed by a binary that recorded no revision of its own. Both are said
+	// as a build nobody recorded rather than guessed at.
+	Build        string           `json:"build,omitempty"`
 	ProductID    domain.ProductID `json:"product_id"`
 	RepositoryID string           `json:"repository_id"`
 	Severity     Severity         `json:"severity"`
@@ -192,7 +204,13 @@ type Report struct {
 	RecordedAt   time.Time        `json:"recorded_at"`
 }
 
-var idPattern = regexp.MustCompile(`^report-[a-f0-9]{32}$`)
+var (
+	idPattern = regexp.MustCompile(`^report-[a-f0-9]{32}$`)
+	// buildPattern is what a recorded build may look like: a Git object name,
+	// abbreviated or whole, and nothing that could be handed to Git as anything
+	// else.
+	buildPattern = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
+)
 
 // ValidID reports whether an identifier names a report. It is exported because
 // the identifier travels now: a report is read out of the pile and named back by
@@ -224,6 +242,9 @@ func (r Report) Validate() error {
 	}
 	if strings.TrimSpace(r.RunID) == "" {
 		problems = append(problems, errors.New("run id is required"))
+	}
+	if r.Build != "" && !buildPattern.MatchString(r.Build) {
+		problems = append(problems, fmt.Errorf("build %q is not a revision", r.Build))
 	}
 	if err := domain.ValidateIdentifier("product id", string(r.ProductID)); err != nil {
 		problems = append(problems, err)
@@ -316,10 +337,13 @@ func Decode(payload string) ([]Entry, error) {
 // Attribution is what the harness knows about a reporter, which is everything
 // about a report except its severity and its text.
 type Attribution struct {
-	Role         domain.AgentRole
-	Agent        string
-	RunID        string
-	WorkItemID   string
+	Role       domain.AgentRole
+	Agent      string
+	RunID      string
+	WorkItemID string
+	// Build is the harness revision the invocation executed, empty where the
+	// binary recorded none.
+	Build        string
 	ProductID    domain.ProductID
 	RepositoryID string
 }
@@ -341,6 +365,7 @@ func Collect(entries []Entry, attribution Attribution, now time.Time) ([]Report,
 			Agent:         strings.TrimSpace(attribution.Agent),
 			RunID:         attribution.RunID,
 			WorkItemID:    attribution.WorkItemID,
+			Build:         strings.TrimSpace(attribution.Build),
 			ProductID:     attribution.ProductID,
 			RepositoryID:  attribution.RepositoryID,
 			Severity:      entry.Severity,
@@ -538,7 +563,18 @@ func (h Handling) Render() string {
 // became of one means naming it, and a listing that showed everything about a
 // report except the word for it would leave the reader unable to act on what
 // they had just read.
+//
+// Beside the run it names the build that run executed, which is what the report
+// is actually a claim about. RenderAgainst says as well how far that build is
+// behind the target branch.
 func (r Report) Render() string {
+	return r.RenderAgainst(nil)
+}
+
+// RenderAgainst is Render with each build measured against the target branch by
+// gauge, so a report filed from a build that predates a fix says by how many
+// changes before anybody admits work from it.
+func (r Report) RenderAgainst(gauge *Gauge) string {
 	var rendered strings.Builder
 	// The agent is named only where it says something the role does not, which
 	// is a project that configured more than one agent for the role.
@@ -551,7 +587,7 @@ func (r Report) Render() string {
 	if r.WorkItemID != "" {
 		fmt.Fprintf(&rendered, " on %s", r.WorkItemID)
 	}
-	fmt.Fprintf(&rendered, " (%s)\n", r.RunID)
+	fmt.Fprintf(&rendered, " (%s)\n", r.provenance(gauge))
 	for _, line := range strings.Split(strings.TrimSpace(r.Message), "\n") {
 		fmt.Fprintf(&rendered, "      %s\n", strings.TrimSpace(line))
 	}

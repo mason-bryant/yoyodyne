@@ -61,10 +61,14 @@ func (a *activeRun) collectReports(role domain.AgentRole, entries []report.Entry
 		return
 	}
 	collected, err := report.Collect(entries, report.Attribution{
-		Role:         role,
-		Agent:        a.pipeline.agentNameForRole(role),
-		RunID:        a.state.RunID,
-		WorkItemID:   a.state.WorkItemID,
+		Role:       role,
+		Agent:      a.pipeline.agentNameForRole(role),
+		RunID:      a.state.RunID,
+		WorkItemID: a.state.WorkItemID,
+		// The build the run's record pins rather than this process's own: a run
+		// resumed or repaired by a later binary was still reserved, and its
+		// decisions made, by the one it records.
+		Build:        a.state.Build,
 		ProductID:    a.pipeline.Config.Product.ID,
 		RepositoryID: string(a.pipeline.Config.Product.RepositoryID),
 	}, a.pipeline.clock().Now())

@@ -523,6 +523,7 @@ func (c Conductor) escalate(recorded Exchange, at time.Time) error {
 			// The exchange is the record this leads back to, exactly as a run is for
 			// a report filed inside one.
 			RunID:        recorded.ID,
+			Build:        recorded.lastBuild(),
 			ProductID:    recorded.ProductID,
 			RepositoryID: recorded.RepositoryID,
 		}, at)

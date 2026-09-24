@@ -438,6 +438,46 @@ attention is a later question, and nothing here does it. The severities are
 deliberately not the reviewer's `blocker`/`major`/`minor`: a finding decides
 whether a change is repaired, and a report decides nothing.
 
+### Which build a report is about
+
+A report is a claim about the build that filed it, not about the tree as it is
+when you read it. So each one also carries the harness revision its invocation
+executed: a run's report carries the build that run's record pins — the same one
+`yoyo status <id>` prints on the run's `ran under ... harness ...` line — a
+conversation's report carries the build holding the conversation, a branch
+review's the build that made the review, and an exchange's escalation the build
+its latest round ran under. Without it a report about a defect fixed since reads
+exactly like one about a live defect. That is how the invariants-index gap, fixed
+on 2026-08-23, was admitted as fresh work twice more — `yoyodyne-ifd.201` and
+`yoyodyne-ifd.380` — each costing a run to find the fix already on main.
+
+Every listing prints the build beside the run, and says how far it is behind the
+target branch's tip:
+
+```text
+  !  report-… [warning] 2026-09-22T09:14:02Z from the developer on yoyodyne-ifd.380 (run-…, build 0123456789ab, 31 change(s) behind the target branch)
+     report-… [note] 2026-09-22T11:02:41Z from the reviewer on yoyodyne-ifd.402 (run-…, build fedcba987654, the target branch's tip)
+     report-… [note] 2026-08-25T18:30:00Z from the developer on yoyodyne-ifd.201 (run-…, no build recorded)
+```
+
+`yoyo reports` and `/reports` print it that way, and the reports carried into
+the product manager's turn are printed the same way, with the instruction to
+check whether a fix has landed before admitting work from a report whose build
+is behind. A build behind the tip is not a verdict. It says the fix may already
+be there and is worth checking, and the report's own run is where to start. The
+count is the one the channel uses for a watch session's build: the commits the
+product's checkout holds past the build, counted by Git (`rev-list --count
+<build>..HEAD`), where HEAD is the target branch every run is written against.
+`yoyo reports --json` carries it as data, under `builds`, keyed by the build.
+
+Reports filed before reports carried a build have none, and neither does one
+filed by a binary that recorded no revision of its own. Both say `no build
+recorded` rather than being read as current. A build the product's repository
+does not hold is not counted either: the builds are the harness's own revisions,
+so the count means something only where the product is the harness's own source,
+and nothing assumes that. Such a report says its build was `not counted against
+the target branch`, and the listing says why once, under the reports.
+
 The severity is the one recorded signal of importance, so every surface that
 shows you a report renders it rather than merely printing the word. In a listing
 it is a mark in the column before the identifier — `!!` for critical, `!` for
@@ -491,9 +531,11 @@ ships, and the pile is none of those.
 
 So the reports nobody has decided about are carried into its conversation, the
 way changes proposed to its documents already are. Each names itself, the role
-and agent that filed it, the work item where there was one, and the run or
-conversation it came out of, which is enough to act on without going and
-fetching anything.
+and agent that filed it, the work item where there was one, the run or
+conversation it came out of, and
+[the build that filed it and how far that build is behind](#which-build-a-report-is-about).
+That is enough to act on without going and fetching anything, including
+checking whether a fix has already landed before work is admitted.
 
 They arrive as a walk through the pile rather than as its worst slice. The
 conversation carries a durable position in the order the pile was filed; a turn

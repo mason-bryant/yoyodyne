@@ -32,6 +32,7 @@ func TestReportsAreCollectedWithoutChangingWhatTheRunDid(t *testing.T) {
 	collector := &fakeReports{}
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = collector
+	pipeline.Build = "0123456789abcdef0123456789abcdef01234567"
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if err != nil {
@@ -69,6 +70,12 @@ func TestReportsAreCollectedWithoutChangingWhatTheRunDid(t *testing.T) {
 		}
 		if collected.Agent != string(collected.Role) {
 			t.Fatalf("report does not name the configured agent: %#v", collected)
+		}
+		// And the build the run executed, which is what the report is a claim
+		// about: a defect reported from a build that predates its fix must not
+		// read like a live one.
+		if collected.Build != pipeline.Build {
+			t.Fatalf("report build = %q, want the run's %q", collected.Build, pipeline.Build)
 		}
 	}
 

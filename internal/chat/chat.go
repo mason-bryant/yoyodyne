@@ -193,6 +193,13 @@ type Options struct {
 	// already on. It is optional like the rest, and a conversation without one
 	// says so rather than showing an empty pile.
 	Reports Reports
+	// Builds counts a report's build against the target branch, so a report
+	// filed from a build that predates a fix says by how many changes wherever it
+	// is shown — to the operator in /reports and to the product manager in the
+	// reports carried into its turn, before either admits work from it. It is
+	// optional: without it every report still names its build, and none says how
+	// far behind it is.
+	Builds report.Builds
 	// Directives is what the operator has told the harness, durable and
 	// product-scoped. It is here because this conversation is where most
 	// directives are received, and it is not the conversation's own memory:
