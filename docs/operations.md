@@ -950,12 +950,30 @@ two-hour window, because it is the same store contended by the same processes
 and a `bd` killed there turned away a dispatch that had nothing wrong with it.
 What it does not do is the other two halves:
 
-- **Nothing is recorded**, because there is no run to record it on. No run has
-  been reserved, and the run a resume is about belongs to whichever process holds
-  its lease rather than to the one asking. So a dispatch that dies mid-window
-  comes back to a whole window rather than to the one it had spent — the opposite
-  of the rule a run's own boundaries follow, and it costs nothing, because a
-  dispatch that died claimed nothing and left nothing behind.
+- **Nothing is recorded on a run**, because there is no run to record it on. No
+  run has been reserved, and the run a resume is about belongs to whichever
+  process holds its lease rather than to the one asking. So a dispatch that dies
+  mid-window comes back to a whole window rather than to the one it had spent —
+  the opposite of the rule a run's own boundaries follow, and it costs nothing,
+  because a dispatch that died claimed nothing and left nothing behind.
+- **The wait is recorded on the watch log instead**, where a watch session
+  started the dispatch — an item it pulled, or a triage decision it carried out.
+  Each wait is written as it is taken, naming the item, the boundary (`reading
+  what this item waits on`), which retry it is, when it asks again, and the
+  failure it is waiting out. Such a dispatch holds a developer slot with no run
+  record for up to the whole window, and until yoyodyne-ifd.428.14 every surface
+  read that as a hung process. Now `yoyo status`'s running line says it —
+  `Running: no run yet, and 1 dispatch waiting out a tracker failure before
+  claiming anything:`, with the wait under it — and so does the brief form the
+  channel carries. The line the channel repeats while nothing is chosen names the
+  wait rather than an idle session, as nobody's move, and the stall alarm reads it
+  as an account of the quiet rather than paging. A wait accounts for the quiet
+  until a minute past its own end, time enough for the retry it precedes, so a
+  dispatch that died mid-wait stops accounting for it within minutes and the
+  alarm is free to fire. These entries are notes about a dispatch rather than
+  changes of the session's state, so `yoyo status`'s session line still names
+  what the session itself last did. A dispatch started by `yoyo run` or `yoyo
+  triage` at a terminal records nothing; whoever typed the command is watching it.
 - **Nothing is parked**, for the same reason. A window that runs out there
   refuses the dispatch with `load work item: the tracker kept failing on
   something a later attempt could have survived`, naming the attempts and the

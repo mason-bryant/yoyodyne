@@ -125,6 +125,15 @@ type Activity struct {
 	// is the record itself, which the first served invocation clears.
 	ProviderOutage runstate.ProviderOutage
 	ProviderAway   bool
+	// TrackerWaits is every dispatch a session started that is waiting out a
+	// tracker failure before it has claimed anything, as WaitingOnTracker reads
+	// them. Such a dispatch holds a slot with no run record, so nothing above can
+	// see it, and for up to the recovery window it starts nothing over a ready
+	// queue and looks from here exactly like a session that has hung. What bounds
+	// it is the wait itself: each one stands only until the attempt it precedes has
+	// had time to answer, so a dispatch that died mid-wait stops accounting for the
+	// quiet within minutes of when it would have asked again.
+	TrackerWaits []DispatchWait
 	// Watched says a session has at some point watched this product. A product no
 	// session has ever watched is not a line that stopped — nothing was choosing
 	// work here, so nothing is failing to, and an operator running items by name
@@ -204,7 +213,7 @@ func (a Activity) Unexplained() bool {
 // explanation is what accounts for nothing having started, or nothing at all.
 // The order is the order a reader would accept them in: the switches somebody
 // placed, then the work that is visibly moving, then the provider refusing to
-// serve any more of it, then a product nobody ever watched, then a machine too
+// serve any more of it, then a dispatch waiting out the tracker, then a product nobody ever watched, then a machine too
 // young to have gone quiet.
 func (a Activity) explanation() string {
 	switch {
@@ -218,6 +227,8 @@ func (a Activity) explanation() string {
 		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
 	case a.ProviderWindow.Standing(a.Now):
 		return a.ProviderWindow.Says()
+	case len(a.TrackerWaits) > 0:
+		return a.TrackerWaits[0].Says()
 	case !a.Watched:
 		return "no watch session has ever run on this product"
 	case a.Since.IsZero():

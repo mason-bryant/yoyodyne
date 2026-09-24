@@ -374,6 +374,59 @@ func TestAWindowThatHasLiftedStopsAccountingForTheQuiet(t *testing.T) {
 	}
 }
 
+// A dispatch waiting out the tracker before it has claimed anything holds its
+// slot with no run record, for up to the recovery window, and the quiet it makes
+// is accounted for by the wait its session recorded rather than paged as a hang
+// — until the wait has lapsed with nothing after it, which is what a dispatch
+// that died mid-wait leaves, and is a stall again.
+func TestADispatchWaitingOutTheTrackerAccountsForTheQuietUntilItLapses(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	harness.watched(t, runstate.WatchIdle, "nothing pullable this poll", moment.Add(time.Minute))
+	waited := moment.Add(time.Hour)
+	wait := runstate.DispatchWait{
+		WorkItemID:   "yoyodyne-task",
+		Boundary:     runstate.RetryDependencyRead,
+		Attempt:      7,
+		DelaySeconds: int64((13 * time.Minute) / time.Second),
+		At:           waited,
+		Failure:      "bd show failed with status timed_out and exit code -1: signal: killed",
+	}
+	if err := harness.watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         runstate.WatchWatching,
+		At:            waited,
+		Reason:        "the dispatch for yoyodyne-task is waiting out a tracker failure",
+		DispatchWait:  &wait,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	harness.now = waited.Add(10 * time.Minute)
+	inside := harness.check(t)
+	if inside.Stalled() {
+		t.Fatalf("Check() = %+v, want the dispatch's wait to account for the quiet", inside)
+	}
+	if !strings.Contains(inside.Silence.Explains, "yoyodyne-task") || !strings.Contains(inside.Silence.Explains, "tracker failure") {
+		t.Fatalf("Explains = %q, want it to name the dispatch waiting out the tracker", inside.Silence.Explains)
+	}
+
+	harness.now = wait.Until().Add(readmodel.DefaultStallThreshold)
+	lapsed := harness.check(t)
+	if lapsed.Opened == nil {
+		t.Fatalf("Check() = %+v, want a stall once the wait lapsed with nothing written after it", lapsed)
+	}
+	// The note is not the session's last word: that is still the idle poll.
+	if !strings.Contains(lapsed.Opened.Chooser, string(runstate.WatchIdle)) {
+		t.Fatalf("Chooser = %q, want the session's own last transition rather than its dispatch's note", lapsed.Opened.Chooser)
+	}
+}
+
 // A check assembled without one of its sources refuses rather than deciding.
 // Every one of them is a reason nothing has started, and a check that treated an
 // unread hold as absent would report a deliberate stop as a machine that died.

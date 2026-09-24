@@ -539,3 +539,62 @@ func TestASessionRecordsWhyItExcludedWhatItAlreadyTried(t *testing.T) {
 		t.Fatal("Record() error = nil, want a reason past the bound refused")
 	}
 }
+
+// A dispatch's wait on the tracker is written onto the log as a watching entry,
+// which is what a reader that knows nothing of it takes it for, and it is not
+// where the session got to: the session is exactly as it was.
+func TestADispatchWaitIsANoteOnTheLogAndNotWhereTheSessionGotTo(t *testing.T) {
+	t.Parallel()
+
+	store := newTestWatchStore(t, t.TempDir())
+	idle := testWatchTransition(testWatchSessionID, WatchIdle, "nothing further pullable")
+	note := testWatchTransition(testWatchSessionID, WatchWatching, "the dispatch for yoyodyne-task is waiting out a tracker failure")
+	note.At = idle.At.Add(time.Minute)
+	note.DispatchWait = &DispatchWait{
+		WorkItemID:   "yoyodyne-task",
+		Boundary:     RetryDependencyRead,
+		Attempt:      1,
+		DelaySeconds: 1,
+		At:           note.At,
+		Failure:      "bd show failed with status timed_out",
+	}
+	for _, transition := range []WatchTransition{idle, note} {
+		if err := store.Record(transition); err != nil {
+			t.Fatalf("Record() error = %v", err)
+		}
+	}
+	recorded, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 || recorded[1].DispatchWait == nil || *recorded[1].DispatchWait != *note.DispatchWait {
+		t.Fatalf("List() = %#v, want the wait read back whole", recorded)
+	}
+	if !recorded[1].DispatchWait.Until().Equal(note.At.Add(time.Second)) {
+		t.Fatalf("Until() = %s, want the moment the dispatch asks again", recorded[1].DispatchWait.Until())
+	}
+	latest, watched, err := store.Latest()
+	if err != nil || !watched || latest.State != WatchIdle {
+		t.Fatalf("Latest() = %#v (watched %v, error %v), want the idle poll rather than the note", latest, watched, err)
+	}
+
+	// A wait said on any other state would tell an older reader the session had
+	// braked, idled, or stopped, and one that names no item or no retry says
+	// nothing anybody can act on.
+	for name, broken := range map[string]func(*WatchTransition){
+		"on an idle entry":    func(t *WatchTransition) { t.State = WatchIdle },
+		"with no item":        func(t *WatchTransition) { t.DispatchWait.WorkItemID = "" },
+		"with no boundary":    func(t *WatchTransition) { t.DispatchWait.Boundary = "" },
+		"with no retry":       func(t *WatchTransition) { t.DispatchWait.Attempt = 0 },
+		"with no moment":      func(t *WatchTransition) { t.DispatchWait.At = time.Time{} },
+		"with a negative one": func(t *WatchTransition) { t.DispatchWait.DelaySeconds = -1 },
+	} {
+		refused := note
+		wait := *note.DispatchWait
+		refused.DispatchWait = &wait
+		broken(&refused)
+		if err := store.Record(refused); err == nil {
+			t.Errorf("Record() of a dispatch wait %s was accepted", name)
+		}
+	}
+}

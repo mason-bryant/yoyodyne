@@ -629,6 +629,9 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		// A stop that is a restart says so, so the reader who is not at this
 		// terminal is told a session is coming back rather than told to start one.
 		Restarting: transition.Restarting,
+		// A dispatch holding a slot while it waits out the tracker before it has
+		// claimed anything, which no run record exists yet to say.
+		DispatchWait: transition.DispatchWait,
 	})
 }
 

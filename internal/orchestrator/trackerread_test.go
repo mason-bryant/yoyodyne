@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -212,5 +215,146 @@ func TestATrackerReadThatSpendsItsWholeWindowParksTheRunAndTheStoreAnsweringResu
 	}
 	if finished.TrackerPause != nil {
 		t.Fatalf("a finished run still carries a tracker park: %#v", finished.TrackerPause)
+	}
+}
+
+// watchLog is the watch log as a session records onto it, over the real store
+// every surface reads. It is guarded because a session's dispatches record onto it
+// from their own goroutines.
+type watchLog struct {
+	mu      sync.Mutex
+	store   *runstate.WatchStore
+	session string
+}
+
+func (w *watchLog) Record(transition SessionState) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.store.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     w.session,
+		State:         transition.State,
+		At:            transition.At,
+		Reason:        transition.Reason,
+		DispatchWait:  transition.DispatchWait,
+	})
+}
+
+// A dispatch a watch session started that waits out a tracker failure before it
+// has claimed anything says so where the surfaces read, while the wait stands.
+// Until yoyodyne-ifd.428.14 it wrote nothing at all: the slot it held was on no
+// running line, the session read as idle over a queue it had found nothing in,
+// and the stall alarm took up to two hours of it for a process that had hung.
+func TestAPreClaimTrackerWaitIsReadableFromTheSurfacesWhileItStands(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	watch, err := runstate.NewWatchStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
+	log := &watchLog{store: watch, session: "watch-0123456789abcdef0123456789abcdef"}
+	session := &watchSession{to: log, now: func() time.Time { return time.Now().UTC() }, schedule: &Schedule{}}
+	// The session idles beside the dispatch it started, which is the state every
+	// surface used to read the whole wait as.
+	session.enter(runstate.WatchIdle, account{reason: "nothing further pullable this poll", running: 1})
+
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker.transientShowErr = killedShow()
+	tracker.showFailures = 1
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+
+	var (
+		during     []readmodel.DispatchWait
+		stall      readmodel.Stall
+		silence    readmodel.Silence
+		standing   string
+		latest     runstate.WatchTransition
+		notified   error
+		waitedFor  time.Duration
+		claimedYet bool
+	)
+	pipeline.Sleep = func(_ context.Context, delay time.Duration) error {
+		// Read while the dispatch is asleep in its wait, exactly as a surface would.
+		waitedFor, claimedYet = delay, tracker.claimed
+		sessions, err := watch.List()
+		if err != nil {
+			t.Errorf("List() error = %v", err)
+			return nil
+		}
+		now := time.Now().UTC()
+		during = readmodel.WaitingOnTracker(sessions, now)
+		stall = readmodel.WhyNothingStarts(readmodel.Conditions{Sessions: watch.List, Now: now})
+		silence = readmodel.ReadSilence(readmodel.Activity{
+			Since:        now.Add(-2 * time.Hour),
+			Ready:        3,
+			TrackerWaits: during,
+			Watched:      true,
+			Now:          now,
+		})
+		standing = readmodel.ReadStanding(context.Background(), readmodel.Sources{Runs: store, Sessions: watch, Now: func() time.Time { return now }}).Render()
+		latest, _, _ = watch.Latest()
+		_, notified = notify.FromWatch(sessions[len(sessions)-1])
+		return nil
+	}
+
+	outcome, err := pipeline.Run(session.dispatching(context.Background()), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("outcome = %#v, want the dispatch to carry on once the tracker answered", outcome)
+	}
+	if claimedYet {
+		t.Fatal("the item was claimed before the pre-claim read was waited out")
+	}
+
+	// The wait itself, with the boundary, the retry, and the failure it waited out.
+	if len(during) != 1 {
+		t.Fatalf("waits standing during the sleep = %#v, want the dispatch's one", during)
+	}
+	wait := during[0]
+	if wait.WorkItemID != "yoyodyne-task" || wait.Boundary != runstate.RetryDependencyRead || wait.Attempt != 1 ||
+		time.Duration(wait.DelaySeconds)*time.Second != waitedFor || !strings.Contains(wait.Failure, "timed_out") {
+		t.Fatalf("recorded wait = %#v, want the item, the boundary, retry 1 of %s, and the tracker's own failure", wait, waitedFor)
+	}
+	// The running line says the dispatch is waiting out the tracker rather than
+	// that nothing is running.
+	if !strings.Contains(standing, "Running: no run yet, and 1 dispatch waiting out a tracker failure before claiming anything:") ||
+		!strings.Contains(standing, "the dispatch for yoyodyne-task is waiting out a tracker failure") {
+		t.Fatalf("status = %q, want its running line to say the dispatch is waiting out the tracker", standing)
+	}
+	// The line the channel says again while it stands names the wait rather than
+	// an idle session, and says it is nobody's move.
+	if stall.Reason != readmodel.ReasonTrackerWait || !strings.Contains(stall.Says, "yoyodyne-task") {
+		t.Fatalf("stall = %#v, want the dispatch's wait rather than an idle session", stall)
+	}
+	if _, attention := stall.Waiting(); attention {
+		t.Fatal("a dispatch waiting out the tracker was put in front of a person")
+	}
+	// The alarm reads the wait as an account of the quiet.
+	if silence.Stalled || !strings.Contains(silence.Explains, "yoyodyne-task") {
+		t.Fatalf("silence = %#v, want the wait to account for it", silence)
+	}
+	// And the session is still where it was: the note is not its last word.
+	if latest.State != runstate.WatchIdle || latest.Note() {
+		t.Fatalf("latest session transition = %#v, want the idle poll rather than the dispatch's note", latest)
+	}
+	if notified != nil {
+		t.Fatalf("FromWatch() error = %v, want the note readable by the sink", notified)
+	}
+
+	// Once the tracker has answered and the dispatch has moved on, the wait stands
+	// for nothing.
+	sessions, err := watch.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if after := readmodel.WaitingOnTracker(sessions, wait.Until().Add(2*time.Minute)); len(after) != 0 {
+		t.Fatalf("waits standing after the wait = %#v, want none", after)
 	}
 }

@@ -134,16 +134,42 @@ func (s Standing) renderRunning() string {
 		return unreadable("Running", s.RunningProblem)
 	}
 	var rendered strings.Builder
-	if len(s.Running) == 0 {
+	// A dispatch waiting out the tracker before it claims anything holds a slot
+	// with no run record, so it is said in the head of the line as well as under
+	// it: the brief rendering the channel carries keeps only the head, and a slot
+	// held for two hours by a line that read "nothing" is the hang this is here to
+	// tell apart from a wait.
+	waiting := ""
+	if len(s.Dispatching) > 0 {
+		waiting = dispatches(len(s.Dispatching)) + " waiting out a tracker failure before claiming anything"
+	}
+	switch {
+	case len(s.Running) == 0 && waiting == "":
 		rendered.WriteString("Running: nothing\n")
-	} else {
+	case len(s.Running) == 0:
+		fmt.Fprintf(&rendered, "Running: no run yet, and %s:\n", waiting)
+	case waiting == "":
 		fmt.Fprintf(&rendered, "Running (%s):\n", count(len(s.Running), "developer run"))
+	default:
+		fmt.Fprintf(&rendered, "Running (%s, and %s):\n", count(len(s.Running), "developer run"), waiting)
+	}
+	if len(s.Running) > 0 {
 		listed, further := bound(len(s.Running))
 		for _, run := range s.Running[:listed] {
 			fmt.Fprintf(&rendered, "  %s — %s, %s elapsed, %s%s\n",
 				run.WorkItemID, phaseOf(run), age(run.Elapsed), spendOf(run), slotOf(run))
 		}
 		rendered.WriteString(remainder(further, "developer run"))
+	}
+	listed, further := bound(len(s.Dispatching))
+	for _, wait := range s.Dispatching[:listed] {
+		fmt.Fprintf(&rendered, "  %s\n", wait.Says())
+	}
+	if further > 0 {
+		fmt.Fprintf(&rendered, "  and %s not named here\n", dispatches(further))
+	}
+	if s.DispatchingProblem != "" {
+		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.DispatchingProblem)
 	}
 	// The slots with nothing in them, each with what it prefers, said under the
 	// runs where some slot prefers a label. A free slot that prefers a label is
@@ -156,6 +182,15 @@ func (s Standing) renderRunning() string {
 		}
 	}
 	return rendered.String()
+}
+
+// dispatches counts dispatches, which count cannot: its plural is the noun with
+// an s on it.
+func dispatches(number int) string {
+	if number == 1 {
+		return "1 dispatch"
+	}
+	return fmt.Sprintf("%d dispatches", number)
 }
 
 // slotOf is which developer slot a run occupies, and what that slot prefers,

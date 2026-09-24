@@ -407,12 +407,21 @@ type SessionState struct {
 	// whatever held the line, and a brake hold is the development manager's or
 	// the harness's until she escalates it.
 	Mover string
+	// DispatchWait is a dispatch this session started waiting out a tracker failure
+	// before it has claimed anything. An entry carrying one is a note about that
+	// dispatch rather than a transition of the session, and is written from the
+	// dispatch's own goroutine as the wait is taken; see
+	// runstate.WatchTransition.Note.
+	DispatchWait *runstate.DispatchWait
 }
 
 // WatchSessions is where a watch session says what it is doing, for the reader
 // who is not at its terminal. It is optional: a session wired without one
 // behaves identically and is simply invisible between the runs it starts, which
 // is the state this exists to end.
+//
+// Record is called from the dispatches a session starts as well as from the
+// session itself, so it is called concurrently.
 type WatchSessions interface {
 	Record(SessionState) error
 }
@@ -1736,7 +1745,7 @@ pulling:
 			}
 			carrying = true
 			go func(task CarryOutTask) {
-				carried, outcome, err := pull.CarryOut.Carry(ctx, task)
+				carried, outcome, err := pull.CarryOut.Carry(session.dispatching(ctx), task)
 				completions <- completed{index: index, outcome: outcome, err: err, carriedOut: &carried}
 			}(task)
 		}
@@ -1934,7 +1943,7 @@ pulling:
 			running++
 			started++
 			go func(workItemID string) {
-				outcome, err := pull.Start(ctx, workItemID, selection)
+				outcome, err := pull.Start(session.dispatching(ctx), workItemID, selection)
 				completions <- completed{index: index, outcome: outcome, err: err}
 			}(entry.ID)
 			return true
@@ -3781,6 +3790,33 @@ func (w *watchSession) resume(reason string) {
 	}
 	w.state, w.said = runstate.WatchWatching, account{reason: reason}
 	w.record(SessionState{State: runstate.WatchResumed, Reason: reason})
+}
+
+// dispatching is the context a dispatch this session starts runs under, carrying
+// where the dispatch records a wait it takes before it has claimed anything. Such
+// a wait holds a developer slot with no run record, for up to the recovery
+// window, and this log is the one place that outlives both the dispatch and the
+// session that can say so.
+//
+// The note is written from the dispatch's goroutine rather than handed back to
+// this one, because this one is asleep between polls for exactly as long as the
+// wait is worth saying. It touches nothing of the session's but the log: the
+// state the session is in is unchanged by it, and a note that could not be
+// written costs that wait its visibility and nothing else, so it is not put on
+// the schedule the session goroutine owns.
+func (w *watchSession) dispatching(ctx context.Context) context.Context {
+	if w.to == nil {
+		return ctx
+	}
+	to := w.to
+	return withDispatchWaits(ctx, func(wait runstate.DispatchWait) {
+		_ = to.Record(SessionState{
+			State:        runstate.WatchWatching,
+			At:           wait.At,
+			Reason:       readmodel.DispatchWait{DispatchWait: wait}.Says(),
+			DispatchWait: &wait,
+		})
+	})
 }
 
 // record writes one transition. A transition that cannot be written costs the
