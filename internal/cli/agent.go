@@ -155,10 +155,11 @@ func listAgents(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "agent list does not accept positional arguments; use `yoyo agent show <name>` for one agent")
 		return 2
 	}

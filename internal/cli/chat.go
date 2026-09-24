@@ -135,10 +135,11 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
 	sideThread := flags.String("side-thread", "", "continue the named side thread with --message instead of reaching the main conversation")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "chat does not accept positional arguments; use --message to send one message")
 		printChatUsage(stderr)
 		return 2

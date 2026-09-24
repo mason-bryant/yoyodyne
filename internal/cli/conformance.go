@@ -39,10 +39,11 @@ func runConformance(ctx context.Context, args []string, stdout, stderr io.Writer
 	definitionPath := flags.String("workflow", "", "workflow definition to run (default: the project's own copy, or the built-in one)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	notes := flags.Bool("notes", false, "render the result as the Markdown section a release's notes carry")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "conformance does not accept positional arguments: it checks the whole product against what it records about itself")
 		printConformanceUsage(stderr)
 		return 2

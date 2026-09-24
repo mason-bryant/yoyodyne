@@ -42,10 +42,11 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	model := flags.String("model", "", "the model selector to review with, instead of the configured one (requires --shadow)")
 	compare := flags.Bool("compare", false, "compare the recorded shadow reviews with the reviews they shadow, and review nothing")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "review does not accept positional arguments")
 		printReviewUsage(stderr)
 		return 2

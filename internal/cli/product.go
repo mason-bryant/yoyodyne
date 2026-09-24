@@ -81,10 +81,11 @@ func runStart(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	foreground := flags.Bool("foreground", false, "run the supervisor in this process rather than detaching it")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "start does not accept positional arguments")
 		printStartUsage(stderr)
 		return 2
@@ -105,10 +106,11 @@ func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "stop does not accept positional arguments")
 		printStopUsage(stderr)
 		return 2

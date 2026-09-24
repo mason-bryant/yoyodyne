@@ -105,10 +105,11 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	// runs this sweep, so an unattended pass should run at least as often as the
 	// threshold it sets.
 	stallAfter := flags.Duration("stall-after", readmodel.DefaultStallThreshold, "how long nothing may start over ready work before this records that the harness has stopped")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "reconcile does not accept positional arguments")
 		printReconcileUsage(stderr)
 		return 2

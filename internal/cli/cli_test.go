@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1167,49 +1170,141 @@ func TestConfigValidateReportsAMissingConfiguration(t *testing.T) {
 	}
 }
 
-// Every command that takes an id reads its flags after that id, because that is
-// the order the usage texts and the documentation say to type and the order
-// anybody types when they have just read an id out of a listing. Go's flag
-// package stops at the first word that is not a flag, so each of these was
-// refused for naming two things.
+// Every command that takes an id reads its flags on either side of that id,
+// because after it is the order the usage texts and the documentation say to
+// type and the order anybody types when they have just read an id out of a
+// listing, and before it is what the triage usage shows. Go's flag package stops
+// at the first word that is not a flag, so each of these was once refused for
+// naming two things. TestEveryCommandParsesThroughTheSharedHelper is what keeps a
+// command added later from reaching the flag package any other way; this is what
+// shows the helper does what that test relies on, verb by verb.
 //
 // The assertion is the exit code: a command that parsed what it was given gets
 // as far as loading the configuration and fails at 1 on a path that is not
 // there, and one that did not refuses at 2 with a usage error before it looks at
 // anything. Nothing here has to reach a provider or a tracker to say which
 // happened.
-func TestFlagsAreReadAfterTheIdEveryCommandThatTakesOne(t *testing.T) {
+func TestFlagsAreReadOnEitherSideOfTheIdEveryCommandThatTakesOne(t *testing.T) {
 	t.Parallel()
 
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
-	for name, args := range map[string][]string{
-		"artifact show":     {"artifact", "show", "brief", "--config", missing},
-		"artifact approve":  {"artifact", "approve", "brief", "--config", missing, "--reason", "approved in conversation"},
-		"amendment show":    {"amendment", "show", "amendment-0123456789abcdef0123456789abcdef", "--config", missing},
-		"amendment approve": {"amendment", "approve", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the ordering was never settled"},
-		"amendment decline": {"amendment", "decline", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the design is right"},
-		"invariant show":    {"invariant", "show", "one-writer-per-item", "--config", missing, "--json"},
-		"invariant create":  {"invariant", "create", "one-writer-per-item", "--config", missing, "--title", "one writer", "--statement", "one writer", "--rationale", "one writer", "--established-by", "yoyodyne-ifd.2.7", "--reason", "extracted"},
-		"invariant amend":   {"invariant", "amend", "one-writer-per-item", "--config", missing, "--scope", "internal/runstate", "--reason", "the other half moved"},
-		"invariant retire":  {"invariant", "retire", "one-writer-per-item", "--config", missing, "--reason", "the reservation moved into the store"},
-		"directive record":  {"directive", "record", "do publishing differently", "--config", missing, "--kind", "ambiguous", "--unresolved", "which behaviour was meant"},
-		"directive resolve": {"directive", "resolve", "directive-0123456789abcdef0123456789abcdef", "--config", missing, "--resolution", "the second behaviour was meant"},
-		"exchange show":     {"exchange", "show", "exchange-0123456789abcdef0123456789abcdef", "--config", missing, "--json"},
-		"agent show":        {"agent", "show", "developer", "--config", missing, "--json"},
-		"agent chat":        {"agent", "chat", "developer", "--config", missing, "--message", "what are you working on?"},
-		"run":               {"run", "yoyodyne-ifd.74", "--config", missing, "--json"},
-		"triage rerun":      {"triage", "rerun", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--json"},
-		"triage repair":     {"triage", "repair", "run-0123456789abcdef0123456789abcdef", "--config", missing},
-		"status":            {"status", "yoyodyne-ifd.74", "--config", missing, "--failed"},
-		"cost":              {"cost", "yoyodyne-ifd.74", "--config", missing, "--record"},
-		"resume":            {"resume", "yoyodyne-ifd.74", "--config", missing},
+	type invocation struct {
+		verb  []string
+		id    string
+		flags []string
+	}
+	for name, command := range map[string]invocation{
+		"artifact show":      {[]string{"artifact", "show"}, "brief", nil},
+		"artifact approve":   {[]string{"artifact", "approve"}, "brief", []string{"--reason", "approved in conversation"}},
+		"amendment show":     {[]string{"amendment", "show"}, "amendment-0123456789abcdef0123456789abcdef", nil},
+		"amendment approve":  {[]string{"amendment", "approve"}, "amendment-0123456789abcdef0123456789abcdef", []string{"--reason", "the ordering was never settled"}},
+		"amendment decline":  {[]string{"amendment", "decline"}, "amendment-0123456789abcdef0123456789abcdef", []string{"--reason", "the design is right"}},
+		"invariant show":     {[]string{"invariant", "show"}, "one-writer-per-item", []string{"--json"}},
+		"invariant create":   {[]string{"invariant", "create"}, "one-writer-per-item", []string{"--title", "one writer", "--statement", "one writer", "--rationale", "one writer", "--established-by", "yoyodyne-ifd.2.7", "--reason", "extracted"}},
+		"invariant amend":    {[]string{"invariant", "amend"}, "one-writer-per-item", []string{"--scope", "internal/runstate", "--reason", "the other half moved"}},
+		"invariant retire":   {[]string{"invariant", "retire"}, "one-writer-per-item", []string{"--reason", "the reservation moved into the store"}},
+		"directive record":   {[]string{"directive", "record"}, "do publishing differently", []string{"--kind", "ambiguous", "--unresolved", "which behaviour was meant"}},
+		"directive resolve":  {[]string{"directive", "resolve"}, "directive-0123456789abcdef0123456789abcdef", []string{"--resolution", "the second behaviour was meant"}},
+		"directive withdraw": {[]string{"directive", "withdraw"}, "directive-0123456789abcdef0123456789abcdef", []string{"--by", "the operator", "--reason", "no longer meant"}},
+		"evaluation show":    {[]string{"evaluation", "show"}, "evaluation-0123456789abcdef0123456789abcdef", []string{"--json"}},
+		"exchange show":      {[]string{"exchange", "show"}, "exchange-0123456789abcdef0123456789abcdef", []string{"--json"}},
+		"agent show":         {[]string{"agent", "show"}, "developer", []string{"--json"}},
+		"agent chat":         {[]string{"agent", "chat"}, "developer", []string{"--message", "what are you working on?"}},
+		"run":                {[]string{"run"}, "yoyodyne-ifd.74", []string{"--json"}},
+		"triage rerun":       {[]string{"triage", "rerun"}, "run-0123456789abcdef0123456789abcdef", []string{"--json"}},
+		"triage repair":      {[]string{"triage", "repair"}, "run-0123456789abcdef0123456789abcdef", nil},
+		"triage rearm":       {[]string{"triage", "rearm"}, "run-0123456789abcdef0123456789abcdef", []string{"--reason", "the forge dropped the merge"}},
+		"triage resume":      {[]string{"triage", "resume"}, "run-0123456789abcdef0123456789abcdef", []string{"--reason", "the push timed out"}},
+		"triage override":    {[]string{"triage", "override"}, "yoyodyne-ifd.74", []string{"--budget", "review round", "--cap", "8", "--by", "mason", "--reason", "the base moved"}},
+		"status":             {[]string{"status"}, "yoyodyne-ifd.74", []string{"--failed"}},
+		"cost":               {[]string{"cost"}, "yoyodyne-ifd.74", []string{"--record"}},
+		"resume":             {[]string{"resume"}, "yoyodyne-ifd.74", nil},
 	} {
-		var stdout, stderr bytes.Buffer
-		code := Run(args, &stdout, &stderr, "test")
-		if code != 1 {
-			t.Fatalf("%s: code = %d, want 1 — the flags after the id were not read; stderr = %q", name, code, stderr.String())
+		// --config comes first among the flags so the split order always has a
+		// whole flag, with its value, on each side of the id.
+		flags := append([]string{"--config", missing}, command.flags...)
+		for order, args := range map[string][]string{
+			"flags after the id":        concatenated(command.verb, []string{command.id}, flags),
+			"flags before the id":       concatenated(command.verb, flags, []string{command.id}),
+			"flags on both sides of it": concatenated(command.verb, flags[:2], []string{command.id}, flags[2:]),
+		} {
+			var stdout, stderr bytes.Buffer
+			code := Run(args, &stdout, &stderr, "test")
+			if code != 1 {
+				t.Errorf("%s, %s: code = %d, want 1 — the flags were not all read; stderr = %q", name, order, code, stderr.String())
+			}
 		}
 	}
+}
+
+// Every command reads its flags through parseArguments, and none calls the flag
+// package's Parse itself, because a direct Parse stops at the first word that is
+// not a flag — which is how `amendment approve <id> --reason ...` and
+// `invariant show <id> --json` came to be refused while their own usage text
+// printed exactly that. A table of verbs only covers the verbs somebody
+// remembered to add to it, so this reads the package's own source instead: a new
+// command that parses any other way fails here before anybody types it.
+//
+// A call is a Parse with one argument on something that is not an imported
+// package, which is what a flag set's Parse looks like and what nothing else in
+// this package calls; time.Parse takes two, and url.Parse is called on the
+// package.
+func TestEveryCommandParsesThroughTheSharedHelper(t *testing.T) {
+	t.Parallel()
+
+	fileSet := token.NewFileSet()
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	for _, path := range sources {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("ParseFile(%s) error = %v", path, err)
+		}
+		imported := map[string]bool{}
+		for _, spec := range file.Imports {
+			name := strings.Trim(spec.Path.Value, `"`)
+			name = name[strings.LastIndex(name, "/")+1:]
+			if spec.Name != nil {
+				name = spec.Name.Name
+			}
+			imported[name] = true
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil || function.Name.Name == "parseArguments" {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok || len(call.Args) != 1 {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "Parse" {
+					return true
+				}
+				if receiver, ok := selector.X.(*ast.Ident); ok && imported[receiver.Name] {
+					return true
+				}
+				t.Errorf("%s: %s calls Parse on a flag set directly; parse through parseArguments so flags are read on either side of a positional argument",
+					fileSet.Position(call.Pos()), function.Name.Name)
+				return true
+			})
+		}
+	}
+}
+
+func concatenated(parts ...[]string) []string {
+	var joined []string
+	for _, part := range parts {
+		joined = append(joined, part...)
+	}
+	return joined
 }
 
 func writeProjectConfig(t *testing.T, content string) string {

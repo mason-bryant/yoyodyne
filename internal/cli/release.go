@@ -47,12 +47,13 @@ func releaseIntake(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
 	// An operator who names the item they can see is one word from a different
 	// verb, so the refusal says which word rather than only that this is not it.
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "release does not accept positional arguments: it lifts the hold on what the harness chooses, and `yoyo resume <beads-id>` is what releases one run's wait on the provider")
 		printReleaseUsage(stderr)
 		return 2

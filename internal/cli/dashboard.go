@@ -45,10 +45,11 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	port := flags.Int("port", 0, "the loopback port to serve on (default: one the operating system chooses)")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "dashboard does not accept positional arguments")
 		printDashboardUsage(stderr)
 		return 2

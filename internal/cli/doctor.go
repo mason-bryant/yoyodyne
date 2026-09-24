@@ -37,10 +37,11 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	quiet := flags.Bool("quiet", false, "report only what is wrong, leaving out what is already healthy")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 {
+	if len(positional) != 0 {
 		fmt.Fprintln(stderr, "doctor does not accept positional arguments: it checks the whole installation")
 		printDoctorUsage(stderr)
 		return 2
