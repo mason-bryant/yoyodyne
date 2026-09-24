@@ -61,7 +61,8 @@ unintended one reads as the fields nobody meant to move.
 The section at the end, naming what no trace holds, is held to that promise by a
 check rather than by a reader: `TestBaselineDocumentDisclosesEveryFieldNoTraceHolds`
 fails when this document states a durable field that no trace carries and the
-gap list does not name. It is a floor rather than a fence — it recognizes field
+gap list does not name, and says which field and the sentence that states it.
+It is a floor rather than a fence — it recognizes field
 names, so a behavior stated only in prose is still a reviewer's to catch — and
 it reports rather than decides: recording a trace satisfies it, and so does
 naming the field below.
@@ -184,13 +185,21 @@ harness.
 | `developing` | One developer invocation in the run's worktree, resuming the run's session on every attempt after the first, and a harness commit of whatever it left there | `provider_session_id`, `provider_model`, `provider_resolved_model`, `harness_commit`, `changes`, `last_sequence`, `verification` |
 | `checking` | The protected-path gate first, then the execution-evidence gate, then every configured check in order | `path_refusal`, the `verification` record's `owed`, or `check_failure` while one is outstanding, and clears the others when a gate passes |
 | `reviewing` | One independent review invocation, its own session, no tools, shown the branch's whole diff against the run's recorded base | `review_session_id`, `review_model`, `review_resolved_model`, `review_base_commit`, `review_head_commit`, `review_decision`, `review_approves`, `review_summary`, `review_findings`, `review_finding_details`, `review_rounds` |
-| `integrating` | Under the target branch's promotion lease: fast-forward the local target onto the branch tip the developer's attempts were committed at, and merge where the project publishes | `harness_commit`, `integration`, `pull_request` |
+| `integrating` | Under the target branch's promotion lease: fast-forward the local target onto the branch tip the developer's attempts were committed at, and merge where the project publishes | `integration`, `pull_request`; `harness_commit` only when the promotion is replayed or a refused promotion committed something itself |
 | `completing` | Record the outcome on the item, settle it — closed when the change discharges the item, back in the backlog parked or waiting on a named impediment when it does not — price it | the tracker's record and settlement |
 | `cleaning_up` | Remove the worktree and the branch, each recorded separately | `worktree_removed`, `branch_removed` |
 | `complete` | Nothing outstanding | `completed_at` |
 
 A run whose integration a person still approves stops after `checking`: it
 records the outcome, leaves the change on its branch, and closes nothing.
+
+`harness_commit` is written by `developing`, and an ordinary promotion leaves
+it where `developing` put it: the commit promoted is that commit, which is why
+the traces of a promotion carry it equal to `integration`'s `source_commit`.
+`integrating` rewrites it in two cases only. A replay onto a moved target names
+the replayed commit, or clears it where nothing is left above the new base; and
+a promotion refused after it committed what the developer left in the worktree
+names that commit before it reports the refusal.
 
 ### The repair loop
 
@@ -597,6 +606,13 @@ them.
 - A replay that conflicts, which blocks with both sides intact.
 - A reviewer's reply that cannot be read as a verdict, which is asked for once
   more and fails the run on the second.
+- **`integrating` rewriting `harness_commit`.** Every trace that carries the
+  field carries the value it ended on, and on a promotion that is the commit
+  promoted. The replay trace ends on the replayed commit, but a trace records
+  only where a run finished, so the commit the replay replaced never appears in
+  it and the rewrite is indistinguishable from a replay that left the field
+  alone. A refused promotion naming the commit it made is held by no trace at
+  all.
 - **A recorded integration the repository contradicts, blocked rather than
   believed.** The traced settlement is the opposite case — an integration the
   record does not carry, found in the target branch by containment — so what no
