@@ -965,7 +965,8 @@ event stream is stored beside it — including what the operator asked the harne
 to do, which is recorded in the conversation's own log beside the runs' logs. A
 re-read that has been taken and not yet delivered is recorded too, with the text
 of it kept in a file beside the record rather than inside it, because a picture
-is close to the whole of what one record may be.
+is close to the whole of what one record may be. So is the text of the picture
+the agent last received, which is what a later refresh is compared against.
 
 ## Talking to the other agents
 
@@ -2203,9 +2204,30 @@ conversation. It discards nothing: what has been said stays said, and the new
 picture reaches the product manager on your next message, framed as evidence
 with an account of what moved, so it reconciles what it believed rather than
 having it swapped underneath. The transcript says the refresh happened, the
-conversation's own log records it, and the durable record only says the
-conversation is working from the new picture once a turn has actually carried
-it — a refresh nobody was told about never reads as one that landed.
+conversation's own log records it, and the durable record moves to the new
+picture as it is read while also saying the picture is still owed, and which
+picture the agent last received, until a turn has actually carried it — a
+refresh nobody was told about never reads as one that landed.
+
+**A refresh carries what moved, not the whole picture.** The agent's session
+already holds the picture it was last given, and it keeps everything it is ever
+sent, so a refresh that sent the whole picture again added the whole picture to
+the session again. The development manager's conversation showed where that
+ends: about twenty re-reads of roughly a megabyte each went into one session
+from 2026-09-20, and on 2026-09-23 a turn that failed was asked again with the
+whole picture some twenty-five times, until the session passed the 32 MB the
+provider accepts in one request and no turn could be taken at all. So the text
+of the last delivered picture is kept beside the record, and a refresh is
+delivered as the sections that differ from it: the changed lines of a document
+or listing both pictures carry, with a line or two around them to show where
+they sit, a section that is new in full, and a section that is gone by name.
+Every section not named is as the agent was last given it, and the framing tells
+it so. The turn after a refresh is as large as what moved rather than as large
+as the product. A conversation that has nothing to compare against — one begun
+before the text was kept — gets the whole picture once, and changes after that;
+and a turn rebuilt for a provider holding no session is given the whole picture
+in front of the changes, since changes mean nothing to a provider that never
+held what they changed.
 
 **The harness refreshes on its own past a threshold.** The line above turned
 out not to be enough: on 2026-09-18 the product manager advised adding a
@@ -2256,9 +2278,15 @@ re-read that went down with the process holding it, so one stuck picture became
 of them measured from the same month-old commit. The backstop was corrected the
 next day, which removed that day's reason for the turns to fail; turns fail for
 other reasons, and this is what stops the next burst of them costing a re-read
-apiece. Only the delivery still moves the picture the conversation is working
-from: a refresh nobody was told about is a picture waiting, never one that
-landed.
+apiece. The record's picture moves when the re-read is taken, so the next
+measurement starts from it rather than from a picture a failing turn never
+replaced; the record also says the re-read is still waiting, and a refresh
+nobody was told about is still a picture waiting, never one that landed. A
+picture carried out of a failed turn is measured again before it is delivered,
+because it can be any age by then: on 2026-09-23 one was carried through thirty
+hours of failing turns. One that has itself fallen past the threshold is read
+again, and the agent is still told everything that moved since the picture it
+last received.
 
 Where the re-read cannot be made — the tracker is locked, the repository will
 not answer — the reply is still given, and it says in its own text, ahead of

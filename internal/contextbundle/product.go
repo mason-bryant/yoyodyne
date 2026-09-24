@@ -545,6 +545,53 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	return bundle, nil
 }
 
+// productSectionHeadings are the headings AssembleProduct opens its own fixed
+// sections with, as they appear on their line.
+var productSectionHeadings = map[string]bool{
+	"# Product context":               true,
+	"## Recorded product intent":      true,
+	"## Specifications":               true,
+	"## What the product ships today": true,
+	"### Command help":                true,
+	"## Beads work items":             true,
+	"## Triage docket":                true,
+	"## Specifications that do not follow the required structure": true,
+	"## Specifications omitted for size":                          true,
+}
+
+// SectionHeading reports whether one line of an assembled product context opens
+// one of the sections AssembleProduct puts together: a fixed section such as the
+// work items, or a document it carries — a specification, a directory index, one
+// of a role's own documents, or a shipped document. A heading inside a document
+// is not one, so a caller comparing two contexts section by section compares
+// whole documents and can say which document a change is in.
+//
+// It is decided here because this is what writes the headings. A document is
+// recognized by the shape its heading is written in, a label and a
+// repository path, so a document's own heading that happens to share that shape
+// is read as a section too; what that costs a comparison is a finer split, never
+// a wrong one.
+func SectionHeading(line string) bool {
+	if productSectionHeadings[line] {
+		return true
+	}
+	var rest string
+	switch {
+	case strings.HasPrefix(line, "### Shipped documentation: "):
+		rest = strings.TrimPrefix(line, "### Shipped documentation: ")
+		return rest != "" && !strings.ContainsAny(rest, " \t")
+	case strings.HasPrefix(line, "## ") && !strings.HasPrefix(line, "### "):
+		rest = strings.TrimPrefix(line, "## ")
+	default:
+		return false
+	}
+	label, path, found := strings.Cut(rest, ": ")
+	if !found || label == "" || strings.Contains(label, ":") || path == "" || strings.ContainsAny(path, " \t") {
+		return false
+	}
+	return strings.Contains(path, "/") || strings.HasSuffix(path, ".md")
+}
+
 // validateSpecificationsDirectory keeps a configured directory inside the
 // repository. The same rule guards the configuration itself; it is repeated
 // here because this package is what actually reads the filesystem, and a
