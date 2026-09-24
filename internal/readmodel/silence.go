@@ -289,7 +289,10 @@ func SessionSays(transition runstate.WatchTransition) string {
 	switch {
 	case transition.Restarting:
 		return "stopped to restart into the build deployed over it"
-	case transition.Unreadable:
+	// Only an idle poll is a read being retried, which is the same condition the
+	// channel's kind is taken on. A session that gave up on the store records a
+	// stop, and a stop said as a retry is a session nobody starts again.
+	case transition.Unreadable && transition.State == runstate.WatchIdle:
 		return "retrying a failed read of the harness's store"
 	}
 	return string(transition.State)

@@ -180,6 +180,7 @@ func TestSessionSaysARetriedReadAndARestartAsThemselves(t *testing.T) {
 	}{
 		{runstate.WatchTransition{State: runstate.WatchIdle}, "idle"},
 		{runstate.WatchTransition{State: runstate.WatchIdle, Unreadable: true}, "retrying a failed read of the harness's store"},
+		{runstate.WatchTransition{State: runstate.WatchStopped, Unreadable: true}, "stopped"},
 		{runstate.WatchTransition{State: runstate.WatchStopped, Restarting: true}, "stopped to restart into the build deployed over it"},
 	} {
 		if said := SessionSays(testCase.transition); said != testCase.want {
