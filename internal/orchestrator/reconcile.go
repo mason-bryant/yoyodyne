@@ -1636,7 +1636,11 @@ func renderReconcileBlockerNotes(state runstate.State, observation gitworktree.O
 		if finding.File != "" {
 			location = fmt.Sprintf(" (%s:%d)", finding.File, finding.Line)
 		}
-		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", finding.Severity, location, finding.Message))
+		label := finding.Severity
+		if finding.Disposition != "" {
+			label += ", " + finding.Disposition
+		}
+		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", label, location, finding.Message))
 	}
 	return strings.Join(lines, "\n")
 }

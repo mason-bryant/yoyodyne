@@ -2591,10 +2591,12 @@ one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the
 and gets a fresh verdict on the replayed change is not charged for it, whichever
 way that verdict goes. Neither is a verdict that approved the change: the cap
 stops an item buying the same argument another round, and an approval ends the
-argument. Neither is a repair whose whole residue is one minor finding — the
-reviewer said the work is right and named one small thing beside it, which is the
-same ending with a note attached; the work still goes back to the developer and
-still spends one of the run's own repair attempts. An uncharged verdict is still
+argument. Neither is a repair whose whole residue is one finding the reviewer
+disposed of as `out_of_scope` — the reviewer said the work is right and named one
+thing beside it that is not this change's to do, which is the same ending with a
+note attached; the work still goes back to the developer and still spends one of
+the run's own repair attempts. The disposition decides this, not the severity: a
+single `minor` finding with no disposition is a round like any other. An uncharged verdict is still
 recorded rather than passed over, because the exclusions are one mechanism — an
 attempt already answered about is charged at most once — and a promotion only
 ever follows an approval. Rounds are what runs actually spend, and every run

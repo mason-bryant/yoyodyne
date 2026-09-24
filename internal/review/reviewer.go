@@ -652,7 +652,7 @@ Reply with a single JSON object and nothing else, except the one report block de
 
 ` + verdictSchema(scope) + `
 
-"findings" may be omitted when approving with no observations. "location" is optional. "fixtures" is omitted unless the evidence named test-data files the patch bound kept out; where it did, an approval must list every one of them, by the path the evidence gave, as the statement of what your approval covered.` + approvesRequirement(scope) + ` The schema is closed: those are the only fields it defines, at every level of the object, and you must not add another one. Anything else you want to say belongs in "summary" or in a finding's "message".
+"findings" may be omitted when approving with no observations. "location" is optional. "disposition" is optional and is not a severity: "minor" says how serious a problem is, and "out_of_scope" says this change does not have to fix it — it is outside what the work item asked for, or too trivial to hold the change for. Omit it for anything this change has to do, whatever its severity. It is what decides whether a repair costs the work item a review round: a repair whose only finding is out of scope costs none, and a repair whose only finding is minor costs one like any other. Never mark something the change has to fix as out of scope to spare the item a round. "fixtures" is omitted unless the evidence named test-data files the patch bound kept out; where it did, an approval must list every one of them, by the path the evidence gave, as the statement of what your approval covered.` + approvesRequirement(scope) + ` The schema is closed: those are the only fields it defines, at every level of the object, and you must not add another one. Anything else you want to say belongs in "summary" or in a finding's "message".
 
 ` + report.Contract + `
 
@@ -821,7 +821,7 @@ func verdictSchema(scope Scope) string {
 		approves = ""
 		decisions = `"decision":"approve|repair",`
 	}
-	return `{` + decisions + approves + `"summary":"one paragraph","fixtures":["path"],"findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}`
+	return `{` + decisions + approves + `"summary":"one paragraph","fixtures":["path"],"findings":[{"severity":"blocker|major|minor","disposition":"out_of_scope","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}`
 }
 
 // approvesRequirement says when the field above is required, beside the two

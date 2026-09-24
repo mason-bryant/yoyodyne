@@ -5965,13 +5965,15 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // with a decision every recorded path refused; it took an operator override and a
 // fresh work item to move.
 //
-// A repair whose whole residue is one trivial finding is the other, by the
-// operator's own direction of 2026-09-05 after four such escalations in a week.
-// It is the same ending with a note attached: the reviewer said the work is right
-// and named one small thing beside it, and an item that reaches its cap on that
-// is an item the semantics stuck rather than the work. What counts as trivial is
-// the reviewer's vocabulary rather than this pipeline's — review.TrivialResidue
-// is where the line is drawn.
+// A repair whose whole residue is one finding the reviewer disposed of as out of
+// scope is the other, by the operator's own direction of 2026-09-05 after four
+// such escalations in a week. It is the same ending with a note attached: the
+// reviewer said the work is right and named one thing beside it that is not this
+// change's to do, and an item that reaches its cap on that is an item the
+// semantics stuck rather than the work. It is the finding's disposition that
+// decides, never its severity — a single minor finding is charged like any
+// other — and what counts is the reviewer's vocabulary rather than this
+// pipeline's: review.TrivialResidue is where the line is drawn.
 //
 // It unbounds nothing, which is what makes both exclusions safe rather than
 // generous, and what holds that is other budgets rather than the rounds. An
@@ -6314,7 +6316,7 @@ func durableFindings(findings []review.Finding) []runstate.Finding {
 	}
 	durable := make([]runstate.Finding, 0, len(findings))
 	for _, finding := range findings {
-		recorded := runstate.Finding{Severity: string(finding.Severity), Message: finding.Message}
+		recorded := runstate.Finding{Severity: string(finding.Severity), Disposition: string(finding.Disposition), Message: finding.Message}
 		if finding.Location != nil {
 			recorded.File = finding.Location.File
 			recorded.Line = finding.Location.Line
@@ -6424,7 +6426,7 @@ func reportedFindings(findings []runstate.Finding) []review.Finding {
 	}
 	reported := make([]review.Finding, 0, len(findings))
 	for _, finding := range findings {
-		restored := review.Finding{Severity: review.Severity(finding.Severity), Message: finding.Message}
+		restored := review.Finding{Severity: review.Severity(finding.Severity), Disposition: review.Disposition(finding.Disposition), Message: finding.Message}
 		if finding.File != "" {
 			restored.Location = &review.Location{File: finding.File, Line: finding.Line}
 		}
@@ -7674,7 +7676,11 @@ func renderReviewNotes(outcome Outcome) []string {
 		if finding.Location != nil {
 			location = fmt.Sprintf(" (%s:%d)", finding.Location.File, finding.Location.Line)
 		}
-		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", finding.Severity, location, finding.Message))
+		label := string(finding.Severity)
+		if finding.Disposition != "" {
+			label += ", " + string(finding.Disposition)
+		}
+		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", label, location, finding.Message))
 	}
 	if outcome.Integration != nil {
 		lines = append(lines,

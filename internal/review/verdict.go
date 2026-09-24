@@ -44,6 +44,28 @@ const (
 	SeverityMinor   Severity = "minor"
 )
 
+// Disposition is what the reviewer says about a finding beside how serious it
+// is. Severity answers how bad the problem is; a disposition answers whether this
+// change is the place to fix it. They are separate words because they are
+// separate questions, and folding one into the other is what made a severity
+// label decide the review budget: before this, a reviewer that wanted to say
+// "right, but not this change's business" had only "minor" to say it with, so a
+// single minor finding became a free round, and a real defect labelled minor was
+// a free round as well as a small-looking one (yoyodyne-ifd.359).
+//
+// A finding with no disposition is an ordinary finding: something this change
+// has to do. That is nearly every finding, which is why the field is optional.
+type Disposition string
+
+const (
+	// DispositionOutOfScope marks a finding the reviewer stands behind and does
+	// not hold this change to: it lies outside what the work item asked for, or it
+	// is too trivial to be worth another round. It is independent of severity — a
+	// real defect in code the item never touched is out of scope and may well be
+	// major.
+	DispositionOutOfScope Disposition = "out_of_scope"
+)
+
 // Approval is what an approving verdict approves. It exists because approving a
 // change and discharging the work item it was made for are two different facts,
 // and only the reviewer sees both the change and what it was offered as: the
@@ -67,11 +89,11 @@ const (
 	ApprovesEvidence Approval = "evidence"
 )
 
-// The three vocabularies above as lists, which is what validates a verdict
+// The vocabularies above as lists, which is what validates a verdict
 // below: a value permitted here and a value the contract accepts are one list
 // rather than two that can drift.
 //
-// Anything added to either has to be added to the durable schema that stores it,
+// Anything added to any of them has to be added to the durable schema that stores it,
 // which keeps its own copy so a record is checked against what a record may hold
 // rather than against this version of the harness. That is a real trap — the
 // addition is accepted here and refused at the moment a run tries to store what
@@ -82,9 +104,11 @@ var (
 	decisions  = []Decision{DecisionApprove, DecisionRepair, DecisionEscalate}
 	severities = []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
 	approvals  = []Approval{ApprovesImplementation, ApprovesEvidence}
+
+	dispositions = []Disposition{DispositionOutOfScope}
 )
 
-// Decisions, Severities, and Approvals are those vocabularies as a caller
+// Decisions, Severities, Approvals, and Dispositions are those vocabularies as a caller
 // outside this package reads them, each answered with a copy so nothing holding
 // one can rewrite the contract.
 func Decisions() []Decision { return slices.Clone(decisions) }
@@ -92,6 +116,8 @@ func Decisions() []Decision { return slices.Clone(decisions) }
 func Severities() []Severity { return slices.Clone(severities) }
 
 func Approvals() []Approval { return slices.Clone(approvals) }
+
+func Dispositions() []Disposition { return slices.Clone(dispositions) }
 
 // Location optionally anchors a finding to a place in the reviewed change.
 type Location struct {
@@ -101,9 +127,13 @@ type Location struct {
 
 // Finding is one actionable observation the developer can act on.
 type Finding struct {
-	Severity Severity  `json:"severity"`
-	Message  string    `json:"message"`
-	Location *Location `json:"location,omitempty"`
+	Severity Severity `json:"severity"`
+	// Disposition is empty for a finding this change has to act on, and
+	// DispositionOutOfScope for one the reviewer names without holding the change
+	// to it. It is what the review budget reads; the severity is not.
+	Disposition Disposition `json:"disposition,omitempty"`
+	Message     string      `json:"message"`
+	Location    *Location   `json:"location,omitempty"`
 }
 
 // Verdict is the reviewer's approve-or-repair decision on one change, and — on
@@ -198,7 +228,7 @@ func Decode(data []byte) (Verdict, []string, error) {
 // disagree about what the contract defines.
 var (
 	verdictFields  = []string{"decision", "approves", "summary", "fixtures", "findings"}
-	findingFields  = []string{"severity", "message", "location"}
+	findingFields  = []string{"severity", "disposition", "message", "location"}
 	locationFields = []string{"file", "line"}
 )
 
@@ -290,22 +320,29 @@ func (v Verdict) Validate() error {
 	return nil
 }
 
-// TrivialResidue reports findings whose whole content is one minor observation.
+// TrivialResidue reports findings whose whole content is one observation the
+// reviewer disposed of as out of scope.
 //
 // It is the reviewer's vocabulary answering a question about budgets, which is
-// why it lives here rather than where the budgets are: minor is a severity this
-// package defines, and a caller comparing severity strings of its own would be
+// why it lives here rather than where the budgets are: the disposition is a word
+// this package defines, and a caller comparing strings of its own would be
 // keeping a private copy of this contract.
 //
-// One and minor, rather than any number of them. A repair whose residue is a
-// single small note is the reviewer saying the work is right and naming one thing
-// beside it — the end of the argument with a note attached, which is why the item
-// is not charged a round for it. Two notes is a list, and a list is the reviewer
-// still arguing; a blocker or a major among them is work the change actually
-// needs, whatever else is beside it. Where the line sits is a judgement rather
-// than a law, and this is where it is written down.
+// It reads the disposition and never the severity. The reviewer is asked for
+// the disposition as the answer to exactly this question — does the change have
+// to do this — where a severity is its estimate of how bad something is, and a
+// budget decided by that estimate made a real defect labelled minor cost nothing
+// (yoyodyne-ifd.359). A single minor finding with no disposition is therefore
+// charged like any other repair.
+//
+// One, rather than any number of them. A repair whose residue is a single note
+// the reviewer has said is not this change's work is the reviewer saying the work
+// is right and naming one thing beside it — the end of the argument with a note
+// attached, which is why the item is not charged a round for it. Two notes is a
+// list, and a list is the reviewer still arguing. Where the line sits is a
+// judgement rather than a law, and this is where it is written down.
 func TrivialResidue(findings []Finding) bool {
-	return len(findings) == 1 && findings[0].Severity == SeverityMinor
+	return len(findings) == 1 && findings[0].Disposition == DispositionOutOfScope
 }
 
 // Resolve returns the decision a valid verdict actually supports, rejecting one
@@ -339,6 +376,12 @@ func (f Finding) Validate() error {
 	var problems []error
 	if !f.Severity.Valid() {
 		problems = append(problems, fmt.Errorf("severity %q must be %q, %q, or %q", f.Severity, SeverityBlocker, SeverityMajor, SeverityMinor))
+	}
+	// Closed for the reason the severity is: the disposition decides whether a
+	// round is charged, so a word nothing recognizes is refused here rather than
+	// read by the budget as either answer.
+	if f.Disposition != "" && !f.Disposition.Valid() {
+		problems = append(problems, fmt.Errorf("disposition %q must be %q or omitted", f.Disposition, DispositionOutOfScope))
 	}
 	if strings.TrimSpace(f.Message) == "" {
 		problems = append(problems, errors.New("message is required"))
@@ -386,6 +429,10 @@ func (s Severity) Valid() bool {
 
 func (a Approval) Valid() bool {
 	return slices.Contains(approvals, a)
+}
+
+func (d Disposition) Valid() bool {
+	return slices.Contains(dispositions, d)
 }
 
 // Discharges reports whether an approval closes the work item it was made for.
