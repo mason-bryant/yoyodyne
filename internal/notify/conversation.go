@@ -291,6 +291,12 @@ type unresolvedTrackerRefusal struct {
 	// role that stopped issuing it, and only the second means nothing was refused
 	// on the turn this record is about.
 	RefusedAgain bool `json:"refused_again"`
+	// Attempts and NeverTaken are the fourth way in: every wakeup the harness made
+	// for the refusal met a provider that never took the turn, and NeverTaken is
+	// what the last one met. Neither the role nor its block is at fault on this
+	// path, and a reader told so knows the fix is the provider or its login.
+	Attempts   int    `json:"attempts"`
+	NeverTaken string `json:"never_taken"`
 }
 
 // fromUnresolvedTrackerRefusal says that a role lost a block of tracker actions
@@ -357,12 +363,23 @@ func fromUnresolvedTrackerRefusal(conversation runstate.Conversation, event exec
 // that did not happen — and this is exactly the ending that would otherwise reach
 // nobody, since the wakeup is spent and no second refusal is coming.
 //
+// A fourth needs no turn at all: every wakeup the harness made met a provider
+// that never took it — down, out of capacity, or a lapsed login — until the
+// attempts ran out. That one says the provider was what failed, because the
+// thing to fix is the provider or its login rather than anything the role wrote;
+// what the provider said is on the durable event and on the product's own
+// outage record, so it is not quoted a second time here.
+//
 // It compares the two refusals rather than quoting the earlier one. The earlier
 // refusal's words are on the durable event, and a channel line carrying two
 // error messages is one nobody reads to the end; what a reader needs from it is
 // whether the same thing went wrong twice, which is the difference between a
 // role that cannot get one action right and one making a fresh mistake.
 func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
+	if strings.TrimSpace(recorded.NeverTaken) != "" {
+		return fmt.Sprintf("the harness tried %d times to wake this conversation to re-issue them and the provider never took the turn",
+			recorded.Attempts)
+	}
 	if !recorded.RefusedAgain {
 		if recorded.Woken {
 			return "the harness woke this conversation to re-issue them and the turn it took asked for no tracker action at all"
