@@ -2558,7 +2558,11 @@ func (m *Manager) ReplayForRepair(ctx context.Context, worktree Worktree, messag
 	}
 	path, head, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
-		return Rebase{}, err
+		resumed, recovered := m.resumeInterruptedMove(ctx, worktree)
+		if !recovered {
+			return Rebase{}, err
+		}
+		path, head = resumed, worktree.HarnessCommit
 	}
 	dirty, err := m.isDirty(ctx, path)
 	if err != nil {
@@ -2610,6 +2614,53 @@ func (m *Manager) ReplayForRepair(ctx context.Context, worktree Worktree, messag
 	rebase.BaseCommit = targetCommit
 	rebase.HeadCommit = targetCommit
 	return rebase, nil
+}
+
+// resumeInterruptedMove recognises the one worktree state a move of this kind
+// leaves that the ownership check refuses: a process that died after the
+// worktree was put on the target and before the caller recorded the move. The
+// recorded state still names the harness commit the change was in, while HEAD
+// sits on the target's history with some or all of the change applied over it.
+//
+// Nobody has worked in that worktree since — the developer is only invoked once
+// the move is recorded — so whatever is there beyond the target is this
+// function's own interrupted apply, and the recorded commit still holds the
+// whole change. The worktree is put back on that commit, which is exactly the
+// state the move starts from, and the move is made again. Anything else — no
+// recorded commit, a HEAD off the target's history, a recorded commit that is
+// not the harness's above the base — is refused as it always was, to a person.
+func (m *Manager) resumeInterruptedMove(ctx context.Context, worktree Worktree) (string, bool) {
+	if worktree.HarnessCommit == "" || !commitPattern.MatchString(worktree.HarnessCommit) {
+		return "", false
+	}
+	path, err := m.validateOwnedPath(worktree)
+	if err != nil {
+		return "", false
+	}
+	registered, branch, err := m.registeredWorktree(ctx, path)
+	if err != nil || !registered || branch != worktree.Branch {
+		return "", false
+	}
+	head, err := m.resolveWorktreeHead(ctx, path)
+	if err != nil || head == worktree.HarnessCommit {
+		return "", false
+	}
+	if onTarget, err := m.contains(ctx, head, worktree.TargetBranch); err != nil || !onTarget {
+		return "", false
+	}
+	if err := m.verifyHarnessHistory(ctx, path, worktree.BaseCommit, worktree.HarnessCommit); err != nil {
+		return "", false
+	}
+	if err := m.restoreExports(ctx, path); err != nil {
+		return "", false
+	}
+	// An apply stopped part-way can leave its own state behind; clearing it is
+	// best-effort because the hard reset below discards what it describes.
+	_ = m.quitCherryPick(ctx, path)
+	if err := m.resetHard(ctx, path, worktree.HarnessCommit); err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 // squashChange records the whole of a run's change as one harness commit above

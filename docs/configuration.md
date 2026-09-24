@@ -2180,8 +2180,10 @@ and a `yoyo run` beside it, share one limit rather than getting one each — a r
 that loses the race for the last slot is reported as declined, not as a failure.
 Integration stays serial: at most one promotion into a given target branch
 happens at a time, and a change whose target moved while it was being reviewed is
-replayed onto where the target went and promoted by fast-forward, or blocked if
-it will not replay. Nothing is ever forced.
+replayed onto where the target went and promoted by fast-forward. A replay that
+conflicts is handed back to the change's own developer to reconcile on top of
+the target, as a repair attempt that is checked and reviewed again, and the run
+blocks only once its repair budget is spent. Nothing is ever forced.
 
 Eight things keep an item out of a pass, reported at two different grains. Five are
 named against the item, because nothing else would report that this item was

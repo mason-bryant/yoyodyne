@@ -594,7 +594,9 @@ them.
 
 - The independence check that refuses to integrate on a reused or missing
   provider session.
-- A replay that conflicts, which blocks with both sides intact.
+- A replay that conflicts, which is handed back to the change's own developer
+  as a repair attempt on top of the target (yoyodyne-ifd.132), and blocks with
+  both sides intact only once the repair budget is spent.
 - A reviewer's reply that cannot be read as a verdict, which is asked for once
   more and fails the run on the second.
 - **A recorded integration the repository contradicts, blocked rather than

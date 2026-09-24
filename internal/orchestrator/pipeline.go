@@ -1629,6 +1629,21 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// a change this run already made, and the step past it puts that change
 	// through the checks and the reviewer. Neither has anything to work on if the
 	// worktree lost it.
+	// A conflict whose move onto the target was never recorded — the run stopped
+	// with its budget spent and triage has granted it a repair, or a process died
+	// part-way through the move — is moved before anything else reads the
+	// worktree, because the conflict is only answerable on top of the target, the
+	// prompt below says the worktree is already there, and an interrupted move
+	// leaves a HEAD the ownership check would otherwise refuse. The move puts the
+	// worktree back on the recorded change before it moves it, so a worktree
+	// holding none of the change has nothing to move, and is left to the handback
+	// check below, which stops it as a missing change.
+	if state.Phase == runstate.PhaseDeveloping && run.state.ReplayConflict != nil && !run.state.ReplayConflict.Moved {
+		if err := run.moveOntoTargetForRepair(ctx); err != nil && !errors.Is(err, gitworktree.ErrNoChanges) {
+			return run.fail(err, failureStatus(ctx, err))
+		}
+		state = run.state
+	}
 	if err := run.verifyHandback(ctx); err != nil {
 		return run.stop(ctx, err)
 	}
@@ -1650,17 +1665,6 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		// A conflict whose move onto the target never happened — the process died
-		// between the two, or the run stopped with its budget spent and triage has
-		// granted it a repair — is moved first, because the conflict is only
-		// answerable on top of the target and the prompt below says the worktree is
-		// already there.
-		if run.state.ReplayConflict != nil && !run.state.ReplayConflict.Moved {
-			if err := run.moveOntoTargetForRepair(ctx); err != nil {
-				return run.fail(err, failureStatus(ctx, err))
-			}
-			state = run.state
-		}
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch, p.Config.Checks,
 			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {

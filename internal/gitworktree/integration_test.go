@@ -1460,6 +1460,73 @@ func TestManagerReplayForRepairLeavesTheConflictOnTopOfTheTarget(t *testing.T) {
 	}
 }
 
+// A process that dies after the move put the worktree on the target and before
+// the caller recorded it leaves a HEAD the ownership check refuses, with the
+// recorded state still naming the change's own commit. Asking for the move again
+// with that record recognises the state, puts the worktree back on the recorded
+// change, and makes the move again — rather than stranding the run for a person.
+// Both interrupted shapes are covered: the apply finished, and the apply never
+// began after the reset onto the target.
+func TestManagerReplayForRepairResumesAMoveNothingRecorded(t *testing.T) {
+	t.Parallel()
+
+	for _, interrupted := range []struct {
+		name  string
+		leave func(t *testing.T, manager *Manager, worktree Worktree, target string)
+	}{
+		{
+			name: "after the apply",
+			leave: func(t *testing.T, manager *Manager, worktree Worktree, target string) {
+				if _, err := manager.ReplayForRepair(context.Background(), worktree, ""); err != nil {
+					t.Fatalf("ReplayForRepair() error = %v", err)
+				}
+			},
+		},
+		{
+			name: "between the reset and the apply",
+			leave: func(t *testing.T, _ *Manager, worktree Worktree, target string) {
+				runGit(t, worktree.Path, "reset", "--hard", "--quiet", target)
+			},
+		},
+	} {
+		t.Run(interrupted.name, func(t *testing.T) {
+			t.Parallel()
+			repository := newRepository(t)
+			manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+			worktree, err := manager.Create(context.Background(), CreateRequest{
+				RunID: testRunID, WorkItemID: "yoyodyne-conflict", BaseRef: "main", TargetBranch: "main",
+			})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeFile(t, worktree.Path, "README.txt", "this run's answer\n")
+			writeFile(t, repository, "README.txt", "somebody else's answer\n")
+			runGit(t, repository, "add", "README.txt")
+			runGit(t, repository, "commit", "-m", "conflicting target change")
+			target := gitLine(t, repository, "rev-parse", "refs/heads/main")
+			refused, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+			if !errors.Is(err, ErrRebaseConflict) {
+				t.Fatalf("RebaseOntoTarget() error = %v, want ErrRebaseConflict", err)
+			}
+			// The record the caller holds: the change's commit on the old base.
+			worktree.HarnessCommit = refused.HeadCommit
+			interrupted.leave(t, manager, worktree, target)
+
+			moved, err := manager.ReplayForRepair(context.Background(), worktree, "")
+			if err != nil {
+				t.Fatalf("ReplayForRepair() over an unrecorded move error = %v", err)
+			}
+			if moved.BaseCommit != target || moved.HeadCommit != target {
+				t.Fatalf("moved = %#v, want the change based on the target at %q", moved, target)
+			}
+			content := readFile(t, worktree.Path, "README.txt")
+			if strings.Count(content, "<<<<<<<") != 1 || !strings.Contains(content, "this run's answer") || !strings.Contains(content, "somebody else's answer") {
+				t.Fatalf("README.txt = %q, want the conflict applied once over the target", content)
+			}
+		})
+	}
+}
+
 // A replay onto a target that never moved is a no-op rather than a failure: a
 // promotion can lose to a held lock rather than to a commit, and that one is
 // simply worth trying again.
