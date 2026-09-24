@@ -2150,6 +2150,13 @@ nothing in flight and a last start over an hour old. The watch read a stall at
 exactly that instant, a second before the pull that refilled the slots. On
 2026-09-24 the last twenty alarms were all that shape. A slot free for seconds
 before a pull is not a stall now. Slots free for the whole threshold still are.
+One kind of end does not count. A run whose process was already gone is ended
+by the harness: `yoyo reconcile` settles it, or the claim audit cancels its
+claim. That end is when the harness noticed, not when the run let its slot go.
+So such a run counts as holding its slot only until its record last moved,
+which the settlement keeps on the run as `settled_quiet_since`. A sweep
+therefore still opens the stall right after it settles a dead line, dated from
+when the line went quiet rather than from the settlement.
 
 What the message that wakes somebody says beside that is the last poll's own
 account of the queue — "33 of the 47 admitted items are awaiting carry-out of

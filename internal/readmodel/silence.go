@@ -343,11 +343,8 @@ func LastHeld(runs []runstate.State, sessions []runstate.WatchTransition) time.T
 		if run.StartedAt.After(latest) {
 			latest = run.StartedAt
 		}
-		// A run the record calls ended carries when it ended. A run still in flight
-		// carries none, and its hold is read from whether it is still moving
-		// (ActiveRuns) rather than from here.
-		if run.CompletedAt != nil && run.CompletedAt.After(latest) {
-			latest = *run.CompletedAt
+		if ended := heldUntil(run); ended.After(latest) {
+			latest = ended
 		}
 	}
 	if !latest.IsZero() {
@@ -363,4 +360,26 @@ func LastHeld(runs []runstate.State, sessions []runstate.WatchTransition) time.T
 		}
 	}
 	return earliest
+}
+
+// heldUntil is the moment a run last held its slot at its end, or zero for a
+// run still in flight, whose hold is read from whether it is still moving
+// (ActiveRuns) rather than from here.
+//
+// An end the run's own process wrote is when it let the slot go. An end the
+// harness wrote while settling a run whose process was already gone is not: it
+// is when somebody noticed, and a sweep reads the stall straight after it
+// settles. So such a run is taken as holding its slot until its record last
+// moved, which the settlement keeps as SettledQuietSince. Reading the
+// settlement as activity would silence the alarm for the crash it exists to
+// catch, and date the stall from the settlement rather than from the silence.
+func heldUntil(run runstate.State) time.Time {
+	switch {
+	case run.CompletedAt == nil:
+		return time.Time{}
+	case run.SettledQuietSince != nil:
+		return *run.SettledQuietSince
+	default:
+		return *run.CompletedAt
+	}
 }

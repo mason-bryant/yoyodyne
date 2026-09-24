@@ -939,8 +939,10 @@ seconds before the pull that refills the slots is therefore not a stall. Until
 yoyodyne-ifd.428.19 the measure was the last start alone, and the watch read a
 stall in exactly that gap every time a batch of long runs ended. On 2026-09-24
 the last twenty alarms were all that false alarm. A line whose slots stay free
-for the whole threshold is still one, and
-[the operations guide](operations.md#when-nothing-happened-at-all) has the rest.
+for the whole threshold is still one. An end the harness wrote while settling a
+run whose process was already gone is not counted: that run held its slot only
+until its record last moved.
+[The operations guide](operations.md#when-nothing-happened-at-all) has the rest.
 
 **The sink says it and does not notice it.** What notices is the harness's own
 loop — [`yoyo work --watch`](work.md#letting-the-harness-choose-the-work), on

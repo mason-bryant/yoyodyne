@@ -1143,6 +1143,11 @@ func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
 	if !strings.Contains(settled.Failure, "the harness settled it as an environmental stop") {
 		t.Fatalf("settled run's reason does not say the harness settled it: %q", settled.Failure)
 	}
+	// The settlement's end is when the sweep noticed, so the record keeps when the
+	// run last moved: that is what the stall reading dates a dead line from.
+	if settled.SettledQuietSince == nil || !settled.SettledQuietSince.Equal(stopped.UpdatedAt) {
+		t.Fatalf("settled run was quiet since %v, want %s, when its record last moved", settled.SettledQuietSince, stopped.UpdatedAt)
+	}
 	refusal := settled.Environmental
 	if refusal == nil || refusal.Cause != runstate.CauseProcessVanished || !refusal.Settled {
 		t.Fatalf("environmental refusal = %#v, want the vanished process recorded and settled", refusal)

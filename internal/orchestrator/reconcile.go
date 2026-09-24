@@ -958,6 +958,7 @@ func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State
 	if !state.Status.Terminal() {
 		completedAt := r.clock().Now()
 		state.Status = runstate.StatusSucceeded
+		state.SettledQuietSince = settledQuietSince(state, completedAt)
 		state.CompletedAt = &completedAt
 	}
 	// This is the settlement the record most depends on. The work landed and the
@@ -1235,11 +1236,26 @@ func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (
 // "stopped" while the durable status stays what the run recorded. The blocker
 // reaching disk is what that rule depends on, which is why this path writes even
 // where recordTerminalFailure would skip.
+// settledQuietSince is the moment a run nothing was carrying last moved, kept
+// on the record as the run is settled. The settlement overwrites UpdatedAt and
+// writes an end, and both are when the harness noticed rather than when the run
+// stopped holding its slot. The stall reading would otherwise take that end as
+// activity, and a sweep settling a dead line would silence the alarm for exactly
+// the crash it exists to catch.
+func settledQuietSince(state runstate.State, settledAt time.Time) *time.Time {
+	quiet := state.UpdatedAt
+	if quiet.IsZero() || quiet.After(settledAt) {
+		quiet = settledAt
+	}
+	return &quiet
+}
+
 func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
 	reconciled := runstate.RecordFailure("reconciled after an interrupted run: " + reason)
 	if !state.Status.Terminal() {
 		completedAt := r.clock().Now()
 		state.Status = runstate.StatusFailed
+		state.SettledQuietSince = settledQuietSince(state, completedAt)
 		state.UpdatedAt = completedAt
 		state.CompletedAt = &completedAt
 		state.Failure = reconciled

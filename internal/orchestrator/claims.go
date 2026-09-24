@@ -293,6 +293,7 @@ func (a ClaimAuditor) settle(ctx context.Context, dead readmodel.DeadClaim, reco
 	}
 	completedAt := now
 	state.Status = runstate.StatusCancelled
+	state.SettledQuietSince = settledQuietSince(state, completedAt)
 	state.UpdatedAt = completedAt
 	state.CompletedAt = &completedAt
 	state.Failure = settledRunFailure(dead)

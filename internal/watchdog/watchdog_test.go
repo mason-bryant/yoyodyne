@@ -514,6 +514,34 @@ func TestSlotsFreeForTheWholeThresholdAfterTheLastEndAreAStall(t *testing.T) {
 	}
 }
 
+// The crash this alarm exists for, seen from the sweep that settles it. A run's
+// process died at T with work ready, its record went still, and two hours later
+// `yoyo reconcile` settled it, writing an end at the settlement. The sweep reads
+// the stall straight after it settles. Taking that end as activity would read a
+// line dead for two hours as one that ended a run a moment ago, open nothing, and
+// date the stall from the settlement when a later pass did open it. The run held
+// its slot until its record last moved, and the stall is dated from there.
+func TestASettlementOfADeadRunIsNotReadAsActivity(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.ready(3)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(-time.Hour))
+	quiet := moment
+	settled := moment.Add(2 * time.Hour)
+	harness.recordSettled(t, moment.Add(-30*time.Minute), quiet, settled)
+
+	harness.now = settled.Add(time.Second)
+	got := harness.check(t)
+	if got.Opened == nil {
+		t.Fatalf("Check() = %+v, want the reading right after the settlement to open the stall", got)
+	}
+	if !got.Opened.Since.Equal(quiet) {
+		t.Fatalf("the record says since %s, want %s — when the dead run last moved rather than when it was settled",
+			got.Opened.Since, quiet)
+	}
+}
+
 // Two readers take this reading, the watching session and the reconcile sweep,
 // each in its own process with its own handle on the stall log. Over one
 // standing stall, their readings together write one record, whichever reads
@@ -536,7 +564,10 @@ func TestTheWatchAndTheSweepOverOneStandingStallWriteOneRecord(t *testing.T) {
 	sweep.Stalls = stalls
 
 	// Both at once, repeatedly, which is the ordering a check-then-append with
-	// nothing between them loses.
+	// nothing between them loses. The two goroutines contend as two processes
+	// would: the stall log's lock is flock(2) (runstate's lockStateFile), which
+	// is held per open file description, and each Reconcile opens the lock file
+	// afresh. POSIX fcntl record locks are per process and would not contend here.
 	const rounds = 20
 	errs := make(chan error, 2*rounds)
 	var wait sync.WaitGroup
@@ -742,6 +773,33 @@ func (h *harness) recordEnded(t *testing.T, status runstate.Status, started, end
 		StartedAt:     started,
 		UpdatedAt:     ended,
 		CompletedAt:   &ended,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+}
+
+// recordSettled records a run whose process died with its record last moving at
+// quiet, ended by the harness at settled, as `yoyo reconcile` and the claim
+// audit record one.
+func (h *harness) recordSettled(t *testing.T, started, quiet, settled time.Time) {
+	t.Helper()
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatalf("NewRunID() error = %v", err)
+	}
+	if err := h.runs.Create(runstate.State{
+		SchemaVersion:     runstate.StateSchemaVersion,
+		RunID:             runID,
+		ProductID:         "yoyodyne",
+		RepositoryID:      "yoyodyne",
+		WorkItemID:        "yoyodyne-ifd.295",
+		Backend:           domain.BackendClaudeCode,
+		Status:            runstate.StatusFailed,
+		Phase:             runstate.PhaseDeveloping,
+		StartedAt:         started,
+		UpdatedAt:         settled,
+		CompletedAt:       &settled,
+		SettledQuietSince: &quiet,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
