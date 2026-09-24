@@ -190,6 +190,10 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		total += exchanges.CostUSD
 		floor = !exchanges.Known()
 	}
+	// The rule above the total is the shape `yoyo status --spend` closes its
+	// table with, and this ledger closes the same way on purpose: the operator
+	// reads both and asked for one shape across them (yoyodyne-ifd.51).
+	fmt.Fprintln(writer, ledgerRule)
 	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, tokens, floor)
 	if unpriced > 0 {
 		fmt.Fprintln(writer, "a run with no surviving record is counted as unpriced and left out of the total,")
@@ -261,6 +265,10 @@ func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
 // ledgerRow is the shape of every line of the ledger, header and total
 // included, so the columns cannot drift apart between them.
 const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %7s %9s\n"
+
+// ledgerRule closes the rows above the total, as wide as the row shape above
+// it comes to.
+var ledgerRule = strings.Repeat("-", 125)
 
 // printLedgerRow writes one item's line. Each phase carries the same floor
 // marker the total does when it is the runs that went unpriced, for the reason

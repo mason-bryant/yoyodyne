@@ -126,7 +126,14 @@ priced retroactively rather than the ledger starting today.
 ./bin/yoyo cost                     # every item the harness has run, and the total
 ./bin/yoyo cost yoyodyne-ifd.2.7    # one item, broken down by run
 ./bin/yoyo cost --record            # write each price onto its work item
+./bin/yoyo status --shipped         # the 10 most recently shipped items, with the wall clock beside the price
 ```
+
+What shipped lately, and how long each item took as well as what it cost, is
+[`yoyo status --shipped`](operations.md#what-shipped-lately-and-what-it-took):
+the same per-item join, read for the items whose work the harness promoted and
+sorted by when each shipped, with elapsed time from first claim to promotion and
+the part of it spent parked stated separately.
 
 ### Where the money went
 
@@ -137,8 +144,14 @@ item, and across everything the harness has run:
 item                                     runs  unpriced      develop       review       repair         cost  cached    waited
 yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43   68.4%     3h37m
 ASKS BETWEEN ROLES                          -         0            -            -            -        $4.12       -
+-----------------------------------------------------------------------------------------------------------------------------
 TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69   61.2%    21h01m
 ```
+
+The rule above the total is the shape
+[`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+closes its table with, and the shipped ledger closes the same way: the operator
+reads all three and asked for one shape across them.
 
 **ASKS BETWEEN ROLES** is what the roles spent asking each other, summed over
 every recorded exchange. It is a row rather than a note under the table because
