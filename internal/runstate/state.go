@@ -1678,9 +1678,18 @@ type State struct {
 	StartedAt            time.Time  `json:"started_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
-	WorktreePath         string     `json:"worktree_path,omitempty"`
-	Branch               string     `json:"branch,omitempty"`
-	BaseCommit           string     `json:"base_commit,omitempty"`
+	// SettledQuietSince is set only where the harness ended a run whose own
+	// process was already gone: `yoyo reconcile` settling a run nothing was
+	// carrying, or the claim audit cancelling a dead claim. It is the moment the
+	// run's record last moved before that settlement overwrote UpdatedAt, which
+	// is the last moment the run demonstrably held its slot. CompletedAt on such a
+	// run is when somebody noticed rather than when the run ended, and the stall
+	// reading dates the silence from this instead, so a settlement is never read
+	// as activity (see readmodel.LastHeld).
+	SettledQuietSince *time.Time `json:"settled_quiet_since,omitempty"`
+	WorktreePath      string     `json:"worktree_path,omitempty"`
+	Branch            string     `json:"branch,omitempty"`
+	BaseCommit        string     `json:"base_commit,omitempty"`
 	// HarnessCommit is the last commit the harness itself made in this run's
 	// worktree, which publishing needs before it can push a branch. It is durable
 	// because it is what permits the worktree's HEAD to have moved: a resumed run
@@ -2267,6 +2276,9 @@ func (s State) Validate() error {
 	}
 	if !s.Status.Terminal() && s.CompletedAt != nil {
 		problems = append(problems, errors.New("non-terminal status cannot have completed_at"))
+	}
+	if s.SettledQuietSince != nil && (s.CompletedAt == nil || s.SettledQuietSince.IsZero() || s.SettledQuietSince.After(*s.CompletedAt)) {
+		problems = append(problems, errors.New("settled_quiet_since requires completed_at and cannot be after it"))
 	}
 	worktreeFields := 0
 	for _, value := range []string{s.WorktreePath, s.Branch, s.BaseCommit} {

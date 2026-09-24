@@ -769,6 +769,7 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 	continued.Status = runstate.StatusRunning
 	continued.Phase = runstate.PhaseDeveloping
 	continued.CompletedAt = nil
+	continued.SettledQuietSince = nil
 	continued.UpdatedAt = c.now()
 	if err := c.Runs.Save(continued); err != nil {
 		return runstate.State{}, err

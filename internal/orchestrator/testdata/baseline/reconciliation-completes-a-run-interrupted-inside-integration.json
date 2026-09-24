@@ -142,6 +142,7 @@
     "review_summary": "the change matches the acceptance criteria",
     "run_id": "run-0123456789abcdef0123456789abcdef",
     "schema_version": 1,
+    "settled_quiet_since": "\u003ctime\u003e",
     "started_at": "\u003ctime\u003e",
     "status": "succeeded",
     "target_branch": "main",

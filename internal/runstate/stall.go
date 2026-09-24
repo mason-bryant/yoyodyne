@@ -22,6 +22,7 @@ package runstate
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -70,8 +71,8 @@ type StallEvent struct {
 	// OpenedAt is when a checker first noticed, which is later than Since by at
 	// most the threshold and by however long the checker was itself away.
 	OpenedAt time.Time `json:"opened_at"`
-	// Since is when the harness last started anything, which is what the age of a
-	// stall is measured from. It is kept apart from OpenedAt because they answer
+	// Since is when anything last held a developer slot, by starting or ending a
+	// run, which is what the age of a stall is measured from. It is kept apart from OpenedAt because they answer
 	// different questions: one is how long nothing happened, and the other is how
 	// long it took anybody to notice.
 	Since time.Time `json:"since"`
@@ -160,7 +161,7 @@ func NewStallEventID() (string, error) {
 type StallObservation struct {
 	// Stalled is the reading itself.
 	Stalled bool
-	// Since is when the harness last started anything, and Ready is how much work
+	// Since is when anything last held a developer slot, and Ready is how much work
 	// was waiting. Both are only read where a stall is being opened.
 	Since time.Time
 	Ready int
@@ -223,7 +224,17 @@ func (s *StallStore) Path() string { return filepath.Join(s.root, "stalls.jsonl"
 // "notice once" is a property of the record rather than of any one process's
 // memory of what it has already seen. A stall standing while a second, third and
 // four-thousandth check agree with it changes nothing at all.
+//
+// Two processes take this reading: the watching session and `yoyo reconcile`.
+// The read and the append are therefore made under one lock across processes.
+// Without it, two readings made at the same moment over no open stall would
+// each find nothing open, and each would open a stall of its own.
 func (s *StallStore) Reconcile(observation StallObservation) (StallReconciliation, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return StallReconciliation{}, err
+	}
+	defer unlock()
 	standing, open, err := s.Standing()
 	if err != nil {
 		return StallReconciliation{}, err
@@ -264,6 +275,31 @@ func (s *StallStore) Reconcile(observation StallObservation) (StallReconciliatio
 		return StallReconciliation{}, nil
 	}
 }
+
+// lock serializes Reconcile across processes, as the intake hold's lock does
+// for its own read-modify-write.
+func (s *StallStore) lock() (func(), error) {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return nil, fmt.Errorf("create stall directory: %w", err)
+	}
+	file, err := os.OpenFile(s.Path()+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open stall log lock: %w", err)
+	}
+	// Bounded, because what this waits on is another process's one small append.
+	// A wait longer than that is a lock somebody died holding, and a check that
+	// cannot record should fail and be asked again rather than hang a poll loop.
+	ctx, cancel := context.WithTimeout(context.Background(), stallLockWait)
+	defer cancel()
+	if err := lockStateFile(ctx, file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock the stall log: %w", err)
+	}
+	return func() { _ = releaseStateFile(file) }, nil
+}
+
+// stallLockWait bounds the wait for the stall log's lock.
+const stallLockWait = 5 * time.Second
 
 // Record appends one entry. Opening a stall and closing it are both appends, so
 // two readers of this log never see a half-written record and a crash between

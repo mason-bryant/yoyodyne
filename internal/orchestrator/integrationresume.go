@@ -483,6 +483,7 @@ func (r IntegrationResumer) supersedeOnRun(prior runstate.State, reason string) 
 	resumed.Status = runstate.StatusRunning
 	resumed.Phase = runstate.PhaseIntegrating
 	resumed.CompletedAt = nil
+	resumed.SettledQuietSince = nil
 	resumed.UpdatedAt = r.now()
 	if err := r.Runs.Save(resumed); err != nil {
 		return runstate.State{}, err

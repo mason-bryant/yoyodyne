@@ -43,7 +43,7 @@ import (
 )
 
 // Runs is every run this product has recorded, read for two facts nothing else
-// holds: when the harness last demonstrably started one, and whether any of them
+// holds: when a run last demonstrably held a slot, and whether any of them
 // is still moving. It is satisfied by *runstate.Store.
 type Runs interface {
 	Recorded() ([]runstate.State, error)
@@ -159,7 +159,10 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 	}
 
 	activity := readmodel.Activity{
-		Since: readmodel.LastStart(runs, sessions),
+		// Dated from the last moment a slot was held rather than the last start,
+		// so a batch of runs ending just before the pull that refills the slots
+		// is not read as a line that has been quiet since the batch began.
+		Since: readmodel.LastHeld(runs, sessions),
 		// In flight *and still moving*: a run whose process was killed leaves a
 		// record saying it is in flight until `yoyo reconcile` settles it, and
 		// taking that at face value would silence this for the crash it exists to

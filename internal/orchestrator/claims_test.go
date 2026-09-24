@@ -230,6 +230,11 @@ func TestADeadClaimIsGivenBackAndRecorded(t *testing.T) {
 	if settled.CompletedAt == nil || !settled.CompletedAt.Equal(auditMoment) {
 		t.Fatalf("the settled run completed at %v, want the moment of the audit", settled.CompletedAt)
 	}
+	// The audit's end is when it noticed, so the record keeps when the run last
+	// moved: that is what the stall reading dates a dead line from.
+	if settled.SettledQuietSince == nil || !settled.SettledQuietSince.Equal(auditMoment.Add(-9*time.Hour)) {
+		t.Fatalf("the settled run was quiet since %v, want %s, when its record last moved", settled.SettledQuietSince, auditMoment.Add(-9*time.Hour))
+	}
 	if settled.Status.Terminal() != true || settled.Outcome() != runstate.OutcomeCancelled {
 		t.Fatalf("the settled run reads as %q, want cancelled", settled.Outcome())
 	}
