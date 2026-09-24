@@ -133,7 +133,7 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	spend := flags.Bool("spend", false, "report what was spent, grouped by the local day it was spent on")
 	latest := flags.Bool("latest", false, "with --follow, move to a later stream when one starts")
 	lines := flags.Int("lines", defaultStreamLines, "replay this many recorded events first (0 replays the whole log)")
-	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, exchanges, or all (default all)")
+	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, sides, exchanges, or all (default all)")
 	includeAll := flags.Bool("all", false, "include the thinking-token events the default leaves out")
 	raw := flags.Bool("raw", false, "emit each event exactly as it was recorded")
 	positional, err := parseArguments(flags, args)
@@ -492,7 +492,7 @@ func reportStreamStatus(ctx context.Context, mode statusMode, options streamOpti
 // number of local days to cover or the thing to price. A purely numeric one is
 // the count, because an operator asking for a fortnight would not otherwise have
 // a way to say so. An id prefix can be all digits too — ids are hex — so one
-// that is has to be given with its `run-`, `chat-`, `review-`, or `exchange-`
+// that is has to be given with its `run-`, `chat-`, `review-`, `side-`, or `exchange-`
 // prefix to be read as an id rather than as days. Naming something prices it
 // whatever day it ran on: the window is for a report that has to choose what to
 // show, and an id has already chosen.
@@ -505,7 +505,7 @@ func spendWindow(named string) (int, string, error) {
 	}
 	days, err := strconv.Atoi(named)
 	if err != nil || days <= 0 {
-		return 0, "", fmt.Errorf("%q is neither a positive number of days nor the id of a run, conversation, branch review, or exchange", named)
+		return 0, "", fmt.Errorf("%q is neither a positive number of days nor the id of a run, conversation, branch review, side thread, or exchange", named)
 	}
 	return days, "", nil
 }
@@ -1361,9 +1361,10 @@ whether the records could be read. Settling what an interrupted run left behind
 is `+"`yoyo reconcile`"+`.
 
 --follow, --events, --list, and --spend read the event stream a run, a
-conversation, and a branch review each record, rather than the run records. It
-is the same question asked of all three -- is this alive, what is it doing, and
-what did it cost -- so every one of them covers all three and the default never
+conversation, a branch review, and a side thread each record, rather than the
+run records. It is the same question asked of all four -- is this alive, what
+is it doing, and what did it cost -- so every one of them covers all four and
+the default never
 asks which kind you meant; --kind narrows it when that is what you want. There,
 the id names a stream or a unique prefix of one rather than a work item.
 
@@ -1372,7 +1373,8 @@ day's group closing with that day's spend and today's coming last: what an
 operator budgets against is what today cost, and the day they mean is the one
 their own clock is keeping. What counts on a day is each invocation rather than
 the log it was recorded in, so a conversation open for a fortnight appears under
-every day it spent on. The exchanges the roles conducted are priced beside the
+every day it spent on. A side thread's rows name the conversation it was opened
+beside, which is whose the money was. The exchanges the roles conducted are priced beside the
 streams, each round on the day it was answered, and narrowed out with the
 streams when --kind names one of them. A number asks for a different count of
 days; naming a stream or an exchange prices that one whatever day it ran on.
@@ -1401,7 +1403,7 @@ Live options:
   --spend           report what was spent, by the local day it was spent on
   --latest          with --follow, move to a later stream when one starts
   --lines <n>       replay this many recorded events first (default 50; 0 the whole log)
-  --kind <kind>     runs, chats, reviews, exchanges (--spend only), or all (default all)
+  --kind <kind>     runs, chats, reviews, sides, exchanges (--spend only), or all (default all)
   --all             include the thinking-token events the default leaves out
   --raw             emit each event exactly as it was recorded`)
 }

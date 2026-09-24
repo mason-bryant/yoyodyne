@@ -105,10 +105,12 @@ func resolveStreamKinds(kind string) ([]runstate.StreamKind, error) {
 		return []runstate.StreamKind{runstate.StreamConversation}, nil
 	case "review", "reviews", "branch-review", "branch-reviews":
 		return []runstate.StreamKind{runstate.StreamReview}, nil
+	case "side", "sides", "side-thread", "side-threads":
+		return []runstate.StreamKind{runstate.StreamSide}, nil
 	case "exchange", "exchanges":
 		return []runstate.StreamKind{runstate.StreamExchange}, nil
 	default:
-		return nil, fmt.Errorf("unknown kind %q: it is runs, chats, reviews, exchanges, or all", kind)
+		return nil, fmt.Errorf("unknown kind %q: it is runs, chats, reviews, sides, exchanges, or all", kind)
 	}
 }
 
@@ -281,6 +283,7 @@ func streamKindName(kind runstate.StreamKind, plural bool) string {
 		runstate.StreamRun:          {"run", "runs"},
 		runstate.StreamConversation: {"conversation", "conversations"},
 		runstate.StreamReview:       {"branch review", "branch reviews"},
+		runstate.StreamSide:         {"side thread", "side threads"},
 		runstate.StreamExchange:     {"exchange", "exchanges"},
 	}[kind]
 	if plural {
@@ -381,7 +384,7 @@ func printSpendRows(writer io.Writer, report runstate.SpendReport, now time.Time
 		}
 		in, out, written, read := renderSpendTokens(row.Usage)
 		fmt.Fprintf(writer, spendRow, row.StreamID, renderSpendMoment(row.At), row.Calls,
-			in, out, written, read, row.CostUSD, row.Status)
+			in, out, written, read, row.CostUSD, renderSpendStatus(row))
 		subtotal.Calls += row.Calls
 		subtotal.CostUSD += row.CostUSD
 		if row.Usage != nil {
@@ -389,6 +392,15 @@ func printSpendRows(writer io.Writer, report runstate.SpendReport, now time.Time
 		}
 	}
 	printSpendSubtotal(writer, day, subtotal)
+}
+
+// renderSpendStatus is a row's last column: its status, and for a side thread
+// the conversation it was opened beside, which is whose the money was.
+func renderSpendStatus(row runstate.SpendRow) string {
+	if row.Conversation == "" {
+		return row.Status
+	}
+	return row.Status + ", beside " + row.Conversation
 }
 
 // renderSpendTokens is a row's four token columns. A row that records no usage
@@ -522,6 +534,7 @@ func renderKindSplit(total runstate.SpendTotals) string {
 		runstate.StreamRun:          {"runs", "invocation(s)"},
 		runstate.StreamConversation: {"conversations", "turn(s)"},
 		runstate.StreamReview:       {"branch reviews", "invocation(s)"},
+		runstate.StreamSide:         {"side threads", "invocation(s)"},
 		runstate.StreamExchange:     {"exchanges", "round(s)"},
 	}
 	var parts []string

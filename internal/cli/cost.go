@@ -22,6 +22,10 @@ type costOutput struct {
 	// money the harness spent: a total that skipped it would be wrong rather than
 	// merely unattributed.
 	Exchanges *runstate.ExchangeSpend `json:"exchanges,omitempty"`
+	// SideStreams is what the agents' side conversations spent, split by the
+	// conversation each was opened beside. It is beside the item prices for the
+	// reason a conversation turn is: it belongs to a conversation, not an item.
+	SideStreams *runstate.SideStreamSpend `json:"side_streams,omitempty"`
 	// Recorded is what was written onto the tracker, and is absent from a report
 	// that only read the records.
 	Recorded []recordedCost `json:"recorded,omitempty"`
@@ -80,6 +84,8 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	if workItemID == "" {
 		exchanges := parts.store.ExchangeSpend()
 		output.Exchanges = &exchanges
+		sides := parts.store.SideStreamSpend()
+		output.SideStreams = &sides
 	}
 	failed := false
 	if *record {
@@ -98,7 +104,7 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 			return code
 		}
 	} else {
-		printPrices(stdout, prices, output.Exchanges, workItemID != "")
+		printPrices(stdout, prices, output.Exchanges, output.SideStreams, workItemID != "")
 		printRecordedPrices(stdout, stderr, output.Recorded)
 	}
 	if failed {
@@ -155,8 +161,8 @@ func recordPrices(ctx context.Context, parts components, workItemID string) ([]r
 // by the runs it took, because a total for one item invites the question of
 // which attempt spent it; asking about everything reports a line per item, which
 // is the ledger.
-func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runstate.ExchangeSpend, single bool) {
-	if len(prices) == 0 && !recordedExchanges(exchanges) {
+func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runstate.ExchangeSpend, sides *runstate.SideStreamSpend, single bool) {
+	if len(prices) == 0 && !recordedExchanges(exchanges) && !recordedSideStreams(sides) {
 		fmt.Fprintln(writer, "the harness has no recorded runs, so there is nothing to price")
 		return
 	}
@@ -190,12 +196,20 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		total += exchanges.CostUSD
 		floor = !exchanges.Known()
 	}
+	// The side threads are a row for the same reason: money the harness spent,
+	// belonging to a conversation rather than to an item.
+	if recordedSideStreams(sides) {
+		printSideRow(writer, *sides)
+		total += sides.CostUSD
+		floor = floor || !sides.Known()
+	}
 	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, tokens, floor)
 	if unpriced > 0 {
 		fmt.Fprintln(writer, "a run with no surviving record is counted as unpriced and left out of the total,")
 		fmt.Fprintln(writer, "so every total it touches is a floor rather than a price")
 	}
 	printAskNote(writer, exchanges)
+	printSideNote(writer, sides)
 	printSplitNote(writer, phases)
 	printCacheNote(writer, tokens)
 	printPhaseCacheNote(writer, phases)
@@ -206,6 +220,58 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 // reason there is no figure for it.
 func recordedExchanges(exchanges *runstate.ExchangeSpend) bool {
 	return exchanges != nil && exchanges.Recorded()
+}
+
+// recordedSideStreams reports side thread spend worth a row: some to price, or
+// a reason there is no figure for it.
+func recordedSideStreams(sides *runstate.SideStreamSpend) bool {
+	return sides != nil && sides.Recorded()
+}
+
+// sideLedgerLabel names the row the side threads land on, a summary line like
+// the asks rather than an item.
+const sideLedgerLabel = "SIDE THREADS"
+
+// printSideRow writes what the side threads spent. The phase columns are "-"
+// for the reason they are on the asks row: a side thread is not development,
+// review, or repair. Its cached column is filled, because its log carries the
+// provider's usage as a run's does.
+func printSideRow(writer io.Writer, sides runstate.SideStreamSpend) {
+	unreadable, cost := "-", "unknown"
+	if sides.Enumerated() {
+		unreadable = strconv.Itoa(sides.Unreadable)
+		cost = renderFloor(sides.CostUSD, !sides.Known())
+	}
+	fmt.Fprintf(writer, ledgerRow, sideLedgerLabel, "-", unreadable, "-", "-", "-", cost, renderCacheShare(sides.Tokens), "")
+}
+
+// printSideNote says what the side thread row is made of and whose it was: the
+// conversation each thread was opened beside, with what the threads beside it
+// cost, so the row's money is attributed rather than merely counted.
+func printSideNote(writer io.Writer, sides *runstate.SideStreamSpend) {
+	if !recordedSideStreams(sides) {
+		return
+	}
+	if !sides.Enumerated() {
+		fmt.Fprintf(writer, "the side threads could not be listed (%s), so what they spent\n", sides.Unknown)
+		fmt.Fprintln(writer, "is missing from the total entirely rather than counted as nothing")
+		return
+	}
+	fmt.Fprintf(writer, "side threads is %d side conversation(s) over %d invocation(s), each opened beside a conversation:\n",
+		sides.Streams, sides.Invocations)
+	for _, part := range sides.Conversations {
+		name := part.Conversation
+		if name == "" {
+			name = "(record unreadable, conversation unknown)"
+		}
+		fmt.Fprintf(writer, "  %s  %s from %d side conversation(s) over %d invocation(s)\n",
+			name, renderFloor(part.CostUSD, false), part.Streams, part.Invocations)
+	}
+	if sides.Unreadable > 0 {
+		fmt.Fprintf(writer, "%d side conversation log(s) could not be read and are left out of that figure (%s),\n",
+			sides.Unreadable, sides.Unknown)
+		fmt.Fprintln(writer, "so the side threads and the total are floors")
+	}
 }
 
 // askLedgerLabel names the row the asks land on. It reads as a summary line
@@ -630,7 +696,9 @@ in as nothing.
 What the roles spent asking each other is a row of its own above the total. The
 exchange record names no piece of work to charge it to, so it reaches no item's
 price; it is a provider invocation the harness made, so a total without it would
-be wrong rather than unattributed.
+be wrong rather than unattributed. What the agents' side conversations spent is
+a row beside it for the same reason, with each side conversation's cost named
+under the table against the conversation it was opened beside.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

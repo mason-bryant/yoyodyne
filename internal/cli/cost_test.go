@@ -72,7 +72,7 @@ func TestCostLedgerCountsUnpricedRunsRatherThanChargingNothingForThem(t *testing
 	}
 
 	var out bytes.Buffer
-	printPrices(&out, prices, nil, false)
+	printPrices(&out, prices, nil, nil, false)
 	rendered := out.String()
 	for _, required := range []string{
 		"yoyodyne-ifd.2.7",
@@ -123,7 +123,7 @@ func TestCostLedgerCarriesWhatTheRolesSpentAskingEachOtherIntoTheTotal(t *testin
 	}}
 
 	var out bytes.Buffer
-	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 2, Rounds: 3, CostUSD: 1.50}, false)
+	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 2, Rounds: 3, CostUSD: 1.50}, nil, false)
 	rendered := out.String()
 	for _, required := range []string{
 		askLedgerLabel,
@@ -156,7 +156,7 @@ func TestCostLedgerCarriesWhatTheRolesSpentAskingEachOtherIntoTheTotal(t *testin
 	printPrices(&out, prices, &runstate.ExchangeSpend{
 		Exchanges: 1, Rounds: 2, CostUSD: 0.30,
 		Unreadable: 1, Unknown: "decode exchange exchange-dddd: unexpected end of JSON input",
-	}, false)
+	}, nil, false)
 	rendered = out.String()
 	for _, required := range []string{
 		// The readable exchange keeps its price, marked as the floor it now is.
@@ -186,7 +186,7 @@ func TestCostLedgerCarriesWhatTheRolesSpentAskingEachOtherIntoTheTotal(t *testin
 	// Exchanges that cannot even be listed are not a floor: how much is missing
 	// is unknown, and so is how many records it is missing from.
 	out.Reset()
-	printPrices(&out, prices, &runstate.ExchangeSpend{Unknown: "read exchange directory: permission denied"}, false)
+	printPrices(&out, prices, &runstate.ExchangeSpend{Unknown: "read exchange directory: permission denied"}, nil, false)
 	rendered = out.String()
 	for _, required := range []string{
 		"unknown",
@@ -249,7 +249,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			Repair:      runstate.PhaseCost{CostUSD: 3.81, Invocations: 2},
 			Waits:       runstate.Waits{UsageLimitSeconds: 3600, OperatorHoldSeconds: 900},
 		},
-	}}, nil, true)
+	}}, nil, nil, true)
 	rendered := out.String()
 	for _, required := range []string{
 		"yoyodyne-ifd.2.7: $27.93 across 2 run(s)",
@@ -269,7 +269,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	}
 
 	out.Reset()
-	printPrices(&out, []runstate.ItemPrice{{WorkItemID: "yoyodyne-ifd.99"}}, nil, true)
+	printPrices(&out, []runstate.ItemPrice{{WorkItemID: "yoyodyne-ifd.99"}}, nil, nil, true)
 	if !strings.Contains(out.String(), "no price rather than a price of nothing") {
 		t.Fatalf("rendered breakdown = %q", out.String())
 	}
@@ -283,7 +283,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			RunID: "run-4", Status: runstate.StatusRunning, Outcome: runstate.RunOutcome(runstate.StatusRunning),
 			Phase: runstate.PhaseDeveloping, StartedAt: started,
 		}},
-	}}, nil, true)
+	}}, nil, nil, true)
 	if !strings.Contains(out.String(), "$0.00 so far from 0 invocation(s)") {
 		t.Fatalf("rendered breakdown = %q", out.String())
 	}
@@ -300,7 +300,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			Phases:  runstate.PhaseSpend{Waits: runstate.Waits{UsageLimitSeconds: 1800}},
 		}},
 		UnknownRuns: 1,
-	}}, nil, true)
+	}}, nil, nil, true)
 	rendered = out.String()
 	if !strings.Contains(rendered, "waited 30m00s for the provider") {
 		t.Fatalf("rendered breakdown = %q, want the unpriceable run's wait", rendered)
@@ -339,7 +339,7 @@ func TestCostSaysWhenPricedInvocationsLandedInNoPhase(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPrices(&out, []runstate.ItemPrice{stray}, nil, false)
+	printPrices(&out, []runstate.ItemPrice{stray}, nil, nil, false)
 	if !strings.Contains(out.String(), "1 priced invocation(s) worth $6.00 named no phase") {
 		t.Fatalf("ledger = %q, want the unplaced money named under the table", out.String())
 	}
@@ -347,7 +347,7 @@ func TestCostSaysWhenPricedInvocationsLandedInNoPhase(t *testing.T) {
 	// The per-item breakdown carries it in the split line itself, where the three
 	// phases are already spelled out and a fourth figure is what makes them add up.
 	out.Reset()
-	printPrices(&out, []runstate.ItemPrice{stray}, nil, true)
+	printPrices(&out, []runstate.ItemPrice{stray}, nil, nil, true)
 	if !strings.Contains(out.String(), "unattributed $6.00 from 1") {
 		t.Fatalf("breakdown = %q, want the unplaced money in the split", out.String())
 	}
@@ -356,7 +356,7 @@ func TestCostSaysWhenPricedInvocationsLandedInNoPhase(t *testing.T) {
 	out.Reset()
 	healthy := stray
 	healthy.Phases.Unattributed = runstate.PhaseCost{}
-	printPrices(&out, []runstate.ItemPrice{healthy}, nil, false)
+	printPrices(&out, []runstate.ItemPrice{healthy}, nil, nil, false)
 	if strings.Contains(out.String(), "named no phase") {
 		t.Fatalf("ledger = %q, want nothing said about money that all landed somewhere", out.String())
 	}
@@ -385,7 +385,7 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 	}}
 
 	var out bytes.Buffer
-	printPrices(&out, prices, nil, false)
+	printPrices(&out, prices, nil, nil, false)
 	rendered := out.String()
 	for _, required := range []string{
 		"cached",
@@ -400,13 +400,13 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 	// An exchange record carries what its rounds cost and no token counts at all,
 	// so the ask row states no share rather than a share of nothing.
 	out.Reset()
-	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 1, Rounds: 1, CostUSD: 0.50}, false)
+	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 1, Rounds: 1, CostUSD: 0.50}, nil, false)
 	if asks := ledgerLine(out.String(), askLedgerLabel); strings.Contains(asks, "%") {
 		t.Fatalf("ask row = %q, want no cache-read share claimed for an exchange", asks)
 	}
 
 	out.Reset()
-	printPrices(&out, prices, nil, true)
+	printPrices(&out, prices, nil, nil, true)
 	if !strings.Contains(out.String(), "cache-read share 62.5% of 4000 input token(s) over 4 invocation(s): 2500 cached, 1300 fresh, 200 written to the cache; 5500 output") {
 		t.Fatalf("rendered breakdown = %q, want the share spelled out per item and per run", out.String())
 	}
@@ -440,7 +440,7 @@ func TestCostReportsTheCacheReadShareOfEachPhaseBesideTheWhole(t *testing.T) {
 	}}
 
 	var out bytes.Buffer
-	printPrices(&out, prices, nil, false)
+	printPrices(&out, prices, nil, nil, false)
 	rendered := out.String()
 	for _, required := range []string{
 		// 9900 of 11000 across everything, which is the figure the review is
@@ -457,7 +457,7 @@ func TestCostReportsTheCacheReadShareOfEachPhaseBesideTheWhole(t *testing.T) {
 	// The same split under each item and each run, so a before-and-after window
 	// can be cut on the runs rather than only on the whole ledger.
 	out.Reset()
-	printPrices(&out, prices, nil, true)
+	printPrices(&out, prices, nil, nil, true)
 	if breakdown := out.String(); strings.Count(breakdown, "review 0.0% over 2 invocation(s)") != 2 {
 		t.Fatalf("rendered breakdown = %q, want the phase split under the item and under its run", breakdown)
 	}
@@ -470,7 +470,7 @@ func TestCostReportsTheCacheReadShareOfEachPhaseBesideTheWhole(t *testing.T) {
 	unmeasured[0].Tokens = runstate.TokenUsage{Unreported: 1}
 	unmeasured[0].Runs[0].Tokens = unmeasured[0].Tokens
 	out.Reset()
-	printPrices(&out, unmeasured, nil, false)
+	printPrices(&out, unmeasured, nil, nil, false)
 	if strings.Contains(out.String(), "cache-read share by phase") {
 		t.Fatalf("ledger = %q, want no per-phase share where nothing was measured", out.String())
 	}
@@ -494,7 +494,7 @@ func TestCostSaysWhenThereIsNoCacheReadShareRatherThanReportingNought(t *testing
 	}}
 
 	var out bytes.Buffer
-	printPrices(&out, unmeasured, nil, false)
+	printPrices(&out, unmeasured, nil, nil, false)
 	rendered := out.String()
 	if !strings.Contains(rendered, "2 priced invocation(s) reported no token usage and none reported any") {
 		t.Fatalf("ledger = %q, want the window said to be unmeasurable", rendered)
@@ -508,7 +508,7 @@ func TestCostSaysWhenThereIsNoCacheReadShareRatherThanReportingNought(t *testing
 	// lose the one figure the provider actually gave.
 	unmeasured[0].Tokens = runstate.TokenUsage{Measured: 1}
 	out.Reset()
-	printPrices(&out, unmeasured, nil, false)
+	printPrices(&out, unmeasured, nil, nil, false)
 	if rendered := out.String(); !strings.Contains(rendered, "0.0%") {
 		t.Fatalf("ledger = %q, want a measured nought reported as the reading it is", rendered)
 	}
@@ -517,7 +517,7 @@ func TestCostSaysWhenThereIsNoCacheReadShareRatherThanReportingNought(t *testing
 	// what was measured and the rest is named beside it rather than folded in.
 	unmeasured[0].Tokens = runstate.TokenUsage{InputTokens: 250, CacheReadTokens: 750, Measured: 3, Unreported: 1}
 	out.Reset()
-	printPrices(&out, unmeasured, nil, false)
+	printPrices(&out, unmeasured, nil, nil, false)
 	rendered = out.String()
 	for _, required := range []string{
 		"75.0%",

@@ -95,9 +95,11 @@ spoke from, and nothing that identifies a piece of work, so there is nothing to
 attribute it to rather than a judgement declined. Neither is left out of
 what the harness has spent altogether —
 [`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
-conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
-the exchanges into its total on a row of their own, because a total that skipped
-any of them would be wrong rather than merely unattributed.
+conversations, branch reviews, side threads, and exchanges beside runs, and
+`yoyo cost` carries the exchanges and the side threads into its total on rows of
+their own, because a total that skipped any of them would be wrong rather than
+merely unattributed. A side thread is attributed to the conversation it was
+opened beside rather than to a work item, for the reason a conversation turn is.
 
 `/show` breaks one item's price down by attempt, which is what a single total
 invites:
@@ -161,6 +163,16 @@ money that belongs to no phase.
 Exchanges that cannot even be listed are the one case with no floor to state:
 how much is missing is unknown, and so is how many records it is missing from,
 so the row reads `unknown` rather than a figure.
+
+**SIDE THREADS** is what the agents' side conversations spent, priced from their
+own event logs by the same reader `yoyo status --spend` uses, and it sits beside
+the asks for the same reason: it is money the harness spent that belongs to a
+conversation rather than to an item. Under the table each conversation a side
+thread was opened beside is listed with what its side threads cost, which is the
+attribution the row itself has no column for. Its **unpriced** column counts
+side thread logs that could not be read, and its **cached** column is filled,
+because a side thread's terminals carry the provider's usage as a run's do. The
+row is absent on a product whose agents have never held a side thread.
 
 **develop** is each run's first developer attempt, **review** is every reviewer
 invocation it made, and **repair** is every developer attempt after the first —

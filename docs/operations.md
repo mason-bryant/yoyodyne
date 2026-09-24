@@ -2994,8 +2994,8 @@ A conversation and a branch review each record the same kind of event stream a
 run does, and "is this alive" is the same question asked of all three, so every
 mode covers all of them and the default never asks which kind you meant.
 Selecting one by id or by a unique id prefix works the same for each. `--kind
-runs`, `--kind chats`, and `--kind reviews` narrow it to one kind when that is
-what you want. `--lines` says how many recorded events to replay before
+runs`, `--kind chats`, `--kind reviews`, and `--kind sides` narrow it to one kind
+when that is what you want. `--lines` says how many recorded events to replay before
 following, fifty by default and `0` for the whole log; `--raw` emits each event
 exactly as it was recorded, and `--all` keeps the thinking-token pings the
 default leaves out. An option that belongs to the other half of the verb —
@@ -3003,11 +3003,20 @@ default leaves out. An option that belongs to the other half of the verb —
 rather than ignored, because a narrowing silently dropped reads as an answer to
 the question that was asked.
 
-An [exchange](conversation.md#roles-asking-each-other-things) is the fourth thing
-priced and the only one that is never followed: its record is the thread itself,
+A side thread — a bounded conversation an agent holds beside its main one —
+records an event stream of its own under `sidestreams/`, so it is listed,
+followed, and priced like the other three. Its terminals are priced by the same
+reader as a run's and a conversation's, and every spend row it contributes names
+the conversation it was opened beside (`open, beside chat-…`), which is whose the
+money was; `yoyo cost` carries the side threads into its total on a `SIDE
+THREADS` row, with each one's cost listed under the table against that
+conversation.
+
+An [exchange](conversation.md#roles-asking-each-other-things) is priced beside the
+streams and is the only thing that is never followed: its record is the thread itself,
 revised as it goes, rather than a stream of events, so it appears in the spend
 report and in no other mode. Naming one by id prices it like anything else,
-`--kind exchanges` prices them alone, and narrowing to any of the three followed
+`--kind exchanges` prices them alone, and narrowing to any of the followed
 kinds narrows the exchanges out along with the kinds it excludes — somebody who
 asked what the runs cost is asking about the runs.
 
@@ -3023,7 +3032,10 @@ before it wrote a terminal; so `yoyo status` and `yoyo status --list` cannot
 disagree about the same conversation. A
 branch review has no state file either — its verdicts share one log rather than
 having a record each — so its status comes from its own events: `reviewing`
-while the verdict is being made, and `reviewed` once it has been.
+while the verdict is being made, and `reviewed` once it has been. A side
+thread's status is read from its own record: `open` while its agent holds it,
+and the outcome it ended with — `concluded` or `spent-its-budget` — once it has
+ended.
 
 Every live mode leads with a PAUSED banner while
 [activity is paused](#pausing-everything-and-resuming-it), naming when the pause
