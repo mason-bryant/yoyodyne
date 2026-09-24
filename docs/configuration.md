@@ -2182,7 +2182,10 @@ that loses the race for the last slot is reported as declined, not as a failure.
 Integration stays serial: at most one promotion into a given target branch
 happens at a time, and a change whose target moved while it was being reviewed is
 replayed onto where the target went and promoted by fast-forward, or blocked if
-it will not replay. Nothing is ever forced.
+it will not replay — or, on a target the forge protects, replayed the same way
+and then landed through its pull request rather than by a local fast-forward
+([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)). Nothing is ever
+forced.
 
 Eleven things keep an item out of a pass, reported at two different grains. The
 first eight are named against the item, because nothing else would report that
@@ -2848,7 +2851,11 @@ reviewer was being asked resumes at the checks rather than at the review, becaus
 a resumed run re-earns the whole gate, and no definition has a transition from
 the review back to the check; such a run records a divergence naming both. A
 process killed inside integration is settled by the sweep as succeeded with its
-instance still standing in `integrate`, and records the gap that leaves. Both are
+instance still standing in `integrate`, and records the gap that leaves. (That
+is a local promotion; a process killed while landing through a pull request is
+settled on the forge's answer instead, as
+[a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)
+says.) Both are
 left as divergences deliberately — the definition is missing a path the pipeline
 takes, and an observation that quietly agreed with itself would be worth nothing.
 
@@ -2943,7 +2950,9 @@ With both on, a run works like this:
 5. **A merge the forge queued ends the run rather than being waited for.** It
    lands minutes later, when your checks pass. The run reports the pull request
    as queued and finishes: your change is already in the local target branch,
-   which is the authoritative one, and the run branch stays on the remote
+   which is the authoritative one (on a
+   [protected target](#a-protected-target-lands-through-its-pull-request) it is
+   not, and nothing local moves until the forge merges), and the run branch stays on the remote
    because that is what the forge still has to merge. The work item is the one
    thing the run does **not** settle — it stays open, with the queued merge named
    on it, because closing it as integrated would record a publication that has
@@ -3033,7 +3042,10 @@ integration policy would be taking the decision that setting reserves for you.
 
 ### Which branch is authoritative
 
-**The local target branch.** Your work is where that branch says it is.
+**The local target branch.** Your work is where that branch says it is. The
+exception is a target branch the forge protects, where the forge's copy leads and
+the local one follows it: see
+[a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request).
 
 Merging is not a second promotion performed on the remote. The harness
 fast-forwards the local target exactly as it always has, and the forge merges
@@ -3083,14 +3095,71 @@ forge's record never decides the confirmation, only what is recorded. A forge th
 commit is reported, not reconciled, and the run branch is left on the remote for
 whoever decides which history is right.
 
-If a promotion cannot be published — the forge is unreachable, the remote target
-moved, or the forge refused the merge — the run still succeeds and closes its
-item, and reports an *outstanding publication*. A forge that could not be reached
+If a promotion onto an unprotected target cannot be published — the forge is
+unreachable, the remote target moved, or the forge refused the merge — the run
+still succeeds and closes its item, and reports an *outstanding publication*. A forge that could not be reached
 is [waited out and asked again](#waiting-out-a-network-that-dropped) first, so
 an outstanding publication over a dropped connection is one that went on being
 dropped rather than one reset the next attempt would have survived. The change is integrated where
 it counts; only its publication is unfinished, and it is reconciled by hand.
-Nothing is ever force-pushed to resolve it.
+Nothing is ever force-pushed to resolve it. On a protected target the same
+failures leave nothing integrated, so the run stops rather than closing the item;
+the next section says how.
+
+### A protected target lands through its pull request
+
+Before it promotes, a publishing run asks the forge whether the target branch is
+protected, both ways GitHub protects one: per-branch protection, and a ruleset
+carrying a pull-request, required-status-check, or update rule. It is the same
+question `make release` asks before a cut. The answer decides the order of the
+two halves above.
+
+**An unprotected target** is promoted exactly as described above: the local
+target is fast-forwarded onto the reviewed commit, and the forge merges the pull
+request carrying it.
+
+**A protected target is never moved locally ahead of the forge.** The run
+commits the change, checks that the local target still stands where the change
+was written against, and asks the forge to merge, with the local target left
+where it was. The reviewed commit reaches the remote only through the forge's
+merge, and the local target follows by the catch-up above: a fast-forward onto
+the remote, taken under the branch's promotion lease. So no ending of the run
+leaves your local target ahead of the remote:
+
+- **Merged.** The catch-up brings the local target onto the forge's merge
+  commit, and the item closes.
+- **Queued.** Nothing moves locally. The worktree and branch are kept, because
+  nothing proves the change is on the target yet; `yoyo reconcile` catches the
+  local target up once the forge merges, closes the item, and cleans up.
+- **Refused or dropped**: a required review, a failing check, anything the
+  forge would not merge. The change is on its pull request and on no target
+  branch, so the item is not closed. The run stops and hands the item back with
+  the forge's answer as the blocker, keeping the record `yoyo triage rearm`
+  repeats the merge from once the requirement is met.
+- **The remote target moved** after the landing was prepared. Nothing was
+  promoted, so this is a lost race rather than a divergence: the local target
+  is fast-forwarded onto the remote and the change is replayed onto it, with
+  the checks and the review re-earned, under the same
+  [retry budget](#losing-a-race-for-the-target-branch).
+- **The process was killed** after the landing was prepared and before the
+  forge's answer was heard. The run recorded the landing before asking, and
+  `yoyo reconcile` settles it on what the forge says rather than on the local
+  target, which says nothing here: merged is confirmed, caught up onto, closed,
+  and cleaned up; queued is recorded as a queued landing and settled like any
+  other; anything else hands the item to a person, as the run itself would have.
+
+**Why.** On a protected target, promoting locally first strands commits. A
+merge the forge refuses or holds leaves the local target ahead of the remote,
+and every later run that has to bring the target onto the remote collides with
+it. That happened on 2026-09-20 and again on 2026-09-24, and both times every
+run stalled until the checkout was reset by hand.
+
+**A forge that cannot be asked is treated as protecting the branch**, and the
+run says so on the work item. The protected path costs an unprotected target
+nothing it needs, since the change still lands by the merge, while the other
+reading could move a branch the forge then refuses. Every publishing run
+records which path it took, and why, as the `Target branch:` line in its notes
+on the work item.
 
 ### What publishing needs
 
@@ -3106,8 +3175,9 @@ Nothing is ever force-pushed to resolve it.
   request, a build check, or a review — is merged into normally, provided the
   account `gh` is authenticated as may merge and the request satisfies whatever
   the protection requires. Only the run branch is pushed. If the protection is
-  not satisfied, the run reports the unmet requirement as an outstanding
-  publication.
+  not satisfied, the run stops with the unmet requirement named, the item is
+  handed back to you, and your local target is left where the forge has it —
+  see [a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request).
 - **Merge commits allowed** in the repository's settings, since that is the
   method the harness asks for. A repository that permits only squashing or only
   rebasing refuses the merge, and the run reports that refusal — it does not
@@ -3681,7 +3751,12 @@ and says what the conversation shows on screen while it waits.
 ## Losing a race for the target branch
 
 A run promotes its change by fast-forwarding the branch it was written against,
-which requires that branch to still be where the run started from. It may not
+which requires that branch to still be where the run started from. On a target
+the forge protects the local branch is not fast-forwarded — the change lands
+through its pull request ([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request))
+— but the same requirement holds, and a remote target that moves between the
+landing being prepared and the forge being asked to merge is a lost race too,
+answered by the same replay and the same budget. It may not
 be: another run can promote into the same branch first, and an operator who
 commits to it while a run is working moves it just as effectively. The
 promotion fails closed in both cases — nothing is force-merged and nothing is
@@ -4335,7 +4410,11 @@ the run that made the publication terminally recorded, and no run of the item in
 flight — which is the precondition a live incident bought, where a publication
 re-armed under a live run left a hand-written amendment stranded on a preserved
 branch. The intake hold does not apply, because a re-arm chooses no work: it
-finishes the publication of work that is already integrated.
+repeats a merge request an approving verdict already authorized, for a change
+that already passed every gate. On an unprotected target that change is already
+integrated locally; on a protected one it is on its pull request and nowhere
+else ([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)), and the re-arm
+is how it lands — either way, nothing new is selected.
 
 It takes the target branch's promotion lease before it asks the forge for
 anything, so it queues behind whatever is promoting into that branch now — a

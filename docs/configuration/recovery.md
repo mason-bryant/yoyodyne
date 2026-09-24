@@ -879,7 +879,11 @@ the run that made the publication terminally recorded, and no run of the item in
 flight — which is the precondition a live incident bought, where a publication
 re-armed under a live run left a hand-written amendment stranded on a preserved
 branch. The intake hold does not apply, because a re-arm chooses no work: it
-finishes the publication of work that is already integrated.
+repeats a merge request an approving verdict already authorized, for a change
+that already passed every gate. On an unprotected target that change is already
+integrated locally; on a protected one it is on its pull request and nowhere
+else ([a protected target lands through its pull request](publishing.md#a-protected-target-lands-through-its-pull-request)), and the re-arm
+is how it lands — either way, nothing new is selected.
 
 It takes the target branch's promotion lease before it asks the forge for
 anything, so it queues behind whatever is promoting into that branch now — a

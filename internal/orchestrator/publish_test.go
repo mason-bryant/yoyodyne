@@ -1349,6 +1349,15 @@ type fakeForge struct {
 	// the run then spends waiting before it asks again. It is how a test
 	// expresses the world moving during that wait.
 	afterMergeReset func()
+	// protection is what the forge says protects the target branch, and
+	// protectionErr is a forge that could not be asked. protectionAsked is every
+	// branch it was asked about.
+	protection      publish.BranchProtection
+	protectionErr   error
+	protectionAsked []string
+	// onMerge runs when the forge is asked to merge, before it answers. It is
+	// how a test reads where the local target stood at that moment.
+	onMerge func()
 }
 
 // connectionReset is what the transport writes when it drops a request, in the
@@ -1396,6 +1405,9 @@ func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publ
 			f.afterMergeReset()
 		}
 		return publish.MergeResult{}, connectionReset(fmt.Sprintf("merge pull request %d", request.Number))
+	}
+	if f.onMerge != nil {
+		f.onMerge()
 	}
 	if f.mergeErr != nil {
 		return publish.MergeResult{}, f.mergeErr
@@ -1489,6 +1501,17 @@ func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) 
 		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued, HeadCommit: f.headCommit}, nil
 	}
 	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true, HeadCommit: f.headCommit}, nil
+}
+
+// Protection answers what the forge says about the target branch. A forge that
+// was told nothing reports it unprotected, which is the arrangement every test
+// written before protection was asked about assumed.
+func (f *fakeForge) Protection(_ context.Context, branch string) (publish.BranchProtection, error) {
+	f.protectionAsked = append(f.protectionAsked, branch)
+	if f.protectionErr != nil {
+		return publish.BranchProtection{}, f.protectionErr
+	}
+	return f.protection, nil
 }
 
 var _ PullRequests = (*fakeForge)(nil)

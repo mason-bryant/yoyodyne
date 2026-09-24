@@ -443,6 +443,12 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 	if queuedMerge(state) {
 		return r.settleQueuedMerge(ctx, state)
 	}
+	// A landing through the pull request whose merge nobody has confirmed is the
+	// forge's to answer for, not the repository's: its local target was never
+	// moved, so what the repository shows says nothing about whether it landed.
+	if unconfirmedLanding(state) {
+		return r.settleInterruptedLanding(ctx, state)
+	}
 	observation := gitworktree.Observation{}
 	if state.WorktreePath != "" {
 		var err error
@@ -809,6 +815,122 @@ func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State
 	result.Detail = reason
 	result.DocketProblem = r.docketStoppedRun(settled)
 	return result, saveErr
+}
+
+// unconfirmedLanding reports a run that recorded a landing through the pull
+// request and holds no answer from the forge about it: not merged, and not
+// queued. Only a run still in flight reaches the sweep that way — one that
+// ended on such a record stopped and handed its item to a person, and owes
+// nothing (runstate.State.Outstanding) — so this is a process that died between
+// preparing the landing and hearing what the forge did with it.
+func unconfirmedLanding(state runstate.State) bool {
+	if state.Integration == nil || !state.Integration.ThroughPullRequest {
+		return false
+	}
+	return state.PullRequest == nil || (!state.PullRequest.Merged && !state.PullRequest.MergeQueued)
+}
+
+// settleInterruptedLanding settles a run killed while it was landing its change
+// through the pull request, on the forge's answer rather than the repository's.
+// A local promotion interrupted there is settled as succeeded because its local
+// target already carries the change; a landing moved no local branch, so doing
+// the same would close the item as integrated over a change that may be on an
+// open pull request and no target branch at all.
+//
+//   - The forge merged it. The merge is confirmed on the remote, the local target
+//     is caught up onto it under the promotion lease, the consumed branch is
+//     removed, and the run is completed exactly as an interrupted local promotion
+//     is — closing the item, and cleaning up on the containment the catch-up
+//     just gave the local target.
+//   - The forge holds the merge queued. The run is recorded as the queued landing
+//     it is, finished and waiting, and the sweep that settles queued merges takes
+//     it from there.
+//   - Anything else — a request still open with nothing queued, or a closed one
+//     — is a change that landed nowhere. The item is handed to a person with that
+//     as the blocker, as the run itself would have done, and the promotion it was
+//     preparing stays on the record for a re-arm to repeat.
+//
+// A forge that cannot be asked settles nothing, and the next sweep asks again.
+func (r Reconciler) settleInterruptedLanding(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	target := state.Integration.TargetBranch
+	if r.Publisher == nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf(
+			"run %s was landing its change on %s through its pull request, and reconciliation has no forge access to ask what became of it",
+			state.RunID, target)
+	}
+	observed, err := r.Publisher.State(ctx, state.Branch)
+	if err != nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("ask the forge about the interrupted landing of run %s: %w", state.RunID, err)
+	}
+	published := runstate.PullRequest{Branch: state.Branch, Number: observed.Number, URL: observed.URL, HeadCommit: state.Integration.SourceCommit}
+	if state.PullRequest != nil {
+		published = *state.PullRequest
+	}
+	published.State = observed.State
+	published.Merged = observed.Merged
+	state.PullRequest = &published
+
+	switch {
+	case observed.Merged:
+		if failure := r.confirmQueuedPublication(ctx, state, &published, observed.MergeCommit); failure != nil {
+			// The forge says merged and nothing could check what the merge left; the
+			// change is closed on the forge's word, as a settled queued merge is, and
+			// the unconfirmed publication stays outstanding for a person and the
+			// sweeps that finish publications.
+			state.PublishFailure = failure.Error()
+		} else {
+			r.catchUp(ctx, target)
+		}
+		state.PullRequest = &published
+		if failure := r.deleteMergedBranch(ctx, &state, published); failure != "" {
+			state.PublishFailure = failure
+		}
+		result, err := r.completeIntegrated(ctx, state, false)
+		result.Detail = fmt.Sprintf("the run was interrupted while landing through pull request %d, and the forge has merged it into %s", published.Number, target)
+		return result, err
+	case observed.AutoMerge:
+		published.MergeQueued = true
+		state.PullRequest = &published
+		detail := fmt.Sprintf("the run was interrupted while landing through pull request %d, and the forge holds its merge into %s queued", published.Number, target)
+		if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, strings.Join([]string{
+			"Yoyodyne found this item's run interrupted while it was landing the change through its pull request.",
+			"Run: " + state.RunID,
+			fmt.Sprintf("Pull request: #%d %s", published.Number, published.URL),
+			"Merge queued: the forge merges this request once the base branch's requirements are met; `yoyo reconcile` settles the run when it does.",
+			fmt.Sprintf("The local %s was not moved and is not moved until the forge merges.", target),
+		}, "\n")); err != nil {
+			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the queued landing for run %s: %w", state.RunID, err)
+		}
+		completedAt := r.clock().Now()
+		state.Status = runstate.StatusSucceeded
+		state.CompletedAt = &completedAt
+		state.Phase = runstate.PhaseCleaningUp
+		state.UpdatedAt = completedAt
+		if err := r.Store.Save(state); err != nil {
+			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the queued landing of run %s: %w", state.RunID, err)
+		}
+		result := reconciliationOf(state, ActionQueued)
+		result.Detail = detail
+		return result, nil
+	default:
+		reason := fmt.Sprintf("the run was interrupted while landing its change on %s through pull request %d, and the forge has not merged it (the request is %s): the local %s was never moved, so the change is on its pull request and on no target branch",
+			target, published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), target)
+		state.PublishFailure = reason
+		itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+		if err != nil {
+			return reconciliationOf(state, ActionBlocked), err
+		}
+		notes, err := r.recordBlocker(ctx, state, itemStatus, gitworktree.Observation{}, reason)
+		if err != nil {
+			return reconciliationOf(state, ActionBlocked), err
+		}
+		state.Blocker = runstate.RecordBlocker(notes)
+		settled, saveErr := r.saveTerminalFailure(state, reason)
+		result := reconciliationOf(settled, ActionBlocked)
+		result.Detail = reason
+		result.DocketProblem = r.docketStoppedRun(settled)
+		return result, saveErr
+	}
 }
 
 // confirmQueuedPublication establishes that the merge the forge reported is what

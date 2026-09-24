@@ -36,6 +36,14 @@ import (
 // one answer about where a project's work is, published under a merge commit
 // the forge owns. A remote that ends up carrying anything else is reported
 // rather than reconciled behind the operator's back.
+//
+// A target branch the forge protects is the exception, and it is decided per
+// promotion by asking the forge (landsThroughPullRequest). There the local
+// target does not move first: the change lands only by the forge merging its
+// pull request, and the local branch follows by a fast-forward onto the remote.
+// A local promotion onto a protected target is one the forge may refuse or hold
+// for hours, and every one of those left the primary checkout's main ahead of
+// origin with nothing that reconciles the two.
 
 func (p Pipeline) publishes() bool {
 	return p.Config.Approvals.Publishing == domain.ApprovalAutomatic
@@ -360,6 +368,9 @@ var errPreMergeVerification = errors.New("the remote target branch could not be 
 // Almost nothing here can fail the run. The work is integrated and the
 // authoritative branch already moved, so a publication that did not finish is an
 // outstanding fact for an operator, in the same way an outstanding cleanup is.
+// A landing through the pull request moved no branch, so there the same
+// unfinished merge is the change not landed at all, and integrate stops the run
+// on it (blockOnUnlandedPullRequest) rather than closing the item.
 //
 // The one exception is the remote target having moved after settleRemoteTarget
 // looked at it and before this asks the forge — the window a check-then-act
@@ -441,6 +452,13 @@ func (a *activeRun) publishIntegration(ctx context.Context) error {
 	})
 	if verifyFailure != nil {
 		cause := fmt.Errorf("check the remote target branch before merging: %w", verifyFailure)
+		// A landing through the pull request moved nothing, so a remote that moved
+		// under it is the race a promotion can lose rather than a divergence: the
+		// change is replayed onto where the target went, as a drifted local target
+		// is, and the merge is asked for again with the gate re-earned.
+		if integration.ThroughPullRequest && errors.Is(verifyFailure, gitworktree.ErrRemoteTargetDrift) {
+			return a.replayUnlandedChange(ctx, cause)
+		}
 		// The merge was never asked for, and nothing here will ask again: this is
 		// the origin-moved refusal that four promotions once waited hours on with
 		// nothing said. The divergence below stops the run as well where the
@@ -558,6 +576,104 @@ func (a *activeRun) settlePromotedDivergence(ctx context.Context, integration gi
 		return nil
 	}
 	return a.blockOnPromotedDivergence(integration, catchup, cause)
+}
+
+// landsThroughPullRequest decides how this run promotes, by asking the forge
+// whether the target branch is protected, and says what it found on the outcome.
+//
+// A protected target lands through the pull request and nothing else. Its local
+// copy is never moved ahead of the forge — only fast-forwarded onto what the
+// forge has — because a local promotion the forge then refused or has not merged
+// yet leaves the primary checkout's target ahead of the remote, where every later
+// run that has to bring it onto the remote collides with it. That happened on
+// 2026-09-20 and again on 2026-09-24, and each time the checkout was reset by
+// hand.
+//
+// A question the forge did not answer takes the same path. It costs an
+// unprotected target nothing it needs — the change still lands, by the merge —
+// while the other reading would move a branch the forge may refuse. The question
+// is asked once per promotion attempt, under the promotion lease, and it is the
+// question scripts/cut-release.sh asks before a release cut.
+//
+// A run that does not publish never asks: it has no forge, and promoting the
+// local target is the whole of what it does.
+func (a *activeRun) landsThroughPullRequest(ctx context.Context) bool {
+	if !a.publishing {
+		return false
+	}
+	target := a.worktree.TargetBranch
+	protection, err := a.pipeline.Publisher.Protection(ctx, target)
+	switch {
+	case err != nil:
+		a.outcome.TargetProtection = fmt.Sprintf(
+			"whether %s is protected could not be asked of the forge (%v), so it was taken as protected: the change lands through its pull request, and the local %s is moved only by a fast-forward onto what the forge has",
+			target, err, target)
+		return true
+	case protection.Protected:
+		a.outcome.TargetProtection = fmt.Sprintf(
+			"%s is protected on the forge by %s, so the change lands through its pull request, and the local %s is moved only by a fast-forward onto what the forge has",
+			target, nonEmpty(protection.By, "a rule"), target)
+		return true
+	default:
+		a.outcome.TargetProtection = fmt.Sprintf(
+			"%s is not protected on the forge, so the change was promoted onto the local %s and its pull request merged after it",
+			target, target)
+		return false
+	}
+}
+
+// landedThroughPullRequest reports a landing through the pull request that
+// reached the target: the forge merged it, or holds the merge queued for when the
+// branch's requirements are met. Everything else publishIntegration can end on —
+// a refusal, a request that is not what was checked, a merge nobody could
+// confirm happened — leaves the change on its pull request alone.
+func (a *activeRun) landedThroughPullRequest() bool {
+	published := a.outcome.PullRequest
+	return published != nil && (published.Merged || published.MergeQueued)
+}
+
+// blockOnUnlandedPullRequest ends a run whose landing through the pull request
+// did not reach the target branch. It is the protected target's counterpart of
+// an outstanding publication: there, the change was already on the local target
+// and only the publication was left, so the item closed; here, nothing moved,
+// so closing the item would record as landed a change that is on no branch but
+// its own. The item is handed to a person with the forge's answer instead, and
+// the run keeps its record of the promotion it was making and of the dropped
+// merge, which is what `yoyo triage rearm` repeats once whatever the forge
+// required has been met.
+func (a *activeRun) blockOnUnlandedPullRequest(integration gitworktree.Integration) error {
+	unlanded := fmt.Errorf("the change was not landed on %s: %s",
+		integration.TargetBranch, nonEmpty(a.outcome.PublishFailure, "the forge did not merge its pull request"))
+	if err := a.block(renderUnlandedPullRequestNotes(a.outcome, integration, unlanded.Error())); err != nil {
+		return errors.Join(unlanded, fmt.Errorf("record the unlanded pull request as a blocker: %w", err))
+	}
+	return unlanded
+}
+
+// replayUnlandedChange answers a remote target that moved after the landing was
+// prepared and before the forge was asked to merge. Nothing was promoted, so
+// nothing is outstanding: the local target is brought onto the remote by a
+// fast-forward, and the run is sent to replay its change onto it exactly as a
+// promotion that lost its race is. A remote the local target cannot be brought
+// onto is the divergence only a person settles, before anything was promoted.
+//
+// The promotion this run was preparing is taken back off the record first,
+// because it no longer describes anything: the change is about to be rewritten
+// onto a new base, and a run stopped on the way there promoted nothing.
+func (a *activeRun) replayUnlandedChange(ctx context.Context, cause error) error {
+	a.outcome.Integration = nil
+	a.state.Integration = nil
+	catchup, err := recoveringValue(ctx, a, runstate.RetryCatchUpTarget, func(ctx context.Context) (gitworktree.Catchup, error) {
+		return a.pipeline.Worktrees.CatchUpTarget(ctx, a.worktree.TargetBranch)
+	})
+	if err != nil {
+		return fmt.Errorf("%w; bring %s onto what %s has: %w", cause, a.worktree.TargetBranch, a.pipeline.Config.Execution.Remote, err)
+	}
+	if catchup.Held != "" {
+		return a.blockOnDivergedTarget(catchup)
+	}
+	a.outcome.Catchup = &catchup
+	return fmt.Errorf("%w: %w", gitworktree.ErrTargetDrift, cause)
 }
 
 // mergeConfirmationDelays are the waits between asking the forge whether the
@@ -894,13 +1010,42 @@ func renderPublishNotes(outcome Outcome) []string {
 	if outcome.PublishSkipped != "" {
 		lines = append(lines, "Publishing skipped: "+outcome.PublishSkipped)
 	}
+	if outcome.TargetProtection != "" {
+		lines = append(lines, "Target branch: "+outcome.TargetProtection)
+	}
 	if outcome.PublishFailure != "" {
-		lines = append(lines,
-			"Publication outstanding: "+outcome.PublishFailure,
-			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.",
-		)
+		standing := "The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished."
+		if outcome.Integration != nil && outcome.Integration.ThroughPullRequest {
+			standing = "The forge merged the change; what is unfinished is the harness's confirmation and hygiene after that merge, which `yoyo reconcile` finishes."
+		}
+		lines = append(lines, "Publication outstanding: "+outcome.PublishFailure, standing)
 	}
 	return append(lines, renderCatchupNotes(outcome.Catchup)...)
+}
+
+// renderUnlandedPullRequestNotes is the blocker a landing through the pull
+// request leaves when the forge did not take the change. It says first that the
+// local target was never moved, because that is what makes this a different
+// hand-back from a dropped merge after a local promotion: nothing needs undoing,
+// and the change is exactly where the pull request has it.
+func renderUnlandedPullRequestNotes(outcome Outcome, integration gitworktree.Integration, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its target branch is protected, so the change was to land through its pull request, and the forge did not merge it.",
+		fmt.Sprintf("The local %s was not moved, so nothing needs undoing: the change is on its pull request and on no target branch, which is why the item is left open rather than closed as integrated.", integration.TargetBranch),
+		"Once whatever the forge requires is met, the development manager's `rearm` decision repeats the merge request through `yoyo triage rearm`, or a person merges the request.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		fmt.Sprintf("Commit to land: %s, onto %s at %s", integration.SourceCommit, integration.TargetBranch, integration.PreviousTargetCommit),
+	}
+	if outcome.TargetProtection != "" {
+		lines = append(lines, "Target branch: "+outcome.TargetProtection)
+	}
+	if outcome.PullRequest != nil {
+		lines = append(lines, fmt.Sprintf("Pull request left unmerged: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL))
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
 // renderCatchupNotes says where the local target branch was left relative to

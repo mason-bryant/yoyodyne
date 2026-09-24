@@ -1616,6 +1616,33 @@ merge, records an outstanding publication and hands the item back with a
 blocker. A repository with no configured remote publishes nothing and behaves
 exactly as a purely local project does.
 
+**A target branch the forge protects is the exception to "local first."** Before
+it promotes, a publishing run asks the forge whether the target is protected,
+both ways GitHub protects a branch (per-branch protection, and a ruleset with a
+pull-request, status-check, or update rule), which is the question `make release`
+asks before a cut. On a protected target the run never moves your local target
+branch ahead of the forge. It commits the change, checks the target still stands
+where the change was written against, and asks the forge to merge with the local
+branch untouched. The reviewed commit reaches the remote only by the forge's
+merge, and the local branch then follows it by the same fast-forward catch-up,
+under the branch's promotion lease. A merge the forge queued moves nothing
+locally until `yoyo reconcile` finds it merged. A merge the forge refused or
+dropped leaves the change on its pull request and on no target branch, so the
+item is not closed: the run stops and hands it back with the forge's answer as
+the blocker, and `yoyo triage rearm` can repeat the merge once the requirement is
+met. A remote target that moved in the meantime is replayed onto, like any lost
+race. A process killed mid-landing is settled by `yoyo reconcile` on the forge's
+answer about the pull request, never on the local target, which the landing did
+not move. A forge that cannot be asked is treated as protecting the branch, and the
+run says so on the item's `Target branch:` line, which every publishing run
+writes to name the path it took. An unprotected target keeps the local-first
+order above. The reason is the two stalls this ended: on 2026-09-20 and again on
+2026-09-24 a local promotion onto the protected `main` the forge would not merge
+left `main` ahead of `origin`, and every later run collided with it until the
+checkout was reset by hand.
+[The configuration guide](configuration.md#a-protected-target-lands-through-its-pull-request)
+has the whole of it.
+
 Merging belongs to `approvals.integration`, so the two settings compose rather
 than imply one another. Publishing with `integration: human` opens the pull
 request and stops: nothing is merged, the run branch survives on the remote, and

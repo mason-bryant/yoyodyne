@@ -233,6 +233,8 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/orchestrator/pipeline.go` | `(*activeRun).recordDevelopment` | Records what a developer invocation produced and cost. |
 | `internal/orchestrator/reports.go` | `(*activeRun).collectReports` | Collects what a run's role reported, which decides nothing. |
 | `internal/protectedpath/protectedpath.go` | `protect` | The unexported builder behind `protectedpath.set`. |
+| `internal/publish/github.go` | `(GitHub).Protection` | Asks the forge whether a branch refuses direct pushes, which decides the order a run promotes in: through the pull request first, or locally first. It grants and refuses nothing — the forge enforces the protection, and every promotion passes the same gates either way. |
+| `internal/publish/github.go` | `BranchProtection` | The forge's answer `(GitHub).Protection` reports. |
 | `internal/runstate/conversation.go` | `(*ConversationStore).leaseFile` | Names the file a conversation's lease is taken on, so two agents on one role do not hold one conversation. |
 | `internal/runstate/lease.go` | `TryLeasePath` | The shared lease primitive that reports rather than waits. The promotion lease waits its turn and is `promotion.lease`. |
 | `internal/runstate/rotation.go` | `(*Store).LeaseRotation` | Serializes account rotation, which is capacity rather than authority. |
