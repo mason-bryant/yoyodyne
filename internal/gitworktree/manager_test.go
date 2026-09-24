@@ -835,6 +835,11 @@ func TestACrossedRegistrationIsGitsWordingForAnEntryAndNothingElse(t *testing.T)
 		{"fatal: failed to read '.git/worktrees/loop-3/locked': No such file or directory", true},
 		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27': No such file or directory", true},
 		{`fatal: Invalid path 'C:\repository\.git\worktrees\creation-loop-27': No such file or directory`, true},
+		// A repository's own path can hold spaces, and none of the three forms
+		// may stop matching over one.
+		{"fatal: failed to read /Users/me/Application Support/My Repos/x/.git/worktrees/loop-3/commondir: Result too large", true},
+		{"fatal: failed to read '/Users/me/Application Support/My Repos/x/.git/worktrees/loop-3/locked': No such file or directory", true},
+		{"fatal: Invalid path '/Users/me/Application Support/My Repos/x/.git/worktrees/loop-3': No such file or directory", true},
 		{"fatal: failed to read .git/worktrees/loop-3/gitdir: Is a directory", false},
 		{"fatal: Invalid path '/tmp/repository/src': No such file or directory", false},
 		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27/nested': No such file or directory", false},
@@ -3165,7 +3170,7 @@ func TestACountThatFailedLeavesTheCreationBudgetedAsAnUncountedTree(t *testing.T
 		t.Fatalf("uncounted allowance = %d file(s), want %d", checkoutAllowanceFiles(0, false), want)
 	}
 	if got := manager.checkoutTimeout(0, false); got != testGitBudget+uncountedCheckoutFiles*checkoutFileBudget {
-		t.Fatalf("uncounted budget = %s, want at least the stand-in tree's allowance", got)
+		t.Fatalf("uncounted budget = %s, want %s: the named budget plus the stand-in tree's allowance", got, testGitBudget+uncountedCheckoutFiles*checkoutFileBudget)
 	}
 }
 

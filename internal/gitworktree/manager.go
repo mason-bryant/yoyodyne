@@ -154,8 +154,15 @@ const (
 // instant, since the entry is either there in full or not at all once the
 // command beside it returns, so both are run again exactly as a half-written
 // commondir is.
+//
+// The path in front of worktrees/ is whatever the repository's own path is,
+// spaces included — a state directory under "Application Support" is the
+// ordinary case on macOS — so no alternative restricts it: the unquoted
+// commondir form takes any prefix, as it always did, and the two quoted forms
+// take anything short of the closing quote.
 var crossedRegistration = regexp.MustCompile(
-	`failed to read '?(?:[^'\s]*[/\\])?worktrees[/\\][^/\\\s']+[/\\](?:commondir|locked)` +
+	`failed to read (?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\]commondir` +
+		`|failed to read '(?:[^']*[/\\])?worktrees[/\\][^/\\']+[/\\](?:commondir|locked)'` +
 		`|Invalid path '(?:[^']*[/\\])?worktrees[/\\][^/\\']+'`)
 
 // maintenanceOptions stop a Git command from handing this repository to Git's
