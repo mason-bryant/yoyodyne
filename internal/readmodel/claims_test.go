@@ -1,10 +1,12 @@
 package readmodel
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -235,6 +237,63 @@ func TestAClaimOverAnApprovedChangeTheEnvironmentStoppedIsNotGivenBack(t *testin
 	stopped.BranchRemoved, stopped.WorktreeRemoved = true, true
 	if dead := DeadClaims([]Claim{claimed("yoyodyne-ifd.436.4", "Swept")}, []runstate.State{stopped}, auditNoon, 0, 0, nil); len(dead) != 1 {
 		t.Fatalf("DeadClaims() = %+v, want the claim given back once nothing is left to resume", dead)
+	}
+}
+
+// The pull's hold and the claim audit are two readers of one run, and an
+// integration stop whose change is gone is where they came apart: the audit gave
+// the claim back because nothing survives to resume, while the hold answered
+// every integration stop as resumable and named `yoyo triage resume` — a verb
+// that refuses once the branch is gone — as what finishes it. So the run is
+// driven through both over the same look, which finds neither the branch nor the
+// worktree, and both have to give the same answer and neither may send anybody
+// to a resume.
+func TestAnIntegrationStopWhoseChangeIsGoneIsReadAlikeByTheHoldAndTheClaimAudit(t *testing.T) {
+	t.Parallel()
+
+	stopped := ended("run-5e1f0a77", "yoyodyne-ifd.428.10", runstate.StatusFailed, 9*time.Hour)
+	stopped.Phase = runstate.PhaseReviewing
+	stopped.Branch = "yoyodyne/yoyodyne-ifd-428-10/5e1f0a77"
+	stopped.WorktreePath = "/state/worktrees/yoyodyne-ifd-428-10-5e1f0a77"
+	stopped.Failure = "bd show failed with status timed_out and exit code -1: "
+	stopped.ReviewDecision = runstate.ReviewApprove
+	stopped.ReviewSessionID = "f4c1a0de-review"
+	stopped.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseTransportFailure,
+		Detail:     stopped.Failure,
+		Phase:      runstate.PhaseReviewing,
+		RecordedAt: auditNoon.Add(-9 * time.Hour),
+	}
+	stopped.BranchRemoved, stopped.WorktreeRemoved = true, true
+	gone := &remainsOf{survives: map[string]gitworktree.Survival{}}
+	look := Looking(context.Background(), gone, func() time.Time { return auditNoon })
+	runs := []runstate.State{stopped}
+
+	// Nothing decided about it: nothing holds it and nothing keeps its claim.
+	held := heldForAPerson(runs, nil, nothingDecided, look)
+	reason, holding := held.Reason(stopped.WorkItemID)
+	dead := DeadClaims([]Claim{claimed(stopped.WorkItemID, "Stopped and swept")}, runs, auditNoon, 0, 0, look)
+	if released := len(dead) == 1; holding == released {
+		t.Fatalf("the hold says held = %t (%q) and the claim audit says released = %t: one run, two answers", holding, reason, released)
+	}
+	if holding {
+		t.Fatalf("the item is held for %q, want nothing holding a stop that has nothing left to resume", reason)
+	}
+
+	// A re-run decided about it: the hold is the carry-out, the harness's move and
+	// one it can make without the branch, and it still names no resume.
+	rerun := decisions(map[string]runstate.TriageCounters{stopped.WorkItemID: {
+		Decisions: []runstate.TriageDecision{{Decision: runstate.TriageDecisionRerun, RunID: stopped.RunID}},
+	}})
+	decided := heldForAPerson(runs, nil, rerun, look)
+	reason = heldReason(t, decided, stopped.WorkItemID)
+	if !decided.Decided(stopped.WorkItemID) || !strings.Contains(reason, "carrying that decision out") {
+		t.Fatalf("the hold says %q, want the carry-out of the recorded decision named as what is outstanding", reason)
+	}
+	for _, said := range []string{reason, because(dead)} {
+		if strings.Contains(said, "resume") {
+			t.Fatalf("%q names a resume, which refuses once the branch is gone", said)
+		}
 	}
 }
 

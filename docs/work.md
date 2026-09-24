@@ -898,6 +898,13 @@ it names it first, ahead of what was found of the change, so the part that says
 what to do survives a rendering that cuts the reason to a line. The development
 manager's docket says the same thing on the same stoppage, because an item given
 two next movers is a disagreement only you could settle.
+That holds only while the change is there to resume. An integration stop whose
+branch and checkout are both gone has nothing for `yoyo triage resume` to finish
+— the resume refuses once the branch is gone — so it is held the way any other
+stoppage with nothing left is: by a repair or re-run she has recorded and the
+harness has not yet carried out, with that carry-out named, or not at all. The
+[claim audit](operations.md#claims-with-nothing-working-on-them) gives its claim
+back for the same reason, so the pull and the audit say the same thing about it.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
