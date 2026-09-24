@@ -51,6 +51,7 @@ func TestTheFenceReachesAProcessTheLaunchedProcessStartsItself(t *testing.T) {
 	result, err := OSProcessRunner{}.Run(context.Background(), Command{
 		Name:    "/bin/sh",
 		Args:    []string{"-c", "git -C " + repository + " config --get gc.auto"},
+		Env:     unfencedEnvironment(),
 		Timeout: 30 * time.Second,
 	}, nil)
 	if err != nil {
@@ -199,6 +200,7 @@ func gitConfigThroughRunner(t *testing.T, repository, setting string) string {
 	result, err := OSProcessRunner{}.Run(context.Background(), Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "config", "--get", setting},
+		Env:     unfencedEnvironment(),
 		Timeout: 30 * time.Second,
 	}, nil)
 	if err != nil {
@@ -208,6 +210,20 @@ func gitConfigThroughRunner(t *testing.T, repository, setting string) string {
 		t.Fatalf("git config --get %s = %v: %s", setting, result.Status, result.Stderr)
 	}
 	return strings.TrimSpace(result.Stdout)
+}
+
+// unfencedEnvironment is this process's environment with no Git configuration in
+// it, for a process whose fence has to come from the runner. A test the harness
+// itself launched already carries the fence, and a child inheriting that would
+// pass these tests with the runner fencing nothing.
+func unfencedEnvironment() []string {
+	var environment []string
+	for _, entry := range os.Environ() {
+		if name, _, _ := strings.Cut(entry, "="); !configuresGit(name) {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
 }
 
 // maintainedRepository is a repository whose own config asks for the automatic
