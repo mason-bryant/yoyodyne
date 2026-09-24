@@ -276,6 +276,7 @@ func TestNewRefusesACurrentExportThatLeavesTheRepository(t *testing.T) {
 			RepositoryRoot: repository,
 			WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 			CurrentExports: []string{export},
+			Timeout:        testGitBudget,
 		})
 		if err == nil {
 			t.Fatalf("New() with current export %q error = nil, want a refusal", export)
@@ -304,6 +305,7 @@ func newExportManager(t *testing.T, repository, worktreeRoot string) *Manager {
 		// the same allowance production makes is what lets a run be cut from it.
 		AllowedPrimaryChanges: []string{exportPath},
 		CurrentExports:        []string{exportPath},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/dashboard"
@@ -230,6 +229,34 @@ func (b *guardedBuffer) String() string {
 	return b.buf.String()
 }
 
+// announcingBuffer is a guardedBuffer that says when a line beginning with its
+// prefix has been written, so a test waits on the command having printed it
+// rather than polling for it against a length of time.
+type announcingBuffer struct {
+	guardedBuffer
+	prefix    string
+	announced chan struct{}
+	once      sync.Once
+}
+
+func newAnnouncingBuffer(prefix string) *announcingBuffer {
+	return &announcingBuffer{prefix: prefix, announced: make(chan struct{})}
+}
+
+func (b *announcingBuffer) Write(p []byte) (int, error) {
+	n, err := b.guardedBuffer.Write(p)
+	// Only whole lines count, so the line is announced once it is all there.
+	written := b.String()
+	complete := written[:strings.LastIndex(written, "\n")+1]
+	for _, line := range strings.Split(complete, "\n") {
+		if strings.HasPrefix(line, b.prefix) {
+			b.once.Do(func() { close(b.announced) })
+			break
+		}
+	}
+	return n, err
+}
+
 // The verb starts, prints its URL and its token, and stops when asked. The
 // token is printed once and is not in the URL. The bind is what a sandbox
 // refuses, so this skips rather than fails where it is refused.
@@ -241,23 +268,23 @@ func TestDashboardPrintsItsURLAndTokenAndStopsWhenAsked(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout, stderr guardedBuffer
+	stdout := newAnnouncingBuffer("token: ")
+	var stderr guardedBuffer
 	done := make(chan int, 1)
 	go func() {
-		done <- RunContext(ctx, []string{"dashboard", "--config", configPath}, &stdout, &stderr, "test")
+		done <- RunContext(ctx, []string{"dashboard", "--config", configPath}, stdout, &stderr, "test")
 	}()
 
-	// Wait for the token to be printed or the command to give up.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(stdout.String(), "token: ") {
-		select {
-		case code := <-done:
-			if strings.Contains(stderr.String(), "operation not permitted") {
-				t.Skipf("this environment grants no listener: %s", strings.TrimSpace(stderr.String()))
-			}
-			t.Fatalf("dashboard exited early with %d: stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
-		case <-time.After(20 * time.Millisecond):
+	// Wait for the token to be printed or the command to give up, whichever it
+	// does; a command that does neither is reported by go test's own timeout,
+	// with the stack of what it was doing, rather than by a bound set here.
+	select {
+	case <-stdout.announced:
+	case code := <-done:
+		if strings.Contains(stderr.String(), "operation not permitted") {
+			t.Skipf("this environment grants no listener: %s", strings.TrimSpace(stderr.String()))
 		}
+		t.Fatalf("dashboard exited early with %d: stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
 	printed := stdout.String()
 	if !strings.Contains(printed, "serving at http://127.0.0.1:") || !strings.Contains(printed, "token: ") {
@@ -274,12 +301,7 @@ func TestDashboardPrintsItsURLAndTokenAndStopsWhenAsked(t *testing.T) {
 	}
 
 	cancel()
-	select {
-	case code := <-done:
-		if code != 0 || !strings.Contains(stdout.String(), "dashboard stopped") {
-			t.Fatalf("stop: code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the dashboard did not stop on cancellation")
+	if code := <-done; code != 0 || !strings.Contains(stdout.String(), "dashboard stopped") {
+		t.Fatalf("stop: code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
 }

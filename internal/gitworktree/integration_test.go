@@ -258,7 +258,7 @@ func TestManagerCleanupIsResumableAcrossItsDestructiveSteps(t *testing.T) {
 		repository := newRepository(t)
 		worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
 		runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
-		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 		if err != nil {
 			t.Fatalf("New() error = %v", err)
 		}
@@ -571,7 +571,7 @@ func TestManagerCleanupReportsRemovalsWhoseVerificationCouldNotRun(t *testing.T)
 		t.Helper()
 		repository := newRepository(t)
 		runner.delegate = execution.OSProcessRunner{}
-		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 		if err != nil {
 			t.Fatalf("New() error = %v", err)
 		}
@@ -918,7 +918,7 @@ func TestManagerIntegratePreservesCommittedWorktreeWhenCommitOrUpdateFails(t *te
 
 	repository := newRepository(t)
 	failing := &commandFailureRunner{delegate: execution.OSProcessRunner{}, failOn: "commit"}
-	manager, err := New(Options{Runner: failing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	manager, err := New(Options{Runner: failing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -955,7 +955,7 @@ func TestManagerIntegrateRefusesNonFastForwardAndKeepsHarnessCommit(t *testing.T
 
 	repository := newRepository(t)
 	drifting := &driftingRunner{delegate: execution.OSProcessRunner{}}
-	manager, err := New(Options{Runner: drifting, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	manager, err := New(Options{Runner: drifting, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -996,7 +996,7 @@ func TestManagerIntegrateRefusesNonFastForwardAndKeepsHarnessCommit(t *testing.T
 func TestManagerIntegrateUsesExactCommitAndDisablesAmbientCustomization(t *testing.T) {
 	repository := newRepository(t)
 	drifting := &driftingRunner{delegate: execution.OSProcessRunner{}}
-	manager, err := New(Options{Runner: drifting, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	manager, err := New(Options{Runner: drifting, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -1201,7 +1201,7 @@ func TestManagerIntegrateAdmitsOnePromotionAndReplaysTheLoser(t *testing.T) {
 			}
 			worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
 			held := &heldRunner{delegate: execution.OSProcessRunner{}, holding: make(chan struct{}), release: make(chan struct{})}
-			loserManager, err := New(Options{Runner: held, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+			loserManager, err := New(Options{Runner: held, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
@@ -1424,7 +1424,7 @@ func TestManagerRebaseOntoTargetReportsARefusalThatIsNotAConflict(t *testing.T) 
 
 	repository := newRepository(t)
 	refusing := &refusingRebaseRunner{delegate: execution.OSProcessRunner{}}
-	manager, err := New(Options{Runner: refusing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	manager, err := New(Options{Runner: refusing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -1508,7 +1508,7 @@ func TestManagerRebaseOntoTargetReportsAKilledReplayAsAStopNotAConflict(t *testi
 				marker:   filepath.Join(t.TempDir(), "picked"),
 				status:   tt.status,
 			}
-			manager, err := New(Options{Runner: killing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+			manager, err := New(Options{Runner: killing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees"), Timeout: testGitBudget})
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}

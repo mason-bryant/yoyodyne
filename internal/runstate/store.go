@@ -57,6 +57,15 @@ type Store struct {
 	// harness builds and is a test's signal, for the reason the conversation
 	// store carries one.
 	promotionQueued func()
+	// leaseWait bounds how long taking a run's lease waits out a lock that looks
+	// held. It is a field only so a test can take the grace's end out of what it
+	// asserts; every store the harness builds gets leaseGrace.
+	leaseWait time.Duration
+	// leaseHeld is told each time taking a run's lease finds the lock held and is
+	// about to wait. It is nil in every store the harness builds and is a test's
+	// signal, so the test can let the lock go at a moment it knows the wait has
+	// begun rather than after a length of time it hopes is inside the grace.
+	leaseHeld func()
 }
 
 type ExistingWorkItemError struct {
@@ -165,6 +174,7 @@ func NewStore(root string, productID domain.ProductID) (*Store, error) {
 		root:          filepath.Join(filepath.Clean(root), "products", string(productID), "runs"),
 		productID:     productID,
 		promotionWait: promotionQueueWait,
+		leaseWait:     leaseGrace,
 	}, nil
 }
 
@@ -321,7 +331,7 @@ func (s *Store) takeLease(ctx context.Context, runID string) (*Lease, bool, erro
 	if err != nil {
 		return nil, false, fmt.Errorf("open run lease: %w", err)
 	}
-	held, err := acquireLease(ctx, file)
+	held, err := acquireLease(ctx, file, s.leaseWait, s.leaseHeld)
 	if err != nil {
 		file.Close()
 		return nil, false, fmt.Errorf("lock run %s: %w", runID, err)
@@ -334,15 +344,19 @@ func (s *Store) takeLease(ctx context.Context, runID string) (*Lease, bool, erro
 }
 
 // acquireLease takes the exclusive lock on an open lease file, retrying within
-// leaseGrace before it concludes that a live holder owns the run. A lock that is
+// the grace before it concludes that a live holder owns the run. A lock that is
 // still held after the grace belongs to somebody, so the caller is told so
-// rather than made to wait for them.
-func acquireLease(ctx context.Context, file *os.File) (bool, error) {
-	deadline := time.Now().Add(leaseGrace)
+// rather than made to wait for them. waiting, where it is set, is told each time
+// an attempt finds the lock held.
+func acquireLease(ctx context.Context, file *os.File, grace time.Duration, waiting func()) (bool, error) {
+	deadline := time.Now().Add(grace)
 	for {
 		held, err := tryLockStateFile(file)
 		if err != nil || held {
 			return held, err
+		}
+		if waiting != nil {
+			waiting()
 		}
 		if !time.Now().Before(deadline) {
 			return false, nil
