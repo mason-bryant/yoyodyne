@@ -34,9 +34,20 @@ own getting-started section is executed on every change.
 The README stands at 844 lines: 600 of them the README the split was aiming at,
 and 244 the `## Configuring a project` block held back for the configuration
 split — see [the disposition
-table](#disposition-of-every-current-readme-section). The configuration guide is
-untouched and has grown to 3,848 lines, so its own tables below are re-measured
-against a file half again the size they were reconciled against.
+table](#disposition-of-every-current-readme-section).
+
+**The configuration split is complete as well.** Tranches yoyodyne-ifd.117.1 to
+117.3 extracted the seven guides under `docs/configuration/` while
+`docs/configuration.md` stayed whole, and yoyodyne-ifd.117.4 reduced that file
+to the index on 2026-09-24: the seven-guide table of contents and a redirect
+stub for every heading it used to carry. The file had grown to 6,023 lines
+across 76 headings by then, so the disposition table below was executed against
+a file twice the size it was reconciled against; [where the configuration split
+landed](#where-the-configuration-split-landed) records the placements that table
+never made. The README's `## Configuring a project` block is **still in the
+README**: its move into the index turns on [question
+2](#what-the-architect-is-being-asked), which is unanswered, so 117.4 left it
+where it is rather than decide a tier question the architect was asked.
 
 ## What each document is for
 
@@ -86,6 +97,16 @@ between drafting and execution, and each grew again across tranches 121.3 to
 than dropped. They are recorded here as landed facts; nothing should be trimmed
 to reach the figure in the table. `provider-plugins.md`, which the split
 neither wrote nor moved content into, is at 308 lines against 288.
+
+**The seven `docs/configuration/` documents have landed too**, and their budgets
+are likewise spent. Measured on 2026-09-24, when yoyodyne-ifd.117.4 reduced
+`docs/configuration.md` to its index: `setup.md` at 733 lines against 524,
+`artifacts.md` at 792 against 549, `goals.md` at 583 against 440, `runs.md` at
+1,048 against 343, `publishing.md` at 374 against 226, `recovery.md` at 1,371
+against 513, `agents.md` at 1,161 against 370, and the index itself at 378
+against 120 — nearly all of the index being the redirect stubs, one per former
+heading. Every one overran for the reason the README documents did: the file
+doubled between reconciliation and execution.
 
 One document is reachable from the index below and is deliberately not a row
 here: [`docs/releases/README.md`](releases/README.md), which explains the notes
@@ -281,7 +302,7 @@ table](#what-the-configuration-guide-becomes) either.
 | `#merge-and-removal-semantics` | `docs/designs/portable-agent-configuration.md:34`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/setup.md#merge-and-removal-semantics` |
 | `#what-fails-closed` | `docs/designs/portable-agent-configuration.md:35`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/setup.md#what-fails-closed` |
 | `#converting-an-inheriting-configuration-to-an-explicit-one` | `docs/designs/portable-agent-configuration.md:45`, `:145` | **1** | stub stays; canonical `configuration/setup.md` |
-| `#running-a-work-item-against-the-workflow-definition` | `.yoyodyne/workflows/delivery.yaml:8` | **1** | stub stays; **no destination row yet** |
+| `#running-a-work-item-against-the-workflow-definition` | `.yoyodyne/workflows/delivery.yaml:8` | **1** | stub stays; canonical `configuration/runs.md` (placed by ifd.117.4) |
 | `#what-reaches-the-queue` | `docs/artifacts.md:44`, `docs/conversation.md:167`, `:215`, `:257`, `:320`, `:770`, and yoyodyne-ifd.117.1 (open) | **1** | stub stays; canonical `configuration/goals.md` |
 | `#what-init-proposes-for-checks` | yoyodyne-ifd.117.1 (open), and one intra-document link | **1** | stub stays; canonical `configuration/runs.md` |
 | `#where-the-tracker-syncs` | `README.md:344`, `:574` | 2 | `configuration/setup.md` |
@@ -296,17 +317,26 @@ table](#what-the-configuration-guide-becomes) either.
 | `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:99` | 2 | `configuration/artifacts.md` |
 | `#traceability-references-and-orphans` | `docs/artifacts.md:85` | 2 | `configuration/goals.md` |
 | `#what-a-change-upstream-leaves-stale` | `docs/artifacts.md:170` | 2 | `configuration/goals.md` |
-| `#the-release-readiness-workflow` | `docs/artifacts.md:355`, `docs/developing-yoyo.md:300` | 2 | **no destination row yet** |
+| `#the-release-readiness-workflow` | `docs/artifacts.md:355`, `docs/developing-yoyo.md:300` | 2 | `configuration/goals.md` (placed by ifd.117.4) |
 | `#what-one-work-item-has-been-given` | `docs/conversation.md:996`, `docs/operations.md:1061` | 2 | `configuration/recovery.md` |
-| `#crossing-a-cap-the-operator-decides-to-cross` | `docs/conversation.md:998` | 2 | **no destination row yet**; its parent lands in `configuration/recovery.md` |
+| `#crossing-a-cap-the-operator-decides-to-cross` | `docs/conversation.md:998` | 2 | `configuration/recovery.md`, with its parent |
 | `#personas` | `docs/conversation.md:76` | 2 | `configuration/agents.md` |
 | `#operators` | `docs/slack/setup.md:231`, `:1176` | 2 | `configuration/agents.md` |
 | `#avatars` | `docs/slack/setup.md:203` | 2 | `configuration/agents.md` |
 | `#research-sources` | `docs/conversation.md:137` | 2 | `configuration/agents.md` |
 | `#how-long-one-role-may-ask-another` | `docs/conversation.md:879` | 2 | `configuration/agents.md` |
-| `#pooling-work-across-several-accounts` | `docs/multi-account-quickstart.md:7` | 2 | **no destination row yet**; its parent lands in `configuration/agents.md` |
+| `#pooling-work-across-several-accounts` | `docs/multi-account-quickstart.md:7` | 2 | `configuration/agents.md`, with its parent |
 
-Three rows say **no destination row yet**, and those three are the sharpest
+**yoyodyne-ifd.117.4 executed this table on 2026-09-24.** Every Tier 2 citation
+it could reach was repointed at the guide and anchor that now carry the section,
+along with the many the documents gained after this pass — 83 links in eleven
+documents outside the guides at execution, rather than the rows above, and 46
+more inside the guides themselves. The Tier 1
+citations in protected homes and in Go source were left as they are, and resolve
+through the index's stubs. The paragraph below is this pass's account and is kept
+as it was written.
+
+Three rows said **no destination row yet**, and those three were the sharpest
 result of this pass: the section exists, something outside the guide links to
 it, and the table that says where every section goes has never named it. A
 fourth, `#running-a-work-item-against-the-workflow-definition`, is in the same
@@ -373,6 +403,10 @@ foot of this section: yoyodyne-ifd.54 and yoyodyne-ifd.1.2 have been treated as
 recorded prose rather than as citations since drafting. The reading itself is
 [question 2 for the architect](#what-the-architect-is-being-asked), because the
 README's no-stub conclusion is what rests on it.
+
+**yoyodyne-ifd.117.4 did not move either section** — the block stays in the
+README until question 2 is answered, so both anchors still resolve and neither
+owes a stub.
 
 **Only the fourth and fifth rows name a section that still has to move**, and
 both are cited by exactly one live citer, `docs/configuration.md` — the document
@@ -481,6 +515,10 @@ third, whose parent `## Running a work item against the workflow definition` has
 none either. `#waiting-out-a-network-that-dropped` is the guide's most-linked
 anchor of all at five links, and it names a section the table below has never
 heard of, which is the clearest single measure of how far the file has moved.
+
+**yoyodyne-ifd.117.4 resolved every one of these** as it reduced the file: a link
+whose target landed in the same guide stayed a bare `#slug`, and one whose target
+landed elsewhere became a relative link to that guide.
 
 `#provider-accounts` remains the case worth naming: it is linked from
 `## Layout`, which lands in `configuration/setup.md`, while its target lands in
@@ -781,6 +819,37 @@ judgement rather than arithmetic, so each is stated:
   `configuration.md:224`'s link to `#what-fails-closed` an intra-document link
   rather than a cross-document one.
 
+### Where the configuration split landed
+
+yoyodyne-ifd.117.4 placed every section the table above has no row for, because
+reducing the file to an index cannot leave one behind. The rule it applied is the
+one the table's own judgements use — a child goes where its parent goes, and a
+section with no parent goes to the guide whose reader configures what it
+describes — and each is listed so the architect can overturn a placement rather
+than inherit it:
+
+| Section | Guide | Why |
+|---|---|---|
+| `## Keeping the configuration outside the repository` | `setup.md` | `init --external` and discovery; the guide linked it four times |
+| `### The release-readiness workflow` | `goals.md` | a sibling of the staleness and traceability checks it runs together; promoted to `##` as its siblings were |
+| `### The environment the harness's own Git and forge commands run in`, `### Which provider authentication is supported` | `runs.md` | children of `## Checks` |
+| `### A developer model chosen by the item's label` | `runs.md` | a child of `## Scheduling ready work` |
+| `## Running a work item against the workflow definition` (+ `### The definition is the project's to own`) | `runs.md` | what a run executes; the Tier 1 anchor stays as a stub in the index |
+| `## Waiting out a network that dropped` | `recovery.md` | a provider wait; `recovery.md` linked it three times |
+| `### Serving a turn from a permitted alternate model`, `### Pinning an agent to a model version` | `recovery.md` | children of `## Waiting out a provider that refuses` (placed by 117.3) |
+| `### Pooling work across several accounts` | `agents.md` | a child of `## Provider accounts` |
+| `## Services` (+ `### The dashboard's entry`) | `agents.md` | the parts of the product that run beside the agents, the Slack sink first among them |
+| `## Recurring tasks` (+ `### A task's own model`, `### Working the report pile on a cadence`) | `agents.md` | turns a role takes on a cadence |
+| `## How far behind a conversation's picture may fall`, `## Queueing a question, or holding it on a side thread`, `## Reading the repository from a conversation` | `agents.md` | how the conversational roles work, beside `## How long one role may ask another` and `## Research sources` |
+| `#### Crossing a cap the operator decides to cross`, `#### A crossing the development manager takes himself`, `#### What spends a round and what does not` | `recovery.md` | children of `## Triage thresholds` (placed by 117.3) |
+
+Before reducing, every guide was diffed section by section against the file as
+main had it, because tranches 1 to 3 were cherry-picked from a branch that
+predates amendments on main. Three passages had fallen behind and were brought
+up to date from the file: the Git-hook sentence under `### Avatars`, the
+invocations a model pin covers under `### Pinning an agent to a model version`,
+and the stall exemption under `## Triage thresholds`.
+
 The index at `docs/configuration.md` carries, verbatim as headings so the slugs
 survive:
 
@@ -813,8 +882,10 @@ page, and everything the product manager reads them *for* lives in thirteen
 documents that set did not name. The README half of that has happened:
 yoyodyne-ifd.160 trimmed the README and grew the set to eight in the same
 change, so the six README-split documents are named. The seven
-`docs/configuration/` documents are not, and will not need to be until the
-configuration guide is actually split.
+`docs/configuration/` documents are named too: yoyodyne-ifd.117.4 added them in
+the same change that reduced `docs/configuration.md` to an index, and
+`TestShippedDocumentationNamesEveryConfigurationGuide` holds the set to the
+directory, so a guide added later and not named fails `make test`.
 
 This is the same failure the comment above that variable already records: ifd.20
 narrowed the product manager's view, and the cost came due when it drafted a
@@ -829,8 +900,8 @@ are now named**: yoyodyne-ifd.160 added `conversation.md`, `work.md`,
 same change that trimmed the README, because that trim is what would otherwise
 have turned this from a pending edit into the ifd.20 failure repeated — the
 product manager reading a landing page and drafting work against surfaces it
-could no longer see. The seven `docs/configuration/` documents are still
-outstanding, and the tranche that lands each one adds it. The set stays
+could no longer see. The seven `docs/configuration/` documents followed in
+yoyodyne-ifd.117.4, which is fifteen entries. The set stays
 explicit — this map is the enumeration it needs, which is the argument for the
 map existing as a checked-in document rather than as a decision recorded in a
 conversation.

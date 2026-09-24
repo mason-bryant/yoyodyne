@@ -913,8 +913,9 @@ func TestShippedDocumentationNoteFitsWhatIsReservedForIt(t *testing.T) {
 // Every document the shipped set names has to actually reach the context, or the
 // product manager is told the product ships something it was never shown. The
 // set grew from two entries to eight when the README was reduced to a landing
-// page and the content it used to carry moved into the documents it links to, so
-// what was one large document is now seven -- and a bound that quietly dropped
+// page and the content it used to carry moved into the documents it links to, and
+// to fifteen when docs/configuration.md was reduced to an index over seven guides
+// -- and a bound that quietly dropped
 // the tail of that list would look exactly like a product that never had those
 // surfaces, which is the ifd.20 narrowing arrived at by accident.
 func TestEveryShippedDocumentReachesTheContext(t *testing.T) {
@@ -980,6 +981,55 @@ func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
 		t.Error(standing)
 	case standing != "":
 		t.Logf("WARNING: %s", standing)
+	}
+}
+
+// The configuration reference is a directory now, and docs/configuration.md is
+// only its index. docs/configuration/artifacts.md tells the product manager in
+// prose that it is given the reference, which is a claim about the list above, so
+// it is pinned against the directory rather than against a copy of the list: a
+// guide added to docs/configuration/ and not named there would make the sentence
+// false silently, and the role would be told it had read something it had not.
+func TestShippedDocumentationNamesEveryConfigurationGuide(t *testing.T) {
+	t.Parallel()
+
+	// The guides are counted where they actually live, because a fixture is
+	// exactly what cannot have the guide that was forgotten.
+	entries, err := os.ReadDir(filepath.Join("../..", "docs", "configuration"))
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	guides := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		guides["docs/configuration/"+entry.Name()] = true
+	}
+	// A walk that found nothing would agree with any list at all, which is the
+	// one way this gate can pass while checking nothing.
+	if len(guides) == 0 {
+		t.Fatal("no configuration guides were found; the walk is looking in the wrong place")
+	}
+
+	named := map[string]bool{}
+	for _, documentPath := range HarnessShippedDocumentation {
+		named[documentPath] = true
+	}
+	for guide := range guides {
+		if !named[guide] {
+			t.Errorf("%s is a configuration guide the product manager is not given", guide)
+		}
+	}
+	for documentPath := range named {
+		if strings.HasPrefix(documentPath, "docs/configuration/") && !guides[documentPath] {
+			t.Errorf("%s is named in the shipped set and is not a guide in the repository", documentPath)
+		}
+	}
+	// The index is what the guides hang off and what every link written before
+	// the split still resolves against, so it is carried as well as they are.
+	if !named["docs/configuration.md"] {
+		t.Error("the configuration index is not among the documentation the product manager is given")
 	}
 }
 

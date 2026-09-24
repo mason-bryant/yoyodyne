@@ -202,7 +202,7 @@ invocation is actually about to be made on.
 
 A provider you declare can be the alternate as well as the agent's own, which is
 what an agent's `failover.provider` names — see
-[configuration](configuration.md#serving-a-turn-from-a-permitted-alternate-model).
+[configuration](configuration/recovery.md#serving-a-turn-from-a-permitted-alternate-model).
 That is worth knowing because a crossing costs something a substitution within one
 provider does not: your provider holds no session for the conversation, so it is
 handed the conversation rebuilt from the harness's durable record rather than a

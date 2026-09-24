@@ -1,32 +1,3 @@
-<!--
-Landed by yoyodyne-ifd.117.2, tranche 2 of the configuration.md split, with
-docs/configuration.md left intact. The links below into ../configuration.md
-resolve today and point at sections a later tranche moves; the tranche that
-moves a section retargets the link:
-
-  #reading-the-repository-from-a-conversation (two uses)
-                                      -> no row in docs/docs-map.md; it stays
-                                         in configuration.md until the map
-                                         gives it a home
-
-No link here points at a tranche 3 guide (runs.md, publishing.md,
-recovery.md).
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-"What Yoyodyne itself carries" names ../configuration.md rather than this
-guide: HarnessShippedDocumentation in internal/contextbundle/product.go still
-lists docs/configuration.md and none of the guides, and docs/docs-map.md has
-the run that lands the last split document grow the list.
-
-Scope against docs/docs-map.md: every section the map's disposition table
-assigns this guide — Product specifications (+ What the product manager
-sees…), Artifact identity and metadata, Approving a document, Who may change
-an artifact, Protected paths in a developer's change, and Proposing a change
-to a document you do not own. Size: 794 lines against the map's 549-line
-budget; the sections themselves grew after the map's counts were taken.
--->
 # Configuring artifact homes, identity, and ownership
 
 Where the product manager reads intent from, what identifies a document, how an
@@ -127,7 +98,7 @@ and the help every command prints. It is carried in a section of its own,
 labeled as description of the implementation as built and never as authority
 about intent. That is the whole of what is delivered in its context: no source
 and no design document arrives there, and nothing runs a command. What it may
-additionally do is [read one named path at a recorded commit](../configuration.md#reading-the-repository-from-a-conversation)
+additionally do is [read one named path at a recorded commit](agents.md#reading-the-repository-from-a-conversation)
 — a source file or a design among them — which arrives under the same
 description-not-intent label, one path at a time, and only when it asks.
 
@@ -155,8 +126,8 @@ found. The list is replaced wholesale rather than merged, as `checks` is.
 **There is no default, and that is the point.** A project that names none is
 shown none, and the section says so — that what the product ships is not
 written down here, rather than that the repository holds no documentation.
-Yoyodyne's own documentation layout is eight generic paths (`docs/work.md`,
-`docs/reporting.md`, `docs/operations.md`, and five more), and a repository
+Yoyodyne's own documentation layout is fifteen generic paths (`docs/work.md`,
+`docs/reporting.md`, `docs/operations.md`, and twelve more), and a repository
 that happens to hold a file at one of them means something else by it. Handing
 those to an adopting project's product manager labeled "what the product
 ships" is a stranger's prose arriving as description of your product, so the
@@ -169,7 +140,9 @@ operator documents the README split put beside it — [the
 conversation](../conversation.md), [how work flows](../work.md), [what comes back to
 you](../reporting.md), [artifacts, goals, and invariants](../artifacts.md),
 [operations and recovery](../operations.md), and [working on yoyo
-itself](../developing-yoyo.md) — and [the configuration reference](../configuration.md). It lives in
+itself](../developing-yoyo.md) — and the configuration reference: [its
+index](../configuration.md) and the seven guides under `docs/configuration/`,
+this one among them. It lives in
 `HarnessShippedDocumentation` in `internal/contextbundle/product.go`, and it is
 deliberately narrower than the README's [further-reading
 index](../../README.md#further-reading): the provider-plugin format, the
@@ -180,7 +153,7 @@ manager — the set has to name it, and a test holds the set to documents this
 repository actually has, because a path that stops resolving is a surface the
 product manager silently stops being given.
 
-**The set has a ceiling, and a margin under it that warns.** The eight
+**The set has a ceiling, and a margin under it that warns.** The fifteen
 documents are carried in full — that is the product manager's decision, taken
 on yoyodyne-ifd.240 and kept on yoyodyne-ifd.403 — and what they add up to is
 measured against `ShippedDocumentationCeiling` in the same file, which is set
@@ -228,7 +201,7 @@ half of `docs/` that made description reachable as intent in the first place.
 Reconciling accumulated documentation against the code belongs to a role that
 reads the code, and the harness still does not have one. What it has since
 gained is narrower: a management role can [read one named path at a recorded
-commit](../configuration.md#reading-the-repository-from-a-conversation), which lets the product
+commit](agents.md#reading-the-repository-from-a-conversation), which lets the product
 manager check a document before it advises about it rather than sweep the tree
 for contradictions. Point `specifications` at a wider directory if you would
 rather have the breadth than the authority; the confinement rule is the only

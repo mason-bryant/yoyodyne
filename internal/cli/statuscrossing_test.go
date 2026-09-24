@@ -16,7 +16,7 @@ import (
 // were not asked, so the two are labelled apart and the count of the second is
 // said under them.
 //
-// docs/configuration.md quotes these lines as an example of what `yoyo status`
+// docs/configuration/recovery.md quotes these lines as an example of what `yoyo status`
 // prints, so this is also what keeps that document from going stale silently.
 func TestStatusSaysWhichCrossingsWereTheDevelopmentManagersOwn(t *testing.T) {
 	t.Parallel()

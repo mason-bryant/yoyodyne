@@ -1,38 +1,8 @@
-<!--
-Landed by yoyodyne-ifd.117.1, tranche 1 of the configuration.md split, with
-docs/configuration.md left intact. The links below into ../configuration.md
-resolve today and point at sections a later tranche moves; the tranche that
-moves a section retargets the link:
-
-  #provider-accounts                  -> configuration/agents.md (117.4; the
-                                         map's row, left in configuration.md
-                                         this tranche on the DM's direction)
-  #what-fails-closed, #merge-and-removal-semantics
-                                      -> this guide (117.4; docs/docs-map.md
-                                         moved the row here from publishing.md
-                                         after tranche 1 was scoped, so the
-                                         section is not lifted yet)
-  #keeping-the-configuration-outside-the-repository (three uses), #services
-                                      -> no row in docs/docs-map.md; they stay
-                                         in configuration.md until the map
-                                         gives them a home
-
-117.2 retargeted #what-reaches-the-queue to goals.md when it landed that guide.
-117.3 retargeted #what-init-proposes-for-checks to runs.md, and
-#triage-thresholds and #waiting-out-a-provider-that-refuses to recovery.md,
-when it landed those guides.
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-Size: 545 lines against the map's 524-line budget for this guide, covering
-exactly the sections the map assigns it minus the merge-semantics row above;
-the sections themselves grew after the map's counts were taken.
--->
 # Writing a project configuration
 
-What `yoyo init` writes, where the harness looks for it, how the layers combine,
-and how to read back what a project actually runs under. Start here if you are
+What `yoyo init` writes, where the harness looks for it, keeping it outside the
+repository, how the layers combine and what refuses a configuration, and how to
+read back what a project actually runs under. Start here if you are
 giving a project its own configuration or changing one it already has.
 
 [The configuration index](../configuration.md) lists the other guides.
@@ -94,7 +64,7 @@ A rule that is local to the checkout, in `.git/info/exclude` or a
 `core.excludesFile`, is reported differently: that is the supported way to keep
 tool config out of a repository that is not yours to commit it to, so it is
 acknowledged rather than argued with, and what the warning names is
-[`init --external`](../configuration.md#keeping-the-configuration-outside-the-repository) for
+[`init --external`](#keeping-the-configuration-outside-the-repository) for
 keeping the configuration outside the repository. Nothing is said where Git
 could not be asked — a project that is not a repository, a configuration kept
 outside the one it describes, a Git that would not run. An external
@@ -171,7 +141,7 @@ repository they do not own has two supported ways not to: the README's
 [Keeping the configuration out of the repository](../../README.md#keeping-the-configuration-out-of-the-repository)
 covers a `.yoyodyne` listed in `.git/info/exclude` and a configuration kept
 outside the repository entirely, which
-[`yoyo init --external`](../configuration.md#keeping-the-configuration-outside-the-repository)
+[`yoyo init --external`](#keeping-the-configuration-outside-the-repository)
 writes and discovery finds without anything being passed to it.
 
 What `init` writes looks like this, with the explanatory comments trimmed:
@@ -246,7 +216,7 @@ agents:
 
 Five agents — product manager, architect, development manager, developer, and
 reviewer — each with a role, a backend, a model selector, the [provider
-account](../configuration.md#provider-accounts) it runs under, an instance count, and a persona file
+account](agents.md#provider-accounts) it runs under, an instance count, and a persona file
 that is in the repository beside the configuration. Change one by
 editing it. Remove one by deleting its block. Nothing has to be expressed as a
 deviation from something invisible.
@@ -269,7 +239,7 @@ does not exist. The set of role names is fixed for the same reason —
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](../configuration.md#what-fails-closed).
+[refused when the configuration loads](#what-fails-closed).
 [Talking to the other agents](../conversation.md#talking-to-the-other-agents) states
 the table itself.
 
@@ -298,7 +268,7 @@ Yoyodyne looks for a configuration in this order:
 4. otherwise `.yoyodyne.yaml` in the same directories;
 5. otherwise this machine's own configuration for the repository the current
    directory is in, under
-   [the configurations home](../configuration.md#keeping-the-configuration-outside-the-repository).
+   [the configurations home](#keeping-the-configuration-outside-the-repository).
 
 Because the search walks upwards, `yoyo run` works from the project root or
 from any directory beneath it. When both forms exist in one directory, the
@@ -357,9 +327,58 @@ stays inside the repository has not left it, and the read and the write both
 follow it. The same holds of the `.yoyodyne` directory `yoyo init` writes: a project
 whose `.yoyodyne` leads out of the project is refused with the project untouched
 rather than scaffolded somewhere nothing commits. And of the
-[configurations home](../configuration.md#keeping-the-configuration-outside-the-repository),
+[configurations home](#keeping-the-configuration-outside-the-repository),
 which is a declared root like any other: a write that resolves out of it
 is refused rather than landing where nothing looks for it.
+
+## Keeping the configuration outside the repository
+
+A contributor to a repository they do not own has the configuration as theirs
+rather than the project's, and a pull request adding a tool directory nobody
+asked for is a pull request about the tool. `yoyo init --external` writes the
+configuration this machine keeps for that repository, and nothing at all into
+the repository:
+
+```sh
+cd ~/src/theirproject
+yoyo init --external
+yoyo doctor
+```
+
+It writes into `~/.config/yoyodyne/projects/<key>/`, where `<key>` names the
+checkout — its directory name, then a digest of where it is — and everything
+`init` ordinarily writes into `.yoyodyne/` goes there instead, personas
+included. `$XDG_CONFIG_HOME/yoyodyne` is used when that variable is set, and
+`YOYODYNE_CONFIG_HOME` overrides both.
+
+Four things are worth knowing about it:
+
+- **Nothing is passed on later commands.** The configuration is keyed by the
+  repository, so `yoyo` finds it from the repository root, from any directory
+  beneath it, and from a worktree Git added from it — a run's worktree, and a
+  check or a hook that shells out to `yoyo` from inside one, resolve to the
+  repository they came from rather than being read as projects of their own.
+  That is what separates this from moving `.yoyodyne` somewhere by hand and
+  passing `--config` on everything thereafter.
+- **The key is the checkout, not the project.** Two checkouts of one project on
+  one machine are two configurations, because they are two things to configure.
+  Moving a checkout leaves its configuration behind under the old key; run
+  `init --external` again, or move the directory to the key the refusal names.
+- **`product.repository` is written absolute.** An external configuration has no
+  project directory above it for a relative path to resolve against. The
+  artifact directories are unaffected: `specifications`, `invariants`,
+  `designs`, and `decisions` resolve against `product.repository` and go on
+  naming directories inside the repository being worked on.
+- **It writes no artifact-home indexes.** `init` ordinarily puts a `README.md` at
+  the door of each of the five artifact homes, and in a repository you are a
+  guest in those are five untracked files in somebody else's `docs/` tree.
+  `yoyo doctor` reports each home without an index as a warning rather than a
+  problem, so an installation configured this way runs work exactly as one with
+  them does.
+
+The project stops describing itself, which in this scenario is the intent:
+another clone, another machine, and anybody else working on it get no
+configuration at all, and `yoyo` there reports that it found none.
 
 ## Precedence
 
@@ -396,7 +415,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
    `approvals.publishing` (`human`), `approvals.work_items` (`human`), an
-   agent's `instances` (1), and every value under [`services`](../configuration.md#services):
+   agent's `instances` (1), and every value under [`services`](agents.md#services):
    `services.slack.enabled` (`false`), `services.dashboard.enabled` (`false`),
    `services.dashboard.port` (8765), `services.dashboard.bind` (`127.0.0.1`),
    `services.dashboard.allowed_hosts` (empty), `services.dashboard.token`
@@ -445,6 +464,139 @@ from the bundle would let a file written against a different schema load as
 whatever the bundle happened to say — which is what the version exists to
 prevent.
 
+## Merge and removal semantics
+
+These describe how a project that uses `extends` combines with the bundle
+beneath it. A configuration `init` wrote has no layer beneath it, so it is read
+as written: an agent is present because it is in the file, and absent because it
+is not.
+
+- A field a layer does not mention is **inherited** from the layer beneath it.
+- A field a layer does mention **replaces** the inherited value. This includes an
+  explicit zero, such as `repair_attempts_before_replan: 0`.
+- `checks` is replaced as a whole list rather than concatenated. Checks gate
+  integration, and a silently merged list is not the gate either layer described.
+- `agents` is merged by agent name. An override names only the fields it changes:
+
+  ```yaml
+  agents:
+    developer:
+      model: claude-opus-5-20260514
+  ```
+
+  The developer keeps its inherited role, backend, instance count, and persona.
+- A `persona` override **replaces the inherited persona completely** and must
+  supply both `version` and `path`. Half of one persona and half of another is
+  guidance nobody wrote.
+- An agent name the bundle does not define creates a new agent, which must then
+  supply everything an agent requires: role, backend, and model selector.
+- `disabled: true` removes an inherited agent:
+
+  ```yaml
+  agents:
+    architect:
+      disabled: true
+  ```
+
+  Removal is explicit, so an agent is never lost by being accidentally omitted.
+  Validation still enforces the roles the invoked workflow executes: at least one
+  developer agent always, and a reviewer agent whenever `approvals.integration`
+  is `automatic`. Disabling either is a validation failure, not a way to skip
+  review.
+
+### What fails closed
+
+These are all errors, reported before any work is claimed:
+
+- a missing `version`, or a `version` this executable does not implement;
+- an unknown key anywhere in the file, including a misspelled agent field;
+- an unknown bundle in `extends`;
+- a `disabled: true` entry that also configures fields, or that names an agent no
+  layer defined;
+- a persona override missing `version` or `path`;
+- a usage-limit pause bound that is not a duration, or that is negative — `0`
+  is accepted, because "never wait" is a choice somebody can mean;
+- a `triage.stuck_merge_age` that is not a duration, or that is zero or
+  negative — unlike the usage-limit pauses, "no time at all" is not a choice
+  anybody can mean here;
+- a negative `triage.review_rounds_cap`, or a `triage.repair_grant_attempts`
+  below 1 — a cap of `0` is a choice and is accepted, a grant of `0` is not;
+- an `execution.remote` that is empty or is not a plain remote name, since it
+  reaches a `git push` command line; and an `execution.push_remote` that is set
+  and is not one, for the same reason — leaving it out is what says your run
+  branches go to `execution.remote`;
+- a `product.specifications` that is empty, absolute, or climbs out of the
+  repository, since it decides what the product manager reads; and the same of
+  `product.invariants`, `product.designs`, and `product.decisions`, since they
+  decide which documents the harness treats as canonical artifacts and which
+  paths a developer's change may not touch. This is the check on the text; the
+  same four are checked again against the filesystem when something writes into
+  them, which is where a symlink out of the repository is caught, and which is a
+  refusal at the point of the write rather than at load;
+- a `product.shipped_documentation` entry that is empty, absolute, climbs out of
+  the repository, or is not a Markdown file, since every entry is read into the
+  product manager's context as a description of what the product ships;
+- a persona path that is absolute, traverses upward, is not Markdown, is missing,
+  is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
+- a `role` that is not one of the harness's five, which is how a typo in an
+  agents block is caught: the message names what was written and lists what could
+  have been meant. Adding a role is a change to the harness, not to this file;
+- a role and backend combination the backend does not support, such as an
+  architect on the Codex backend — and the same refusal for a provider your
+  project declared itself, including one asked to hold a tool posture it never
+  claimed, such as a developer on a provider that declared only `read-only`;
+- a role and backend combination the backend serves and cannot hold to the tool
+  posture the role requires, such as a reviewer on the Codex backend: Codex
+  declares `worktree-write` and not `read-only`, so it is the developer's
+  backend and no other role's, and the refusal names the posture rather than the
+  role. [Provider plugins](../provider-plugins.md#capability-validation) is why;
+- a `providers:` entry that names no adapter or one this build ships none for,
+  serves no role, holds no tool posture, names a role or posture the harness does
+  not have, reads nothing its provider says, or tries to replace a backend this
+  build ships;
+- an `execution.developer_slots` list longer than `max_concurrent_developers`,
+  since a preference for a slot the capacity does not have is one nothing would
+  act on; and a slot preferring a label the tracker would not carry — anything
+  but one identifier-shaped word — or naming one label twice;
+- an `execution.developer_models` entry naming a label the tracker would not
+  carry, naming no usable model selector, or naming a label an earlier entry
+  already mapped — since the first match in the mapping's order is what an item
+  takes, so a second entry for one label is one nothing would ever reach;
+- a `recurring_tasks` entry whose `model` is written and is not a usable model
+  selector, by the rule and with the reason an agent's `model` is refused;
+- any effective configuration that fails validation, even when every individual
+  layer looked reasonable — for example `max_concurrent_developers` above the
+  configured developer instances, or automatic integration with no checks;
+- `slack.enabled` with no `slack.channel`, a channel that is not a channel id
+  or name, or an entry under `slack.avatars` keyed by something that is not a
+  role or `harness` or valued as something that is neither an emoji shortcode
+  nor an https image URL — all checked whether or not reporting is switched on,
+  so a typo is found now rather than on the day somebody turns it on;
+- a `services` entry that is not one of the four the product has, a
+  `services.dashboard.port` outside 1–65535, a `services.dashboard.bind` that
+  is not an IP address, a `services.dashboard.token` that is not `generated`,
+  `keychain`, or `file`, an entry under `services.dashboard.allowed_hosts` that
+  is empty, carries a scheme, a port, or a path, or is named twice; and two
+  combinations: `services.slack` enabled while `slack.enabled` is off, since a
+  sink for a project that reports nothing has nowhere to post, and a
+  `services.dashboard.bind` outside loopback with a `generated` token, since a
+  token printed to one terminal is unusable from the other device the bind
+  exists for — all checked whether or not the service is enabled, so a typo is
+  found now rather than on the day the product is started;
+- an `operators` entry that binds no namespace at all, binds one that is not an
+  address, a forge account, or a Slack member id, names a grant the harness does
+  not have, or binds an identifier a second human already bound — and two humans
+  holding `own-intent`, since intent has one owner;
+- an `accounts` alias that is not an identifier, a description longer than 200
+  bytes, an agent whose `account` names an alias the mapping does not declare, a
+  `pool` that is neither `active` nor `reserved`, a negative
+  `weekly_budget_usd`, or a mapping whose every account is reserved — a pool
+  with an empty active half is one every run falls out of;
+- an `accounts` entry whose `provider` is not a provider this project names, and
+  an agent no configured account could authenticate — a project whose accounts
+  hold one provider's logins and whose developer runs on another is a project no
+  run can ever be served for.
+
 ## Extending a built-in bundle
 
 Inheritance is a supported capability, and a project that wants it writes
@@ -468,7 +620,7 @@ agents:
 
 That file inherits the five agents and their personas from the bundle, overlays
 the one field it names, and is subject to the [precedence](#precedence) and
-[merge rules](../configuration.md#merge-and-removal-semantics).
+[merge rules](#merge-and-removal-semantics).
 
 **What it buys, and what it costs.** Upgrading the executable upgrades the
 defaults and the personas the project did not override — which is exactly what

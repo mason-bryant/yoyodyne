@@ -76,7 +76,7 @@ holding three questions gets one answer and loses the other two. It is a questio
 and not a gate. Nothing is blocked, nothing is written, later means later, and a
 repository whose goals are already written gets no such prompt. The asking is
 persona guidance, so a project that wants a different opening
-[replaces it](configuration.md#personas) like any other part of the
+[replaces it](configuration/agents.md#personas) like any other part of the
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
@@ -85,8 +85,9 @@ README split put beside it — this one, [how work flows](work.md),
 [what comes back to you](reporting.md),
 [artifacts, goals, and invariants](artifacts.md),
 [operations and recovery](operations.md), and
-[working on yoyo itself](developing-yoyo.md) — the configuration guide, and
-the help every command prints. It is labeled as exactly that — a description of
+[working on yoyo itself](developing-yoyo.md) — the
+[configuration reference](configuration.md), its index and the seven guides
+beneath it, and the help every command prints. It is labeled as exactly that — a description of
 the implementation as built, never authority about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist
 without you having to tell it. Where that description and a specification
@@ -95,11 +96,11 @@ disagree, the product manager reports the conflict rather than settling it.
 Not the source, not the design document, and no way to run a command: those say
 how the product is built rather than what it is for or what it ships. Nor
 everything [Further reading](../README.md#further-reading) reaches, which is
-more than these eight — the set is named one document at a time, so adding one
-to that index does not thereby show it to the product manager. The eight are
-named, and the narrowing this partially undoes is described with what it bought
+more than these fifteen — the set is named one document at a time, so adding
+one to that index does not thereby show it to the product manager. The fifteen
+are named, and the narrowing this partially undoes is described with what it bought
 and what it cost, in the
-[configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+[configuration guide](configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf — the tracker below, [a read of
@@ -188,7 +189,7 @@ it on.** The role still has no network. What it has is the same arrangement it
 has with the tracker: it names a question and one of the sources you configured,
 the harness runs that source, and it hands back what came out. A source is a
 command you wrote — see
-[research sources](configuration.md#research-sources) — so what the harness may
+[research sources](configuration/agents.md#research-sources) — so what the harness may
 reach is exactly what you named and nothing else. Only the question leaves your
 machine, redacted and bounded on the way out; a project that configured no source
 has the capability off, and the product manager is told so and says it could not
@@ -218,7 +219,7 @@ claims: one is what it says it read, the other is what was fetched.
 one admits no work, changes no document, and approves nothing. Everything it
 might lead to already has a path with an approval on it and none of those paths
 runs through here: work reaches the queue as a proposal, under whatever approval
-[your project asks for](configuration.md#what-reaches-the-queue); a change to the
+[your project asks for](configuration/goals.md#what-reaches-the-queue); a change to the
 brief or the goals is yours to make; a change to a design or a decision record is
 the architect's, through `yoyo amendment`. That separation is the point. Research
 that could quietly turn an idea into approved work would be a way to approve work
@@ -266,7 +267,7 @@ and what could not be read is said.
 
 The product manager can propose a Beads work item instead of creating one, when
 the decision is yours rather than its. What becomes of a proposal is
-[`approvals.work_items`](configuration.md#what-reaches-the-queue) to decide,
+[`approvals.work_items`](configuration/goals.md#what-reaches-the-queue) to decide,
 and until you say otherwise every one of them is put to you: shown as a numbered
 card with its reasoning, and created only after an answer that approves it by
 name. A proposal you left undecided is named when the conversation ends, and a
@@ -311,7 +312,7 @@ it was, because an item claiming an approval you never gave is the one record
 this arrangement cannot afford.
 
 **Or keep the gate and carve one class out of it.**
-[`approvals.work_item_exemptions`](configuration.md#what-reaches-the-queue)
+[`approvals.work_item_exemptions`](configuration/goals.md#what-reaches-the-queue)
 lists classes of work the per-item gate is not asking about, and there is one:
 `diagnosis`, work that only reads what is already there and produces findings
 rather than a change. It is empty until you write it, the product manager is told
@@ -374,7 +375,7 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself where [`approvals.work_items`](configuration.md#what-reaches-the-queue)
+itself where [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)
 lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
@@ -558,7 +559,7 @@ An item also carries the tracker's own labels, and they are how an admission
 practice is written where it can be checked. The practice that provoked this is
 the reliability directive of 2026-09-19: every item admitted under it, every
 bug, and every stall or mistake fix carries a `reliability` label, and a
-[developer slot that prefers the label](configuration.md#a-developer-slot-that-prefers-a-label)
+[developer slot that prefers the label](configuration/runs.md#a-developer-slot-that-prefers-a-label)
 pulls that work first and the rest only when none of it is ready. `labels` on
 a creation applies them in the same write as the admission, so the item never
 exists unlabelled — for the reason `parked` and `executor` are set there — and
@@ -792,7 +793,7 @@ does not, and only a hold she escalated
 leads `/status` with its own banner saying when it was placed, who placed it,
 and why, beneath the PAUSED banner if both are active. Who placed it is on the
 record rather than assumed: the harness's own failure-storm brake
-([`blocked_runs_before_intake_hold`](configuration.md#watching-instead-of-draining))
+([`blocked_runs_before_intake_hold`](configuration/runs.md#watching-instead-of-draining))
 places the same hold, and a banner that called that one yours would send you
 looking for a decision you never made. It is recorded per product, unlike
 [`yoyo pause`](operations.md#pausing-everything-and-resuming-it), because what a development
@@ -1012,7 +1013,7 @@ of the agent yet, so there is nothing to lose by trying again, and a delivery th
 waited would hold its budget open for the length of somebody else's turn.
 
 The exception is an agent configured to
-[hold side threads](configuration.md#queueing-a-question-or-holding-it-on-a-side-thread).
+[hold side threads](configuration/agents.md#queueing-a-question-or-holding-it-on-a-side-thread).
 A `--message` that finds such an agent mid-turn is answered beside that turn
 rather than after it, on a side thread with its own record and its own lease, and
 the answer says so. What comes back is the agent's judgment and never an action:
@@ -1049,7 +1050,7 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Reads the repository by path | Its own documents |
 | --- | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | yes, [labelled as description](#reading-the-repository-at-a-recorded-commit) | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | yes, [labelled as description](#reading-the-repository-at-a-recorded-commit) | brief and goals: proposes, never writes |
 | architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
 | developer, reviewer | yes | nothing | no | none |
@@ -1161,7 +1162,7 @@ specifications are the only statement of what the product is for, and where a
 file contradicts one the product manager reports the conflict rather than
 resolving it or repeating either side as settled product fact. That label is the
 whole of what makes the read safe to give the role that owns intent, and it is
-the same label its [shipped documentation](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not)
+the same label its [shipped documentation](configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not)
 already carries.
 
 **Each read is on the conversation's record** as the commit, the path, and the
@@ -1285,7 +1286,7 @@ round of it, and the asking role then either asks again in the same thread or
 closes it with what it took from the exchange. Closing is the ordinary ending.
 
 **Every exchange is opened with a hard limit on rounds**, which is
-[`exchange.max_rounds`](configuration.md#how-long-one-role-may-ask-another) and defaults
+[`exchange.max_rounds`](configuration/agents.md#how-long-one-role-may-ask-another) and defaults
 to ten. The limit is copied onto the exchange as it opens and is durable with it,
 so neither a process dying nor an edit to the configuration lengthens a thread
 that is already running long. Reaching it is not a silent cutoff: the exchange
@@ -1461,7 +1462,7 @@ that delivery is about the stoppage it delivered and not the run — and work
 nothing has happened to since stays settled. **A decision to `wait` is the one that lapses rather than
 settling anything**: it says the forge still has the merge, so the entry comes
 back once the merge has been sitting there for another
-[`triage.stuck_merge_age`](configuration.md#triage-thresholds), carrying what
+[`triage.stuck_merge_age`](configuration/recovery.md#triage-thresholds), carrying what
 was decided last time so whoever gets it knows they have seen it. **A repair or
 a re-run the harness tried to carry out and could not comes back the same way**:
 the entry is listed again carrying the decision she made and the gate that
@@ -1527,7 +1528,7 @@ refused once it is gone — the refusal names every budget that refused, what ea
 has spent, and the ceiling that would permit the decision.
 A repair and a re-run are each once per item, and a re-arm once per publication
 — a second of any of them is an escalation rather than a larger budget — and past the
-[review-round cap](configuration.md#what-one-work-item-has-been-given) even
+[review-round cap](configuration/recovery.md#what-one-work-item-has-been-given) even
 the first is refused.
 
 **The seventh decision is `cross`, and it is what she does about that refusal
@@ -1544,7 +1545,7 @@ justification is refused outright, which is the condition the delegation rests
 on.
 
 What is still yours is
-[`yoyo triage override`](configuration.md#crossing-a-cap-the-operator-decides-to-cross),
+[`yoyo triage override`](configuration/recovery.md#crossing-a-cap-the-operator-decides-to-cross),
 in your name and with your reason: any ceiling, any budget, and lifting one
 entirely. **Nothing crosses a cap except a recorded crossing**, and the refusal
 prints both — her own, with the budget already in it, and your command with the
@@ -1691,7 +1692,7 @@ Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
 special carries it, deliberately: notes are not evidence for a [protected-path
-grant](configuration.md#protected-paths-in-a-developers-change), so
+grant](configuration/artifacts.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
@@ -1814,7 +1815,7 @@ says exactly that. Your hold on intake does not apply, because a re-arm chooses
 no work — it repeats a merge an approving verdict already authorized, for a
 change that already passed every gate, whether that change is already on the
 local target or, on a target the forge protects, only on its pull request
-([configuration](configuration.md#a-protected-target-lands-through-its-pull-request)).
+([configuration](configuration/publishing.md#a-protected-target-lands-through-its-pull-request)).
 
 The harness carries out none of the other three: a re-scope, a wait, and an
 escalation ask for no action at all. The budget is spent when the decision is
@@ -2188,7 +2189,7 @@ in landings rather than hours, and writes the answer to the conversation's log
 as a `context.measured` event: when the picture was gathered, against which
 commit, how many landings and tracker changes since, the threshold, and what
 was done about it. Past the threshold — `conversation.refresh_after_landings`,
-20 unless [you set it](configuration.md#how-far-behind-a-conversations-picture-may-fall)
+20 unless [you set it](configuration/agents.md#how-far-behind-a-conversations-picture-may-fall)
 — the harness re-reads the repository and the tracker before the turn is
 answered, exactly as `/refresh` does and with the same framing to the role, and
 the transcript and `--json` (`picture`) tell you afterwards:

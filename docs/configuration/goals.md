@@ -1,27 +1,9 @@
-<!--
-Landed by yoyodyne-ifd.117.2, tranche 2 of the configuration.md split, with
-docs/configuration.md left intact. Nothing here links into ../configuration.md
-except the index link below, and no link here points at a tranche 3 guide
-(runs.md, publishing.md, recovery.md).
-
-"The configuration index ... lists the other guides" below is a forward claim:
-configuration.md becomes the index in 117.4.
-
-Scope against docs/docs-map.md: every section the map's disposition table
-assigns this guide — What reaches the queue, Traceability: references and
-orphans, Goals, and the work attributed to them, What a change upstream leaves
-stale, and Architectural invariants. The four lifted from under Artifact
-identity and metadata are promoted from ### to ## here, as the preserved
-branch had them; their slugs are unchanged. "The release-readiness workflow",
-which sits between the last two in configuration.md, has no destination row
-in the map and stays there. Size: 528 lines against the map's 440-line
-budget; the sections themselves grew after the map's counts were taken.
--->
 # Configuring admission, attribution, and staleness
 
 What reaches the work queue and on whose approval, how work is traced back to
 the brief, how a goal claims the work attributed to it, what a change upstream
-leaves stale, and the invariants a change is held to.
+leaves stale, the workflow a release is gated on, and the invariants a change is
+held to.
 
 [The configuration index](../configuration.md) lists the other guides.
 
@@ -460,6 +442,79 @@ operator's decision or the owning role's; this surfaces the condition.
 A tracker that cannot be read costs the work half of the report rather than all
 of it: the documents still report, and the report says the queue was not read
 instead of rendering it as one nothing has moved under.
+
+## The release-readiness workflow
+
+Every check above answers for one thing, and `yoyo conformance` asks the whole
+set together — which is what [cutting a
+release](../developing-yoyo.md#cutting-a-release) gates on.
+
+```sh
+yoyo conformance          # what a release is tagged behind
+yoyo conformance --json   # machine-readable
+yoyo conformance --notes  # the Markdown section a release's notes carry
+```
+
+The order the checks run in is not code. It is a **workflow definition**: a
+state machine in YAML that selects actions the harness registered in Go, maps
+each outcome to where the sequence goes next, and ends in one of two terminals —
+`ready`, which lets a tag be cut, and `mismatch`, which refuses it. This build
+ships one, and a project that wants its own writes it here:
+
+```
+.yoyodyne/workflows/release-readiness.yaml
+```
+
+Nothing is merged between the two. A project that writes one owns the whole
+sequence from then on, which is the only arrangement where reading the file
+tells you what actually ran; `yoyo conformance` names which of the two it read,
+and the content digest it pinned, in everything it prints.
+
+What a definition can change is the sequence and nothing else. It selects among
+the actions the build registered — `conformance.artifacts`,
+`conformance.references`, `conformance.invariants`, `conformance.goals` and
+`conformance.staleness` — and an action nothing registers is refused rather than
+run. Each action's authority is declared in Go, and the gate is compiled under
+`repository.read` and `work-item.read` and nothing else, so no definition can
+make it write anything. Each state must handle exactly the outcomes its check can
+produce — `conforms` and `diverges` for the four that gate, `noted` for
+`conformance.staleness`, which reports and refuses nothing — so an unhandled
+outcome, or a transition on one the check never returns, is refused here rather
+than met halfway through a cut. Validation and compilation both happen before the
+first check runs, and a definition that is wrong is refused whole rather than
+half adopted:
+
+```yaml
+schema: 1
+id: release-readiness
+summary: what this project checks before it tags
+initial: artifacts
+states:
+    artifacts:
+        action: conformance.artifacts
+        on:
+            conforms: references
+            diverges: mismatch
+    references:
+        action: conformance.references
+        on:
+            conforms: ready
+            diverges: mismatch
+terminals:
+    ready: {}
+    mismatch: {}
+```
+
+A definition names its own states; `action:` is what selects the check. A state
+called `check-artifacts` selecting `conformance.artifacts` is reported as
+`check-artifacts`, with the check named beside it, so a renamed sequence reads
+against both the file and this build.
+
+A run is recorded durably, one state boundary at a time, under the harness's own
+state root, so what a release was gated on can be read back afterwards. That
+record is the one thing `yoyo conformance` writes — it touches neither the
+repository nor the tracker — and nothing prunes them; one is written per
+invocation.
 
 ## Architectural invariants
 

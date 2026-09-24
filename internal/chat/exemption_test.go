@@ -359,7 +359,7 @@ func TestAnExemptionDoesNotAdmitWorkWhoseGoalNobodyCouldCheck(t *testing.T) {
 	}}})
 	options.Tracker = tracker
 	// A repository with no goals in force: the attribution is neither confirmed
-	// nor denied, which is the state configuration.md calls uncheckable.
+	// nor denied, which is the state docs/configuration/goals.md calls uncheckable.
 	options.Goals = goal.Set{}
 	options.Admission = Admission{
 		WorkItems: domain.ApprovalHuman,

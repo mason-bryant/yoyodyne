@@ -14,7 +14,7 @@ yoyo stop     # the supervisor, then every part, in order
 
 Slack, the scheduler, the dashboard, and the maintenance pass are parts of one
 product rather than tools each started by hand, and the configuration's
-[`services`](configuration.md#services) section is where a product says which
+[`services`](configuration/agents.md#services) section is where a product says which
 of them it runs. `yoyo start` starts the product's supervisor — one process per
 product, detached into a session of its own so it outlives the terminal — and
 the supervisor reads that section and starts every enabled part the way that
@@ -116,7 +116,7 @@ exported in this shell, which is an authentication the harness no longer
 carries, whether every agent runs on
 one model with nothing to fail over to, forge access when the project publishes,
 when reporting is on, this project's own Slack secrets and the sink that is
-supposed to be using them, and each part the [`services`](configuration.md#services)
+supposed to be using them, and each part the [`services`](configuration/agents.md#services)
 section declares — off, on with what it needs stored, or on with it missing.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
@@ -180,7 +180,7 @@ warning  failover               every agent runs on one model, opus on claude-co
 Nothing about it stops a run today. What it costs is paid the day that model's
 window closes: on 2026-09-08 the seven-day limit on the one model all five
 agents ran on closed with a reset five days off, no agent named an alternate,
-and the harness waited the whole window out. [Failover](configuration.md#serving-a-turn-from-a-permitted-alternate-model)
+and the harness waited the whole window out. [Failover](configuration/recovery.md#serving-a-turn-from-a-permitted-alternate-model)
 had shipped, off by default so that each agent's alternate is a choice somebody
 made, and this project had never turned it on — a condition that was in the
 configuration the whole time and is one line to state. The finding is healthy
@@ -194,7 +194,7 @@ as it would have. They are still named, in full, with the command that ends each
 one — what the exit status refuses to do is fail a machine that works.
 
 **So is every service finding.** Each part the configuration's
-[`services`](configuration.md#services) section declares gets a line of its
+[`services`](configuration/agents.md#services) section declares gets a line of its
 own — `service:slack`, `service:dashboard`, `service:scheduler`,
 `service:maintenance` — saying it is off, or on with what it needs in place, or
 on with what it needs missing: the Slack service without this project's two
@@ -230,7 +230,7 @@ A stopped sink is the one finding here you need not act on by hand. On macOS,
 `yoyo slack ensure` starts one if nothing is reporting for this product, from
 this product's own keychain items, and does nothing when a sink is already
 running. With the Slack service enabled in the
-[`services`](configuration.md#services) section, that is what
+[`services`](configuration/agents.md#services) section, that is what
 [`yoyo start`](#starting-the-product-and-stopping-it)'s supervisor does for the
 sink — the same lease-checked start, made again whenever the sink dies, within
 the supervisor's bounds — so on a product that has been started the finding
@@ -280,7 +280,7 @@ variable names under `provider_keys` in its `--json`. And `yoyo slack` says it
 once when the sink starts — the shell that starts a sink is usually the shell the
 harness was started from, and that process is the one an operator leaves running.
 All three name the variables and never their values.
-[The environment a check runs in](configuration.md#the-environment-a-check-runs-in)
+[The environment a check runs in](configuration/runs.md#the-environment-a-check-runs-in)
 is where the allowlist itself is stated.
 
 ## Pausing everything, and resuming it
@@ -359,7 +359,7 @@ where the reason for it can be recorded with it.
 **These three verbs, and `yoyo artifact approve`, are a person's, and a
 process an agent started is refused them.** Every process the harness launches
 for a role carries the role it was launched for in its environment, as
-`YOYODYNE_AGENT_ROLE`, on top of [the explicit environment](configuration.md#the-environment-a-check-runs-in)
+`YOYODYNE_AGENT_ROLE`, on top of [the explicit environment](configuration/runs.md#the-environment-a-check-runs-in)
 every invocation is built from; the variable is under the harness's own
 prefix, so a shell the agent opens and every `yoyo` that shell runs carry it
 too. `yoyo pause`, `yoyo resume` in both its forms, `yoyo release`, and
@@ -402,7 +402,7 @@ until somebody noticed — on the last of them for about two hours, with a free
 developer slot idle. The operator's decision that day, recorded as a directive,
 was that the brake may trip so long as the development manager is always
 invoked at once to sort it out and nothing waits. So the poll that trips the
-brake also summons her [sweep](configuration.md#recurring-tasks) out of its
+brake also summons her [sweep](configuration/agents.md#recurring-tasks) out of its
 cadence, with the runs that blocked and the reason each blocked in the message
 that wakes her, and she decides what happens to the hold: release it, keep it
 and probe the line, or keep it and escalate it to you. The watching session
@@ -1226,7 +1226,7 @@ worktree of a checkout outside it, and that refusal says what to do: run
 `execution.worktree_root` outside the repository.
 `TestVerbsRunFromInsideAManagedWorktree` in `internal/cli` drives the verbs
 from a worktree it creates, and [the configuration
-guide](configuration.md#discovery) says how the resolution is made.
+guide](configuration/setup.md#discovery) says how the resolution is made.
 
 It compares the recorded run against the repository and Beads, and then finishes
 the run's own remaining step or hands the item to you. A run it settled into an
@@ -1775,7 +1775,7 @@ branch and then having the forge refuse or hold the merge: the local branch was
 left ahead of the remote with the run's commits, which is how the product stalled
 on 2026-09-20 and again on 2026-09-24. A run today lands a protected target
 through its pull request and moves the local branch only by a fast-forward onto
-the remote ([configuration](configuration.md#a-protected-target-lands-through-its-pull-request)).
+the remote ([configuration](configuration/publishing.md#a-protected-target-lands-through-its-pull-request)).
 Reaching this state now takes somebody pushing to the target directly. The
 recovery is the same either way, and it is yours to run. (A queued merge landing among others used to reach this page too — as a
 publication reported unconfirmable for good rather than as a wedge — until
@@ -1880,7 +1880,7 @@ Needs a human (3):
 - **Running** is the developer runs in flight, each with its item, the phase it
   reached, how long it has been going, and what it has spent so far. A run whose
   evidence cannot be priced says so; it is never reported as free. Where any
-  [developer slot prefers a label](configuration.md#a-developer-slot-that-prefers-a-label),
+  [developer slot prefers a label](configuration/runs.md#a-developer-slot-that-prefers-a-label),
   each run also says which slot it is in and what that slot prefers — `, in
   developer slot 1 (prefers the dashboard label)` — and each free slot is named
   under the runs with its preference, `developer slot 3 is free and prefers no
@@ -2582,7 +2582,7 @@ there as well.
 
 A **round** is a reviewer verdict that sent a developer attempt back, counted
 across every run of the item. A re-review no developer attempt produced is not
-one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
+one, so a promotion that [loses its race](configuration/publishing.md#losing-a-race-for-the-target-branch)
 and gets a fresh verdict on the replayed change is not charged for it, whichever
 way that verdict goes. Neither is a verdict that approved the change: the cap
 stops an item buying the same argument another round, and an approval ends the
@@ -2611,7 +2611,7 @@ second drop of one publication is an escalation rather than another re-arm. The
 rounds alone would bound neither of the first two on an item whose runs
 keep stopping before a reviewer ever sees them. The
 numbers are the `triage` keys in [the configuration
-guide](configuration.md#what-one-work-item-has-been-given). An item triage
+guide](configuration/recovery.md#what-one-work-item-has-been-given). An item triage
 has spent more than one pass on says so in the first line, which is the fact
 worth looking for: work that keeps coming back is usually work where something
 other than the change is wrong.
@@ -2642,7 +2642,7 @@ until you stop it:
 ./bin/yoyo dashboard --port 8765  # one you can bookmark
 ```
 
-The configuration's [`services.dashboard`](configuration.md#services) entry
+The configuration's [`services.dashboard`](configuration/agents.md#services) entry
 declares the dashboard as a part of the product — its port, the address it
 binds, the hosts a request may name, and where a supplied token comes from —
 for the supervisor that will start it with the rest. The supervisor is here
@@ -3066,14 +3066,14 @@ money was; `yoyo cost` carries the side threads into its total on a `SIDE
 THREADS` row, with each one's cost listed under the table against that
 conversation.
 
-A [recurring task](configuration.md#recurring-tasks)'s passes are turns of the
+A [recurring task](configuration/agents.md#recurring-tasks)'s passes are turns of the
 role's own conversation, so their cost is already in the conversations figure.
 What the spend report adds under its totals, whenever it covers conversations
 and names nothing in particular, is that figure's recurring part: each task's
 passes, turns, and cost by the model the passes ran on, read from the passes'
 own records over the same window. It is a split rather than an addition, and it
 is how a sweep moved onto a cheaper model with
-[`model`](configuration.md#a-tasks-own-model) is told from the decisions beside
+[`model`](configuration/agents.md#a-tasks-own-model) is told from the decisions beside
 it on the role's own. The JSON carries it as `sweeps`.
 
 An [exchange](conversation.md#roles-asking-each-other-things) is priced beside the
@@ -3183,7 +3183,7 @@ repository.
 
 ## Reading what the recurring tasks found
 
-A [recurring task](configuration.md#recurring-tasks) wakes a role on a cadence to
+A [recurring task](configuration/agents.md#recurring-tasks) wakes a role on a cadence to
 look at its own domain. Nobody is watching those turns, so each firing ends in a
 durable report, and `yoyo sweeps` is where they are read:
 
@@ -3207,7 +3207,7 @@ It is read-only. A sweep is written once and never revised, and nothing here
 fires one, retires one, or decides anything about what a pass found.
 
 Each pass's header names the model its turns ran on — the task's own
-[`model`](configuration.md#a-tasks-own-model) where it names one, the role's
+[`model`](configuration/agents.md#a-tasks-own-model) where it names one, the role's
 configured model where it does not, and the alternate where a failover answered
 — and `--json` carries it as `model`. A pass recorded before passes named their
 model, or one that took no turn, has none.
@@ -3233,7 +3233,7 @@ does — it closes nothing — and each request is stated once, on the first pas
 that finds it, rather than once an hour. The `--json` form carries them a second
 time as `pull_requests` on the record, by number, which is what the next pass
 reads to know what was already said. [Recurring
-tasks](configuration.md#recurring-tasks) says when the reading is taken.
+tasks](configuration/agents.md#recurring-tasks) says when the reading is taken.
 
 Three outcomes look similar in a listing and are not the same thing:
 

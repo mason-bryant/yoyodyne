@@ -24,7 +24,7 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 #
 # What the bound buys is a dump of every goroutine instead of a hang, and that
 # is still bought: the figure stays well inside `execution.check_timeout` (30
-# minutes by default, see docs/configuration.md), so a test that genuinely hangs
+# minutes by default, see docs/configuration/runs.md), so a test that genuinely hangs
 # is reported by the binary naming what it waited on rather than killed by the
 # harness with nothing to read.
 TEST_TIMEOUT ?= 20m

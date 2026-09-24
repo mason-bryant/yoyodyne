@@ -73,7 +73,7 @@ func TestATurnRefusedForCapacityIsServedByThePermittedAlternate(t *testing.T) {
 
 // Each attempt is priced against the model that attempt actually asked for. That
 // is what putting the failover outside the cost meter buys, and it is the whole
-// of the claim docs/configuration.md makes about what a substitution costs: a
+// of the claim docs/configuration/recovery.md makes about what a substitution costs: a
 // turn the alternate served must not be billed to the model that refused it.
 func TestEachAttemptIsPricedAgainstTheModelItAskedFor(t *testing.T) {
 	t.Parallel()

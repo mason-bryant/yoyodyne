@@ -175,7 +175,7 @@ func TestTheVerbLaunchedFromADevelopersEnvironmentIsRefused(t *testing.T) {
 // developer run whose change carries a forged approval in docs/product/goals,
 // refused with nothing reaching the target branch -- is
 // TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed in
-// internal/orchestrator, and it is what `docs/configuration.md`'s sentence about
+// internal/orchestrator, and it is what `docs/configuration/artifacts.md`'s sentence about
 // the write being refused whatever ran the command rests on.
 func TestTheDocumentAnApprovalIsWrittenIntoIsAPathARunsChangeIsRefused(t *testing.T) {
 	// Not parallel: the marker is cleared in this process's environment, so the

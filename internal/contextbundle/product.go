@@ -44,9 +44,9 @@ import (
 // (yoyodyne-ifd.403): the product manager is given all eight documents in full,
 // and the set is neither trimmed nor narrowed. What changed is the check's shape
 // — a distant ceiling, a declared margin under it that warns, and the set's size
-// recorded on every pass — and what brings the set down is yoyodyne-ifd.117.4,
-// which removes the text README.md and docs/configuration.md carry that the
-// split guides also carry.
+// recorded on every pass. yoyodyne-ifd.117.4 reduced docs/configuration.md to an
+// index, which removed the copy it carried of everything the split guides carry;
+// the README's own configuration section is the overlap that remains.
 const ShippedDocumentationCeiling = 2 << 20
 
 // ShippedDocumentationMargin is how far under the ceiling the warning starts.
@@ -150,6 +150,11 @@ const maxIntentPathBytes = 80
 // narrowing that cost ifd.20 a work item drafted against surfaces it could not
 // see. docs/docs-map.md is the enumeration this set is kept against.
 //
+// The configuration reference is named the same way, for the same reason:
+// docs/configuration.md is an index now, and its content lives in the seven
+// guides under docs/configuration/. A set that named the index alone would carry
+// a table of contents and call it a description of the product.
+//
 // **It describes this repository and is scoped to it.** Every path in it is
 // generic — docs/work.md, docs/reporting.md, docs/operations.md — so applying it
 // to whatever repository the harness happens to run in feeds an adopting
@@ -167,6 +172,13 @@ var HarnessShippedDocumentation = []string{
 	"docs/operations.md",
 	"docs/developing-yoyo.md",
 	"docs/configuration.md",
+	"docs/configuration/setup.md",
+	"docs/configuration/artifacts.md",
+	"docs/configuration/goals.md",
+	"docs/configuration/runs.md",
+	"docs/configuration/publishing.md",
+	"docs/configuration/recovery.md",
+	"docs/configuration/agents.md",
 }
 
 // harnessModulePath is what Yoyodyne's own repository declares itself to be. It

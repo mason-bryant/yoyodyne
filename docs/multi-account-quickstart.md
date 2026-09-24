@@ -3,8 +3,8 @@
 One Claude subscription has usage limits, and a project that runs steadily will
 meet them. Pooling spreads the runs across two or more accounts, one account per
 run, so the work keeps moving when one subscription is spent. This page is the
-shortest path to a working pool; [Provider accounts](configuration.md#provider-accounts)
-and [Pooling work across several accounts](configuration.md#pooling-work-across-several-accounts)
+shortest path to a working pool; [Provider accounts](configuration/agents.md#provider-accounts)
+and [Pooling work across several accounts](configuration/agents.md#pooling-work-across-several-accounts)
 have the full behavior.
 
 ## 1. Declare the accounts

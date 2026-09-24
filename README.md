@@ -360,7 +360,7 @@ worth knowing: the tracker's history counts against your repository's size like
 any other history, and what it pushes — `refs/dolt/data` and a
 `__dolt_remote_info__` branch — is carried without complaint by GitHub but is
 worth checking on a forge that restricts which refs it accepts. See
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration/setup.md#where-the-tracker-syncs).
 
 **Then review the checks it proposed.** Your repository already announces what
 it is built with, so `init` reads that and writes the commands that follow from
@@ -402,7 +402,7 @@ wrapper. Each says which it is and why.
 Taking any of them costs a character: delete its leading `#`. A repository that
 announces nothing keeps `checks: []` and the commented examples for Go,
 TypeScript, Python, and Java that have always been there; the
-[configuration guide](docs/configuration.md#checks) has the same examples with
+[configuration guide](docs/configuration/runs.md#checks) has the same examples with
 the reasoning.
 
 Each entry runs through `/bin/sh -c` in the run's worktree. A check must be
@@ -414,7 +414,7 @@ Each check also gets a wall-clock budget, `execution.check_timeout`, thirty
 minutes by default. Raise it as your suite grows, and raise it again if you run
 several developers at once: concurrent runs share the machine, so each suite's
 wall clock grows without its work doing so. See
-[How long a check may take](docs/configuration.md#how-long-a-check-may-take).
+[How long a check may take](docs/configuration/runs.md#how-long-a-check-may-take).
 
 **Then validate what you wrote:**
 
@@ -439,7 +439,7 @@ yours to commit tool config to, that is a real case rather than a mistake: keep
 the configuration outside it with `yoyo init --external`, which yoyo finds
 without `--config`, and exclude what is already there in `.git/info/exclude`
 rather than in a tracked `.gitignore`. See
-[When the repository ignores the configuration](docs/configuration.md#when-the-repository-ignores-the-configuration).
+[When the repository ignores the configuration](docs/configuration/setup.md#when-the-repository-ignores-the-configuration).
 
 **Then check the whole installation, not only the file:**
 
@@ -476,8 +476,9 @@ README, the six operator documents beside it — [the conversation](docs/convers
 [artifacts, goals, and invariants](docs/artifacts.md),
 [operations and recovery](docs/operations.md), and
 [working on yoyo itself](docs/developing-yoyo.md) — the
-[configuration guide](docs/configuration.md), and the help the commands print.
-That is eight documents, named one at a time rather than swept up from
+[configuration reference](docs/configuration.md), its index and the seven
+guides beneath it, and the help the commands print. That is fifteen documents,
+named one at a time rather than swept up from
 [Further reading](#further-reading), which reaches more than these. Not the
 source, and not the design document. A specification opens with an introduction
 saying what the thing is and why it exists, and states the goals that serve it
@@ -573,7 +574,7 @@ approvals:
   publication is an escalation rather than another attempt.
 
 [How work flows once you approve it](docs/work.md) has
-the full behavior, and the [configuration guide](docs/configuration.md#publishing-through-pull-requests)
+the full behavior, and the [configuration guide](docs/configuration/publishing.md#publishing-through-pull-requests)
 has the table of what each combination produces.
 
 ## Configuring a project
@@ -600,7 +601,7 @@ repository id follow from it. Editing a field is the whole of what changes the
 harness's behavior. `init` also points the tracker at a remote so the backlog is
 shared rather than per-machine — this project's Git remote by default, or the
 URL `--tracker-remote` names; see
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs) — and
+[Where the tracker syncs](docs/configuration/setup.md#where-the-tracker-syncs) — and
 writes the `README.md` each artifact home gets, which says what is filed there,
 who owns it, and whether you may edit one by hand.
 
@@ -738,7 +739,7 @@ ever served by an account that can sign its provider in.
 The state directory is `$YOYODYNE_STATE_HOME`, `$XDG_STATE_HOME/yoyodyne`,
 `~/Library/Application Support/Yoyodyne/state` on macOS, or
 `~/.local/state/yoyodyne` on Linux — the same one `yoyo status` reads. See
-[provider accounts](docs/configuration.md#provider-accounts) for what the pool
+[provider accounts](docs/configuration/agents.md#provider-accounts) for what the pool
 does with a budget it has spent, why a run stays on the account it started on,
 and why conversations do not rotate.
 
@@ -823,9 +824,10 @@ working on it get no configuration at all, and `yoyo` there reports that it foun
 none. In this scenario that is the intent: the configuration belongs to you and
 not to a repository you are a guest in.
 
-See the [configuration guide](docs/configuration.md) for the full layout, the
-`init` flags, precedence, merge and removal semantics, persona rules, extending
-a bundle, and migration from `.yoyodyne.yaml`.
+See [writing a project configuration](docs/configuration/setup.md) for the full
+layout, the `init` flags, precedence, merge and removal semantics, extending a
+bundle, and migration from `.yoyodyne.yaml`; persona rules are in
+[configuring agents](docs/configuration/agents.md#personas).
 
 ## Further reading
 
@@ -858,9 +860,10 @@ a bundle, and migration from `.yoyodyne.yaml`.
   — the shipped prompt that walks a blank or broken installation to a passing
   `yoyo doctor`, acting on what `yoyo setup --json` and `yoyo doctor --json`
   report.
-- [The configuration guide](docs/configuration.md) — the full configuration
-  reference: layout, discovery, precedence, checks, publishing, personas,
-  inheritance, and inspection.
+- [The configuration guide](docs/configuration.md) — the index to the
+  configuration reference, split by what you are configuring: writing a
+  configuration, artifact homes, admission, checks and scheduling, publishing,
+  triage thresholds and provider waits, and agents.
 - [Provider plugins](docs/provider-plugins.md) — declaring a provider of your
   own: the nine answers a provider has to give, the rule format for describing one
   in configuration, which compiled adapter runs it, and why a plugin never

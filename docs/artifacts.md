@@ -41,14 +41,14 @@ unapproved document still loads, still governs what is downstream of it, and
 stops nothing that reads it, and approving writes nothing but the approval — the
 document itself stays the owning role's to change. What your approval of the
 goals decides is whether work serving them is admitted without asking you, which
-is [`approvals.work_items`](configuration.md#what-reaches-the-queue) to say:
+is [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue) to say:
 it is `human` until you set it otherwise, and every item is put to you. Set it to
 `automatic` and your approval of the goals document is what lets work serving
 those goals into the queue — so a goals document nobody approved, and one amended
 since you approved it, are documents nothing is admitted under. Everywhere else
 an amendment after approval changes what is reported about a document rather than
 what is allowed. The
-[configuration guide](configuration.md#approving-a-document) has the schema
+[configuration guide](configuration/artifacts.md#approving-a-document) has the schema
 and what is refused.
 
 **The approval is written into your checkout and stops there**, and the command
@@ -108,7 +108,7 @@ brief is reported as an orphan. Neither refuses the document — a broken
 relationship is a name to correct, not a reason to lose what somebody wrote. The
 brief is the root and a decision record is not downstream of intent, so neither
 is asked to support anything. The
-[configuration guide](configuration.md#traceability-references-and-orphans)
+[configuration guide](configuration/goals.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
 ## Goals, and what work serves them
@@ -242,7 +242,7 @@ attribution fails there like anywhere else — the record was written over, the
 witness holds the words, and putting them back is something somebody can do. An
 item naming a goal no goals document states is counted and named on closed work
 and does not fail: it named what the goals stated when it was admitted, and a
-goal reworded after it closed is what [`yoyo stale`](configuration.md#what-a-change-upstream-leaves-stale)
+goal reworded after it closed is what [`yoyo stale`](configuration/goals.md#what-a-change-upstream-leaves-stale)
 reports rather than a claim anybody can now correct.
 
 The two halves of the protection are not interchangeable, and neither of them
@@ -427,7 +427,7 @@ recorded — and having checked nothing at all, which an unreadable tracker or
 unreadable goals amount to.
 
 The order the checks run in is not in the code. It is a
-[workflow definition](configuration.md#the-release-readiness-workflow) —
+[workflow definition](configuration/goals.md#the-release-readiness-workflow) —
 project-owned data selecting actions the harness registered in Go — validated and
 compiled whole before a single check runs. A project may write its own; nothing
 it writes can make the gate perform anything beyond reading this repository and
