@@ -64,7 +64,30 @@ type Request struct {
 	WorkItem       beads.WorkItem
 	References     []string
 	MaxBytes       int
+	// Revision, where set, is the commit every reference is read at instead of
+	// the repository's working tree, and each reference is labelled with it. A
+	// reviewer's context sets it to the change's recorded base: the checkout has
+	// moved on by the time a review is asked for whenever anything else was
+	// promoted meanwhile, and a document read at a later revision than the one the
+	// change was written against makes a correct change read as a divergent one.
+	Revision *Revision
 }
+
+// Revision is a recorded commit references are read at.
+type Revision struct {
+	// Name is how the commit is named to the reader — "base commit <id>" — and is
+	// what every reference read at it is labelled with.
+	Name string
+	// Read answers one repository-relative, slash-separated path as the commit
+	// holds it: its size, and its whole content where the size is within
+	// maxBytes. A path the commit does not hold as a regular file answers an
+	// error wrapping ErrNotAtRevision.
+	Read func(path string, maxBytes int64) (size int64, content []byte, err error)
+}
+
+// ErrNotAtRevision is what a Revision's Read answers for a path the commit does
+// not hold as a regular file.
+var ErrNotAtRevision = errors.New("not a file at this revision")
 
 type Reference struct {
 	Path    string
@@ -133,8 +156,9 @@ func Assemble(request Request) (Bundle, error) {
 	}
 
 	referencePaths := append([]string(nil), request.References...)
-	referencePaths = append(referencePaths, implicitReferenceCandidates(root, ExtractMarkdownReferences(request.WorkItem))...)
-	plans, err := planReferences(root, uniqueSorted(referencePaths), request.References)
+	source := referenceSource{root: root, revision: request.Revision}
+	referencePaths = append(referencePaths, implicitReferenceCandidates(source, ExtractMarkdownReferences(request.WorkItem))...)
+	plans, err := planReferences(source, uniqueSorted(referencePaths), request.References)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -210,7 +234,11 @@ func ExtractMarkdownReferences(item beads.WorkItem) []string {
 // something missing. Everything else is kept, including a path that is not a
 // repository reference — planReferences states those as left out, which is what
 // tells the developer their item named something this context could not carry.
-func implicitReferenceCandidates(root string, referencePaths []string) []string {
+//
+// Read at a revision, a path the commit does not hold is dropped for the same
+// reason: it is a deliverable the change itself creates, and the patch is where
+// it is read.
+func implicitReferenceCandidates(source referenceSource, referencePaths []string) []string {
 	candidates := make([]string, 0, len(referencePaths))
 	for _, referencePath := range referencePaths {
 		clean, err := validateReferencePath(referencePath)
@@ -218,12 +246,51 @@ func implicitReferenceCandidates(root string, referencePaths []string) []string 
 			candidates = append(candidates, referencePath)
 			continue
 		}
-		if _, err := os.Lstat(filepath.Join(root, clean)); errors.Is(err, os.ErrNotExist) {
+		if !source.exists(clean) {
 			continue
 		}
 		candidates = append(candidates, referencePath)
 	}
 	return candidates
+}
+
+// referenceSource is where references are read from: the repository's working
+// tree, or, where a revision is set, the commit it names.
+type referenceSource struct {
+	root     string
+	revision *Revision
+}
+
+// exists says whether a validated path names anything at all in this source,
+// which is the question implicitReferenceCandidates asks before a path is
+// planned.
+func (s referenceSource) exists(clean string) bool {
+	if s.revision != nil {
+		_, _, err := s.revision.Read(filepath.ToSlash(clean), 0)
+		return !errors.Is(err, ErrNotAtRevision)
+	}
+	_, err := os.Lstat(filepath.Join(s.root, clean))
+	return !errors.Is(err, os.ErrNotExist)
+}
+
+// resolve proves a reference names a regular file in this source.
+func (s referenceSource) resolve(referencePath string) (resolvedReference, error) {
+	if s.revision == nil {
+		return resolveReference(s.root, referencePath)
+	}
+	clean, err := validateReferencePath(referencePath)
+	if err != nil {
+		return resolvedReference{}, err
+	}
+	path := filepath.ToSlash(clean)
+	// Read whole up to the largest file an excerpt is chosen from, so the one
+	// read decides the size and the content together rather than two reads that
+	// could see two different things.
+	size, content, err := s.revision.Read(path, maxExcerptSourceBytes)
+	if err != nil {
+		return resolvedReference{}, fmt.Errorf("read reference %q at %s: %w", referencePath, s.revision.Name, err)
+	}
+	return resolvedReference{path: path, size: size, revision: s.revision.Name, content: content}, nil
 }
 
 // plannedReference is one reference decided before any of the budget is spent:
@@ -247,7 +314,7 @@ func (p plannedReference) note() string {
 	if p.omission != "" {
 		return p.omission
 	}
-	return renderOmittedReference(p.path)
+	return renderOmittedReference(p.path, p.resolved.revision)
 }
 
 // planReferences resolves every reference before any of them is read.
@@ -263,14 +330,14 @@ func (p plannedReference) note() string {
 // An explicit request reference is the caller's own required input rather than
 // anything an item accumulated, so it still fails here. Nothing appended to a
 // work item can add one, so there is nothing for a run to be wedged by.
-func planReferences(root string, referencePaths, required []string) ([]plannedReference, error) {
+func planReferences(source referenceSource, referencePaths, required []string) ([]plannedReference, error) {
 	requiredPaths := make(map[string]struct{}, len(required))
 	for _, referencePath := range required {
 		requiredPaths[referencePath] = struct{}{}
 	}
 	plans := make([]plannedReference, 0, len(referencePaths))
 	for _, referencePath := range referencePaths {
-		resolved, err := resolveReference(root, referencePath)
+		resolved, err := source.resolve(referencePath)
 		if err != nil {
 			if _, isRequired := requiredPaths[referencePath]; isRequired {
 				return nil, err
@@ -311,6 +378,12 @@ type resolvedReference struct {
 	// location is the resolved path on disk, which is what is opened.
 	location string
 	size     int64
+	// revision names the commit the reference was read at, and is empty for one
+	// read from the working tree. Where it is set, content is what the commit
+	// holds — nil for a file larger than any excerpt is chosen from — and
+	// location is unused.
+	revision string
+	content  []byte
 }
 
 func resolveReference(root, referencePath string) (resolvedReference, error) {
@@ -344,6 +417,15 @@ func resolveReference(root, referencePath string) (resolvedReference, error) {
 // between being sized and being read is caught by the caller rather than
 // spending whatever it has become.
 func readBounded(reference resolvedReference, referencePath string, limitBytes int) ([]byte, error) {
+	if reference.revision != "" {
+		if reference.content == nil && reference.size > 0 {
+			return nil, fmt.Errorf("read reference %q at %s: it is %d bytes, larger than was read", referencePath, reference.revision, reference.size)
+		}
+		if len(reference.content) > limitBytes {
+			return reference.content[:limitBytes+1], nil
+		}
+		return reference.content, nil
+	}
 	file, err := os.Open(reference.location)
 	if err != nil {
 		return nil, fmt.Errorf("open reference %q: %w", referencePath, err)
@@ -369,7 +451,7 @@ func readBounded(reference resolvedReference, referencePath string, limitBytes i
 //
 // The returned Reference has no path when nothing of the file was carried.
 func referenceSection(resolved resolvedReference, referencePath string, item beads.WorkItem, available int) (string, Reference, error) {
-	header := fmt.Sprintf("\n## Referenced file: %s\n\n", resolved.path)
+	header := renderReferenceHeader(resolved, "")
 	// The trailing newline the section is terminated with is part of what it
 	// costs, so it is charged here rather than discovered afterwards.
 	budget := available - len(header) - 1
@@ -392,12 +474,12 @@ func referenceSection(resolved resolvedReference, referencePath string, item bea
 // wrote rather than the resolved one, because that is what a developer will look
 // for in the worktree.
 func excerptSection(resolved resolvedReference, referencePath string, item beads.WorkItem, available int) (string, Reference, error) {
-	omission := renderOmittedReference(referencePath)
+	omission := renderOmittedReference(referencePath, resolved.revision)
 	if resolved.size > maxExcerptSourceBytes {
 		return omission, Reference{}, nil
 	}
-	header := fmt.Sprintf("\n## Referenced file: %s (excerpt)\n\n", resolved.path)
-	notice := renderExcerptNotice(resolved.path, resolved.size)
+	header := renderReferenceHeader(resolved, "excerpt")
+	notice := renderExcerptNotice(resolved.path, resolved.size, resolved.revision)
 	budget := available - len(header) - len(notice) - 1
 	if budget < minExcerptBytes {
 		return omission, Reference{}, nil
@@ -421,16 +503,45 @@ func terminated(content string) string {
 	return content + "\n"
 }
 
-func renderExcerptNotice(path string, size int64) string {
-	return fmt.Sprintf(`%s is %d bytes and does not fit in this context. What follows is an excerpt:
-the sections of it that look most relevant to this work item, in the file's own
-order, with a marker wherever something was left out. The whole file is in the
-worktree — read it there rather than reading this as all of it.
-
-`, path, size)
+// renderReferenceHeader heads one carried reference. A reference read at a
+// revision says which one in the heading itself and again in a sentence under
+// it, because the heading is what a reader scanning the context sees and the
+// sentence is what says the file may since have changed.
+func renderReferenceHeader(resolved resolvedReference, kind string) string {
+	if resolved.revision == "" {
+		if kind == "" {
+			return fmt.Sprintf("\n## Referenced file: %s\n\n", resolved.path)
+		}
+		return fmt.Sprintf("\n## Referenced file: %s (%s)\n\n", resolved.path, kind)
+	}
+	qualifier := "at " + resolved.revision
+	if kind != "" {
+		qualifier = kind + ", " + qualifier
+	}
+	return fmt.Sprintf("\n## Referenced file: %s (%s)\n\n%s as it stands at %s, which may differ from the file as it stands now.\n\n",
+		resolved.path, qualifier, resolved.path, resolved.revision)
 }
 
-func renderOmittedReference(referencePath string) string {
+func renderExcerptNotice(path string, size int64, revision string) string {
+	where := "is in the\nworktree"
+	if revision != "" {
+		where = "is at\n" + revision
+	}
+	return fmt.Sprintf(`%s is %d bytes and does not fit in this context. What follows is an excerpt:
+the sections of it that look most relevant to this work item, in the file's own
+order, with a marker wherever something was left out. The whole file %s — read it there rather than reading this as all of it.
+
+`, path, size, where)
+}
+
+func renderOmittedReference(referencePath, revision string) string {
+	if revision != "" {
+		return fmt.Sprintf(`
+## Referenced file: %s (omitted, at %s)
+
+%s was referenced but exceeds the context budget; consult it at %s.
+`, referencePath, revision, referencePath, revision)
+	}
 	return fmt.Sprintf(`
 ## Referenced file: %s (omitted)
 
