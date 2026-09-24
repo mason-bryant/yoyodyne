@@ -1,5 +1,11 @@
 # yoyodyne-ifd.298: the design landed, the store did not
 
+> **Superseded.** yoyodyne-ifd.308 later landed the store in
+> `internal/runstate/memory.go`, and the operator ruled on 2026-09-24 that its
+> revision log satisfies the design. `yoyo agent memory <name>` is now built over
+> it, on the seams named below. The finding that no store existed was true on
+> 2026-09-06 and is not true now; the rest is kept as the record of that run.
+
 yoyodyne-ifd.298 asks for `yoyo agent memory <name>`: a role's memories printed
 as Markdown-rendered text, each one with its revision history and the invocation
 that wrote it, degrading readably where a terminal cannot show emphasis, and a

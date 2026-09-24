@@ -975,6 +975,7 @@ comes from. Every other configured agent is reachable the same way:
 ```text
 ./bin/yoyo agent list                      # who is configured, and what each is doing
 ./bin/yoyo agent show architect            # one agent in full
+./bin/yoyo agent memory architect          # what it remembers, with each memory's history
 ./bin/yoyo agent chat architect            # talk to it
 ./bin/yoyo agent chat development-manager --message "Decompose ifd.4." --json
 ```
@@ -1230,12 +1231,27 @@ write is one `memory.requested` event and then one `memory.recorded` or
 `memory.failed`, carrying the memory's name and revision number; the text lives
 only in the memory store, under the state root at
 `products/<product>/memory/<agent>.memory.jsonl`, because a copy in the
-conversation record would be a second store. A command that reads that history
-as text is `yoyodyne-ifd.298`, which is not yet built.
+conversation record would be a second store.
+
+**`yoyo agent memory <name>` reads that history as text.** Every memory the
+agent holds is listed with all of its revisions, newest first, each quoted as it
+was written and followed by the invocation that wrote it — the conversation or
+run and its turn, the provider, the model asked for and the one that answered,
+the account, and the configuration — with the records it cites and, for a
+compaction, the revisions it folded together. A retired memory says `(retired)`
+beside its name and the revision that retired it says so, so nothing about its
+state rests on colour or position. On a terminal the listing is dressed as
+Markdown by the same renderer a reply is; under `NO_COLOR`, on a `dumb`
+terminal, or into a pipe it is the same text undressed. `--json` carries the
+store's records themselves. An agent with none gets one sentence saying so, a
+line of the store that would not decode is listed under its own heading beside
+what could be read, and a store that cannot be read at all is named as
+unreadable rather than shown as empty.
 
 **The developer and the reviewer are unchanged.** Neither keeps a memory: their
 turns carry no memory briefing, their contracts do not describe the block, and a
-reply from either that carries one is refused whole, with nothing recorded.
+reply from either that carries one is refused whole, with nothing recorded. Asked
+what either remembers, `yoyo agent memory` says it keeps none.
 
 ### Roles asking each other things
 
