@@ -3,6 +3,7 @@ package runstate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -944,61 +945,190 @@ func boundRecordedText(text string, limit int, cutNote string) string {
 }
 
 // MaxRecordedTextBytes bounds every free-text field on the run record that has
-// no bound of its own above. It is the docket's bound on a message, shared for
-// the reason the review summary's is: these are the fields a docket entry, a
-// notification, or a status line carries onward in the harness's own words, and
-// a bound that could drift from theirs is a reason recorded here and refused
-// there.
+// no bound of its own. It is the docket's bound on a message, shared for the
+// reason the review summary's is: these are the fields a docket entry, a
+// notification, or a status line carries onward, and a bound that could drift
+// from theirs is a reason recorded here and refused there.
 const MaxRecordedTextBytes = triage.MaxMessageBytes
 
-// The note promises nothing about where the rest went, for the reason the
-// failure's does not: for most of these fields the record is the only copy.
-const recordedTextCutNote = "\n[cut; the rest of this was not recorded]"
+// truncatedNote is the marker a field cut to its bound ends on, where no older
+// note of its own was already established. It is the shape yoyodyne-ifd.258 gave
+// a process's cut output — the bound it was cut at, and where the rest is — and
+// it says the rest was not recorded because for these fields the record is the
+// only copy.
+func truncatedNote(limit int) string {
+	return fmt.Sprintf("\n[truncated at %d bytes; the rest was not recorded]", limit)
+}
+
+// selectionCutNote is the marker a selection's reason has always been cut with
+// by Selection.Stamped, used again here so a reason cut on its way into the store
+// reads the same as one cut where it was stamped.
+const selectionCutNote = " …truncated to the recorded bound"
 
 // recordedText is one free-text field of the run record and the bound it is
 // held to.
 type recordedText struct {
-	key     string
-	text    *string
-	limit   int
+	// key is the field's place in the record, with [] standing for any element
+	// of a list, and path is the same place with the element's index.
+	key   string
+	path  string
+	text  *string
+	limit int
+	// cutNote is what a cut copy of the field ends on, saying it was cut.
 	cutNote string
+	// stated reports a bound the nested record's own Validate already states,
+	// so State.Validate does not say it a second time.
+	stated bool
 }
 
-// recordedTexts is every free-text field on State, each with its bound. It is
-// the one list the bound is applied from — by the store on every write and every
-// read, and by Validate — so a field is bounded by being named here rather than
-// by every writer of it remembering to be.
+// recordedTexts is every free-text field in the run record, nested ones
+// included, each with its bound. It is the one list the bound is applied from —
+// by the store on every write and every read, and by Validate — so a field is
+// bounded by being named here rather than by every writer of it remembering to
+// be.
 //
 // That is the lesson of three work items bounding three fields one at a time:
 // each moved the unbounded case onto the next field nobody had listed.
-// TestEveryStringFieldOnTheRunRecordIsBoundedOrStructured enumerates State's
-// string fields and fails on any that is neither here nor in its short list of
-// identifiers and enumerations, so a field added later is bounded or classified
-// on purpose and never unbounded by omission.
+// TestEveryStringInTheRunRecordIsBoundedOrStructured walks the whole of State,
+// through every nested record and list, and fails on any string that is neither
+// here nor in its short list of identifiers and enumerations, and on any kind
+// of field it cannot see strings inside. A field added later, at any depth, is
+// bounded or classified on purpose and never unbounded by omission.
+//
+// Nested records mostly carry their bounds already, in their own Validate. Those
+// are named here at the same bound, so a field over it is cut on its way into
+// the store rather than costing the whole record.
 func (s *State) recordedTexts() []recordedText {
-	return []recordedText{
-		{"work_item_title", &s.WorkItemTitle, MaxRecordedTextBytes, recordedTextCutNote},
-		{"workflow_divergence", &s.WorkflowDivergence, MaxRecordedTextBytes, recordedTextCutNote},
-		{"workflow_unobserved", &s.WorkflowUnobserved, MaxRecordedTextBytes, recordedTextCutNote},
-		{"developer_model_reason", &s.DeveloperModelReason, MaxRecordedTextBytes, recordedTextCutNote},
-		{"review_summary", &s.ReviewSummary, MaxReviewSummaryBytes, reviewSummaryCutNote},
-		// The landing reason is carried onward as an escalation's account, which
-		// is held to the blocker's bound, so it is held to that bound here too.
-		{"landing_reason", &s.LandingReason, MaxBlockerBytes, recordedTextCutNote},
-		{"landing_impediment_problem", &s.LandingImpedimentProblem, MaxRecordedTextBytes, recordedTextCutNote},
-		{"landing_problem", &s.LandingProblem, MaxRecordedTextBytes, recordedTextCutNote},
-		{"report_problem", &s.ReportProblem, MaxChannelProblemBytes, channelProblemCutNote},
-		{"amendment_problem", &s.AmendmentProblem, MaxChannelProblemBytes, channelProblemCutNote},
-		{"usage_limit_kind", &s.UsageLimitKind, MaxRecordedTextBytes, recordedTextCutNote},
-		{"publish_failure", &s.PublishFailure, MaxRecordedTextBytes, recordedTextCutNote},
-		{"failure", &s.Failure, MaxBlockerBytes, failureCutNote},
-		{"blocker", &s.Blocker, MaxBlockerBytes, blockerCutNote},
-		{"cleanup_failure", &s.CleanupFailure, MaxRecordedTextBytes, recordedTextCutNote},
-		{"completion_recording_failure", &s.CompletionRecordingFailure, MaxRecordedTextBytes, recordedTextCutNote},
+	var texts []recordedText
+	add := func(key, path string, text *string, limit int, cutNote string, stated bool) {
+		texts = append(texts, recordedText{key: key, path: path, text: text, limit: limit, cutNote: cutNote, stated: stated})
 	}
+	own := func(key string, text *string, limit int, cutNote string) {
+		add(key, key, text, limit, cutNote, false)
+	}
+	// nested names a field of a record inside this one, whose own Validate
+	// states its bound unless unstated says otherwise.
+	nested := func(key, path string, text *string, limit int) {
+		add(key, path, text, limit, truncatedNote(limit), true)
+	}
+	unstated := func(key, path string, text *string, limit int) {
+		add(key, path, text, limit, truncatedNote(limit), false)
+	}
+	at := func(prefix string, index int, field string) string {
+		return fmt.Sprintf("%s[%d].%s", prefix, index, field)
+	}
+
+	own("work_item_title", &s.WorkItemTitle, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	if s.Selection != nil {
+		add("selection.reason", "selection.reason", &s.Selection.Reason, MaxSelectionReasonBytes, selectionCutNote, true)
+	}
+	own("workflow_divergence", &s.WorkflowDivergence, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	own("workflow_unobserved", &s.WorkflowUnobserved, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	own("developer_model_reason", &s.DeveloperModelReason, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	own("review_summary", &s.ReviewSummary, MaxReviewSummaryBytes, reviewSummaryCutNote)
+	// The landing reason is carried onward as an escalation's account, which is
+	// held to the blocker's bound, so it is held to that bound here too.
+	own("landing_reason", &s.LandingReason, MaxBlockerBytes, truncatedNote(MaxBlockerBytes))
+	own("landing_impediment_problem", &s.LandingImpedimentProblem, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	own("landing_problem", &s.LandingProblem, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	// A finding is the reviewer's own prose, message and file both, and its
+	// record states no bound of its own; the count of findings is the docket's.
+	for index := range s.ReviewFindingDetails {
+		finding := &s.ReviewFindingDetails[index]
+		unstated("review_finding_details[].message", at("review_finding_details", index, "message"), &finding.Message, MaxRecordedTextBytes)
+		unstated("review_finding_details[].file", at("review_finding_details", index, "file"), &finding.File, MaxRecordedTextBytes)
+	}
+	if s.CheckFailure != nil {
+		nested("check_failure.output", "check_failure.output", &s.CheckFailure.Output, MaxCheckOutputBytes)
+	}
+	if s.Verification != nil {
+		if s.Verification.Probe != nil {
+			nested("verification.probe.command", "verification.probe.command", &s.Verification.Probe.Command, MaxVerificationCommandBytes)
+			nested("verification.probe.detail", "verification.probe.detail", &s.Verification.Probe.Detail, MaxVerificationDetailBytes)
+		}
+		for index := range s.Verification.Checks {
+			check := &s.Verification.Checks[index]
+			nested("verification.checks[].command", at("verification.checks", index, "command"), &check.Command, MaxVerificationCommandBytes)
+			nested("verification.checks[].detail", at("verification.checks", index, "detail"), &check.Detail, MaxVerificationDetailBytes)
+		}
+		for index := range s.Verification.Owed {
+			unstated("verification.owed[]", fmt.Sprintf("verification.owed[%d]", index), &s.Verification.Owed[index], MaxRecordedTextBytes)
+		}
+		nested("verification.problem", "verification.problem", &s.Verification.Problem, MaxChannelProblemBytes)
+	}
+	for index := range s.RefusedAmendments {
+		nested("refused_amendments[].problem", at("refused_amendments", index, "problem"), &s.RefusedAmendments[index].Problem, MaxAmendmentRefusalBytes)
+	}
+	own("report_problem", &s.ReportProblem, MaxChannelProblemBytes, channelProblemCutNote)
+	own("amendment_problem", &s.AmendmentProblem, MaxChannelProblemBytes, channelProblemCutNote)
+	for index := range s.RepairContinuations {
+		continuation := &s.RepairContinuations[index]
+		nested("repair_continuations[].reason", at("repair_continuations", index, "reason"), &continuation.Reason, MaxSelectionReasonBytes)
+		nested("repair_continuations[].superseded_blocker", at("repair_continuations", index, "superseded_blocker"), &continuation.SupersededBlocker, MaxBlockerBytes)
+	}
+	environmental := func(key, path string, refusal *EnvironmentalRefusal) {
+		nested(key+".detail", path+".detail", &refusal.Detail, MaxEnvironmentalDetailBytes)
+		nested(key+".problem", path+".problem", &refusal.Problem, MaxEnvironmentalProblemBytes)
+	}
+	if s.Environmental != nil {
+		environmental("environmental", "environmental", s.Environmental)
+	}
+	if s.IntegrationStop != nil {
+		nested("integration_stop.detail", "integration_stop.detail", &s.IntegrationStop.Detail, MaxEnvironmentalDetailBytes)
+	}
+	for index := range s.IntegrationResumptions {
+		resumption := &s.IntegrationResumptions[index]
+		nested("integration_resumptions[].reason", at("integration_resumptions", index, "reason"), &resumption.Reason, MaxSelectionReasonBytes)
+		nested("integration_resumptions[].superseded_failure", at("integration_resumptions", index, "superseded_failure"), &resumption.SupersededFailure, MaxBlockerBytes)
+		nested("integration_resumptions[].superseded_blocker", at("integration_resumptions", index, "superseded_blocker"), &resumption.SupersededBlocker, MaxBlockerBytes)
+		if resumption.SupersededRefusal != nil {
+			environmental("integration_resumptions[].superseded_refusal", at("integration_resumptions", index, "superseded_refusal"), resumption.SupersededRefusal)
+		}
+	}
+	for index := range s.SweepContinuations {
+		nested("sweep_continuations[].reason", at("sweep_continuations", index, "reason"), &s.SweepContinuations[index].Reason, MaxSelectionReasonBytes)
+	}
+	for index := range s.Retries {
+		nested("retries[].failure", at("retries", index, "failure"), &s.Retries[index].Failure, MaxRetryFailureBytes)
+	}
+	// The usage limit's kind is the provider's own name for the limit, read off
+	// its refusal rather than chosen from a set this harness keeps, so it is held
+	// to a bound like any other text the provider wrote.
+	own("usage_limit_kind", &s.UsageLimitKind, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	if s.DirectivePause != nil {
+		unstated("directive_pause.unresolved", "directive_pause.unresolved", &s.DirectivePause.Unresolved, MaxRecordedTextBytes)
+	}
+	if s.TrackerPause != nil {
+		nested("tracker_pause.failure", "tracker_pause.failure", &s.TrackerPause.Failure, MaxRetryFailureBytes)
+	}
+	if s.Changes != nil {
+		nested("changes.files", "changes.files", &s.Changes.Files, MaxChangeRecordBytes)
+		nested("changes.diff_stat", "changes.diff_stat", &s.Changes.DiffStat, MaxChangeRecordBytes)
+	}
+	own("publish_failure", &s.PublishFailure, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	// The drop's reason is the publication failure's sentence kept beside the
+	// moment, so it is held to the same bound.
+	if s.MergeDrop != nil {
+		unstated("merge_drop.reason", "merge_drop.reason", &s.MergeDrop.Reason, MaxRecordedTextBytes)
+	}
+	own("failure", &s.Failure, MaxBlockerBytes, failureCutNote)
+	own("blocker", &s.Blocker, MaxBlockerBytes, blockerCutNote)
+	own("cleanup_failure", &s.CleanupFailure, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	own("completion_recording_failure", &s.CompletionRecordingFailure, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
+	return texts
 }
 
-// boundRecordedTexts cuts every free-text field on the record to its bound,
+// overBound reports a record holding some free-text field longer than its bound.
+func (s *State) overBound() bool {
+	for _, field := range s.recordedTexts() {
+		if len(*field.text) > field.limit {
+			return true
+		}
+	}
+	return false
+}
+
+// boundRecordedTexts cuts every free-text field in the record to its bound,
 // saying in the field that it was cut. It is applied on both sides of the store.
 //
 // On write it is what makes the bound hold for every writer: a reason is often
@@ -1016,13 +1146,37 @@ func (s *State) recordedTexts() []recordedText {
 // loader refuses is the whole history nobody can list.
 //
 // It touches only a field that is actually over its bound, so it is a no-op over
-// every record already within its bounds.
+// every record already within its bounds. It writes through the record's nested
+// pointers and lists, so a caller that does not own them uses
+// withRecordedTextsBounded instead.
 func (s *State) boundRecordedTexts() {
 	for _, field := range s.recordedTexts() {
 		if len(*field.text) > field.limit {
 			*field.text = boundRecordedText(*field.text, field.limit, field.cutNote)
 		}
 	}
+}
+
+// withRecordedTextsBounded is the record with every free-text field cut to its
+// bound, for a writer handed a record it does not own. A State passed by value
+// still shares its nested records and lists with the caller, so cutting one in
+// place would rewrite the caller's copy underneath it; an over-long record is
+// copied whole first instead. A record within its bounds, which is nearly every
+// one, is returned as it was.
+func (s State) withRecordedTextsBounded() (State, error) {
+	if !s.overBound() {
+		return s, nil
+	}
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return State{}, fmt.Errorf("copy run state to bound its text: %w", err)
+	}
+	var copied State
+	if err := json.Unmarshal(encoded, &copied); err != nil {
+		return State{}, fmt.Errorf("copy run state to bound its text: %w", err)
+	}
+	copied.boundRecordedTexts()
+	return copied, nil
 }
 
 // DirectivePause is the user directive a run stopped short for. It is recorded
@@ -2281,8 +2435,8 @@ func (s State) Validate() error {
 		}
 	}
 	for _, field := range s.recordedTexts() {
-		if len(*field.text) > field.limit {
-			problems = append(problems, fmt.Errorf("%s is %d bytes, which exceeds the %d byte bound", field.key, len(*field.text), field.limit))
+		if !field.stated && len(*field.text) > field.limit {
+			problems = append(problems, fmt.Errorf("%s is %d bytes, which exceeds the %d byte bound", field.path, len(*field.text), field.limit))
 		}
 	}
 	if s.ContextTruncation != nil {

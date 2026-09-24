@@ -200,7 +200,7 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 
 // The size guard is asked with a label rather than with any text field, because
 // every free-text field on the record is now cut to its bound before it reaches
-// the encoder (see TestEveryStringFieldOnTheRunRecordIsBoundedOrStructured). A
+// the encoder (see TestEveryStringInTheRunRecordIsBoundedOrStructured). A
 // label is an identifier the tracker supplies and nothing here bounds by length,
 // so it is still something only the encoder's guard stands in front of — which
 // is what is being measured here.
