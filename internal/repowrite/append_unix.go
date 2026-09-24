@@ -12,3 +12,7 @@ import (
 // gap left over once every component above it has been resolved: the open fails
 // with a link there rather than writing through it.
 const appendFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND | syscall.O_NOFOLLOW
+
+// truncateFlags open an existing file to cut it, refusing a link at the final
+// component for the same reason.
+const truncateFlags = os.O_WRONLY | syscall.O_NOFOLLOW

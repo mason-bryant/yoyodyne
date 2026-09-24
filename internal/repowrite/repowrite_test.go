@@ -276,6 +276,65 @@ func TestAppendingRefusesALinkStandingAtTheTargetItself(t *testing.T) {
 	}
 }
 
+// A cut keeps every byte before it exactly as it was, which is the whole reason
+// it is a cut rather than a rewrite, and creates nothing that was not there.
+func TestTruncatingKeepsWhatIsBeforeTheCut(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	written := filepath.Join(root.Path(), "state", "sink.log")
+	writeFile(t, written, "first\nsecond\ntorn")
+	if _, err := root.Truncate("state/sink.log", int64(len("first\nsecond\n"))); err != nil {
+		t.Fatalf("Truncate() error = %v", err)
+	}
+	if content := readFile(t, written); content != "first\nsecond\n" {
+		t.Fatalf("content = %q, want the lines before the cut", content)
+	}
+	if _, err := root.Truncate("state/missing.log", 0); err == nil {
+		t.Fatal("Truncate() accepted a file that is not there")
+	}
+	if _, err := os.Stat(filepath.Join(root.Path(), "state", "missing.log")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Truncate() created the file it was asked to cut: %v", err)
+	}
+}
+
+func TestTruncatingThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "sink.log"), "somebody else's log")
+	link(t, filepath.Join(outside, "sink.log"), filepath.Join(root.Path(), "sink.log"))
+
+	_, err := root.Truncate("sink.log", 0)
+	var refused *EscapeError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Truncate() error = %v, want an EscapeError", err)
+	}
+	if content := readFile(t, filepath.Join(outside, "sink.log")); content != "somebody else's log" {
+		t.Fatalf("the file outside the repository reads %q, and a refused cut changed it", content)
+	}
+}
+
+func TestTruncatingRefusesALinkStandingAtTheTargetItself(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("refusing to follow the final component is the Unix hosts' O_NOFOLLOW")
+	}
+	t.Parallel()
+
+	root, outside := repository(t)
+	writeFile(t, filepath.Join(outside, "sink.log"), "somebody else's log")
+	target := filepath.Join(root.Path(), "sink.log")
+	link(t, filepath.Join(outside, "sink.log"), target)
+
+	opened, err := os.OpenFile(target, truncateFlags, 0)
+	if opened != nil {
+		opened.Close()
+	}
+	if err == nil {
+		t.Fatal("the truncate flags followed a symlink at the target")
+	}
+}
+
 // A directory is created with the same confinement a document is written with,
 // and creating one that is already there is the same answer rather than a
 // failure: the caller this exists for is a run resumed by a second process,

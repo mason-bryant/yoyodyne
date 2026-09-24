@@ -18,6 +18,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/sidestream"
 )
 
@@ -505,11 +506,16 @@ type MemoryProblem struct {
 	// refuse over, because it is the only one the writer can prove is its own
 	// unfinished write rather than history it could not read. The next write sets
 	// it aside, as the log's name with `.memory.torn-NNNN` in place of
-	// `.memory.jsonl`, and writes its own line whole.
+	// `.memory.jsonl`, and writes its own line whole; from then on the set-aside
+	// file is what is reported, torn and with no line, until an operator has read
+	// it and removed it.
 	Torn bool `json:"torn,omitempty"`
 }
 
 func (p MemoryProblem) String() string {
+	if p.Line == 0 {
+		return fmt.Sprintf("%s: %s", p.Log, p.Problem)
+	}
 	if p.Torn {
 		return fmt.Sprintf("%s line %d (torn, unterminated end of the log): %s", p.Log, p.Line, p.Problem)
 	}
@@ -836,7 +842,11 @@ func (s *MemoryStore) recorded(agent string) ([]MemoryRevision, []MemoryProblem,
 		revisions = append(revisions, read...)
 		problems = append(problems, found...)
 	}
-	return revisions, problems, nil
+	aside, err := s.setAside(agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	return revisions, append(problems, aside...), nil
 }
 
 // Live is what the agent still knows: every memory whose latest revision is not
@@ -1049,12 +1059,18 @@ func (s *MemoryStore) append(path string, encoded []byte) error {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return fmt.Errorf("create the memory directory: %w", err)
 	}
-	_, statErr := os.Stat(path)
+	confined, err := repowrite.NewRoot(s.root)
+	if err != nil {
+		return fmt.Errorf("resolve the memory directory: %w", err)
+	}
+	_, statErr := os.Lstat(path)
 	created := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !created {
 		return fmt.Errorf("inspect the memory log: %w", statErr)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	// Opened through the confined primitive, so a log replaced by a link out of
+	// the memory directory is refused rather than appended through.
+	file, err := confined.OpenAppend(filepath.Base(path), 0o600, 0o700)
 	if err != nil {
 		return fmt.Errorf("open the memory log: %w", err)
 	}
@@ -1116,23 +1132,17 @@ func (s *MemoryStore) mendTail(agent, path string) error {
 	if err != nil {
 		return err
 	}
+	// append syncs the directory when it creates a file, so the torn file's entry
+	// is durable before the cut below removes the only other copy of its bytes.
 	if err := s.append(aside, tail); err != nil {
 		return fmt.Errorf("set the torn end of the %s memory log aside: %w", agent, err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	confined, err := repowrite.NewRoot(s.root)
 	if err != nil {
-		return fmt.Errorf("open the %s memory log: %w", agent, err)
+		return fmt.Errorf("resolve the memory directory: %w", err)
 	}
-	if err := file.Truncate(int64(cut)); err != nil {
-		file.Close()
+	if _, err := confined.Truncate(filepath.Base(path), int64(cut)); err != nil {
 		return fmt.Errorf("cut the torn end from the %s memory log: %w", agent, err)
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return fmt.Errorf("sync the %s memory log: %w", agent, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close the %s memory log: %w", agent, err)
 	}
 	return nil
 }
@@ -1180,18 +1190,25 @@ const (
 	memoryTornFormat    = "%s" + memoryTornMiddle + "%04d"
 )
 
-// nextTornPath is where a torn end is about to be set aside: the number after the
-// highest already there, so one fragment never overwrites another.
-func (s *MemoryStore) nextTornPath(agent string) (string, error) {
+// tornPaths is every torn end set aside from one agent's log, oldest first, with
+// the number each carries. There are none for an agent whose writes have never
+// been interrupted, which is nearly all of them.
+func (s *MemoryStore) tornPaths(agent string) ([]string, []int, error) {
 	if err := domain.ValidateIdentifier("agent", agent); err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	entries, err := os.ReadDir(s.root)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read the memory directory: %w", err)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the memory directory: %w", err)
 	}
 	prefix := agent + memoryTornMiddle
-	highest := 0
+	var (
+		paths   []string
+		numbers []int
+	)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
 			continue
@@ -1200,11 +1217,49 @@ func (s *MemoryStore) nextTornPath(agent string) (string, error) {
 		if err != nil {
 			continue
 		}
+		paths = append(paths, filepath.Join(s.root, entry.Name()))
+		numbers = append(numbers, numbered)
+	}
+	return paths, numbers, nil
+}
+
+// nextTornPath is where a torn end is about to be set aside: the number after the
+// highest already there, so one fragment never overwrites another.
+func (s *MemoryStore) nextTornPath(agent string) (string, error) {
+	_, numbers, err := s.tornPaths(agent)
+	if err != nil {
+		return "", err
+	}
+	highest := 0
+	for _, numbered := range numbers {
 		if numbered > highest {
 			highest = numbered
 		}
 	}
 	return filepath.Join(s.root, fmt.Sprintf(memoryTornFormat, agent, highest+1)), nil
+}
+
+// setAside is the torn ends already set aside from one agent's log, each reported
+// as a torn problem so that a crash stays in front of whoever reads the agent's
+// memory after the write that mended it. It is reported until an operator has
+// read the file and removed it, which is the whole of the repair: the fragment
+// never became a revision, and nothing in the log refers to it.
+func (s *MemoryStore) setAside(agent string) ([]MemoryProblem, error) {
+	paths, _, err := s.tornPaths(agent)
+	if err != nil {
+		return nil, err
+	}
+	var problems []MemoryProblem
+	for _, each := range paths {
+		info, err := os.Lstat(each)
+		if err != nil {
+			return nil, fmt.Errorf("inspect the torn end %s: %w", filepath.Base(each), err)
+		}
+		problems = append(problems, MemoryProblem{Agent: agent, Log: filepath.Base(each), Torn: true,
+			Problem: fmt.Sprintf("%d bytes of a write a crash stopped were set aside from the log and never became a revision; read the file, then remove it (%s)",
+				info.Size(), each)})
+	}
+	return problems, nil
 }
 
 // archivePaths is every archive rolled off one agent's log, oldest first. There

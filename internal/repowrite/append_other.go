@@ -9,3 +9,5 @@ import "os"
 // answer, which leaves the link-planted-after-the-check case open on a platform
 // this harness is not run on.
 const appendFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+
+const truncateFlags = os.O_WRONLY

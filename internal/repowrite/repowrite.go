@@ -239,6 +239,40 @@ func (r Root) OpenAppend(relative string, file, directory fs.FileMode) (*os.File
 	return opened, nil
 }
 
+// Truncate cuts the existing file a root-relative path names to size bytes and
+// syncs it, and returns where it landed.
+//
+// It is here for the append-only log that has to lose an unfinished last line:
+// the bytes before the cut are already on the disk and must stay exactly as they
+// are, so the write-and-rename below would be a rewrite of every one of them to
+// remove a handful, and a writer that reached for `os.OpenFile` and `Truncate`
+// itself would be a write outside this package deciding its own containment.
+// Confinement is decided as it is for OpenAppend, and the open refuses a link
+// standing at the target for the same reason. Nothing is created: a file that is
+// not there has nothing to cut.
+func (r Root) Truncate(relative string, size int64) (string, error) {
+	clean, target, err := r.resolve(relative)
+	if err != nil {
+		return "", err
+	}
+	opened, err := os.OpenFile(target, truncateFlags, 0)
+	if err != nil {
+		return "", fmt.Errorf("open %s to cut it: %w", clean, err)
+	}
+	if err := opened.Truncate(size); err != nil {
+		opened.Close()
+		return "", fmt.Errorf("cut %s to %d bytes: %w", clean, size, err)
+	}
+	if err := opened.Sync(); err != nil {
+		opened.Close()
+		return "", fmt.Errorf("sync %s: %w", clean, err)
+	}
+	if err := opened.Close(); err != nil {
+		return "", fmt.Errorf("close %s: %w", clean, err)
+	}
+	return target, nil
+}
+
 // WriteFile replaces the document a repository-relative path names and returns
 // where it landed, which is the resolved path rather than the one asked for.
 //

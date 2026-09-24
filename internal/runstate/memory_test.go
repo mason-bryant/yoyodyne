@@ -482,8 +482,12 @@ func TestMemoryStoreReadsAndWritesPastATornLastLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
 	}
-	if len(problems) != 0 {
-		t.Fatalf("Memories() reported %v after the tear was mended", problems)
+	// The crash stays in front of whoever reads this agent's memory after the
+	// write that mended it: the fragment set aside is reported, torn, until an
+	// operator removes it, and it blocks no write while it is.
+	if len(problems) != 1 || !problems[0].Torn || problems[0].Log != "product-manager.memory.torn-0001" ||
+		!strings.Contains(problems[0].String(), "remove it") {
+		t.Fatalf("Memories() reported %v after the tear was mended, want the set-aside fragment named with its repair", problems)
 	}
 	if len(memories) != 1 || len(memories[0].Revisions) != 3 {
 		t.Fatalf("Memories() returned %v, want three revisions of one memory", memories)
@@ -506,6 +510,53 @@ func TestMemoryStoreReadsAndWritesPastATornLastLine(t *testing.T) {
 	}
 	if len(agents) != 1 || agents[0] != "product-manager" {
 		t.Errorf("Agents() returned %v, want the torn file not read as an agent", agents)
+	}
+	// Removing the file is the whole of the repair.
+	if err := os.Remove(filepath.Join(store.Root(), "product-manager.memory.torn-0001")); err != nil {
+		t.Fatalf("remove the torn end set aside: %v", err)
+	}
+	if _, problems, err = store.Memories("product-manager"); err != nil || len(problems) != 0 {
+		t.Fatalf("Memories() reported %v (%v) after the torn file was removed", problems, err)
+	}
+}
+
+// TestMemoryStoreRefusesToCutOrAppendThroughALinkOutOfItsDirectory holds the
+// store's writes to the memory directory: a log replaced by a link to a file
+// elsewhere is refused, and the file it points at is left as it was.
+func TestMemoryStoreRefusesToCutOrAppendThroughALinkOutOfItsDirectory(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	store := newMemoryStore(t, filepath.Join(base, "state"))
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	path := filepath.Join(store.Root(), "product-manager.memory.jsonl")
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the memory log: %v", err)
+	}
+	outside := filepath.Join(base, "elsewhere.jsonl")
+	torn := append(append([]byte{}, stored...), []byte(`{"schema_ver`)...)
+	if err := os.WriteFile(outside, torn, 0o600); err != nil {
+		t.Fatalf("write the file outside: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove the memory log: %v", err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err == nil {
+		t.Fatal("Remember() wrote through a link out of the memory directory")
+	}
+	after, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read the file outside: %v", err)
+	}
+	if string(after) != string(torn) {
+		t.Errorf("the file outside the memory directory was changed: %q", after)
 	}
 }
 
