@@ -183,9 +183,11 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 // All three ask whether the change survived, and none of them holds a claim
 // without it: a stoppage whose branch is gone leaves nothing for a fresh run to
 // strand, and an integration stop whose branch is gone is one nothing can resume
-// at all. It is asked of the repository, as the pull's hold asks it, and a look
-// that could not be made holds the claim — so a repository nobody could read
-// costs a claim left standing rather than a change run over.
+// at all. The pull's hold lets that stop go for the same reason, rather than
+// holding it out of the pull behind a resume that would refuse. It is asked of
+// the repository, as the pull's hold asks it, and a look that could not be made
+// holds the claim — so a repository nobody could read costs a claim left
+// standing rather than a change run over.
 //
 // A run that has not ended is never one of these. Its record is what fills a
 // developer slot and its claim is what keeps the item out of every pull, and

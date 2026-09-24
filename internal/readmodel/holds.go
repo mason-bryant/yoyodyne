@@ -245,8 +245,22 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		return carryOut
 	}) {
 		found, preserved := remaining[run.RunID]
-		// An approved change the environment stopped is answered before the item's
-		// triage record is read at all, and without reading it: what such a stoppage
+		// A run with nothing of its change left is held only by a decision standing
+		// about it, and that is so of an integration stop too. Its approval is of a
+		// change the repository no longer has, so `yoyo triage resume` — which puts
+		// a retired checkout back from the branch and refuses once the branch is
+		// gone — is nothing anybody can do about it, and the claim audit gives its
+		// claim back for the same reason (stillHeld). Answered as the resumable
+		// stop below, it was held out of the pull naming a verb that refuses, while
+		// the audit released the same run: two readers, two answers, and a next
+		// mover that could not move.
+		if !preserved {
+			carryOut, problem := decided(workItemID, run.RunID)
+			reasons[workItemID] = heldFor(continuedStoppage(run), carryOut, problem)
+			continue
+		}
+		// An approved change the environment stopped, with its change still there,
+		// is answered without reading the item's triage record: what such a stoppage
 		// waits on is the harness resuming the promotion, whatever has or has not
 		// been decided about the item's other stoppages. It is reported as the
 		// harness's move — the same wait the surfaces already call a carry-out —
@@ -255,14 +269,10 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		// about, and an item given two next movers is a disagreement only the
 		// operator can settle.
 		if run.IntegrationStop != nil {
-			reasons[workItemID] = backlog.Hold{Reason: stoppedIntegration(run, found, preserved), Decided: true}
+			reasons[workItemID] = backlog.Hold{Reason: stoppedIntegration(run, found), Decided: true}
 			continue
 		}
 		carryOut, problem := decided(workItemID, run.RunID)
-		if !preserved {
-			reasons[workItemID] = heldFor(continuedStoppage(run), carryOut, problem)
-			continue
-		}
 		reasons[workItemID] = heldFor(preservedChange(run, found), carryOut, problem)
 	}
 	// The merged publications last. Only these know the change reached everywhere
@@ -376,18 +386,18 @@ func uncheckable(found triage.Found) string {
 // What was found of the change is still said, because it is what a reader about
 // to release the item checks; it is last because it is the part that can be cut
 // without leaving somebody unable to act.
-func stoppedIntegration(run runstate.State, found triage.Found, preserved bool) string {
+//
+// It is only ever said of a stop whose change the look found or could not rule
+// out. One whose change is gone has nothing to resume, and is held, if at all,
+// as any other stoppage with nothing left is.
+func stoppedIntegration(run runstate.State, found triage.Found) string {
 	account := fmt.Sprintf(
 		"run %s stopped on it with its change approved, and the environment is what stopped the promotion, so `yoyo triage resume` finishes it rather than a decision or a fresh run",
 		run.RunID)
-	switch {
-	case !preserved:
-		return account
-	case found.Unknown:
+	if found.Unknown {
 		return account + " (" + uncheckable(found) + ")"
-	default:
-		return account + " (" + whatWasFound(found) + ")"
 	}
+	return account + " (" + whatWasFound(found) + ")"
 }
 
 // continuedStoppage says why an item whose stopped run left nothing behind is
