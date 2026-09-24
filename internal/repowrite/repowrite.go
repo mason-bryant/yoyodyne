@@ -19,6 +19,17 @@
 // below the root is resolved, a symlink is followed only while it stays inside
 // the repository, and anything that leaves is refused rather than written.
 //
+// The readers of those same directories resolve through the same walk, and for
+// a defect that costs more rather than less: bytes that escaped a write are
+// simply missing afterwards, while a document read from outside the repository
+// comes back named by a path the repository appears to hold. An invariant
+// planted behind a symlinked `docs` was delivered to every developer's context
+// and every reviewer's evidence as a constraint nobody committed. So Resolve is
+// where a configured directory is turned into a real one, whichever direction
+// the bytes are about to move; a read and a write that disagreed about where
+// `docs/decisions` is would be a disagreement about which repository is being
+// worked on.
+//
 // What this does not defend against is a symlink planted between the resolution
 // and the rename. That is a race against something already running inside the
 // repository, and the escapes this exists for are configuration and repository
@@ -133,9 +144,11 @@ func Relative(value string) (string, error) {
 	return clean, nil
 }
 
-// Resolve is where a repository-relative path actually writes to: every
-// component below the root followed through whatever the filesystem has put
-// there, and an EscapeError rather than a path for anything that leaves.
+// Resolve is where a repository-relative path actually lands: every component
+// below the root followed through whatever the filesystem has put there, and an
+// EscapeError rather than a path for anything that leaves. It answers a read as
+// well as a write, because "where does this configured path go" is one question
+// however the bytes are about to move.
 //
 // The path does not have to exist. What does not exist cannot be a symlink, so
 // once a component is missing the rest of the path is taken as written — which
@@ -143,6 +156,20 @@ func Relative(value string) (string, error) {
 func (r Root) Resolve(relative string) (string, error) {
 	_, resolved, err := r.resolve(relative)
 	return resolved, err
+}
+
+// ResolveDirectory is Resolve for a directory rather than a document: the same
+// component-by-component walk, and the repository root itself accepted as an
+// answer. Relative refuses "." because nothing writes a document at the root,
+// and a reader configured to read the whole repository is pointed there
+// legitimately — so the one path a writer has no use for is the one a reader may
+// be given.
+func (r Root) ResolveDirectory(relative string) (string, error) {
+	trimmed := strings.TrimSpace(relative)
+	if trimmed != "" && !filepath.IsAbs(trimmed) && path.Clean(filepath.ToSlash(trimmed)) == "." {
+		return r.path, nil
+	}
+	return r.Resolve(relative)
 }
 
 func (r Root) resolve(relative string) (clean, resolved string, err error) {

@@ -136,6 +136,15 @@ const (
 	// the refused invocation left there is preserved on the branch rather than
 	// delivered, and the round spends nothing whatever the worktree says.
 	CauseUsageWindow EnvironmentalCause = "usage-window"
+	// CauseReplayKilled is an approved change whose replay onto a moved target
+	// the harness ended before Git finished it — a budget that ran out, a context
+	// that was cancelled, a process that went silent — and which was put back on
+	// its branch afterwards. A killed rebase leaves the state directory a
+	// conflicted one does, and was being reported as a conflict: terminal, and
+	// telling an operator to settle one that did not exist (run b82c1c5a, under
+	// load against the local Git budget; yoyodyne-ifd.406). Only the integration
+	// stop records it, because a replay happens only there.
+	CauseReplayKilled EnvironmentalCause = "replay-killed"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -143,7 +152,7 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow, CauseReplayKilled:
 		return true
 	default:
 		return false
@@ -179,6 +188,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the process carrying the run was gone and no ending was ever recorded"
 	case CauseUsageWindow:
 		return "the provider's usage window refused it and resets past the maximum pause the harness will wait"
+	case CauseReplayKilled:
+		return "the replay onto the moved target was ended by the harness before it finished"
 	default:
 		return string(c)
 	}

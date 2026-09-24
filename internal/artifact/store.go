@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -92,16 +93,17 @@ func (s Store) Load() (Set, error) {
 	read := map[string]bool{}
 	claims := map[string][]Artifact{}
 	for _, home := range homes {
-		paths, err := discover(root, home, excluded)
+		files, err := discover(root, home, excluded)
 		if err != nil {
 			return Set{}, err
 		}
-		for _, relative := range paths {
+		for _, file := range files {
+			relative := file.relative
 			if read[relative] {
 				continue
 			}
 			read[relative] = true
-			loaded, err := s.read(filepath.Join(root, filepath.FromSlash(relative)), relative)
+			loaded, err := s.read(file.location, relative)
 			if err != nil {
 				var unreadable unreadableError
 				if errors.As(err, &unreadable) {
@@ -382,7 +384,15 @@ func (s Store) loadOne(id string) (recorded Artifact, body string, err error) {
 	if err != nil {
 		return Artifact{}, "", err
 	}
-	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(found.Path)))
+	// Resolved rather than joined, for the reason Load's walk is: the document
+	// this reads is the one the mutation below will write back over, and a
+	// mutation that read one file and replaced another is the escape read
+	// backwards.
+	location, err := root.Resolve(found.Path)
+	if err != nil {
+		return Artifact{}, "", err
+	}
+	content, err := os.ReadFile(location)
 	if err != nil {
 		return Artifact{}, "", fmt.Errorf("read artifact %q: %w", found.Path, err)
 	}
@@ -429,7 +439,15 @@ func (s Store) path(id, directory string) (absolute, relative string, err error)
 		return "", "", fmt.Errorf("artifact directory %q carries an identity scheme of its own and is not read as an artifact home", directory)
 	}
 	relative = target + "/" + name
-	return filepath.Join(root, filepath.FromSlash(relative)), relative, nil
+	// Resolved the way the write that follows will resolve it, so what is
+	// inspected here for a document already claiming the id is the file the write
+	// would replace rather than whatever the same string reaches through a
+	// symlink.
+	absolute, err = root.Resolve(relative)
+	if err != nil {
+		return "", "", err
+	}
+	return absolute, relative, nil
 }
 
 // within reports a directory that is one of the named directories or below one.
@@ -491,11 +509,28 @@ func render(recorded Artifact, body string) (string, error) {
 	return rendered.String(), nil
 }
 
-// discover lists the Markdown one home holds, to any depth and without
-// following symlinks out of the repository. Every path it returns is still
-// validated when it is read.
-func discover(root, home string, excluded []string) ([]string, error) {
-	base := filepath.Join(root, filepath.FromSlash(home))
+// discovered is one Markdown file a home holds: the repository-relative path it
+// is named by, and where the walk actually found it. The two are kept apart
+// because a home may be reached through a symlink that stays inside the
+// repository — a document behind one is still named by the home it was
+// configured under, and is still read from where it really is rather than
+// through the link a second time.
+type discovered struct {
+	relative string
+	location string
+}
+
+// discover lists the Markdown one home holds, to any depth and without following
+// symlinks out of the repository. The home itself is resolved component by
+// component first, because joining it onto the root proves nothing about where
+// it lands: one symlink above `docs/product` reads whatever is on the other side
+// of it and reports every document there as the product's own. Every path it
+// returns is still validated when it is read.
+func discover(root repowrite.Root, home string, excluded []string) ([]discovered, error) {
+	base, err := root.ResolveDirectory(home)
+	if err != nil {
+		return nil, err
+	}
 	info, err := os.Lstat(base)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -507,16 +542,16 @@ func discover(root, home string, excluded []string) ([]string, error) {
 		return nil, fmt.Errorf("artifact home %q is not a directory", home)
 	}
 
-	var found []string
+	var found []discovered
 	err = filepath.WalkDir(base, func(candidate string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		relative, err := filepath.Rel(root, candidate)
+		relative, err := filepath.Rel(base, candidate)
 		if err != nil {
 			return err
 		}
-		slashed := filepath.ToSlash(relative)
+		slashed := path.Join(home, filepath.ToSlash(relative))
 		if entry.IsDir() {
 			if isExcluded(slashed, excluded) {
 				return fs.SkipDir
@@ -529,13 +564,13 @@ func discover(root, home string, excluded []string) ([]string, error) {
 		if strings.EqualFold(entry.Name(), indexFileName) {
 			return nil
 		}
-		found = append(found, slashed)
+		found = append(found, discovered{relative: slashed, location: candidate})
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("discover artifacts under %q: %w", home, err)
 	}
-	sort.Strings(found)
+	sort.Slice(found, func(first, second int) bool { return found[first].relative < found[second].relative })
 	return found, nil
 }
 
@@ -664,13 +699,11 @@ func splitDocument(content string) (metadata, body string, err error) {
 // resolveRoot resolves the repository the artifacts belong to. It is the same
 // root the writes are confined to rather than a second reading of it, so a path
 // this package reads from and the path it would write to cannot disagree about
-// where the repository is.
-func resolveRoot(repositoryRoot string) (string, error) {
-	root, err := repowrite.NewRoot(repositoryRoot)
-	if err != nil {
-		return "", err
-	}
-	return root.Path(), nil
+// where the repository is — and the reads below go through its own walk for the
+// reason the writes do, because a home that reads as `docs/product` is wherever
+// the filesystem has since decided that is.
+func resolveRoot(repositoryRoot string) (repowrite.Root, error) {
+	return repowrite.NewRoot(repositoryRoot)
 }
 
 // resolveDirectories keeps every configured directory inside the repository.

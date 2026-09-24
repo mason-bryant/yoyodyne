@@ -360,6 +360,16 @@ var (
 	// never resolves a conflict, because which side of one is right is a
 	// judgement about the product rather than a Git operation.
 	ErrRebaseConflict = errors.New("change cannot be replayed onto the moved integration target")
+	// ErrReplayKilled reports a replay this harness ended before Git finished it:
+	// a budget that ran out, a context that was cancelled, or a process that went
+	// silent past its liveness bound. It is never a conflict. A killed rebase
+	// leaves the same state directory a conflicted one does, and reading it as one
+	// sent an operator to settle a disagreement that did not exist (run b82c1c5a,
+	// under load against the local Git budget). It is returned only once the
+	// replay has been abandoned and the worktree is back on its branch, so a
+	// caller may treat it as the environment having stopped the promotion rather
+	// than as anything about the change.
+	ErrReplayKilled = errors.New("the replay onto the moved integration target was ended by the harness before it finished")
 	// ErrPrimaryNotReady reports the primary checkout carrying uncommitted state
 	// the harness does not own, so no worktree may be cut from it and no change
 	// may be promoted into it. It is a sentinel rather than only a message because
@@ -2321,7 +2331,9 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 // Only the run's own branch is rewritten, and only into commits the harness
 // authors. A conflict is refused rather than resolved: the replay is aborted,
 // the branch is left exactly where it was, and ErrRebaseConflict is what the
-// caller reports to whoever owns that decision.
+// caller reports to whoever owns that decision. A replay the harness killed —
+// timed out, cancelled, or stalled — is abandoned the same way and reported as
+// ErrReplayKilled instead, because nobody has a decision to make about it.
 func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, message string) (Rebase, error) {
 	target := worktree.TargetBranch
 	if err := validateTargetBranch(target); err != nil {
@@ -2409,6 +2421,11 @@ func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, messa
 // reported as a conflict either, for the other half of the same reason: what
 // makes a conflict safe to hand over is that the branch and the worktree were
 // put back, and that is precisely what did not happen.
+//
+// Nor is a replay the harness itself ended. A rebase killed part-way leaves the
+// same state directory a conflicted one does, so it is told apart by how the
+// process stopped before that directory is ever asked about, and it is reported
+// as ErrReplayKilled once the worktree is back on its branch.
 func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, targetCommit string) error {
 	// A refreshed export is a path this worktree's index has been told to leave
 	// alone, and Git refuses to move a HEAD across one. The branch's own copies go
@@ -2433,6 +2450,9 @@ func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, ta
 	if rebased.Status == execution.ProcessSucceeded {
 		return nil
 	}
+	if stopped, killed := killedReplay(rebased.Status); killed {
+		return m.abandonKilledReplay(ctx, path, worktree, targetCommit, stopped)
+	}
 	failed := fmt.Errorf("replay %s onto %s at %s failed with exit code %d: %s",
 		worktree.Branch, worktree.TargetBranch, targetCommit, rebased.ExitCode, strings.TrimSpace(rebased.Stderr))
 	started, err := m.replayInProgress(ctx, path)
@@ -2454,6 +2474,66 @@ func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, ta
 			aborted.ExitCode, strings.TrimSpace(aborted.Stderr)))
 	}
 	return fmt.Errorf("%w: %w", ErrRebaseConflict, failed)
+}
+
+// killedReplay reports a rebase this harness ended rather than Git answering,
+// and how it was ended, in the words the stop is recorded in. A cancelled one is
+// in the class with the other two: nothing about the change stopped it.
+func killedReplay(status execution.ProcessStatus) (string, bool) {
+	switch status {
+	case execution.ProcessTimedOut:
+		return "timed out", true
+	case execution.ProcessCancelled:
+		return "was cancelled", true
+	case execution.ProcessStalled:
+		return "stalled", true
+	default:
+		return "", false
+	}
+}
+
+// abandonKilledReplay puts a worktree back on its branch after the harness
+// killed the rebase replaying it, and only then reports the stop. A rebase
+// killed part-way leaves its state directory and a detached HEAD behind, and a
+// worktree left like that is one nothing may promote or replay again.
+//
+// The clean-up runs outside the caller's cancellation, because a cancelled
+// context is one of the ways a replay is killed and the clean-up is still owed
+// then; it is still bounded by the local Git budget every command gets. An
+// abort that fails is not reported as ErrReplayKilled, for the reason a failed
+// abort is not reported as a conflict: what makes the stop safe to resume from
+// is the worktree having been put back, and that is what did not happen.
+func (m *Manager) abandonKilledReplay(ctx context.Context, path string, worktree Worktree, targetCommit, stopped string) error {
+	account := fmt.Sprintf("replay %s onto %s at %s %s", worktree.Branch, worktree.TargetBranch, targetCommit, stopped)
+	cleanup := context.WithoutCancel(ctx)
+	started, err := m.replayInProgress(cleanup, path)
+	if err != nil {
+		return errors.Join(errors.New(account), err)
+	}
+	if started {
+		aborted, err := m.run(cleanup, "-C", path, "rebase", "--abort")
+		if err != nil {
+			return errors.Join(errors.New(account), err)
+		}
+		if aborted.Status != execution.ProcessSucceeded {
+			return fmt.Errorf("%s, and abandoning it failed with exit code %d: %s; the worktree is left part-way through it",
+				account, aborted.ExitCode, strings.TrimSpace(aborted.Stderr))
+		}
+		if left, err := m.replayInProgress(cleanup, path); err != nil || left {
+			return errors.Join(fmt.Errorf("%s, and its state directory survived the abort; the worktree is left part-way through it", account), err)
+		}
+	}
+	// Killed before it wrote any state, a rebase has nothing to abort, and the
+	// branch still being checked out is what says it also moved nothing.
+	head, err := m.run(cleanup, "-C", path, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return errors.Join(errors.New(account), err)
+	}
+	if head.Status != execution.ProcessSucceeded || strings.TrimSpace(head.Stdout) != "refs/heads/"+worktree.Branch {
+		return fmt.Errorf("%s, and the worktree was not back on %s afterwards (HEAD %q); the worktree is left part-way through it",
+			account, worktree.Branch, strings.TrimSpace(head.Stdout))
+	}
+	return fmt.Errorf("%w: %s", ErrReplayKilled, account)
 }
 
 // replayInProgress reports whether Git left a rebase half-applied in this

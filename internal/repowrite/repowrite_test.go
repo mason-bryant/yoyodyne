@@ -38,6 +38,38 @@ func TestAPathThatDoesNotExistYetResolvesToWhereItWouldBe(t *testing.T) {
 	}
 }
 
+// A reader may legitimately be pointed at the whole repository, which is the one
+// path Resolve refuses because no document is written at the root itself.
+func TestTheRepositoryRootResolvesAsADirectoryAndNotAsAPath(t *testing.T) {
+	t.Parallel()
+
+	root, _ := repository(t)
+	for _, value := range []string{".", "./", " . "} {
+		resolved, err := root.ResolveDirectory(value)
+		if err != nil {
+			t.Fatalf("ResolveDirectory(%q) error = %v", value, err)
+		}
+		if resolved != root.Path() {
+			t.Fatalf("ResolveDirectory(%q) = %q, want the repository root %q", value, resolved, root.Path())
+		}
+		if _, err := root.Resolve(value); err == nil {
+			t.Fatalf("Resolve(%q) accepted the repository root as somewhere to write", value)
+		}
+	}
+
+	// Everything else it answers is what Resolve answers, refusals included.
+	if _, err := root.ResolveDirectory("../outside"); err == nil {
+		t.Fatal("ResolveDirectory() accepted a directory that climbs out of the repository")
+	}
+	resolved, err := root.ResolveDirectory("docs/decisions")
+	if err != nil {
+		t.Fatalf("ResolveDirectory() error = %v", err)
+	}
+	if want := filepath.Join(root.Path(), "docs", "decisions"); resolved != want {
+		t.Fatalf("ResolveDirectory() = %q, want %q", resolved, want)
+	}
+}
+
 func TestASymlinkThatStaysInsideTheRepositoryIsFollowed(t *testing.T) {
 	t.Parallel()
 
