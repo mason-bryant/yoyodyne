@@ -115,6 +115,11 @@ type WorktreeManager interface {
 	// before it.
 	CommitAttempt(ctx context.Context, worktree gitworktree.Worktree, message string) (string, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
+	// PrepareLanding is the promotion onto a target branch the forge protects:
+	// the same checks and the same harness commit Integrate makes, and the local
+	// target left where it is. The change reaches the target through its pull
+	// request, and the local branch only follows the forge by CatchUpTarget.
+	PrepareLanding(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
 	// that ever rewrites a run's branch, and it never resolves a conflict.
@@ -160,6 +165,10 @@ type PullRequests interface {
 	Ensure(ctx context.Context, request publish.Request) (publish.PullRequest, error)
 	Merge(ctx context.Context, request publish.MergeRequest) (publish.MergeResult, error)
 	State(ctx context.Context, head string) (publish.PullRequest, error)
+	// Protection asks the forge whether the target branch is protected, which
+	// decides whether a promotion may move the local target before the forge
+	// merges. An error is a question nobody answered, and is read as protected.
+	Protection(ctx context.Context, branch string) (publish.BranchProtection, error)
 }
 
 // ChangeReviewer runs one independent review of a developer's change. The
@@ -807,6 +816,12 @@ type Outcome struct {
 	// which is a repository with no configured remote and nothing else.
 	PullRequest    *runstate.PullRequest `json:"pull_request,omitempty"`
 	PublishSkipped string                `json:"publish_skipped,omitempty"`
+	// TargetProtection says what the forge answered about the target branch
+	// being protected, and so which way this run promoted: a protected target —
+	// or one the forge could not be asked about — lands through the pull request
+	// and never moves the local target, and an unprotected one is promoted
+	// locally first. It is set by a publishing run that reached its promotion.
+	TargetProtection string `json:"target_protection,omitempty"`
 	// PublishFailure reports a promotion that could not be published. The local
 	// target branch is the authoritative one and it already moved, so this is an
 	// outstanding publication rather than a failed run.
@@ -4766,7 +4781,17 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	if err := a.settleRemoteTarget(ctx); err != nil {
 		return err
 	}
-	integration, err := p.Worktrees.Integrate(ctx, a.worktree, integrationMessage(a.item, a.outcome))
+	// A target the forge protects is one whose local copy this run never moves:
+	// the change lands by the forge merging its pull request, and the local branch
+	// follows the forge by a fast-forward afterwards. Promoting locally first is
+	// what stranded commits on main twice, because a merge the forge refused or
+	// has not performed yet leaves the local target ahead of the remote with
+	// nothing that ever reconciles the two.
+	promote := p.Worktrees.Integrate
+	if a.landsThroughPullRequest(ctx) {
+		promote = p.Worktrees.PrepareLanding
+	}
+	integration, err := promote(ctx, a.worktree, integrationMessage(a.item, a.outcome))
 	if err != nil {
 		// A refused promotion may already have committed what the developer left,
 		// and that commit is what this worktree's HEAD is now. It is recorded
@@ -4789,6 +4814,7 @@ func (a *activeRun) integrate(ctx context.Context) error {
 		SourceCommit:         integration.SourceCommit,
 		TargetCommit:         integration.TargetCommit,
 		PreviousTargetCommit: integration.PreviousTargetCommit,
+		ThroughPullRequest:   integration.ThroughPullRequest,
 	}
 	// The approving verdict authorized this promotion, so it also authorized the
 	// merge of the pull request that carried it. Publishing does not fail the run
@@ -4799,6 +4825,12 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	// fast-forward reconciles. The promotion stands either way; the blocker says so.
 	if err := a.publishIntegration(ctx); err != nil {
 		return err
+	}
+	// A landing through the pull request has landed only where the forge merged
+	// it or holds the merge queued. Anything else left the change on its pull
+	// request and nowhere on the target, so the item is not closed on it.
+	if integration.ThroughPullRequest && !a.landedThroughPullRequest() {
+		return a.blockOnUnlandedPullRequest(integration)
 	}
 	a.state.Phase = runstate.PhaseCompleting
 	a.state.UpdatedAt = p.clock().Now()
@@ -4825,6 +4857,15 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	}
 	a.observe(ctx, deliveryComplete, "completed")
 	if a.outcome.Integration == nil {
+		return outcome, nil
+	}
+	// A landing the forge has queued is on no target branch yet, so nothing
+	// proves this run's artifacts are integrated and cleanup would refuse them.
+	// They stay where they are, in the cleaning_up phase, until `yoyo reconcile`
+	// finds the merge performed, catches the local target up onto it, and cleans
+	// up on that proof.
+	if a.outcome.Integration.ThroughPullRequest && a.mergeQueued() {
+		a.observe(ctx, deliveryCleanUp, "partial")
 		return outcome, nil
 	}
 	if err := a.cleanUp(ctx); err != nil {

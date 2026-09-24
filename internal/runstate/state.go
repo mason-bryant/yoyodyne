@@ -1518,6 +1518,12 @@ type Integration struct {
 	SourceCommit         string `json:"source_commit"`
 	TargetCommit         string `json:"target_commit"`
 	PreviousTargetCommit string `json:"previous_target_commit"`
+	// ThroughPullRequest records a promotion onto a target branch the forge
+	// protects, which never moves the local target: the change lands only by the
+	// forge merging its pull request, and TargetCommit names the commit being
+	// landed rather than where the local target stands. Absent is a local
+	// promotion, which every run recorded before this was.
+	ThroughPullRequest bool `json:"through_pull_request,omitempty"`
 }
 
 type State struct {

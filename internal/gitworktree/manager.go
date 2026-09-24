@@ -278,12 +278,19 @@ type Observation struct {
 // harness commits whatever the developer left before it advances anything, and
 // that commit exists whether or not the advance succeeds. TargetCommit is the
 // one field that is only ever set by a promotion that happened.
+//
+// ThroughPullRequest marks a promotion PrepareLanding prepared rather than one
+// Integrate made: the local target was not moved, and the change reaches the
+// target only by the forge merging the pull request that carries it. Its
+// TargetCommit is the commit being landed — the promoted commit every check
+// after it asks the remote about — and not where the local target stands.
 type Integration struct {
 	Branch               string `json:"branch"`
 	TargetBranch         string `json:"target_branch"`
 	SourceCommit         string `json:"source_commit"`
 	TargetCommit         string `json:"target_commit"`
 	PreviousTargetCommit string `json:"previous_target_commit"`
+	ThroughPullRequest   bool   `json:"through_pull_request,omitempty"`
 }
 
 // Rebase is what re-preparing a run's change against a moved target produced:
@@ -2244,12 +2251,60 @@ func (m *Manager) CommitAttempt(ctx context.Context, worktree Worktree, message 
 // nothing about the promotion: the source commit is the branch tip either way,
 // and the target is still only ever fast-forwarded onto it.
 func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message string) (Integration, error) {
+	attempted, inPrimary, err := m.prepareIntegration(ctx, worktree, message, true)
+	if err != nil {
+		return attempted, err
+	}
+	if err := m.fastForward(ctx, worktree.Branch, attempted.TargetBranch, attempted.PreviousTargetCommit, attempted.SourceCommit, inPrimary); err != nil {
+		return attempted, err
+	}
+	integrated, err := m.resolveBranchCommit(ctx, attempted.TargetBranch)
+	if err != nil {
+		return attempted, err
+	}
+	if integrated != attempted.SourceCommit {
+		return attempted, fmt.Errorf("%w: %s is at %s after the update, want %s", ErrNotFastForward, attempted.TargetBranch, integrated, attempted.SourceCommit)
+	}
+	attempted.TargetCommit = integrated
+	return attempted, nil
+}
+
+// PrepareLanding is Integrate for a target branch the forge protects: every
+// check Integrate makes before it moves anything, and the commit of whatever
+// the developer left, and then nothing more. The local target branch is not
+// moved. The change reaches the target through the pull request that carries it,
+// and the primary checkout's copy of the target only ever follows the forge,
+// by a fast-forward onto what the remote has.
+//
+// The target must still stand at the worktree's recorded base, exactly as for a
+// promotion: a target that moved is ErrTargetDrift, which is what sends a run to
+// replay its change onto where the target went rather than asking the forge to
+// merge a change written against somewhere else.
+//
+// What is reported is the same shape Integrate reports, marked ThroughPullRequest,
+// with TargetCommit naming the commit being landed.
+func (m *Manager) PrepareLanding(ctx context.Context, worktree Worktree, message string) (Integration, error) {
+	attempted, _, err := m.prepareIntegration(ctx, worktree, message, false)
+	if err != nil {
+		return attempted, err
+	}
+	attempted.TargetCommit = attempted.SourceCommit
+	attempted.ThroughPullRequest = true
+	return attempted, nil
+}
+
+// prepareIntegration is what Integrate and PrepareLanding share: the ownership
+// and drift checks and the harness commit. A local promotion also has the
+// primary checkout to answer for, which is ready and not holding the target
+// elsewhere; a landing through a pull request writes nothing there, so it asks
+// neither, and the catch-up that later moves the checkout makes its own checks.
+func (m *Manager) prepareIntegration(ctx context.Context, worktree Worktree, message string, local bool) (Integration, bool, error) {
 	target := worktree.TargetBranch
 	if err := validateTargetBranch(target); err != nil {
-		return Integration{}, err
+		return Integration{}, false, err
 	}
 	if target == worktree.Branch {
-		return Integration{}, errors.New("integration target must differ from the worktree branch")
+		return Integration{}, false, errors.New("integration target must differ from the worktree branch")
 	}
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -2261,42 +2316,47 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 	// state.
 	path, head, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
-		return Integration{}, err
+		return Integration{}, false, err
 	}
 	dirty, err := m.isDirty(ctx, path)
 	if err != nil {
-		return Integration{}, err
+		return Integration{}, false, err
 	}
 	if !dirty && head == worktree.BaseCommit {
-		return Integration{}, ErrNoChanges
+		return Integration{}, false, ErrNoChanges
 	}
-	if err := m.ValidateReady(ctx); err != nil {
-		return Integration{}, fmt.Errorf("primary checkout is not ready for integration: %w", err)
+	if local {
+		if err := m.ValidateReady(ctx); err != nil {
+			return Integration{}, false, fmt.Errorf("primary checkout is not ready for integration: %w", err)
+		}
 	}
 	previousTarget, err := m.resolveBranchCommit(ctx, target)
 	if err != nil {
-		return Integration{}, err
+		return Integration{}, false, err
 	}
 	if previousTarget != worktree.BaseCommit {
-		return Integration{}, fmt.Errorf("%w: %s is at %s, recorded base is %s", ErrTargetDrift, target, previousTarget, worktree.BaseCommit)
+		return Integration{}, false, fmt.Errorf("%w: %s is at %s, recorded base is %s", ErrTargetDrift, target, previousTarget, worktree.BaseCommit)
 	}
-	inPrimary, err := m.targetCheckout(ctx, target)
-	if err != nil {
-		return Integration{}, err
+	inPrimary := false
+	if local {
+		inPrimary, err = m.targetCheckout(ctx, target)
+		if err != nil {
+			return Integration{}, false, err
+		}
 	}
 
 	sourceCommit := head
 	if dirty {
 		sourceCommit, err = m.commitWorktree(ctx, path, message)
 		if err != nil {
-			return Integration{}, err
+			return Integration{}, false, err
 		}
 	}
 	if sourceCommit == worktree.BaseCommit {
-		return Integration{}, ErrNoChanges
+		return Integration{}, false, ErrNoChanges
 	}
 	// From here the harness may already have made a commit, which exists whether
-	// or not the promotion below succeeds. It is reported alongside a refusal for
+	// or not the promotion that follows succeeds. It is reported alongside a refusal for
 	// the reason PublishBranch reports its own: a caller that could not learn of
 	// it would be left holding a worktree at a HEAD nothing recorded, which is the
 	// one state the ownership check has to be able to tell from an agent's commit.
@@ -2306,18 +2366,7 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 		SourceCommit:         sourceCommit,
 		PreviousTargetCommit: previousTarget,
 	}
-	if err := m.fastForward(ctx, worktree.Branch, target, previousTarget, sourceCommit, inPrimary); err != nil {
-		return attempted, err
-	}
-	integrated, err := m.resolveBranchCommit(ctx, target)
-	if err != nil {
-		return attempted, err
-	}
-	if integrated != sourceCommit {
-		return attempted, fmt.Errorf("%w: %s is at %s after the update, want %s", ErrNotFastForward, target, integrated, sourceCommit)
-	}
-	attempted.TargetCommit = integrated
-	return attempted, nil
+	return attempted, inPrimary, nil
 }
 
 // RebaseOntoTarget replays a run's change onto wherever its target branch is

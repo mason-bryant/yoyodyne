@@ -1769,9 +1769,15 @@ Runs that predate the fix in `yoyodyne-ifd.177` could produce this by losing a
 cross-machine race after promoting, and a repository still standing in that state
 is what this section is for. A run today cannot produce it that way: it settles
 where the remote target stands before promoting, and stops without closing
-anything if the remote moves afterwards. Reaching it now takes somebody pushing
-to the target directly. The recovery is the same either way, and it is yours to
-run. (A queued merge landing among others used to reach this page too — as a
+anything if the remote moves afterwards. Runs before `yoyodyne-ifd.429.5` could
+also produce it on a target the forge protects, by promoting onto the local
+branch and then having the forge refuse or hold the merge: the local branch was
+left ahead of the remote with the run's commits, which is how the product stalled
+on 2026-09-20 and again on 2026-09-24. A run today lands a protected target
+through its pull request and moves the local branch only by a fast-forward onto
+the remote ([configuration](configuration.md#a-protected-target-lands-through-its-pull-request)).
+Reaching this state now takes somebody pushing to the target directly. The
+recovery is the same either way, and it is yours to run. (A queued merge landing among others used to reach this page too — as a
 publication reported unconfirmable for good rather than as a wedge — until
 confirmation asked whether the remote contains the promotion rather than whether
 its tip carries exactly the promotion's content.)

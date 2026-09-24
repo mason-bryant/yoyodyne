@@ -3318,6 +3318,10 @@ func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, s
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
 }
 
+func (partialWorktreeManager) PrepareLanding(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {
+	return gitworktree.Integration{}, errors.New("partial worktree cannot be landed")
+}
+
 func (partialWorktreeManager) RebaseOntoTarget(context.Context, gitworktree.Worktree, string) (gitworktree.Rebase, error) {
 	return gitworktree.Rebase{}, errors.New("partial worktree cannot be replayed")
 }

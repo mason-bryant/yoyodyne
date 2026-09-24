@@ -686,6 +686,92 @@ func (g GitHub) Contains(ctx context.Context, base, commit string) (bool, error)
 	return *compared.AheadBy == 0, nil
 }
 
+// BranchProtection is what the forge says stands between a push and one branch.
+// By names which of the forge's two mechanisms protects it, for a reader who has
+// to go and look at the rule; it is empty for a branch nothing protects.
+type BranchProtection struct {
+	Protected bool
+	By        string
+}
+
+// Protection asks the forge whether a branch is protected against changes that
+// do not arrive through a pull request, both ways the forge can protect one:
+// the older per-branch protection, and a ruleset whose rules apply to the
+// branch. It is the question scripts/cut-release.sh asks before a release cut,
+// asked here the same way so the two cannot disagree about one branch.
+//
+// A branch with per-branch protection is protected whatever that protection
+// requires. A ruleset protects it where it carries a rule that keeps a direct
+// push out — a required pull request, a required status check, or a restriction
+// on updates — and rules that only shape what may be pushed, such as a naming
+// pattern, do not count.
+//
+// A question the forge does not answer is an error rather than an answer:
+// the caller decides what an unanswered question means, and "not protected" is
+// the one reading that would let a run move a branch the forge refuses.
+func (g GitHub) Protection(ctx context.Context, branch string) (BranchProtection, error) {
+	if err := validateArgument("branch", branch); err != nil {
+		return BranchProtection{}, err
+	}
+	protection, err := g.api(ctx, "repos/{owner}/{repo}/branches/"+branch+"/protection")
+	if err != nil {
+		return BranchProtection{}, fmt.Errorf("ask the forge whether %s is protected: %w", branch, err)
+	}
+	if protection.Status == execution.ProcessSucceeded {
+		return BranchProtection{Protected: true, By: "branch protection"}, nil
+	}
+	// The forge answers an unprotected branch here with a 404. Anything else —
+	// a 403 for an account that may not read the rule, a forge that is down —
+	// is a question nobody answered.
+	if answer := strings.TrimSpace(protection.Stderr + "\n" + protection.Stdout); !strings.Contains(answer, "HTTP 404") {
+		return BranchProtection{}, fmt.Errorf("ask the forge whether %s is protected: exit code %d: %s",
+			branch, protection.ExitCode, g.redact(firstLine(answer)))
+	}
+	rules, err := g.api(ctx, "repos/{owner}/{repo}/rules/branches/"+branch)
+	if err != nil {
+		return BranchProtection{}, fmt.Errorf("ask the forge which rulesets apply to %s: %w", branch, err)
+	}
+	if rules.Status != execution.ProcessSucceeded {
+		return BranchProtection{}, fmt.Errorf("ask the forge which rulesets apply to %s: exit code %d: %s",
+			branch, rules.ExitCode, g.redact(firstLine(strings.TrimSpace(rules.Stderr))))
+	}
+	var applied []struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(rules.Stdout)), &applied); err != nil {
+		return BranchProtection{}, fmt.Errorf("decode the rulesets that apply to %s: %w", branch, err)
+	}
+	for _, rule := range applied {
+		switch rule.Type {
+		case "pull_request", "required_status_checks", "update":
+			return BranchProtection{Protected: true, By: "ruleset"}, nil
+		}
+	}
+	return BranchProtection{}, nil
+}
+
+// api runs one GET against the forge's REST API for the configured remote's
+// repository. The API verb takes no --repo flag, so the repository is named in
+// the environment, in the form Contains explains.
+func (g GitHub) api(ctx context.Context, endpoint string) (execution.ProcessResult, error) {
+	url, err := g.remoteURL(ctx, g.remoteName())
+	if err != nil {
+		return execution.ProcessResult{}, err
+	}
+	repository, err := remoteRepository(url)
+	if err != nil {
+		return execution.ProcessResult{}, fmt.Errorf("resolve the repository of remote %s: %w", g.remoteName(), err)
+	}
+	return g.Runner.Run(ctx, execution.Command{
+		Name:     g.binary(),
+		Args:     []string{"api", "--method", "GET", endpoint},
+		Dir:      g.Dir,
+		Env:      append(execution.ForgeEnvironment(nil), "GH_REPO="+repository),
+		Timeout:  g.timeout(),
+		Redactor: execution.NewRedactor(g.RedactValues...),
+	}, nil)
+}
+
 // find lists the one pull request a run branch may have, in any state. Listing
 // is deliberate: it reports "there is none" as an empty result rather than as a
 // failed command, so an absent pull request is never confused with a forge that
