@@ -37,7 +37,7 @@ the prose the check reads, every one of them a term with a row below.
 | `heartbeat`   | how often to repeat                                                                                                                        | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md)                                                                                                                         |
 | `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
 | `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
-| `re-arm`      | repeat the merge request a forge dropped, once per publication — the `yoyo triage rearm` verb and the budget it spends                     | `yoyo triage rearm` and its help; the merge re-arms count in `yoyo status`; the development manager's triage decisions and `yoyo ground`; `internal/orchestrator` and `internal/runstate`                                                |
+| `re-arm`      | repeat the merge request a forge dropped, once per publication — the `yoyo triage rearm` verb and the budget it spends                     | `yoyo triage rearm` and its help; the merge re-arms count in `yoyo status`; the development manager's triage decisions and `yoyo ground`; the guides that say when to type it — [operations](operations.md), [recovery](configuration/recovery.md), [the conversation](conversation.md), and [configuration](configuration.md); `internal/orchestrator` and `internal/runstate` |
 | `seat`        | an instance of a specific persona type — a developer seat, the product manager seat — often with persistent memory but not always. A *developer slot* is the harness's word for the capacity one developer seat fills: the seat is what does the work, and the slot is what it takes up while it does | the operator's own conversations, which is where the word came from; [a developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label), the yoyodyne-ifd.388 mechanism, and the reliability seat yoyodyne-ifd.415 configured under it |
 | `sink`        | the process that posts to Slack                                                                                                            | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                                 |
 | `steer`       | direct the work, or change what is being worked on                                                                                         | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                          |
@@ -58,7 +58,10 @@ the governed documents, but `yoyo triage rearm` is a verb an operator types and
 `yoyo status` counts, and a word a command is called cannot be swept out of the
 command's help without renaming the command. So it is registered, and a row
 permits its term everywhere the check reads — the governed documents included,
-in every spelling — not only in the command's output. What keeps it out of a
+in every spelling — not only in the command's output. The guides that tell an
+operator when to type the verb use the word too, so the check reads them for
+this term as well: take the row out and every guide sentence saying `re-arm`
+or `rearm` fails with the command. What keeps it out of a
 sentence that could have said *repeat the merge request* is the reviewer, not
 the check.
 
@@ -159,14 +162,22 @@ one word is looked for as one word, so `hand back` in a sentence about handing
 something back is not reported as `handback`. Nothing is matched across a blank
 line or a fenced block, because a term cannot wrap across either.
 
+It reads the guides for a few terms only, since yoyodyne-ifd.360: the README
+and every Markdown file under `docs/` outside the homes above, this document,
+and the records under `docs/diagnoses`, `docs/experiments`, and
+`docs/releases`. A guide is held to the register only for a term the check
+marks as used in the guides — today `re-arm` and no other — so a guide that
+leans on a row fails once the row is gone, and is not read for any other word.
+
 Three things it deliberately does not read. A document's frontmatter is identity
 and revision history, and a revision's recorded reason is what somebody decided
 in their own words on a date — rewriting one to change a word falsifies a record
-instead of clarifying a sentence. Fenced blocks are code. And the guides under
-`docs/`, the README, the tracker's own items, and the Go source outside the
-packages named above are outside it: they are operator-facing too, but no sweep
-has been run over them and holding a document to an inventory nobody took over
-it would fail on words nobody was asked about.
+instead of clarifying a sentence. Fenced blocks are code. And the guides for
+every other term, the records under `docs/`, the tracker's own
+items, and the Go source outside the packages named above are outside it: they
+are operator-facing too, but no sweep has been run over them and holding a
+document to an inventory nobody took over it would fail on words nobody was
+asked about.
 
 What no check can do is recognize a word coined this morning. That is the
 reviewer's, and it is written into the reviewer persona as a finding class: a

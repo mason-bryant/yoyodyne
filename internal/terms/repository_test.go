@@ -31,6 +31,14 @@ func TestThisRepositoryOwnCoinedTermsAreRegistered(t *testing.T) {
 	if len(documents) == 0 {
 		t.Fatal("no documents were found in this repository's artifact homes; the walk is looking in the wrong place")
 	}
+	// The same for the guides, which is where the `yoyo triage rearm` prose is.
+	guides, err := GuideFiles(repositoryRoot)
+	if err != nil {
+		t.Fatalf("GuideFiles() error = %v", err)
+	}
+	if len(guides) == 0 {
+		t.Fatal("no guides were found in this repository; the walk is looking in the wrong place")
+	}
 	entries, err := Register(repositoryRoot)
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)

@@ -450,6 +450,59 @@ func TestDocumentsWalksTheHomesAndNothingElse(t *testing.T) {
 	}
 }
 
+func TestGuideFilesWalksTheGuidesAndNotTheHomesOrTheRecords(t *testing.T) {
+	t.Parallel()
+
+	directory := root(t, register(), map[string]string{
+		"README.md":                   "# Readme\n",
+		"docs/operations.md":          "# Operations\n",
+		"docs/configuration/runs.md":  "# Runs\n",
+		"docs/designs/one.md":         "# One\n",
+		"docs/diagnoses/a.md":         "# A\n",
+		"docs/releases/v1.md":         "# V1\n",
+		"docs/experiments/e/notes.md": "# E\n",
+		"docs/slack/notes.txt":        "not markdown\n",
+	})
+	guides, err := GuideFiles(directory)
+	if err != nil {
+		t.Fatalf("GuideFiles() error = %v", err)
+	}
+	want := []string{"README.md", "docs/configuration/runs.md", "docs/operations.md"}
+	if strings.Join(guides, ",") != strings.Join(want, ",") {
+		t.Fatalf("GuideFiles() = %v, want %v", guides, want)
+	}
+}
+
+// The guides are held to the register for a term marked Guides — `re-arm`,
+// which the guides use because `yoyo triage rearm` is what the command is
+// called — and for no other term, since nobody has swept them for the rest.
+// So the row is what the guide prose leans on: with it the guide passes, and
+// without it the guide fails in every spelling the verb is written.
+func TestGuidesAreHeldToTheRegisterForATermMarkedGuides(t *testing.T) {
+	t.Parallel()
+
+	guide := map[string]string{
+		"docs/operations.md": "# Operations\n\nRun `yoyo triage rearm` once; a second re-arm is refused.\n\nThe cadence is set elsewhere.\n",
+	}
+	permitted := root(t, register("| `re-arm` | repeat the merge request a forge dropped | `yoyo triage rearm` |"), guide)
+	forbidden := root(t, register(), guide)
+
+	allowed, err := Check(permitted)
+	if err != nil {
+		t.Fatalf("Check(permitted) error = %v", err)
+	}
+	if len(allowed) != 0 {
+		t.Fatalf("Check() reported %v, want nothing: re-arm is registered and cadence is not read in a guide", allowed)
+	}
+	refused, err := Check(forbidden)
+	if err != nil {
+		t.Fatalf("Check(forbidden) error = %v", err)
+	}
+	if len(refused) != 1 || refused[0].Path != "docs/operations.md" || refused[0].Line != 3 || refused[0].Term != "re-arm" {
+		t.Fatalf("Check() reported %v, want re-arm once at docs/operations.md:3", refused)
+	}
+}
+
 // A home a project has not created is intent not yet written rather than a
 // defect, which is the judgement the goals check already makes about an absent
 // artifact home.

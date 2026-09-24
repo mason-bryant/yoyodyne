@@ -78,11 +78,26 @@ const RegisterHeading = "## The register"
 const ReplacedHeading = "## Replaced rather than registered"
 
 // Homes are the document trees this check reads: the artifact homes the sweep
-// covered. The guides under `docs/` are operator-facing too and are deliberately
-// not read here — the sweep measured the homes, and holding documents to an
-// inventory nobody has taken over them would fail on words nobody was asked
-// about.
+// covered. The guides under `docs/` are operator-facing too and are not read
+// for the whole vocabulary — the sweep measured the homes, and holding
+// documents to an inventory nobody has taken over them would fail on words
+// nobody was asked about. They are read for the few terms marked Guides; see
+// Guides.
 var Homes = []string{"docs/product", "docs/designs", "docs/decisions"}
+
+// Guides are the operator guides: the README, and every Markdown file under
+// `docs/` that is not in a home, not the register, and not under one of the
+// record directories in NotGuides. They are read for the terms a Coinage marks
+// Guides and for nothing else, because no sweep has been run over them for the
+// rest: a term held there is one whose row the guides lean on, so removing the
+// row fails on the guide prose that uses it rather than leaving that prose
+// using a word nothing defines.
+var Guides = []string{"README.md", "docs"}
+
+// NotGuides are the directories under `docs/` that hold records rather than
+// guides. A diagnosis or a release note says what was true on a date in the
+// words used then, and rewording one to follow the register falsifies it.
+var NotGuides = []string{"docs/diagnoses", "docs/experiments", "docs/releases"}
 
 // Sources are the Go packages whose string literals this check reads: the
 // command line, the conversation, the notifier and the Slack sink, the read
@@ -132,6 +147,13 @@ type Coinage struct {
 	// the two mistakes: a term this check misses a reviewer still catches, and a
 	// term it reports wrongly is a check people learn to argue with.
 	Whole bool
+	// Guides holds the operator guides to the register for this term as well as
+	// the homes and the sources. It is set for a term the guides already use
+	// under a row, so the row is what keeps them legible: `re-arm` is the verb
+	// `yoyo triage rearm`, and the guides that tell an operator when to type it
+	// have to say the word the command is called. A term without it is not read
+	// in the guides at all, since nobody has swept them for it.
+	Guides bool
 	// PlainWords is the ordinary wording the audit recorded, carried here so a
 	// failure says what to write instead rather than only what is wrong.
 	PlainWords string
@@ -152,7 +174,7 @@ var Vocabulary = []Coinage{
 	{Term: "minute zero", Match: "minute zero", PlainWords: "before development begins"},
 	{Term: "pane of glass", Match: "pane of glass", PlainWords: "one window"},
 	{Term: "posture", Match: "posture", PlainWords: "which tools a role may use"},
-	{Term: "re-arm", Match: "re-arm", PlainWords: "repeat the merge request"},
+	{Term: "re-arm", Match: "re-arm", Guides: true, PlainWords: "repeat the merge request"},
 	{Term: "seam", Match: "seam", Whole: true, PlainWords: "name the boundary instead — what attaches to what"},
 	{Term: "sidecar", Match: "sidecar", PlainWords: "a separate directory outside the repository"},
 	{Term: "sink", Match: "sink", PlainWords: "the process that posts to Slack"},
@@ -337,6 +359,49 @@ func Documents(root string) ([]string, error) {
 	return documents, nil
 }
 
+// GuideFiles is every guide, repository-relative and in sorted order: the
+// Markdown files under Guides less the homes, the register, and the record
+// directories. Exported for the reason Documents is.
+func GuideFiles(root string) ([]string, error) {
+	skipped := make(map[string]bool)
+	for _, directory := range append(append([]string{}, Homes...), NotGuides...) {
+		skipped[directory] = true
+	}
+	var guides []string
+	for _, guide := range Guides {
+		start := filepath.Join(root, filepath.FromSlash(guide))
+		err := filepath.WalkDir(start, func(current string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			relative, err := filepath.Rel(root, current)
+			if err != nil {
+				return err
+			}
+			relative = filepath.ToSlash(relative)
+			if entry.IsDir() {
+				if skipped[relative] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if relative == RegisterPath || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+				return nil
+			}
+			guides = append(guides, relative)
+			return nil
+		})
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("walk %s for guides: %w", guide, err)
+		}
+	}
+	sort.Strings(guides)
+	return guides, nil
+}
+
 // SourceFiles is every Go file under the sources that is not a test, and every
 // file under the assets, repository-relative and in sorted order. Exported for
 // the reason Documents is: a walk that found nothing and a set of files with
@@ -384,7 +449,7 @@ func SourceFiles(root string) ([]string, error) {
 // the register does not define, every register entry that defines nothing, and
 // every replaced term still excused in a document that no longer carries it.
 // Problems come out in the order the register is written, then the order the
-// documents are walked, then the order the sources are, so two runs over one
+// documents are walked, then the guides, then the sources, so two runs over one
 // checkout report the same thing in the same order.
 func Check(root string) ([]Problem, error) {
 	entries, err := Register(root)
@@ -414,6 +479,18 @@ func Check(root string) ([]Problem, error) {
 			return nil, fmt.Errorf("read %s: %w", document, err)
 		}
 		found := scan{path: document, patterns: patterns, registered: registered, excused: excused[document], carried: carried}
+		problems = append(problems, found.problems(passages(strings.Split(content, "\n")))...)
+	}
+	guides, err := GuideFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, guide := range guides {
+		content, err := read(filepath.Join(root, filepath.FromSlash(guide)))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", guide, err)
+		}
+		found := scan{path: guide, patterns: patterns, registered: registered, guide: true}
 		problems = append(problems, found.problems(passages(strings.Split(content, "\n")))...)
 	}
 	files, err := SourceFiles(root)
@@ -649,6 +726,9 @@ type scan struct {
 	// carried records, for an excused term, that this file was seen to carry it,
 	// so the row excusing a document that no longer does is reported.
 	carried map[string]map[string]bool
+	// guide is set for an operator guide, which is read only for the terms
+	// marked Guides.
+	guide bool
 }
 
 // problems reports the unregistered coinage in some passages of one file.
@@ -660,7 +740,7 @@ func (s scan) problems(stretches []passage) []Problem {
 		// and a term written twice on one line is one problem rather than two.
 		found := make(map[int]map[int]bool)
 		for position, coinage := range Vocabulary {
-			if s.registered[coinage.Term] {
+			if s.registered[coinage.Term] || (s.guide && !coinage.Guides) {
 				continue
 			}
 			matches := s.patterns[position].FindAllStringIndex(stretch.text, -1)
