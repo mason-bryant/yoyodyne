@@ -176,6 +176,16 @@ const (
 	// against the commit the file was read at. One event per path, and a path
 	// that was refused is recorded with the refusal rather than left out.
 	EventRepositoryRead EventType = "repository.read"
+	// A memory a management conversation recorded for its own agent, recorded as
+	// what was asked for and what came of it, separately, for the reason a tracker
+	// action is: a write that was refused is never readable as one that landed.
+	// They carry the memory's name, the operation, and the revision the store
+	// numbered it, and never its text: the memory store holds what the agent
+	// knows, and a copy of it in the conversation record is the second store the
+	// agent-memory design refuses.
+	EventMemoryRequested EventType = "memory.requested"
+	EventMemoryRecorded  EventType = "memory.recorded"
+	EventMemoryFailed    EventType = "memory.failed"
 )
 
 // MaxEventTextBytes bounds the text one recorded event carries — a message either

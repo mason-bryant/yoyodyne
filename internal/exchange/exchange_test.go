@@ -308,3 +308,19 @@ func TestAFollowUpNeedNotRestateWhoIsBeingAsked(t *testing.T) {
 		t.Fatal("an exchange was opened without naming who is asked")
 	}
 }
+
+// An unresolved exchange's own report carries the build the latest round was
+// spoken under, skipping rounds written before rounds recorded one, and none at
+// all where no round did rather than a guess.
+func TestAnExchangesReportIsAboutTheBuildItsLatestRoundRan(t *testing.T) {
+	t.Parallel()
+
+	const earlier, later = "0123456789abcdef0123456789abcdef01234567", "fedcba9876543210fedcba9876543210fedcba98"
+	recorded := Exchange{Rounds: []Round{{Build: earlier}, {Build: later}, {}}}
+	if got := recorded.lastBuild(); got != later {
+		t.Fatalf("lastBuild() = %q, want the latest recorded %q", got, later)
+	}
+	if got := (Exchange{Rounds: []Round{{}}}).lastBuild(); got != "" {
+		t.Fatalf("lastBuild() = %q, want none where no round recorded one", got)
+	}
+}

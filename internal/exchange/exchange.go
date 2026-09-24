@@ -258,6 +258,19 @@ func (e Exchange) Open() bool { return e.Outcome == "" }
 // Spent is how many rounds this exchange has taken.
 func (e Exchange) Spent() int { return len(e.Rounds) }
 
+// lastBuild is the harness revision the latest round that recorded one was
+// spoken under, which is the build an exchange's own report is about. A round
+// written before rounds carried it records none, and an exchange of only those
+// reports none rather than a guess.
+func (e Exchange) lastBuild() string {
+	for i := len(e.Rounds) - 1; i >= 0; i-- {
+		if e.Rounds[i].Build != "" {
+			return e.Rounds[i].Build
+		}
+	}
+	return ""
+}
+
 // RoundsRemaining is how many further rounds this exchange may still take. It is
 // never negative: an exchange at its cap has nothing remaining rather than a
 // debt.

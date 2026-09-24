@@ -1193,6 +1193,50 @@ manager advising, from a month-old briefing, that CLAUDE.md gain a section it
 had opened with for weeks — is now a read before the advice, and a picture that
 far behind is re-read by the harness before the turn is answered at all.
 
+### What the management roles remember
+
+The product manager, the architect, and the development manager each keep a
+memory of their own across conversations: short conclusions that should shape
+how they work next time — how you read a reply, what this project's checks tend
+to do, a mistake not to repeat, where a piece of work they are carrying stands.
+
+**Every turn opens with what the agent remembers**, under "What you remember",
+labelled as its own earlier conclusions rather than as evidence or instruction:
+the canonical documents, the tracker, and what you say now all outrank a memory,
+and the role is told that a memory they contradict is out of date. The newest
+memories are carried up to 16 KiB and the rest are named as left out rather than
+dropped silently. What an agent's side threads concluded still arrives in its own
+block, as before, and is not repeated here.
+
+**A turn records what it learned** by ending its reply with a `yoyodyne-memory`
+block: `remember` records a memory or a new revision of one, `retire` takes one
+out of the briefing and says why it stopped being true, and `compact` folds a
+memory's earlier revisions into a shorter one that names them. Each write goes
+through the same `agent-context` actions a side thread's merge does, so it is
+redacted before it reaches the disk, held to the store's budget (at most four
+writes a reply, 8 KiB each, 32 KiB for everything the agent knows), and recorded
+with the conversation, turn, provider, model, account, and configuration that
+wrote it. A write the store refuses — past the budget, compacting a revision that
+does not exist — is told to the role on its next turn rather than failing the
+reply. You are told what was written as it happens, in the transcript and in
+`--json` (`memories`):
+
+```text
+the product manager recorded memory "checks-are-slow" (revision 1)
+```
+
+**The conversation's record says a write happened and never what it said.** Each
+write is one `memory.requested` event and then one `memory.recorded` or
+`memory.failed`, carrying the memory's name and revision number; the text lives
+only in the memory store, under the state root at
+`products/<product>/memory/<agent>.memory.jsonl`, because a copy in the
+conversation record would be a second store. A command that reads that history
+as text is `yoyodyne-ifd.298`, which is not yet built.
+
+**The developer and the reviewer are unchanged.** Neither keeps a memory: their
+turns carry no memory briefing, their contracts do not describe the block, and a
+reply from either that carries one is refused whole, with nothing recorded.
+
 ### Roles asking each other things
 
 A question one role cannot answer itself used to cost you one of two things:

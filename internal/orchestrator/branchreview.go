@@ -98,7 +98,11 @@ type BranchReviewer struct {
 	// Limits bounds the described change. A zero value takes the branch-scope
 	// defaults, which are larger than a work item's because an accumulated
 	// change is many work items by construction.
-	Limits       gitworktree.DiffLimits
+	Limits gitworktree.DiffLimits
+	// Build is the repository revision this harness binary was built from, which
+	// is what the reviewer's reports carry: a report is a claim about the build
+	// that filed it. Empty is a binary that recorded none.
+	Build        string
 	RedactValues []string
 }
 
@@ -410,6 +414,7 @@ func (b BranchReviewer) collectReports(outcome *BranchReviewOutcome, entries []r
 		Role:         domain.RoleReviewer,
 		Agent:        b.agentName(),
 		RunID:        outcome.ReviewID,
+		Build:        b.Build,
 		ProductID:    b.Config.Product.ID,
 		RepositoryID: string(b.Config.Product.RepositoryID),
 	}, b.clock().Now())

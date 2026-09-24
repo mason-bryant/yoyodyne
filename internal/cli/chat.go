@@ -617,11 +617,11 @@ func prepareChat(ctx context.Context, role domain.AgentRole, agentName, configPa
 	if err != nil {
 		return preparedChat{}, err
 	}
-	// What this agent knows, read for the side conversations it held beside this
-	// one: each concluded side thread merges its substance in here, and this
-	// conversation's next turn is where that revision is read. The redaction values
-	// are the store's rather than this reader's — a store built without them is one
-	// nothing may be written through — and reading is all this wiring does.
+	// What this agent knows. A management role's turns are briefed from it and
+	// record what they conclude into it, through the context actions; every
+	// role's turns read from it what the side conversations held beside this one
+	// concluded. The redaction values are the store's, so what a turn writes is
+	// redacted before it reaches the disk, exactly as a side stream's merge is.
 	memories, err := runstate.NewMemoryStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
 	if err != nil {
 		return preparedChat{}, err
@@ -729,6 +729,15 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// The collected reports are the same pile the runs fill, read and written
 		// from here because this conversation is where the operator already is.
 		Reports: parts.reports,
+		// And what counts a report's build against the target branch, asked of the
+		// product's repository exactly as `yoyo reports` and the channel ask it, so
+		// a report from a build that predates a fix says so before the product
+		// manager admits work from it.
+		Builds: repositoryDeployments{
+			repository: repository,
+			runner:     processRunner,
+			timeout:    chatTrackerTimeout,
+		},
 		// The same directives every run reads before it commits to work. One
 		// recorded from this conversation is not this conversation's: it belongs
 		// to the product, and it reaches runs in other processes exactly as it
@@ -780,10 +789,11 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
 		Amendments: parts.amendments,
-		// The agent's own memory, read for what its side threads concluded. A side
-		// conversation never speaks into this one: what it worked out arrives as a
-		// memory revision naming the stream it came from, and anything it promised
-		// stays tentative until this thread ratifies it.
+		// The agent's own memory: what a management role recorded in earlier turns,
+		// briefed into each turn and written to by it, and what its side threads
+		// concluded. A side conversation never speaks into this one: what it worked
+		// out arrives as a memory revision naming the stream it came from, and
+		// anything it promised stays tentative until this thread ratifies it.
 		Memories: memories,
 		// How evidence from outside the repository is gathered on the role's
 		// behalf, bounded by what the operator configured. It is the harness's own

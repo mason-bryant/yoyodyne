@@ -193,6 +193,13 @@ type Options struct {
 	// already on. It is optional like the rest, and a conversation without one
 	// says so rather than showing an empty pile.
 	Reports Reports
+	// Builds counts a report's build against the target branch, so a report
+	// filed from a build that predates a fix says by how many changes wherever it
+	// is shown — to the operator in /reports and to the product manager in the
+	// reports carried into its turn, before either admits work from it. It is
+	// optional: without it every report still names its build, and none says how
+	// far behind it is.
+	Builds report.Builds
 	// Directives is what the operator has told the harness, durable and
 	// product-scoped. It is here because this conversation is where most
 	// directives are received, and it is not the conversation's own memory:
@@ -296,12 +303,13 @@ type Options struct {
 	// refuses the block plainly and says so in the turn, rather than leaving the
 	// role to advise from its briefing believing it had looked.
 	RepositoryReader RepositoryReader
-	// Memories is what this agent knows, read for the side conversations it held
-	// beside this one: each concluded side thread merges its substance into the
-	// agent's memory, and this turn is where that revision is read. It is optional
-	// like the rest, and a conversation without one carries no merges rather than
-	// reporting that there were none — an agent that holds no side threads is
-	// every agent until one is configured for them.
+	// Memories is what this agent knows. A management role's turns are briefed
+	// from it and write what they conclude back into it, through the context
+	// actions; every role's turns read from it the side conversations it held
+	// beside this one, each of which merged its substance in when it concluded.
+	// It is optional like the rest, and a conversation without one carries no
+	// memory and no merges rather than reporting that there were none, and
+	// refuses a memory write as having nowhere to go.
 	Memories Memories
 	// Evaluations is where a durable recommendation about an operator's idea is
 	// kept. It is optional like the rest: a conversation without one still
@@ -801,7 +809,11 @@ type Reply struct {
 	// because a conversation that quietly went and asked another agent something
 	// is the kind of side conversation this channel exists not to be.
 	Exchanges []ExchangeRound `json:"exchanges,omitempty"`
-	Evidence  Evidence        `json:"evidence"`
+	// Memories are what this reply wrote into the agent's own memory, in the
+	// order it asked, with the revision each became or why it was refused. They
+	// already happened, so they are reported rather than put to anybody.
+	Memories []MemoryOutcome `json:"memories,omitempty"`
+	Evidence Evidence        `json:"evidence"`
 }
 
 // Open loads or starts a role's conversation. A recorded conversation with a
@@ -1303,6 +1315,22 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 				reply.Evaluation = recorded
 			}
 		}
+		// What the role asked to remember, written into its own memory through the
+		// context actions. It never starts another round: what became of each write
+		// travels with whatever this round is already handing back, or waits for the
+		// next turn where it is handing back nothing.
+		if len(parsed.Memories) > 0 {
+			outcomes, err := s.performMemoryWrites(ctx, parsed.Memories)
+			reply.Memories = append(reply.Memories, outcomes...)
+			if err != nil {
+				return reply, err
+			}
+			if undelivered != "" {
+				undelivered += renderMemoryResults(outcomes)
+			} else if err := s.carryResults(renderMemoryResults(outcomes)); err != nil {
+				return reply, err
+			}
+		}
 		if undelivered != "" {
 			continuation = undelivered + continueAfterResults
 		}
@@ -1717,7 +1745,10 @@ type parsedReply struct {
 	Reads []repositoryread.Request
 	// Ask is the one question this reply puts to another role, where it puts
 	// one. Most replies put none, which is not an empty ask.
-	Ask           *exchange.Ask
+	Ask *exchange.Ask
+	// Memories are what this reply asked to be remembered, revised, or retired
+	// in the agent's own memory. Most replies ask for none.
+	Memories      []MemoryWrite
 	Reports       []report.Entry
 	ReportProblem error
 }
@@ -1768,6 +1799,11 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 		parsed.Prose = rest
 		return parsed, &AskError{Err: err}
 	}
+	prose, memories, err := extractMemoryWrites(prose)
+	if err != nil {
+		parsed.Prose = rest
+		return parsed, &MemoryError{Err: err}
+	}
 	parsed.Prose = prose
 	parsed.Actions = actions
 	parsed.Proposals = proposals
@@ -1776,6 +1812,7 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	parsed.Evaluation = evaluated
 	parsed.Reads = reads
 	parsed.Ask = ask
+	parsed.Memories = memories
 	return parsed, nil
 }
 
@@ -2414,6 +2451,9 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// reply that rests on a file is one the operator should be able to hold
 		// against the commit the file was read at.
 		s.reportRepositoryReads(out, reply)
+		// What it put into its own memory, because a memory enters every later turn
+		// and one the operator was never told about is agent state they cannot see.
+		s.reportMemories(out, reply)
 		// How old the picture the reply rests on was and what the harness did
 		// about it, where it did anything: a re-read the operator never asked for
 		// is a re-read they have to be told about, and a re-read that could not be
@@ -2493,6 +2533,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		var unkeptEvaluation *EvaluationError
 		if errors.As(err, &unkeptEvaluation) {
 			fmt.Fprintf(out, "%v\nNothing was recorded, and nothing was admitted or approved either way; ask it to record the evaluation again.\n\n", unkeptEvaluation)
+			continue
+		}
+		var unreadableMemory *MemoryError
+		if errors.As(err, &unreadableMemory) {
+			fmt.Fprintf(out, "%v\nNothing was remembered; ask it what it meant to record.\n\n", unreadableMemory)
 			continue
 		}
 		var unreadableConcern *ConcernError
@@ -3302,6 +3347,9 @@ func (s *Session) turnPrompt(message string, picture *PictureAge) string {
 	// carrying one in, which is what a report channel with no standing reader
 	// otherwise depends on.
 	prompt.WriteString(s.renderUnhandledReports())
+	// What this agent concluded in earlier turns and recorded for itself, labelled
+	// as its own conclusions rather than as evidence or instruction.
+	prompt.WriteString(s.renderMemories())
 	// What this agent's own side threads concluded, as memory rather than as their
 	// dialogue: the two transcripts never meet, and a commitment one of them
 	// drafted is ratified here or nowhere.
@@ -3708,6 +3756,8 @@ The pile is worked through rather than sampled, so what you do with the ones a t
 What becomes of one is a product decision and it is yours. Judge it as you judge anything else: work to admit, a proposal to make, a concern to raise, an upstream change to argue for, or nothing at all — a report that asks for nothing is handled by saying so. Record what you decided with the "handle" action, whose "reason" is what a later reader finds when they ask what happened about this. That record is the only thing that takes a report out of the pile: a report you discussed and did not handle is offered again to your next conversation, and one you handled is never offered again. So handle what you have actually decided and leave the rest, rather than clearing the list.
 
 A report is not a work item and handling one does not create anything. If the answer is work, admit or propose it in the same reply and say in the reason which item it became.
+
+` + memoryContract + `
 
 ` + exchange.AskingContract + `
 

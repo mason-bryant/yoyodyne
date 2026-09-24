@@ -19,13 +19,16 @@ package cli
 // for work that is already done.
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -37,7 +40,16 @@ type reportsOutput struct {
 	// on each report because that is what they are on disk: the pile is never
 	// rewritten, and a disposition is a second record about it.
 	Handlings []report.Handling `json:"handlings"`
-	Error     string            `json:"error,omitempty"`
+	// Builds is how far each build the reports carry is behind the target
+	// branch's tip, keyed by the build. It is a map beside the reports rather
+	// than a field on each for the reason handlings are: the report is what its
+	// author filed, and this is a reading taken now that will be different
+	// tomorrow. A build that could not be counted carries why instead.
+	Builds map[string]report.Lag `json:"builds,omitempty"`
+	// BuildsProblem says why no build was counted at all, where the repository
+	// they are counted in could not be found.
+	BuildsProblem string `json:"builds_problem,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func readReports(args []string, stdout, stderr io.Writer) int {
@@ -71,6 +83,11 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportReportsError(stdout, stderr, *jsonOutput, err)
 	}
+	// How far each report's build is behind the target branch, asked of the
+	// product's repository. A repository that cannot be found costs the counts
+	// and nothing else: every report still names its build.
+	builds, buildsErr := reportBuilds(*configPath)
+	gauge := report.NewGauge(context.Background(), builds)
 	if *jsonOutput {
 		// Both lists are always encoded, so a caller reading JSON tells "nobody has
 		// reported anything" from a failure by the field being empty rather than
@@ -81,7 +98,11 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 		if handlings == nil {
 			handlings = []report.Handling{}
 		}
-		return writeJSON(stdout, stderr, reportsOutput{Reports: collected, Handlings: handlings})
+		output := reportsOutput{Reports: collected, Handlings: handlings, Builds: gauge.Measure(collected)}
+		if buildsErr != nil {
+			output.BuildsProblem = buildsErr.Error()
+		}
+		return writeJSON(stdout, stderr, output)
 	}
 	if len(collected) == 0 {
 		// "Nothing has been reported" is an answer, and where the pile would be is
@@ -108,12 +129,46 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	// the one the channel says cannot come apart.
 	fmt.Fprintf(stdout, "reports: %s\n", report.SummarizeHandled(collected, handled, time.Now()).Describe())
 	for _, reported := range collected {
-		fmt.Fprint(stdout, theme.Severity(console.Severity(reported.Severity), reported.Render()))
+		fmt.Fprint(stdout, theme.Severity(console.Severity(reported.Severity), reported.RenderAgainst(gauge)))
 		if handling, done := handled[reported.ID]; done {
 			fmt.Fprint(stdout, handling.Render())
 		}
 	}
+	// Why the counts are missing is said once, under the listing, rather than
+	// under every report it affects.
+	switch {
+	case buildsErr != nil:
+		fmt.Fprintf(stdout, "no build was counted against the target branch: %s\n", buildsErr)
+	case gauge.Problem() != "":
+		fmt.Fprintln(stdout, gauge.Problem())
+	}
 	return 0
+}
+
+// reportBuilds is what counts a report's build against the target branch: the
+// product's repository, asked exactly as the channel asks it how far a watch
+// session's build is behind, so the two surfaces cannot count one build two
+// ways. HEAD of the product's checkout is the target branch every run is written
+// against and promoted into.
+//
+// The builds are the harness's own revisions, so the count means something only
+// where the product is the harness's own source. Nothing assumes it: a build the
+// repository does not hold is refused rather than counted, and the listing says
+// so.
+func reportBuilds(configPath string) (report.Builds, error) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), resolved.Config.Product.Repository)
+	if err != nil {
+		return nil, fmt.Errorf("resolve product repository: %w", err)
+	}
+	return repositoryDeployments{
+		repository: repository,
+		runner:     execution.OSProcessRunner{},
+		timeout:    chatTrackerTimeout,
+	}, nil
 }
 
 // reportStore resolves the same product-scoped pile every run appends to and
@@ -164,7 +219,14 @@ product, which is what this reads.
 
 Each report names itself, the role and the configured agent that made it, the run
 or conversation it came from, the work item where there was one, a severity —
-critical, warning, or note — and the text. A report the product manager has
+critical, warning, or note — and the text.
+
+Beside the run it names the harness build that run executed, and how many changes
+the target branch has taken since. A report is a claim about that build, so a
+report from a build behind the tip may describe something already fixed. Check
+before admitting work from it. A report filed before reports carried a build says
+"no build recorded", and a build the product's repository does not hold is named
+as not counted. A report the product manager has
 decided about carries what it decided, under it; everything else is still
 waiting on somebody. The whole pile is printed, oldest first; `+"`/reports`"+` in
 `+"`yoyo chat`"+` shows the same reports beside the conversation, listing the

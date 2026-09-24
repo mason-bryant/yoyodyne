@@ -51,6 +51,15 @@ func Authorize(role domain.AgentRole) error {
 	return fmt.Errorf("%w: the %s does not hold %s", ErrUnauthorized, role.Title(), capability.AgentContextMutate)
 }
 
+// Store is the one write the context actions make. It is satisfied by
+// *runstate.MemoryStore, which is the only store the harness builds; it is an
+// interface so that a caller holding the store behind an interface of its own —
+// a conversation, which reads the same store to brief its turns — writes through
+// these actions rather than around them.
+type Store interface {
+	Remember(ctx context.Context, revision runstate.MemoryRevision) (runstate.MemoryRevision, error)
+}
+
 // Write is what a context action acts on: the store to write to, the revision to
 // write, and — once it has been performed — what was actually stored.
 //
@@ -59,7 +68,7 @@ func Authorize(role domain.AgentRole) error {
 // needs to know what its agent will read back later reads Recorded, which is what
 // reached the disk: redacted, numbered, and stamped.
 type Write struct {
-	Store *runstate.MemoryStore
+	Store Store
 	// Revision is what the agent asked to record. Its sequence is left unset: the
 	// store numbers a revision, so nothing outside it decides where one falls.
 	Revision runstate.MemoryRevision
