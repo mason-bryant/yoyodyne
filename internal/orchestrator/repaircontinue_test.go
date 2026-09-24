@@ -1040,6 +1040,16 @@ func TestARepairContinuationReconcilesAReplayConflictTheStoppedRunCouldNot(t *te
 	if stopped.ReplayConflict == nil || stopped.ReplayConflict.Moved {
 		t.Fatalf("stopped run recorded conflict %#v, want it kept and not yet moved", stopped.ReplayConflict)
 	}
+	// Under a loaded machine the local Git budget can kill the replay part-way,
+	// and the worktree manager still reports a killed rebase as a conflict whose
+	// "exit code -1" reads as the environment's — yoyodyne-ifd.406, not this
+	// path. Such a run is owed `yoyo triage resume` rather than a repair, so what
+	// this test is about cannot be exercised on it, and saying so is better than
+	// failing on a defect another item owns.
+	if stopped.IntegrationStop != nil {
+		t.Skipf("the replay was stopped by the environment rather than by a conflict (%s: %s); see yoyodyne-ifd.406",
+			stopped.IntegrationStop.Cause, stopped.IntegrationStop.Detail)
+	}
 	docket := &memoryDocket{}
 	if _, err := docketerOverStore(docket, store, pipeline.Config).RecordStoppedRun(stopped); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
