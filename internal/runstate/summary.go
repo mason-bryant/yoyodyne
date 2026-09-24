@@ -457,7 +457,9 @@ func (s *Store) History(query RunQuery) (RunHistory, error) {
 	}
 	// Only the runs actually reported are priced, because pricing one reads its
 	// whole event log: a listing of the twenty most recent runs must not cost a
-	// scan of every log the product has ever written.
+	// scan of every log the product has ever written. A limit of zero is the one
+	// exception, and it is the caller's to ask for: it reports every run, so it
+	// prices every run, and `yoyo status --limit 0` reads every event log there is.
 	for _, state := range matched {
 		history.Runs = append(history.Runs, s.summarize(state))
 	}

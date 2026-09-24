@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // The tracker statuses admitted work can be in. Open work is waiting to be
@@ -595,13 +595,5 @@ func waitingOn(item beads.WorkItem, unfinished map[string]struct{}) []string {
 // entry whatever it contains. It is cut on a rune boundary: a line truncated
 // mid-rune is not text.
 func singleLine(value string, limit int) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, limit)
 }

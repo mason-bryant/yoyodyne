@@ -10,11 +10,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -1678,13 +1678,5 @@ func renderOmittedSpecifications(omitted []string) string {
 // entry whatever it contains. It is cut on a rune boundary: a line truncated
 // mid-rune is not text.
 func singleLine(value string, limit int) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, limit)
 }
