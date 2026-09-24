@@ -1199,7 +1199,7 @@ func TestFlagsAreReadAfterTheIdEveryCommandThatTakesOne(t *testing.T) {
 		"agent chat":        {"agent", "chat", "developer", "--config", missing, "--message", "what are you working on?"},
 		"run":               {"run", "yoyodyne-ifd.74", "--config", missing, "--json"},
 		"triage rerun":      {"triage", "rerun", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--json"},
-		"triage repair":     {"triage", "repair", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the findings still stand"},
+		"triage repair":     {"triage", "repair", "run-0123456789abcdef0123456789abcdef", "--config", missing},
 		"status":            {"status", "yoyodyne-ifd.74", "--config", missing, "--failed"},
 		"cost":              {"cost", "yoyodyne-ifd.74", "--config", missing, "--record"},
 		"resume":            {"resume", "yoyodyne-ifd.74", "--config", missing},

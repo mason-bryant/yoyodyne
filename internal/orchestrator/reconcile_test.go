@@ -1326,7 +1326,7 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 				Continue(ctx, workItemID, runID)
 		},
 	}
-	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID, Reason: continueReasoning})
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID})
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}
@@ -1466,7 +1466,7 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 				Continue(ctx, workItemID, runID)
 		},
 	}
-	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID, Reason: continueReasoning})
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID})
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}

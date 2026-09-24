@@ -819,25 +819,58 @@ declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
 Eleven things keep an item out of a pass, and the pass accounts for them at two
-different grains. Eight are named against the item, because nothing else would
-report that this particular item was passed over. An **unresolved directive** is
-named with the directive's own words, because it needs a person. An item
-whose **unfinished children already carry its execution** is skipped with those
-children named: a decomposed epic and the child that does its work are both
-reported as ready to pull, so a scheduler that did not know the difference would
-buy the same change twice — two developers rewriting one file, the second of them
-guaranteed a conflict at integration. A child covers whether it is queued,
-blocked, or already claimed by a run in flight, and the container becomes
-ordinary work again once its last unfinished child leaves the backlog. An
-item that **would race work already in flight** is sequenced behind it rather
-than started beside it, with the run it would have raced and what the two share
-both named. An item whose **executor is a persona conversation** rather than
-a developer run is passed over with what carries it named, which the paragraph
-after next is about. An item the product manager has **parked** is passed
-over with the parking reason named, which the paragraph after that is about. And
-a **held** item — a stoppage whose change is still on a branch, one nobody has
-decided about, or a publication that did not finish over work already integrated,
-in the sense the hold paragraph above gives it — is
+different grains. The first eight are named against the item, because nothing
+else would report that this particular item was passed over; the last three are
+facts about the pass rather than about any one item. The
+[configuration guide](configuration.md#scheduling-ready-work) lists the same
+eleven in the same order, and a test fails when the two lists differ:
+
+<!-- selection-rules: the same names, in the same order, as docs/configuration.md and docs/configuration/runs.md; internal/doclink/selectionrules_test.go holds them together -->
+1. **An unresolved directive** withholds the item until a person resolves the
+   directive, and is named in the directive's own words.
+2. **Unfinished children that carry its execution** withhold a container while
+   any child it was broken into is queued, blocked, or claimed, and release it
+   once the last of them leaves the backlog.
+3. **A race with work in flight** withholds an item that shares an epic
+   decomposition or files with a run in flight, and releases it at the first
+   pull after that run ends.
+4. **A conversation executor** withholds an item whose `executor` names a
+   persona conversation from every developer run; nothing clears it, and what
+   moves the item is somebody opening the conversation it names.
+5. **Parking** withholds an item the product manager parked however far the
+   queue drains, and only her `unpark` releases it.
+6. **A hold** withholds an item whose stopped run left its change on a branch,
+   or whose publication did not finish, until the development manager's
+   decision is carried out, the escalation is answered, or `yoyo reconcile`
+   settles the publication.
+7. **A prerequisite the tree does not meet** withholds an item that pinpoints
+   code the repository no longer has, or says in its own words that something
+   must land first; a pinpoint releases it when the code lands, and a sentence
+   when the item is amended or the dependency recorded.
+8. **A label another slot prefers** withholds an item every free developer slot
+   walked past for its preferred label, and the next slot with no preference to
+   come free — or the preferring slot, once its label's work is exhausted —
+   releases it.
+9. **The tracker not calling it ready** withholds an item with unfinished
+   dependencies or a status that is not open, and the tracker's own readiness
+   releases it.
+10. **A run already in flight for it** withholds the item while that run lasts,
+    and the run ending releases it.
+11. **No free developer slot** withholds everything once the slots are taken,
+    and any run ending releases one.
+<!-- /selection-rules -->
+
+The children rule is there because a decomposed epic and the child that does
+its work are both reported as ready to pull, so a scheduler that did not know
+the difference would buy the same change twice — two developers rewriting one
+file, the second of them guaranteed a conflict at integration. A race is
+sequenced behind the run it would have raced rather than started beside it,
+with that run and what the two share both named. A conversation executor is
+passed over with what carries the item named, which the paragraph after next is
+about, and a parked item with the parking reason named, which the paragraph
+after that is about. A **held** item — a stoppage whose change is still on a
+branch, one nobody has decided about, or a publication that did not finish over
+work already integrated, in the sense the hold paragraph above gives it — is
 passed over with the hold named. A stoppage nobody has decided about is, like
 the parking, not a wait for anything and will not clear on its own; one she has
 decided into something for the harness to do — a repair handed back, a re-run, a
@@ -891,7 +924,7 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those six that is a wait rather than a refusal. Two
+Sequencing is a wait rather than a refusal. Two
 items race when one is the epic the other was broken out of, or when the files
 they will change overlap. Being filed under one epic is deliberately not a
 third: an epic is as often a heading the backlog is filed under as it is one
@@ -1086,7 +1119,7 @@ docket, the refusal still stands and says so: dispatching an item the tree canno
 serve in order to avoid losing a line of the record would spend a run to save a
 sentence.
 
-A tenth thing deliberately keeps nothing out: an item whose goal was amended
+A twelfth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.

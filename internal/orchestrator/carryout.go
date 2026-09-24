@@ -164,10 +164,11 @@ type CarryOut struct {
 // CarryOutTask is one recorded decision the harness has not acted on: which
 // stoppage, what was decided, and the reasoning it was decided on.
 //
-// The reasoning travels with it because it is what a repair records as why the
-// run is going again. It is read from the durable decision rather than composed
-// here, for the reason yoyodyne-ifd.311 made it durable: the words attributed to
-// the development manager have to be words she wrote.
+// The reasoning travels with it so whoever reads the pass can see what is about
+// to be carried out. It is not what either action records: both read the
+// decision again from the durable record as they carry it out, so the words a
+// run attributes to the development manager are always words she wrote, however
+// the task reached the action.
 type CarryOutTask struct {
 	WorkItemID string `json:"work_item_id"`
 	RunID      string `json:"run_id"`
@@ -476,16 +477,17 @@ func (c CarryOut) rerun(ctx context.Context, task CarryOutTask, carried CarriedO
 }
 
 // repair re-enters the stopped run's own repair loop on the grant one repair
-// decision recorded, handing it the reasoning the development manager recorded
-// rather than words from whoever asked: the run and the item both record that
-// sentence, and it has to be hers.
+// decision recorded. It hands the action the run and nothing else, exactly as a
+// re-run is handed: the action reads the decision and its reasoning from the
+// record the development manager wrote, so a carry-out fired here and one typed
+// at a terminal learn what she decided the one same way.
 func (c CarryOut) repair(ctx context.Context, task CarryOutTask, carried CarriedOut) (CarriedOut, Outcome, error) {
 	if c.Repairer == nil {
 		return c.stopped(ctx, task, carried, runstate.TriageGateHarness, false,
 			"nothing is wired to this harness to continue a stopped run, so the repair granted against this stoppage waits on somebody running `yoyo triage repair`",
 			"a harness wired to continue stopped runs itself"), Outcome{}, nil
 	}
-	result, runErr := c.Repairer.Continue(ctx, RepairContinueRequest{Run: task.RunID, Reason: task.Reason})
+	result, runErr := c.Repairer.Continue(ctx, RepairContinueRequest{Run: task.RunID})
 	switch {
 	case result.IntakeHeld != nil:
 		return c.stopped(ctx, task, carried, runstate.TriageGateIntakeHold, true,

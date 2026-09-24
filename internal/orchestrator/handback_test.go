@@ -61,7 +61,7 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 
 	// The development manager's decision, which spends the item's repair budget
 	// before anything acts on it.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, decidedRunID), 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
 
 	result, err := repairContinuerOver(t, continuing, store, docket, tracker).
-		Continue(context.Background(), RepairContinueRequest{Run: stopped.RunID, Reason: continueReasoning})
+		Continue(context.Background(), RepairContinueRequest{Run: stopped.RunID})
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}
