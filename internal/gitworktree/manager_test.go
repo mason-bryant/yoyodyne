@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"
@@ -2674,6 +2675,7 @@ func removeLinkedWorktrees(t *testing.T, repository string) {
 	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
 		return
 	}
+	clearUnfinishedRegistrations(t, repository)
 	for _, path := range linkedWorktreePaths(t, repository) {
 		// A worktree whose directory a test deleted on purpose cannot be
 		// removed, only pruned. One that is still on disk must come off here —
@@ -2692,6 +2694,34 @@ func removeLinkedWorktrees(t *testing.T, repository string) {
 	}
 	if remaining := linkedWorktreePaths(t, repository); len(remaining) > 0 {
 		t.Errorf("cleanup left worktree registrations behind: %v", remaining)
+	}
+}
+
+// clearUnfinishedRegistrations takes out what a killed `git worktree add` left
+// half-written, before anything lists the registrations. Where the kill landed
+// while commondir was being written, `git worktree list` refuses the whole
+// listing over that entry ("failed to read .git/worktrees/<name>/commondir"),
+// so the tests that kill an add on purpose failed their own cleanup whenever
+// the kill landed there. The harness clears such an entry on its next creation,
+// once the grace for an add still in flight has passed; a test being torn down
+// has nothing in flight, so it clears them at once, through the same reading
+// and the same confined removal the harness uses.
+func clearUnfinishedRegistrations(t *testing.T, repository string) {
+	t.Helper()
+	root, err := repowrite.NewRoot(filepath.Join(repository, ".git"))
+	if err != nil {
+		t.Errorf("cleanup could not resolve the Git directory: %v", err)
+		return
+	}
+	unfinished, err := readUnfinishedRegistrations(root)
+	if err != nil {
+		t.Errorf("cleanup could not read the worktree registrations: %v", err)
+		return
+	}
+	for _, entry := range unfinished {
+		if err := clearRegistration(root, entry.Name); err != nil {
+			t.Errorf("cleanup could not clear the unfinished registration %s: %v", entry.Name, err)
+		}
 	}
 }
 
@@ -3229,4 +3259,35 @@ func (r *refusingCount) Run(ctx context.Context, command execution.Command, obse
 		}, nil
 	}
 	return r.delegate.Run(ctx, command, observer)
+}
+
+// The teardown every test here relies on survives the entry a killed add leaves
+// when the kill lands on commondir. That shape is what failed
+// TestAWorktreeCheckoutKilledByItsBudgetIsSaidInOneSentence's cleanup under
+// `make race`, and only when the timing put the kill there; this puts it there
+// every time.
+func TestTeardownClearsARegistrationAKilledAddLeftHalfWritten(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	entry := filepath.Join(repository, ".git", "worktrees", "killed-add")
+	if err := os.MkdirAll(entry, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for name, content := range map[string]string{"locked": "initializing", "gitdir": filepath.Join(t.TempDir(), "gone", ".git") + "\n", "commondir": ""} {
+		if err := os.WriteFile(filepath.Join(entry, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if _, err := attemptGit(repository, "worktree", "list", "--porcelain"); err == nil {
+		t.Fatal("git lists the registrations over a half-written commondir; the shape under test is not the one that fails")
+	}
+
+	removeLinkedWorktrees(t, repository)
+	if output, err := attemptGit(repository, "worktree", "list", "--porcelain"); err != nil {
+		t.Fatalf("the listing still fails after teardown: %v: %s", err, output)
+	}
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Errorf("the unfinished registration survived teardown: %v", err)
+	}
 }
