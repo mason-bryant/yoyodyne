@@ -23,7 +23,6 @@ package runstate
 // this for what the supervisor decided about it.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -306,6 +305,13 @@ func (s *SupervisionStore) Save(recorded Supervision) error {
 // Load reads the record back, reporting whether a supervisor ever wrote one. A
 // record left by a supervisor that died is returned like any other: whether it
 // is still there is the lease's answer, and the two are read together.
+//
+// It is the tolerant door of the two in tolerantread.go, because nothing reads
+// this record to write it back: the supervisor writes it whole from what it is
+// running, and every reader — the dashboard's services panel, `yoyo product` —
+// only says what it holds. A supervisor on a newer build than the dashboard
+// reading it is the ordinary case after a landing, and refusing its record would
+// blank the panel for as long as the two builds differ.
 func (s *SupervisionStore) Load() (Supervision, bool, error) {
 	file, err := os.Open(s.path())
 	if errors.Is(err, os.ErrNotExist) {
@@ -315,15 +321,16 @@ func (s *SupervisionStore) Load() (Supervision, bool, error) {
 		return Supervision{}, false, fmt.Errorf("open supervision record: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return Supervision{}, false, fmt.Errorf("read supervision record: %w", err)
+	}
 	var recorded Supervision
-	if err := decoder.Decode(&recorded); err != nil {
+	unknown, err := decodeTolerating(encoded, &recorded)
+	if err != nil {
 		return Supervision{}, false, fmt.Errorf("decode supervision record: %w", err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return Supervision{}, false, fmt.Errorf("decode supervision record: %w", err)
-	}
+	noteUnknownFields("supervision record", unknown)
 	if err := recorded.Validate(); err != nil {
 		return Supervision{}, false, err
 	}

@@ -326,7 +326,7 @@ func (s *StreamStore) describe(entry streamEntry, current map[string]Conversatio
 	case StreamRun:
 		// A run keeps its own status and its own opening moment, and both are
 		// authoritative over anything the log could be read to imply.
-		state, err := s.runs.Load(entry.id)
+		state, err := s.runs.Read(entry.id)
 		if err == nil {
 			stream.Status = string(state.Status)
 			stream.StartedAt = state.StartedAt
@@ -870,7 +870,7 @@ func (s *StreamStore) spendOnExchanges(match string, report *SpendReport) error 
 		if match != "" && !strings.Contains(id, match) {
 			continue
 		}
-		recorded, err := s.exchanges.Load(id)
+		recorded, err := s.exchanges.Read(id)
 		if err != nil {
 			report.UnreadableExchanges = append(report.UnreadableExchanges, id)
 			if report.UnreadableReason == "" {

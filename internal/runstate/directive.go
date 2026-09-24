@@ -1,7 +1,6 @@
 package runstate
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,7 +91,18 @@ func (s *DirectiveStore) Record(recorded directive.Directive) error {
 // List returns every recorded directive in the order it was received. A
 // directory that does not exist yet is a product nobody has directed, which is
 // not a failure to read.
+//
+// It is the tolerant door of the two in tolerantread.go, because its readers —
+// the read model's lines, the reporting sink, a listing an operator asked for —
+// say what the directives hold and write none of them back: a directive a newer
+// build recorded is read without the fields this build does not know rather than
+// stopping every one of those readers. What settles a directive, and what asks
+// whether one pauses work, reads through the strict door instead.
 func (s *DirectiveStore) List() ([]directive.Directive, error) {
+	return s.list(true)
+}
+
+func (s *DirectiveStore) list(tolerateUnknownFields bool) ([]directive.Directive, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -105,7 +115,7 @@ func (s *DirectiveStore) List() ([]directive.Directive, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		loaded, err := s.Load(strings.TrimSuffix(entry.Name(), ".json"))
+		loaded, err := s.load(strings.TrimSuffix(entry.Name(), ".json"), tolerateUnknownFields)
 		if err != nil {
 			return nil, err
 		}
@@ -119,16 +129,25 @@ func (s *DirectiveStore) List() ([]directive.Directive, error) {
 // question the run pipeline asks, and it is answered from the durable records
 // every time rather than from anything a process remembers: a directive recorded
 // by one process while another is mid-run has to reach that run.
+//
+// It reads strictly: whether work may proceed is decided from what this returns,
+// and a directive this build can only read part of is refused to the caller —
+// which declines to run on it — rather than judged on the part it could read.
 func (s *DirectiveStore) Pausing(workItemID string) ([]directive.Directive, error) {
-	recorded, err := s.List()
+	recorded, err := s.list(false)
 	if err != nil {
 		return nil, err
 	}
 	return directive.Pausing(recorded, workItemID), nil
 }
 
-// Load reads one directive by its full identifier.
+// Load reads one directive by its full identifier, strictly: a field this build
+// does not know refuses the record, for a caller that may write it back.
 func (s *DirectiveStore) Load(id string) (directive.Directive, error) {
+	return s.load(id, false)
+}
+
+func (s *DirectiveStore) load(id string, tolerateUnknownFields bool) (directive.Directive, error) {
 	path, err := s.path(id)
 	if err != nil {
 		return directive.Directive{}, err
@@ -141,13 +160,18 @@ func (s *DirectiveStore) Load(id string) (directive.Directive, error) {
 		return directive.Directive{}, fmt.Errorf("open directive: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var loaded directive.Directive
-	if err := decoder.Decode(&loaded); err != nil {
-		return directive.Directive{}, fmt.Errorf("decode directive %s: %w", id, err)
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return directive.Directive{}, fmt.Errorf("read directive %s: %w", id, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	var loaded directive.Directive
+	if tolerateUnknownFields {
+		unknown, err := decodeTolerating(encoded, &loaded)
+		if err != nil {
+			return directive.Directive{}, fmt.Errorf("decode directive %s: %w", id, err)
+		}
+		noteUnknownFields("directive record", unknown)
+	} else if err := decodeStrictly(encoded, &loaded); err != nil {
 		return directive.Directive{}, fmt.Errorf("decode directive %s: %w", id, err)
 	}
 	if loaded.ID != id {
@@ -165,12 +189,15 @@ func (s *DirectiveStore) Load(id string) (directive.Directive, error) {
 // every other identity here is, and nobody types thirty-two hex digits: an
 // ambiguous prefix is reported as ambiguous rather than resolved to whichever
 // directive happened to sort first.
+//
+// It reads strictly, because settling a directive finds it here and writes it
+// back.
 func (s *DirectiveStore) Find(reference string) (directive.Directive, error) {
 	wanted := strings.TrimSpace(reference)
 	if wanted == "" {
 		return directive.Directive{}, errors.New("name the directive; a listing shows what is recorded")
 	}
-	recorded, err := s.List()
+	recorded, err := s.list(false)
 	if err != nil {
 		return directive.Directive{}, err
 	}

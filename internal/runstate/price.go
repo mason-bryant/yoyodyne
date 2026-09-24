@@ -476,7 +476,7 @@ func (s *Store) ExchangeSpend() ExchangeSpend {
 	}
 	var spend ExchangeSpend
 	for _, id := range ids {
-		recorded, err := store.Load(id)
+		recorded, err := store.Read(id)
 		if err != nil {
 			spend.Unreadable++
 			// The first reason stands for all of them. A caller reports the count

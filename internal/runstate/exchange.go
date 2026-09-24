@@ -20,7 +20,6 @@ package runstate
 // file nothing can read.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -99,8 +98,23 @@ func (s *ExchangeStore) Save(recorded exchange.Exchange) error {
 	return syncDirectory(s.root)
 }
 
-// Load reads one exchange by its full identifier.
+// Load reads one exchange by its full identifier, for a caller about to act on
+// it — answer it, settle it, carry it forward — which is the strict door of the
+// two in tolerantread.go: the exchange is written back, and a field stepped over
+// here is a field lost there.
 func (s *ExchangeStore) Load(id string) (exchange.Exchange, error) {
+	return s.load(id, false)
+}
+
+// Read reads one exchange for a reader that only says what it holds — a listing,
+// a spend total — which is the tolerant door: a field this build does not know
+// is stepped over and named once, rather than turning an exchange a newer build
+// wrote into one nobody can price or list.
+func (s *ExchangeStore) Read(id string) (exchange.Exchange, error) {
+	return s.load(id, true)
+}
+
+func (s *ExchangeStore) load(id string, tolerateUnknownFields bool) (exchange.Exchange, error) {
 	path, err := s.path(id)
 	if err != nil {
 		return exchange.Exchange{}, err
@@ -113,13 +127,18 @@ func (s *ExchangeStore) Load(id string) (exchange.Exchange, error) {
 		return exchange.Exchange{}, fmt.Errorf("open exchange: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var loaded exchange.Exchange
-	if err := decoder.Decode(&loaded); err != nil {
-		return exchange.Exchange{}, fmt.Errorf("decode exchange %s: %w", id, err)
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return exchange.Exchange{}, fmt.Errorf("read exchange %s: %w", id, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	var loaded exchange.Exchange
+	if tolerateUnknownFields {
+		unknown, err := decodeTolerating(encoded, &loaded)
+		if err != nil {
+			return exchange.Exchange{}, fmt.Errorf("decode exchange %s: %w", id, err)
+		}
+		noteUnknownFields("exchange record", unknown)
+	} else if err := decodeStrictly(encoded, &loaded); err != nil {
 		return exchange.Exchange{}, fmt.Errorf("decode exchange %s: %w", id, err)
 	}
 	if loaded.ID != id {
@@ -139,7 +158,7 @@ func (s *ExchangeStore) Load(id string) (exchange.Exchange, error) {
 // me what the roles said" and an answer quietly missing a thread is worse than
 // no answer. A caller that is totalling rather than reading — where losing the
 // records beside the broken one would lose real money from a total — reads them
-// one at a time through Records and Load instead.
+// one at a time through Records and Read instead.
 func (s *ExchangeStore) List() ([]exchange.Exchange, error) {
 	ids, err := s.Records()
 	if err != nil {
@@ -150,7 +169,7 @@ func (s *ExchangeStore) List() ([]exchange.Exchange, error) {
 	}
 	exchanges := make([]exchange.Exchange, 0, len(ids))
 	for _, id := range ids {
-		loaded, err := s.Load(id)
+		loaded, err := s.Read(id)
 		if err != nil {
 			return nil, err
 		}

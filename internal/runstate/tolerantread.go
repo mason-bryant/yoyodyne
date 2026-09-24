@@ -26,20 +26,28 @@ import (
 // which door a caller goes through says what the caller is about to do rather
 // than how careful it feels like being:
 //
-//   - A listing reads tolerantly. It keeps every field this build knows, steps
-//     over the fields it does not, and says once for the life of the process —
-//     rather than once per pass — which fields it stepped over. What makes that
-//     safe here and nowhere else is that nothing decided from a listing is
-//     written back: every caller that acts on one re-reads the record through the
-//     strict door first, under the record's own lease, because the listing is a
-//     snapshot another process may already have moved on from.
+//   - A read that only says what a record holds reads tolerantly: a listing, and
+//     a surface that fetches one record by id to show it — Store.Read,
+//     ConversationStore.Read, ExchangeStore.Read, and the records nothing ever
+//     reads to write back, the supervisor's and the watch holder's. It keeps
+//     every field this build knows, steps over the fields it does not, and says
+//     once for the life of the process — rather than once per pass — which
+//     fields it stepped over. What makes that safe here and nowhere else is that
+//     nothing decided from such a read is written back: every caller that acts
+//     on one re-reads the record through the strict door first, under the
+//     record's own lease, because what it read is a snapshot another process may
+//     already have moved on from.
 //   - Everything that precedes a write reads strictly. A field this build does
 //     not know means the record was written by different code, and decoding it as
 //     though the field were not there and then saving it back is exactly how the
 //     field is lost. That refusal is an error the caller reports on its own
-//     surface; it is never an empty answer.
+//     surface; it is never an empty answer. So does a gate that declines to
+//     proceed on a record it can only read part of — a hold, a pausing directive
+//     — whose refusal is the visible failure it is owed.
 //
 // decodeStrictly is the second door and decodeTolerating is the first.
+// strictdecode_audit_test.go lists every strict read in the tree and which of
+// those it is, and fails on one it does not list.
 
 // decodeStrictly decodes one durable record, refusing a record that carries
 // anything this build does not know and a record with more than one value in it.

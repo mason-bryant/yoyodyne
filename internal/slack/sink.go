@@ -653,9 +653,10 @@ func (s *Sink) pass(ctx context.Context) error {
 	s.mark(ctx, &threads, batch.Statuses)
 
 	// Cursors for streams that no longer exist are dropped only after a pass
-	// that read them all, so a feed that failed halfway never looks like a
-	// product whose runs have gone away.
-	if len(batch.Streams) > 0 && cursors.Keep(batch.Streams) {
+	// that read them all, so a feed that failed halfway, or read a record past
+	// because it could not read it, never looks like a product whose runs have
+	// gone away.
+	if len(batch.Streams) > 0 && !batch.Partial && cursors.Keep(batch.Streams) {
 		if err := s.store.SaveCursors(cursors); err != nil {
 			return err
 		}

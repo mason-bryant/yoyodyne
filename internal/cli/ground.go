@@ -333,7 +333,7 @@ type conversationStoppedRuns struct {
 }
 
 func (r conversationStoppedRuns) WorkItemOf(_ context.Context, runID string) (string, error) {
-	state, err := r.store.Load(runID)
+	state, err := r.store.Read(runID)
 	if err != nil {
 		return "", err
 	}

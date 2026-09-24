@@ -965,14 +965,29 @@ func (h *ConversationHold) Retake(ctx context.Context) error {
 }
 
 // Load returns the conversation recorded for an agent, reporting
-// ErrNoConversation when there is none to resume.
+// ErrNoConversation when there is none to resume. It is the strict door: the
+// agent resuming the conversation writes the record back at the end of its turn.
 func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, error) {
+	return s.load(identity, false)
+}
+
+// Read returns the conversation recorded for an agent to a reader that will not
+// write it back — a listing of the agents, a question about which conversation
+// is being held — and is the tolerant door: a field this build does not know is
+// stepped over and named once rather than refusing the whole record, for the
+// reason Recorded does. Anything that resumes the conversation goes through
+// Load.
+func (s *ConversationStore) Read(identity ConversationIdentity) (Conversation, error) {
+	return s.load(identity, true)
+}
+
+func (s *ConversationStore) load(identity ConversationIdentity, tolerateUnknownFields bool) (Conversation, error) {
 	role := identity.Role
 	path, err := s.statePathFor(identity)
 	if err != nil {
 		return Conversation{}, err
 	}
-	conversation, err := s.read(path, string(role))
+	conversation, err := s.decode(path, string(role), tolerateUnknownFields)
 	if err != nil {
 		return Conversation{}, err
 	}
@@ -990,28 +1005,18 @@ func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, e
 	return conversation, nil
 }
 
-// read is one conversation record as it sits on disk, checked as far as the
+// decode is one conversation record as it sits on disk, checked as far as the
 // record itself can be checked. Who it belongs to is the caller's question: an
 // agent resuming its own conversation and a reader listing every conversation
 // there is ask it differently, and neither can answer it from the file alone.
 // The label names the record in a failure, because a reader that cannot say
 // which file would not decode has been told nothing useful.
 //
-// This is the strict door: an agent resuming its conversation writes the record
-// back at the end of its turn, and a field stepped over on the way in is a field
-// lost on the way out. readListing beside it is the other door.
-func (s *ConversationStore) read(path, label string) (Conversation, error) {
-	return s.decode(path, label, false)
-}
-
-// readListing is the read behind Recorded, which tolerates a field this build
-// does not know for the reason the run listings do: a listing is noticed and
-// never written back, and a reader that refused the whole record would report
-// nothing at all about every conversation in the directory.
-func (s *ConversationStore) readListing(path, label string) (Conversation, error) {
-	return s.decode(path, label, true)
-}
-
+// Strictly is the door for an agent resuming its conversation, which writes the
+// record back at the end of its turn: a field stepped over on the way in is a
+// field lost on the way out. Tolerating is the door for Read and Recorded, whose
+// readers notice and never write back, and a reader that refused the whole
+// record would report nothing at all about it.
 func (s *ConversationStore) decode(path, label string, tolerateUnknownFields bool) (Conversation, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -1062,13 +1067,27 @@ func (s *ConversationStore) decode(path, label string, tolerateUnknownFields boo
 // authoritative and this is a view of them — and it is stated rather than hidden
 // because a gap somebody does not know about is worse than one they do.
 func (s *ConversationStore) Recorded() ([]Conversation, error) {
+	conversations, _, err := s.recorded(false)
+	return conversations, err
+}
+
+// RecordedReadable lists what Recorded does, reading past a record that will
+// not decode and returning it beside the listing, for the reason
+// Store.RecordedReadable does. The record is named by its file, because a
+// record that will not decode cannot say which conversation it was.
+func (s *ConversationStore) RecordedReadable() ([]Conversation, []Unreadable, error) {
+	return s.recorded(true)
+}
+
+func (s *ConversationStore) recorded(readPast bool) ([]Conversation, []Unreadable, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read conversation directory: %w", err)
+		return nil, nil, fmt.Errorf("read conversation directory: %w", err)
 	}
+	var unreadable []Unreadable
 	conversations := make([]Conversation, 0, len(entries))
 	for _, entry := range entries {
 		// The leases, the event logs, and the temporary files of a save in flight
@@ -1077,16 +1096,20 @@ func (s *ConversationStore) Recorded() ([]Conversation, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		conversation, err := s.readListing(filepath.Join(s.root, entry.Name()), entry.Name())
+		conversation, err := s.decode(filepath.Join(s.root, entry.Name()), entry.Name(), true)
+		if err != nil && readPast {
+			unreadable = append(unreadable, Unreadable{Record: entry.Name(), Err: err})
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("discover recorded conversations: %w", err)
+			return nil, nil, fmt.Errorf("discover recorded conversations: %w", err)
 		}
 		conversations = append(conversations, conversation)
 	}
 	sort.Slice(conversations, func(i, j int) bool {
 		return conversations[i].ConversationID < conversations[j].ConversationID
 	})
-	return conversations, nil
+	return conversations, unreadable, nil
 }
 
 // ClaimRefusalWakeup marks a conversation's outstanding tracker refusal as one

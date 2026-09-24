@@ -431,12 +431,14 @@ func (s *Store) Load(runID string) (State, error) {
 	return s.load(runID, false)
 }
 
-// loadListing reads one run record for a listing, which is the tolerant door: a
-// field this build does not know is stepped over and named rather than refusing
-// the whole record. Nothing decided from a listing is written back — every
-// caller that acts re-reads through Load, under the run's lease — so the field
-// this steps over is one nothing here could have saved anyway.
-func (s *Store) loadListing(runID string) (State, error) {
+// Read reads one run record for a reader that will not write it back — a
+// listing, or a surface that fetches one run by id to say something about it —
+// which is the tolerant door: a field this build does not know is stepped over
+// and named rather than refusing the whole record. Nothing decided from it is
+// written back — every caller that acts re-reads through Load, under the run's
+// lease — so the field this steps over is one nothing here could have saved
+// anyway.
+func (s *Store) Read(runID string) (State, error) {
 	return s.load(runID, true)
 }
 
@@ -587,15 +589,40 @@ func (s *Store) ReviewRounds(workItemID string) (int, error) {
 // plain answer rather than a failure to look.
 var ErrNoRecordedRun = errors.New("no run of this work item is recorded")
 
+// Unreadable is one record a listing read past because it would not decode: the
+// record it is, named as its file is, and what refused it.
+type Unreadable struct {
+	Record string
+	Err    error
+}
+
+// RecordedReadable lists every run Recorded does, except that a record which
+// will not decode is read past and returned beside the listing rather than
+// refusing all of it. It is for a reader that reports on every run independently
+// — the reporting sink — where one run nobody can read is a reason to say
+// nothing about that run, not about every other run as well: the sink once held
+// every stream's cursor still for as long as five records a newer build wrote
+// stood in the directory. A caller that decides anything across the whole set
+// wants Recorded, whose refusal says the set is incomplete.
+func (s *Store) RecordedReadable() ([]State, []Unreadable, error) {
+	return s.scanning("recorded", func(State) bool { return true }, true)
+}
+
 func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
+	states, _, err := s.scanning(label, keep, false)
+	return states, err
+}
+
+func (s *Store) scanning(label string, keep func(State) bool, readPast bool) ([]State, []Unreadable, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read run state directory: %w", err)
+		return nil, nil, fmt.Errorf("read run state directory: %w", err)
 	}
 	states := make([]State, 0)
+	var unreadable []Unreadable
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -607,9 +634,13 @@ func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 		if !runIDPattern.MatchString(runID) {
 			continue
 		}
-		state, err := s.loadListing(runID)
+		state, err := s.Read(runID)
+		if err != nil && readPast {
+			unreadable = append(unreadable, Unreadable{Record: runID, Err: err})
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("discover %s runs: %w", label, err)
+			return nil, nil, fmt.Errorf("discover %s runs: %w", label, err)
 		}
 		if keep(state) {
 			states = append(states, state)
@@ -618,7 +649,7 @@ func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 	sort.Slice(states, func(i, j int) bool {
 		return states[i].RunID < states[j].RunID
 	})
-	return states, nil
+	return states, unreadable, nil
 }
 
 func (s *Store) AppendEvent(event execution.Event) error {

@@ -554,6 +554,12 @@ type WatchHolder struct {
 // whether that session is still alive — the lease is what decides that, and this
 // is only how the holder of one is named — so it is read after a lease was
 // refused rather than instead of trying to take one.
+//
+// It is the tolerant door of the two in tolerantread.go. The stamp is written
+// whole by the session that holds the watch and never read to be written back,
+// and its readers — the supervisor naming the scheduler it adopts, the sentence
+// that refuses a second watch — are exactly the ones that meet a session on a
+// newer build than their own.
 func (s *WatchStore) Holder() (WatchHolder, bool, error) {
 	file, err := os.Open(filepath.Join(s.root, watchHolderFile))
 	if errors.Is(err, os.ErrNotExist) {
@@ -563,15 +569,16 @@ func (s *WatchStore) Holder() (WatchHolder, bool, error) {
 		return WatchHolder{}, false, fmt.Errorf("open the watch holder: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	encoded, err := io.ReadAll(io.LimitReader(file, maxEncodedStateBytes))
+	if err != nil {
+		return WatchHolder{}, false, fmt.Errorf("read the watch holder: %w", err)
+	}
 	var holder WatchHolder
-	if err := decoder.Decode(&holder); err != nil {
+	unknown, err := decodeTolerating(encoded, &holder)
+	if err != nil {
 		return WatchHolder{}, false, fmt.Errorf("decode the watch holder: %w", err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return WatchHolder{}, false, fmt.Errorf("decode the watch holder: %w", err)
-	}
+	noteUnknownFields("watch holder", unknown)
 	if holder.PID <= 0 {
 		return WatchHolder{}, false, errors.New("the watch holder names no process")
 	}
