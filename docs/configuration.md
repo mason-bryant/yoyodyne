@@ -2184,19 +2184,63 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Eight things keep an item out of a pass, reported at two different grains. Five are
-named against the item, because nothing else would report that this item was
-passed over. An unresolved directive is named with the directive's own words: it
-needs a person. An item whose unfinished children already carry its execution is
-named with those children: a decomposed epic and the child doing its work are
-both reported as ready, and starting both buys the same change twice — two
-developers over one file, the second of them guaranteed a conflict at
-integration. A child covers whether it is queued, blocked, or already claimed,
-and the container is ordinary work again once its last unfinished child leaves
-the backlog. And an item that would race work already in flight is sequenced
-behind it rather than started beside it, named with the run it would have raced
-and what the two share — the epic one of them was broken out of and the other
-is, or overlapping files. Two items merely filed under one epic are not racing:
+Eleven things keep an item out of a pass, reported at two different grains. The
+first eight are named against the item, because nothing else would report that
+this item was passed over; the last three are facts about the pass rather than
+about any one item.
+[How work flows](work.md#letting-the-harness-choose-the-work) lists the same
+eleven in the same order, and a test fails when the two lists differ:
+
+<!-- selection-rules: the same names, in the same order, as docs/work.md and docs/configuration/runs.md; internal/doclink/selectionrules_test.go holds them together -->
+1. **An unresolved directive** withholds the item until a person resolves the
+   directive, and is named in the directive's own words.
+2. **Unfinished children that carry its execution** withhold a container while
+   any child it was broken into is queued, blocked, or claimed, and release it
+   once the last of them leaves the backlog.
+3. **A race with work in flight** withholds an item that shares an epic
+   decomposition or files with a run in flight, and releases it at the first
+   pull after that run ends.
+4. **A conversation executor** withholds an item whose `executor` names a
+   persona conversation from every developer run; nothing clears it, and what
+   moves the item is somebody opening the conversation it names.
+5. **Parking** withholds an item the product manager parked however far the
+   queue drains, and only her `unpark` releases it.
+6. **A hold** withholds an item whose stopped run left its change on a branch,
+   or whose publication did not finish, until the development manager's
+   decision is carried out, the escalation is answered, or `yoyo reconcile`
+   settles the publication.
+7. **A prerequisite the tree does not meet** withholds an item that pinpoints
+   code the repository no longer has, or says in its own words that something
+   must land first; a pinpoint releases it when the code lands, and a sentence
+   when the item is amended or the dependency recorded.
+8. **A label another slot prefers** withholds an item every free developer slot
+   walked past for its preferred label, and the next slot with no preference to
+   come free — or the preferring slot, once its label's work is exhausted —
+   releases it.
+9. **The tracker not calling it ready** withholds an item with unfinished
+   dependencies or a status that is not open, and the tracker's own readiness
+   releases it.
+10. **A run already in flight for it** withholds the item while that run lasts,
+    and the run ending releases it.
+11. **No free developer slot** withholds everything once the slots are taken,
+    and any run ending releases one.
+<!-- /selection-rules -->
+
+Parking is the one to know about if you watch the queue: it is how deferred
+work stays admitted without being pulled, and it exists because on 2026-08-27 a
+draining queue reached work a scope decision had put off, started it, and spent
+$34.38 on a run nobody wanted. A priority cannot do that job — the bottom of the
+order is the last thing pulled, not the thing never pulled. The conversation
+executor is the same kind of marker for work a role does in conversation rather
+than in a developer run.
+
+The children rule is there because a decomposed epic and the child doing its
+work are both reported as ready, and starting both buys the same change twice —
+two developers over one file, the second of them guaranteed a conflict at
+integration. A race is sequenced behind the run it would have raced rather than
+started beside it, named with that run and what the two share — the epic one of
+them was broken out of and the other is, or overlapping files. Two items merely
+filed under one epic are not racing:
 an epic is as often a heading as it is one piece of work broken into several,
 nothing tells the two apart from the outside, and holding every child of a
 heading behind whichever started first serializes the queue rather than
@@ -2209,20 +2253,18 @@ by naming them after `conflict-surface:` on a line of its own, in its title,
 description, design guidance, or acceptance criteria; an item that declares
 nothing has those same fields read for the files it plainly names, and that
 inference takes only a path with a separator and an extension on the end, because
-a surface invented out of prose would hold unrelated work back. And an item the
-tree is not ready for — one that pinpoints a `file:line` or a package-qualified
+a surface invented out of prose would hold unrelated work back. An item the tree
+is not ready for — one that pinpoints a `file:line` or a package-qualified
 symbol the repository no longer has, or that says in its own authored words that
 something must land before it starts — is named with the unmet prerequisite and
 routed to the [triage docket](#triage-thresholds) rather than
 to a run; [how work flows](work.md#letting-the-harness-choose-the-work) says what
-the two readings are and who releases each. And an item every free
+the two readings are, and what the executor, parking, and hold rules each
+record. An item every free
 [developer slot](#a-developer-slot-that-prefers-a-label) walked past for its
 preferred label is named as left for another slot, with the slot and what it
-pulled ahead of the item: it waits on nothing about itself, and the next slot
-with no preference to come free takes it in the order. The tracker not
-reporting an item as ready, a run for it
-already being in flight anywhere, and there being no free slot are facts about
-the pass rather than about any one item, so the pass reports them as such — the
+pulled ahead of the item: it waits on nothing about itself. The last three
+rules are reported as facts about the pass — the
 stop reason names which of them ended the choosing, and a pass that got as far as
 reading the queue prints how many items were admitted, how many the tracker
 called ready to pull, and how many slots were taken. Those are counts rather than
@@ -2231,7 +2273,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A ninth thing deliberately keeps nothing out: an item whose goal was amended
+A twelfth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
