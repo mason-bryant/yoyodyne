@@ -199,6 +199,14 @@ step "whether $default_branch is protected"
 # out. The forge is asked through its command line, both ways it can protect a
 # branch -- the older per-branch protection, and a ruleset -- and a question it
 # cannot answer is named as unchecked rather than guessed at.
+#
+# Per-branch protection is read off the branch itself, the 'protected' field of
+# repos/{owner}/{repo}/branches/<branch>, as the harness's own forge check reads
+# it (internal/publish/github.go). The branch's protection endpoint needs
+# administrator rights, and the forge answers an account without them with the
+# same 404 it gives an unprotected branch, so asking it first read a protected
+# branch as open to anybody but an administrator. It is still asked, once the
+# branch is known to be protected, and only to say which rules apply.
 probe_protection() {
   if [ "$origin_reachable" != "1" ]; then
     printf 'unchecked: origin is unreachable'
@@ -209,13 +217,28 @@ probe_protection() {
     return
   fi
   local answer
-  if answer="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/branches/$default_branch/protection" 2>&1 >/dev/null)"; then
-    printf 'protected'
+  if ! answer="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/branches/$default_branch" --jq '.protected' 2>&1)"; then
+    printf 'unchecked: %s could not ask the forge: %s' "$gh_program" "$(printf '%s' "$answer" | head -1)"
     return
   fi
   case "$answer" in
-    *"HTTP 404"*) ;;
-    *) printf 'unchecked: %s could not ask the forge: %s' "$gh_program" "$(printf '%s' "$answer" | head -1)"; return ;;
+    true)
+      local applied
+      if applied="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/branches/$default_branch/protection" \
+          --jq '[(if .required_pull_request_reviews then "required pull request reviews" else empty end),
+                 (if .required_status_checks then "required status checks" else empty end),
+                 (if .restrictions then "push restrictions" else empty end),
+                 (if .required_linear_history.enabled then "linear history" else empty end),
+                 (if .enforce_admins.enabled then "enforced for administrators" else empty end)] | join(", ")' 2>/dev/null)" \
+          && [ -n "$applied" ]; then
+        printf 'protected: by branch protection, with %s' "$applied"
+      else
+        printf 'protected: by branch protection, whose rules this account cannot read'
+      fi
+      return
+      ;;
+    false) ;;
+    *) printf 'unchecked: %s could not ask the forge: its answer did not say whether %s is protected' "$gh_program" "$default_branch"; return ;;
   esac
   local rules
   if ! rules="$(cd "$repository" && "$gh_program" api "repos/{owner}/{repo}/rules/branches/$default_branch" \
@@ -223,12 +246,12 @@ probe_protection() {
     printf 'unchecked: %s could not ask the forge: %s' "$gh_program" "$(printf '%s' "$rules" | head -1)"
     return
   fi
-  if [ "$rules" != "0" ]; then printf 'protected'; else printf 'open'; fi
+  if [ "$rules" != "0" ]; then printf 'protected: by a ruleset'; else printf 'open'; fi
 }
 protection="$(probe_protection)"
 case "$protection" in
-  protected)
-    printf 'origin/%s is protected: a change reaches it only through a pull request. The cut\n' "$default_branch"
+  protected*)
+    printf 'origin/%s is protected (%s): a change reaches it only through a pull request. The cut\n' "$default_branch" "${protection#protected: }"
     printf 'writes nothing to it either way, so what changes is what stands between a cut and\n'
     printf 'its tag: a readiness result not yet in docs/releases/%s.md reaches it only through\n' "$tag"
     printf 'the pull request this cut opens and stops at, and publishing is the tag alone.\n'

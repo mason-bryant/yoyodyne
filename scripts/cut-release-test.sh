@@ -96,7 +96,8 @@ pull_requests_of() { printf '%s/%s-pull-requests.log' "$scratch" "$(basename "$1
 # result in them), "absent", or "draft-red" for this release's notes, $5 is
 # what the stub forge command line answers about the default branch --
 # "open" (the default), "protected" (the older per-branch protection),
-# "ruleset" (a ruleset requiring a pull request), or "down" (a forge it cannot
+# "protected-unreadable" (the same, asked by an account that may not read the
+# protection endpoint), "ruleset" (a ruleset requiring a pull request), or "down" (a forge it cannot
 # reach) -- and $6 is "green" (the default) or "red" for the release-readiness
 # gate. Most cases want notes already stamped, an open branch, and a green
 # gate, because the one they are about is further down.
@@ -136,9 +137,19 @@ fabricate() {
     printf 'set -euo pipefail\n'
     printf 'log="%s"\n' "$(pull_requests_of "$project")"
     printf 'case "${1:-} ${2:-}" in\n'
+    printf '  "api repos/{owner}/{repo}/branches/main")\n'
+    case "$forge" in
+      protected|protected-unreadable) printf '    echo true\n' ;;
+      down) printf '    echo "error connecting to api.forge.invalid" >&2; exit 1\n' ;;
+      *)    printf '    echo false\n' ;;
+    esac
+    printf '    ;;\n'
+    # The per-branch protection endpoint needs administrator rights, and the
+    # forge answers an account without them with the 404 it gives an
+    # unprotected branch -- which is what "protected-unreadable" fabricates.
     printf '  "api repos/{owner}/{repo}/branches/main/protection")\n'
     case "$forge" in
-      protected) printf '    echo "{}"\n' ;;
+      protected) printf '    echo "required pull request reviews"\n' ;;
       down)      printf '    echo "error connecting to api.forge.invalid" >&2; exit 1\n' ;;
       *)         printf '    echo "HTTP 404: Branch not protected" >&2; exit 1\n' ;;
     esac
@@ -754,7 +765,7 @@ else
   contains "$refused" "Changes must be made through a pull request" "the fixture's origin refuses a direct push to main the way the forge does"
 fi
 output="$(cut "$project" "v0.3.0")"
-contains "$output" "origin/main is protected: a change reaches it only through a pull request" "the protection is detected"
+contains "$output" "origin/main is protected (by branch protection, with required pull request reviews): a change reaches it only through a pull request" "the protection is detected, and which rules apply is said"
 missing "$output" "stub build succeeded" "before anything is built"
 contains "$output" "reaches it only through" "and the cut says which step changes because of it"
 contains "$output" "publishing is the tag alone" "and that the push is the tag alone"
@@ -854,7 +865,26 @@ step "a ruleset requiring a pull request is protection too"
 project="$(fabricate ruleset-protected green green present ruleset)"
 origin_for "$project" >/dev/null
 output="$(cut "$project" "v0.3.0")"
-contains "$output" "origin/main is protected" "a ruleset the older protection query does not see is found by the rules query"
+contains "$output" "origin/main is protected (by a ruleset)" "a ruleset the older protection query does not see is found by the rules query"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "and a cut whose notes already carry the result goes through"
+else
+  fail "expected v0.3.0, got: $(tags "$project")"
+fi
+
+step "a branch protected to an account that may not read its protection still reads as protected"
+# The protection endpoint answers 404 to an account without administrator
+# rights, which is what it answers for an unprotected branch; the branch's own
+# 'protected' field is what decides, and the endpoint only says which rules.
+project="$(fabricate protected-unreadable green green present protected-unreadable)"
+origin_for "$project" >/dev/null
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "origin/main is protected (by branch protection, whose rules this account cannot read)" "a 404 from the protection endpoint does not read a protected branch as open"
+if printf '%s' "$output" | grep -qF "is not protected"; then
+  fail "the cut called a protected branch open"
+else
+  pass "and the cut never calls it open"
+fi
 if [ "$(tags "$project")" = "v0.3.0" ]; then
   pass "and a cut whose notes already carry the result goes through"
 else

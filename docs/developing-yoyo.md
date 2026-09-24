@@ -518,12 +518,21 @@ that requires a pull request refused the push — a pull request produces a
 different commit, so the tag named a tree `main` would never hold, and a
 second cut had fresh housekeeping it could not push either. So whether `main`
 is protected is now asked of the forge before anything is built, both ways a
-forge can protect a branch, and the cut says what that changes rather than
+forge can protect a branch — the `protected` field of
+`repos/{owner}/{repo}/branches/<branch>`, which any account that can read the
+repository may read, and then the rulesets that apply to it — and the cut says
+what that changes rather than
 finding out at the push: on a protected branch the readiness result reaches
 the notes only through the pull request the cut opens, and publishing is the
 tag alone. On a branch that is not protected the path is the same. Where the
 forge cannot be asked — `gh` not installed, or a remote it does not know — the
-cut says that went unchecked and takes the same path.
+cut says that went unchecked and takes the same path. The branch's protection
+endpoint, `repos/{owner}/{repo}/branches/<branch>/protection`, is asked only
+once the branch is known to be protected, and only to say which rules apply:
+it needs administrator rights and answers anybody else with the 404 it gives
+an unprotected branch, so a cut that decided from it told a non-administrator
+that a protected `main` was open. Where it will not answer, the cut says the
+branch is protected and that its rules could not be read.
 
 Two things the tree carries are handled differently because of that. The
 tracker's own exports — `.beads/interactions.jsonl` and `.beads/issues.jsonl`
