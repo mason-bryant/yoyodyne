@@ -430,6 +430,170 @@ func TestMemoryStoreReportsAnUnreadableLineWithoutLosingTheRest(t *testing.T) {
 	}
 }
 
+// TestMemoryStoreReadsAndWritesPastATornLastLine is a crash mid-append: the log
+// ends partway through a revision. One crash must not lock an agent out of its
+// memory, so the reader names the torn line and carries on, and the next write
+// sets the fragment aside and lands whole.
+func TestMemoryStoreReadsAndWritesPastATornLastLine(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	interrupted := testMemoryRevision()
+	interrupted.Sequence = 2
+	interrupted.Text = "the operator reads the interrupted revision"
+	encoded, err := encodeMemoryRevision(interrupted)
+	if err != nil {
+		t.Fatalf("encodeMemoryRevision() error = %v", err)
+	}
+	fragment := encoded[:len(encoded)/2]
+	path := filepath.Join(store.Root(), "product-manager.memory.jsonl")
+	appendToMemoryLog(t, path, fragment)
+
+	memories, problems, err := store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(memories) != 1 || len(memories[0].Revisions) != 1 {
+		t.Fatalf("Memories() returned %v, want the one revision that reads", memories)
+	}
+	if len(problems) != 1 || !problems[0].Torn || problems[0].Line != 2 {
+		t.Fatalf("Memories() reported %v, want the torn line 2 named", problems)
+	}
+
+	written := testMemoryRevision()
+	written.Text = "the operator reads reports at leisure, after the crash"
+	recorded, err := store.Remember(context.Background(), written)
+	if err != nil {
+		t.Fatalf("Remember() after a torn append error = %v", err)
+	}
+	// The torn write was never acknowledged, so nobody numbered after it and the
+	// number it would have taken is still free.
+	if recorded.Sequence != 2 {
+		t.Errorf("the write after the tear is numbered %d, want 2", recorded.Sequence)
+	}
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err != nil {
+		t.Fatalf("Remember() a second time after the tear error = %v", err)
+	}
+
+	memories, problems, err = store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Memories() reported %v after the tear was mended", problems)
+	}
+	if len(memories) != 1 || len(memories[0].Revisions) != 3 {
+		t.Fatalf("Memories() returned %v, want three revisions of one memory", memories)
+	}
+	if memories[0].Revisions[1].Text != written.Text {
+		t.Errorf("revision 2 reads %q, want the write after the tear", memories[0].Revisions[1].Text)
+	}
+	// The fragment is set aside rather than thrown away: what was on the disk is
+	// still on it, where an operator can read it.
+	aside, err := os.ReadFile(filepath.Join(store.Root(), "product-manager.memory.torn-0001"))
+	if err != nil {
+		t.Fatalf("read the torn end set aside: %v", err)
+	}
+	if string(aside) != string(fragment) {
+		t.Errorf("the torn file holds %q, want the fragment %q", aside, fragment)
+	}
+	agents, err := store.Agents()
+	if err != nil {
+		t.Fatalf("Agents() error = %v", err)
+	}
+	if len(agents) != 1 || agents[0] != "product-manager" {
+		t.Errorf("Agents() returned %v, want the torn file not read as an agent", agents)
+	}
+}
+
+// TestMemoryStoreKeepsAWholeRevisionThatLostOnlyItsNewline is the crash that
+// fell between a revision and its newline. The revision is whole and read, so
+// the next write terminates it rather than setting it aside.
+func TestMemoryStoreKeepsAWholeRevisionThatLostOnlyItsNewline(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	unterminated := testMemoryRevision()
+	unterminated.Sequence = 2
+	encoded, err := encodeMemoryRevision(unterminated)
+	if err != nil {
+		t.Fatalf("encodeMemoryRevision() error = %v", err)
+	}
+	path := filepath.Join(store.Root(), "product-manager.memory.jsonl")
+	appendToMemoryLog(t, path, encoded[:len(encoded)-1])
+
+	recorded, err := store.Remember(context.Background(), testMemoryRevision())
+	if err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	if recorded.Sequence != 3 {
+		t.Errorf("the write is numbered %d, want 3 after the unterminated revision 2", recorded.Sequence)
+	}
+	memories, problems, err := store.Memories("product-manager")
+	if err != nil {
+		t.Fatalf("Memories() error = %v", err)
+	}
+	if len(problems) != 0 || len(memories) != 1 || len(memories[0].Revisions) != 3 {
+		t.Fatalf("Memories() returned %v with %v, want three revisions and no problem", memories, problems)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "product-manager.memory.torn-0001")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a whole revision was set aside as torn: %v", err)
+	}
+}
+
+// TestMemoryStoreStillRefusesACorruptLineBeforeATornEnd holds the exception to
+// the torn end alone: an unreadable line anywhere else is history the writer
+// could not read, and the write is refused and leaves the log as it was.
+func TestMemoryStoreStillRefusesACorruptLineBeforeATornEnd(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore(t, t.TempDir())
+	if _, err := store.Remember(context.Background(), testMemoryRevision()); err != nil {
+		t.Fatalf("Remember() error = %v", err)
+	}
+	path := filepath.Join(store.Root(), "product-manager.memory.jsonl")
+	appendToMemoryLog(t, path, []byte("{not a memory}\n{\"schema_ver"))
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the memory log: %v", err)
+	}
+
+	_, err = store.Remember(context.Background(), testMemoryRevision())
+	if err == nil {
+		t.Fatal("Remember() wrote past a corrupt line that is not the torn end")
+	}
+	if !strings.Contains(err.Error(), "product-manager.memory.jsonl line 2") {
+		t.Errorf("Remember() error = %v, want the corrupt line named", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the memory log: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a refused write changed the log")
+	}
+}
+
+func appendToMemoryLog(t *testing.T, path string, content []byte) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open the memory log: %v", err)
+	}
+	if _, err := file.Write(content); err != nil {
+		t.Fatalf("append to the memory log: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close the memory log: %v", err)
+	}
+}
+
 func TestMemoryStoreReportsARevisionThatBelongsToAnotherAgent(t *testing.T) {
 	t.Parallel()
 

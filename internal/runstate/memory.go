@@ -499,9 +499,20 @@ type MemoryProblem struct {
 	Log     string `json:"log"`
 	Line    int    `json:"line"`
 	Problem string `json:"problem"`
+	// Torn says the line is the unterminated end of the live log that will not
+	// decode: what an append leaves when a crash stops it partway. It is reported
+	// like any other unreadable line, and it is the one kind the writer does not
+	// refuse over, because it is the only one the writer can prove is its own
+	// unfinished write rather than history it could not read. The next write sets
+	// it aside, as the log's name with `.memory.torn-NNNN` in place of
+	// `.memory.jsonl`, and writes its own line whole.
+	Torn bool `json:"torn,omitempty"`
 }
 
 func (p MemoryProblem) String() string {
+	if p.Torn {
+		return fmt.Sprintf("%s line %d (torn, unterminated end of the log): %s", p.Log, p.Line, p.Problem)
+	}
 	return fmt.Sprintf("%s line %d: %s", p.Log, p.Line, p.Problem)
 }
 
@@ -599,8 +610,20 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 	// must not, because the sequence it is about to assign is worked out from what
 	// it could read, and a revision it could not read may be the one it is
 	// numbering after.
-	if len(problems) > 0 {
-		return MemoryRevision{}, fmt.Errorf("%s cannot be written while %d of its lines will not decode: %s", revision.Agent, len(problems), problems[0])
+	//
+	// The torn end of the live log is the exception, and the only one. Every line
+	// is written whole with its newline in one append, so bytes after the last
+	// newline are an append that never finished — a write whose caller was never
+	// told it succeeded, and so never a revision anybody numbered after. Refusing
+	// over it would turn one crash into an agent locked out of its memory for good.
+	var unreadable []MemoryProblem
+	for _, problem := range problems {
+		if !problem.Torn {
+			unreadable = append(unreadable, problem)
+		}
+	}
+	if len(unreadable) > 0 {
+		return MemoryRevision{}, fmt.Errorf("%s cannot be written while %d of its lines will not decode: %s", revision.Agent, len(unreadable), unreadable[0])
 	}
 
 	revision.Sequence = nextMemorySequence(recorded, revision.Memory)
@@ -619,6 +642,12 @@ func (s *MemoryStore) Remember(ctx context.Context, revision MemoryRevision) (Me
 		return MemoryRevision{}, fmt.Errorf("the encoded revision is %d bytes, limit is %d", len(encoded), maxEncodedMemoryRevisionBytes)
 	}
 	if err := s.affordable(recorded, revision); err != nil {
+		return MemoryRevision{}, err
+	}
+	// The torn end is mended before the roll as well as before the append, so an
+	// archive never carries one: an archive's last line is not the end of the live
+	// log, and a torn line there would be read as corruption for ever after.
+	if err := s.mendTail(revision.Agent, path); err != nil {
 		return MemoryRevision{}, err
 	}
 	// The roll happens before the append rather than after it, so the log a write
@@ -800,7 +829,7 @@ func (s *MemoryStore) recorded(agent string) ([]MemoryRevision, []MemoryProblem,
 		problems  []MemoryProblem
 	)
 	for _, each := range append(archives, path) {
-		read, found, err := s.read(each, agent)
+		read, found, err := s.read(each, agent, each == path)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -924,7 +953,13 @@ func memoryHasSequence(recorded []MemoryRevision, name string, sequence int) boo
 // read is one of an agent's log files as it sits on disk. A line that will not
 // decode, or that belongs to another agent or another product, is a problem
 // reported against the file it is in rather than a failure to read the rest.
-func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProblem, error) {
+//
+// live says the file is the agent's live log, which is the only file an append
+// lands in and so the only one whose end can be torn. An unterminated last line
+// there that will not decode is reported as torn; the same bytes in an archive
+// are corruption, because an archive is only ever a log the writer had already
+// mended.
+func (s *MemoryStore) read(path, agent string, live bool) ([]MemoryRevision, []MemoryProblem, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -941,6 +976,16 @@ func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProble
 	)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedMemoryRevisionBytes)
+	// The split is the ordinary line split, watched for the one token it hands back
+	// without a newline after it: the last line of a file that does not end in one.
+	unterminated := false
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		advance, token, err := bufio.ScanLines(data, atEOF)
+		if atEOF && token != nil && advance == len(data) && data[len(data)-1] != '\n' {
+			unterminated = true
+		}
+		return advance, token, err
+	})
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -949,7 +994,8 @@ func (s *MemoryStore) read(path, agent string) ([]MemoryRevision, []MemoryProble
 		}
 		revision, err := decodeMemoryRevision(scanner.Bytes())
 		if err != nil {
-			problems = append(problems, MemoryProblem{Agent: agent, Log: log, Line: line, Problem: err.Error()})
+			problems = append(problems, MemoryProblem{Agent: agent, Log: log, Line: line, Problem: err.Error(),
+				Torn: live && unterminated})
 			continue
 		}
 		if revision.Agent != agent {
@@ -1034,6 +1080,63 @@ func (s *MemoryStore) append(path string, encoded []byte) error {
 	return nil
 }
 
+// mendTail leaves the live log ending in a newline, so the line about to be
+// appended is written whole rather than onto the end of an unfinished one. It is
+// called under the agent's lock, after every refusal a write can meet, so a write
+// that is refused leaves the log exactly as it found it.
+//
+// Bytes after the last newline are an append a crash stopped. Where they decode,
+// the crash fell between the revision and its newline: the revision is whole, the
+// reader already counts it, and the newline is all it lacks. Where they do not,
+// they are set aside rather than thrown away — copied, synced, into a torn file
+// beside the log, and only then cut from it — so the log goes on holding only
+// lines that read, and nothing that was ever on the disk is lost. A crash between
+// the copy and the cut leaves the tail in place to be set aside again by the next
+// write, which costs a second copy of a fragment and never the fragment.
+func (s *MemoryStore) mendTail(agent, path string) error {
+	stored, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the %s memory log: %w", agent, err)
+	}
+	if len(stored) == 0 || stored[len(stored)-1] == '\n' {
+		return nil
+	}
+	cut := bytes.LastIndexByte(stored, '\n') + 1
+	tail := stored[cut:]
+	if _, err := decodeMemoryRevision(tail); err == nil {
+		if err := s.append(path, []byte("\n")); err != nil {
+			return fmt.Errorf("terminate the last %s memory line: %w", agent, err)
+		}
+		return nil
+	}
+	aside, err := s.nextTornPath(agent)
+	if err != nil {
+		return err
+	}
+	if err := s.append(aside, tail); err != nil {
+		return fmt.Errorf("set the torn end of the %s memory log aside: %w", agent, err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open the %s memory log: %w", agent, err)
+	}
+	if err := file.Truncate(int64(cut)); err != nil {
+		file.Close()
+		return fmt.Errorf("cut the torn end from the %s memory log: %w", agent, err)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("sync the %s memory log: %w", agent, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close the %s memory log: %w", agent, err)
+	}
+	return nil
+}
+
 // lockAgent serializes writes to one agent's log against every other Yoyodyne
 // process, so that the sequence a writer assigns is one nobody else is assigning
 // at the same moment. It is the same advisory lock the reservations use, which
@@ -1065,13 +1168,44 @@ func (s *MemoryStore) lockAgent(ctx context.Context, agent string) (func(), erro
 // which is what tells the listing a file holds an agent's memories rather than
 // being the lock beside it or an archive rolled off it; an archive is the same
 // name with a number in it, so the archives of one agent sort into the order they
-// were rolled and no archive is ever read as a live log.
+// were rolled and no archive is ever read as a live log. A torn end set aside is
+// numbered the same way and carries no `.jsonl` at all, because what it holds is
+// by definition not a line anything can read.
 const (
 	memoryLogSuffix     = ".memory.jsonl"
 	memoryLockSuffix    = ".memory.lock"
 	memoryArchiveMiddle = ".memory.archive-"
 	memoryArchiveFormat = "%s" + memoryArchiveMiddle + "%04d.jsonl"
+	memoryTornMiddle    = ".memory.torn-"
+	memoryTornFormat    = "%s" + memoryTornMiddle + "%04d"
 )
+
+// nextTornPath is where a torn end is about to be set aside: the number after the
+// highest already there, so one fragment never overwrites another.
+func (s *MemoryStore) nextTornPath(agent string) (string, error) {
+	if err := domain.ValidateIdentifier("agent", agent); err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read the memory directory: %w", err)
+	}
+	prefix := agent + memoryTornMiddle
+	highest := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		numbered, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), prefix))
+		if err != nil {
+			continue
+		}
+		if numbered > highest {
+			highest = numbered
+		}
+	}
+	return filepath.Join(s.root, fmt.Sprintf(memoryTornFormat, agent, highest+1)), nil
+}
 
 // archivePaths is every archive rolled off one agent's log, oldest first. There
 // are none for an agent whose log has never been rolled, which is nearly all of
