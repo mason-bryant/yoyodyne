@@ -142,6 +142,13 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	if !a.publishing {
 		return nil
 	}
+	// A change moved onto the target to reconcile a refused replay is no longer
+	// built on the branch the pull request carries, so it replaces that branch
+	// rather than extending it: a compare-and-swap from exactly the commit the
+	// harness published, and the same request carries the reconciled change.
+	if a.reconcilingPublishedBranch() {
+		return a.republishRebase(ctx, gitworktree.Rebase{HeadCommit: a.state.HarnessCommit})
+	}
 	// The push is the first place a run touches the network, and a reset one is
 	// what killed a run at this exact step. Asking again is safe as well as
 	// necessary: commitAttempt has already recorded the work, so a second attempt

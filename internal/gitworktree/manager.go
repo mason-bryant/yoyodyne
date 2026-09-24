@@ -306,6 +306,37 @@ type Rebase struct {
 	PreviousHeadCommit string `json:"previous_head_commit"`
 }
 
+// RebaseConflict is a refused replay with the detail whoever settles it needs
+// rather than only the fact that one happened: the paths Git stopped on, and
+// where the target had moved to. Both are collected before the replay is
+// abandoned, because abandoning it is what puts the worktree back and takes the
+// evidence with it.
+//
+// It carries the sentinel above rather than replacing it, so every caller that
+// only asks which class of failure this is keeps working unchanged.
+type RebaseConflict struct {
+	Branch       string
+	TargetBranch string
+	// TargetCommit is where the target branch had got to: the other side of the
+	// disagreement, and the commit anybody reconciling the change has to read.
+	TargetCommit string
+	// Paths are the repository-relative paths Git left unmerged, in the order it
+	// listed them. A replay refused for something other than content can leave
+	// none, so an empty list is a conflict with nothing to name rather than an
+	// absent one.
+	Paths []string
+	// Err is Git's own account of the failure, kept whole.
+	Err error
+}
+
+func (c *RebaseConflict) Error() string {
+	return ErrRebaseConflict.Error() + ": " + c.Err.Error()
+}
+
+// Unwrap reports the sentinel and Git's own failure both, so errors.Is finds
+// either exactly as the wrapped pair this replaced did.
+func (c *RebaseConflict) Unwrap() []error { return []error{ErrRebaseConflict, c.Err} }
+
 // Moved reports that the replay actually put the change on a different base. A
 // rebase onto a target that never moved is a legitimate no-op — an integration
 // can lose a race to a lock rather than to a commit — and it must not read as
@@ -356,9 +387,10 @@ var (
 	// fast-forward. The harness never resolves this by forcing or resetting.
 	ErrNotFastForward = errors.New("integration target cannot be fast-forwarded")
 	// ErrRebaseConflict reports a change that could not be replayed onto its
-	// moved target. It is deliberately terminal: the harness replays work, it
-	// never resolves a conflict, because which side of one is right is a
-	// judgement about the product rather than a Git operation.
+	// moved target. Nothing here resolves one: the harness replays work, and
+	// which side of a conflict is right is a judgement about the product rather
+	// than a Git operation. What the caller does with it — hand it to whoever
+	// wrote the change, or to a person — is the caller's.
 	ErrRebaseConflict = errors.New("change cannot be replayed onto the moved integration target")
 	// ErrPrimaryNotReady reports the primary checkout carrying uncommitted state
 	// the harness does not own, so no worktree may be cut from it and no change
@@ -2445,6 +2477,12 @@ func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, ta
 		// Git's own.
 		return failed
 	}
+	// Read before the abort, because the abort is what removes it. A listing that
+	// could not be taken names no paths rather than failing the report: what makes
+	// this a conflict is that a replay began and was abandoned, which is already
+	// established, and a conflict named without its paths is still one somebody
+	// can settle.
+	conflicted, _ := m.conflictedPaths(ctx, path)
 	aborted, err := m.run(ctx, "-C", path, "rebase", "--abort")
 	if err != nil {
 		return errors.Join(failed, err)
@@ -2453,7 +2491,233 @@ func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, ta
 		return errors.Join(failed, fmt.Errorf("abandon the replay failed with exit code %d: %s; the worktree is left part-way through it",
 			aborted.ExitCode, strings.TrimSpace(aborted.Stderr)))
 	}
-	return fmt.Errorf("%w: %w", ErrRebaseConflict, failed)
+	return &RebaseConflict{
+		Branch:       worktree.Branch,
+		TargetBranch: worktree.TargetBranch,
+		TargetCommit: targetCommit,
+		Paths:        conflicted,
+		Err:          failed,
+	}
+}
+
+// conflictedPaths lists what Git left unmerged in a half-applied replay or
+// apply, which is the nearest thing to a statement of what the two sides
+// disagree about.
+func (m *Manager) conflictedPaths(ctx context.Context, path string) ([]string, error) {
+	listed, err := m.run(ctx, "-C", path, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	if listed.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list the unmerged paths failed with exit code %d: %s", listed.ExitCode, strings.TrimSpace(listed.Stderr))
+	}
+	var paths []string
+	for _, line := range strings.Split(listed.Stdout, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			paths = append(paths, trimmed)
+		}
+	}
+	return paths, nil
+}
+
+// ReplayForRepair moves a change whose replay was refused onto the target
+// anyway, and leaves the disagreement in the worktree for whoever wrote the
+// change to settle. It exists because the refusal cannot be answered from the
+// base the change still sits on: a resolution written there is another change
+// to lines the target already changed, so replaying it conflicts exactly as the
+// first attempt did, however carefully it was written. The only place the two
+// answers can be reconciled is on top of the target.
+//
+// Nothing is resolved here and nothing is chosen. Git's own three-way apply puts
+// every hunk that fits where it goes and writes the ones that do not as
+// conflict markers — the state a person resolving a rebase by hand works in.
+// Unlike a rebase left half-applied it is an ordinary dirty worktree: no
+// operation is in progress, HEAD is the target commit the caller records as the
+// run's new base, and a process that dies here leaves something the next one
+// can read.
+//
+// The change is applied as one commit rather than as the commits the run
+// happened to make, because a branch that published several attempts replays
+// each of them in turn, and the first one conflicting refuses the whole replay
+// even where the change as a whole would apply.
+//
+// What the move drops is only this run's own commits, whose content is
+// re-applied over the target as uncommitted work; the target keeps every commit
+// it has, and nothing is force-merged, chosen between, or pushed anywhere.
+func (m *Manager) ReplayForRepair(ctx context.Context, worktree Worktree, message string) (Rebase, error) {
+	target := worktree.TargetBranch
+	if err := validateTargetBranch(target); err != nil {
+		return Rebase{}, err
+	}
+	if target == worktree.Branch {
+		return Rebase{}, errors.New("integration target must differ from the worktree branch")
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = defaultCommitMessage(worktree)
+	}
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
+	if err != nil {
+		return Rebase{}, err
+	}
+	dirty, err := m.isDirty(ctx, path)
+	if err != nil {
+		return Rebase{}, err
+	}
+	// The change has to be in a commit to be applied over anything. A refused
+	// replay has already committed it, so this ordinarily finds nothing to do.
+	source := head
+	if dirty {
+		source, err = m.commitWorktree(ctx, path, message)
+		if err != nil {
+			return Rebase{}, err
+		}
+	}
+	rebase := Rebase{
+		Branch:             worktree.Branch,
+		TargetBranch:       target,
+		BaseCommit:         worktree.BaseCommit,
+		HeadCommit:         source,
+		PreviousBaseCommit: worktree.BaseCommit,
+		PreviousHeadCommit: source,
+	}
+	if source == worktree.BaseCommit {
+		return rebase, ErrNoChanges
+	}
+	targetCommit, err := m.resolveBranchCommit(ctx, target)
+	if err != nil {
+		return rebase, err
+	}
+	if targetCommit == worktree.BaseCommit {
+		// The target is back where this change was written, so there is nothing to
+		// reconcile it with, and the change is left exactly where it is.
+		return rebase, nil
+	}
+	squashed, err := m.squashChange(ctx, path, worktree.BaseCommit, source, message)
+	if err != nil {
+		return rebase, err
+	}
+	// A refreshed export is a path this worktree's index has been told to leave
+	// alone, and Git refuses to move a HEAD across one — the same reason replay
+	// puts the branch's own copies back first and refreshes them afterwards.
+	if err := m.restoreExports(ctx, path); err != nil {
+		return rebase, fmt.Errorf("put the current exports back before moving onto the target: %w", err)
+	}
+	defer func() { _ = m.refreshExports(ctx, path) }()
+	if err := m.applyOverTarget(ctx, path, targetCommit, source, squashed); err != nil {
+		return rebase, err
+	}
+	rebase.BaseCommit = targetCommit
+	rebase.HeadCommit = targetCommit
+	return rebase, nil
+}
+
+// squashChange records the whole of a run's change as one harness commit above
+// the base without touching the branch. It is built from the source commit's
+// tree rather than from a patch, because a tree is what the run's work actually
+// is, and renames, modes, and binary content survive Git's own merge more
+// reliably than a round trip through a diff.
+func (m *Manager) squashChange(ctx context.Context, path, base, source, message string) (string, error) {
+	written, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"commit-tree", "--no-gpg-sign", source+"^{tree}", "-p", base, "-m", message)
+	if err != nil {
+		return "", err
+	}
+	if written.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("record the change as one commit failed with exit code %d: %s", written.ExitCode, strings.TrimSpace(written.Stderr))
+	}
+	commit := strings.TrimSpace(written.Stdout)
+	if !commitPattern.MatchString(commit) {
+		return "", fmt.Errorf("recorded squashed commit %q is invalid", commit)
+	}
+	return commit, nil
+}
+
+// applyOverTarget puts the branch and worktree on the target and applies the
+// change over it, leaving whatever would not merge as conflict markers.
+//
+// The two things it will not leave behind are a Git operation in progress and an
+// index that claims a resolution: the sequencer state a stopped apply writes is
+// cleared, and the index is reset to the target, so the only thing carrying the
+// change afterwards is the working tree. That is what makes this recoverable — a
+// run that dies here is a run with a dirty worktree, which every other step
+// already knows how to read.
+//
+// An apply that never started is not a conflict, and it is the one failure here
+// that would otherwise lose work: the branch has already been moved, so the
+// change would be left in a commit nothing points at. The branch is put back on
+// the change before the failure is reported.
+func (m *Manager) applyOverTarget(ctx context.Context, path, targetCommit, source, squashed string) error {
+	if err := m.resetHard(ctx, path, targetCommit); err != nil {
+		return err
+	}
+	picked, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
+		"-c", "core.hooksPath="+os.DevNull,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"cherry-pick", "--no-commit", squashed)
+	if err != nil {
+		return errors.Join(err, m.resetHard(ctx, path, source))
+	}
+	if picked.Status != execution.ProcessSucceeded {
+		failed := fmt.Errorf("apply %s over %s failed with exit code %d: %s",
+			squashed, targetCommit, picked.ExitCode, strings.TrimSpace(picked.Stderr))
+		conflicted, err := m.conflictedPaths(ctx, path)
+		if err != nil {
+			return errors.Join(failed, err, m.resetHard(ctx, path, source))
+		}
+		if len(conflicted) == 0 {
+			// Git declined the apply rather than stopping inside it, so there is no
+			// disagreement to hand anybody and nothing was written.
+			return errors.Join(failed, m.resetHard(ctx, path, source))
+		}
+		// An apply that stopped inside itself can leave sequencer state behind,
+		// which would make this an operation in progress rather than a dirty
+		// worktree. Clearing it keeps what was written and nothing else.
+		if err := m.quitCherryPick(ctx, path); err != nil {
+			return errors.Join(failed, err)
+		}
+	}
+	// Whatever the apply staged is unstaged, resolved and conflicting alike: a
+	// resolution is the developer's to make, and an index that already recorded
+	// one would hide from every later step which paths still hold a disagreement.
+	unstaged, err := m.run(ctx, "-C", path, "reset", "--quiet")
+	if err != nil {
+		return err
+	}
+	if unstaged.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("unstage the applied change failed with exit code %d: %s", unstaged.ExitCode, strings.TrimSpace(unstaged.Stderr))
+	}
+	return nil
+}
+
+func (m *Manager) resetHard(ctx context.Context, path, commit string) error {
+	result, err := m.run(ctx, "-C", path, "reset", "--hard", "--quiet", commit)
+	if err != nil {
+		return err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("move the worktree to %s failed with exit code %d: %s", commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return nil
+}
+
+// quitCherryPick clears any sequencer state a stopped apply left, keeping the
+// working tree exactly as that apply wrote it. An apply asked not to commit
+// ordinarily leaves none, and Git answers that case the same way, so this is
+// asked unconditionally rather than only when there is something to clear.
+func (m *Manager) quitCherryPick(ctx context.Context, path string) error {
+	result, err := m.run(ctx, "-C", path, "cherry-pick", "--quit")
+	if err != nil {
+		return err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("clear the stopped apply failed with exit code %d: %s; the worktree is left part-way through it",
+			result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return nil
 }
 
 // replayInProgress reports whether Git left a rebase half-applied in this

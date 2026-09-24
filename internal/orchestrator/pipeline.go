@@ -111,9 +111,14 @@ type WorktreeManager interface {
 	CommitAttempt(ctx context.Context, worktree gitworktree.Worktree, message string) (string, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
-	// replaying it onto wherever the target branch went. It is the only thing
-	// that ever rewrites a run's branch, and it never resolves a conflict.
+	// replaying it onto wherever the target branch went. It never resolves a
+	// conflict, and it is one of the two things that rewrite a run's branch.
 	RebaseOntoTarget(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Rebase, error)
+	// ReplayForRepair is the other, and it is what a refused replay is answered
+	// with: the change moved onto the target anyway, with whatever would not merge
+	// left in the worktree as conflict markers for its author to settle. It
+	// resolves nothing either — leaving the disagreement is the point.
+	ReplayForRepair(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Rebase, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	// The publishing half. RemoteConfigured is what lets a repository with no
 	// remote degrade to purely local behavior instead of failing; PublishBranch
@@ -1645,6 +1650,17 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
+		// A conflict whose move onto the target never happened — the process died
+		// between the two, or the run stopped with its budget spent and triage has
+		// granted it a repair — is moved first, because the conflict is only
+		// answerable on top of the target and the prompt below says the worktree is
+		// already there.
+		if run.state.ReplayConflict != nil && !run.state.ReplayConflict.Moved {
+			if err := run.moveOntoTargetForRepair(ctx); err != nil {
+				return run.fail(err, failureStatus(ctx, err))
+			}
+			state = run.state
+		}
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, run.scratch, p.Config.Checks,
 			protectedpath.Protect(p.Config, p.Worktrees.CurrentExports()...), run.repairBudget())
 		if err != nil {
@@ -1670,11 +1686,18 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // change nobody ran anything against are both decided in front of the checks, so
 // a check failure beside either was recorded against a change this run has
 // already moved past, and the same holds for findings beside a failing check. A
-// run that recorded none of the four never had a failure returned to it — it
+// run that recorded none of the five never had a failure returned to it — it
 // paused before or during its first attempt — so what it is owed is that
 // attempt.
+//
+// A refused replay is the exception that proves the ordering rather than one
+// against it. It is answered first because it is the only input decided after
+// every gate has passed, and every gate that decides another one clears it, so a
+// run still carrying one carries the most recent trigger there is.
 func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, scratchDirectory string, checks []string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
+	case state.ReplayConflict != nil:
+		return replayConflictRepairPrompt(invariants, scratchDirectory, checks, *state.ReplayConflict, state.RepairAttempts, limit), nil
 	case state.PathRefusal != nil:
 		return pathRefusalRepairPrompt(invariants, scratchDirectory, checks, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
 	case owesVerification(state):
@@ -1690,12 +1713,17 @@ func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, s
 
 // handedBackRepair reports a run carrying a failure that was actually returned
 // to its developer: refused paths, a change its developer ran nothing against, a
-// failing check, or the reviewer's findings. Each of the four is a failure about
-// a change that exists, so the presence of any of them is what says a worktree
-// is supposed to hold one, and a run that recorded none of them never had a
-// failure returned at all.
+// failing check, the reviewer's findings, or a replay the moved target refused.
+// Each of the five is a failure about a change that exists, so the presence of
+// any of them is what says a worktree is supposed to hold one, and a run that
+// recorded none of them never had a failure returned at all.
+//
+// A refused replay is recorded on a run whose budget is spent too, before the
+// run stops, and that is deliberate: it is what lets a repair triage grants
+// afterwards hand the same developer the same conflict in the same session
+// rather than leaving a re-run as the only way on.
 func handedBackRepair(state runstate.State) bool {
-	return state.PathRefusal != nil || owesVerification(state) || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+	return state.ReplayConflict != nil || state.PathRefusal != nil || owesVerification(state) || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
 }
 
 // owesVerification reports a run holding the execution-evidence gate's refusal:
@@ -2229,10 +2257,11 @@ func contendedIntegration(err error) bool {
 // recorded for the same reason publishing records its own: a worktree at a HEAD
 // nothing named is a worktree nothing may promote afterwards.
 //
-// A replay that conflicts is the end of the line rather than another retry. The
-// harness does not decide which side of a conflict is right — that belongs to
-// the development manager, which is the operator until the role exists — so it
-// is recorded as a blocker on the work item with the artifacts preserved.
+// A replay that conflicts is not another retry, and it is not the end of the
+// line either: the harness still decides nothing about which side is right, but
+// the developer that wrote the change is asked to reconcile it before anybody
+// else is. Only a run whose repair budget is spent hands the conflict to a
+// person.
 func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (bool, error) {
 	if !contendedIntegration(cause) {
 		return false, nil
@@ -2256,8 +2285,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 		return false, errors.Join(err, recordErr)
 	}
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
-		a.observe(ctx, deliveryIntegrate, "conflicted")
-		return false, a.blockOnRebaseConflict(err)
+		return a.continueOnRebaseConflict(ctx, err)
 	}
 	if err != nil {
 		return false, fmt.Errorf("replay the change onto the moved integration target: %w", err)
@@ -2355,12 +2383,152 @@ func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
 	return blocked
 }
 
+// continueOnRebaseConflict hands a change that cannot be replayed back to the
+// developer that wrote it, and reports whether the run may go round the gate
+// again.
+//
+// It is the repair loop applied to the one failure that used to end a run
+// outright, and what changed is who is asked rather than what the harness
+// decides: nothing is forced, no side is chosen, and neither answer is
+// discarded. The developer is asked because it is the one party that already
+// knows what this change was for, its session and worktree are still open, and
+// reconciling its own work with what the target became is the same kind of work
+// every other repair asks for — at a continuation's price rather than a fresh
+// run's.
+//
+// It is not asked to answer from where the change sits, because a resolution
+// written there is another change to lines the target has already changed and
+// replays into the same conflict however carefully it was made. The change is
+// moved onto the target first, with the disagreement left in the worktree as
+// Git's own markers, and what the developer is asked for is the two answers
+// reconciled on the ground the target now holds.
+//
+// The resolution earns nothing on its way through. The caller re-enters the
+// gate, so the reconciled change is checked again, reviewed again by its own
+// invocation, and promoted only after both — exactly as a change repaired for a
+// finding is.
+//
+// The budget is the repair budget, shared with the other inputs for the reason
+// they share it: what it bounds is how many times a run may ask a developer. A
+// run that has spent it stops with both sides intact, which is what this always
+// did, and carries the conflict on its record so a repair triage grants
+// afterwards hands the same developer the same disagreement.
+func (a *activeRun) continueOnRebaseConflict(ctx context.Context, cause error) (bool, error) {
+	limit := a.repairBudget()
+	a.recordReplayConflict(recordedReplayConflict(a.worktree, cause))
+	if a.state.RepairAttempts >= limit {
+		a.observe(ctx, deliveryIntegrate, "conflicted")
+		return false, a.blockOnRebaseConflict(cause, limit)
+	}
+	// Observed before the hand-back, because the hand-back is the next state.
+	a.observe(ctx, deliveryIntegrate, "reconciling")
+	if err := a.moveOntoTargetForRepair(ctx); err != nil {
+		return false, errors.Join(cause, err)
+	}
+	if err := a.repair(ctx, replayConflictRepairPrompt(a.deliveredInvariants().Text(), a.scratch, a.pipeline.Config.Checks, *a.state.ReplayConflict, a.state.RepairAttempts+1, limit)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// moveOntoTargetForRepair puts the run's change onto the target with the
+// conflict left in the worktree, and makes the move durable before anything
+// acts on it. The recorded base and the harness commit move together for the
+// reason they always do, and a move that leaves the change as uncommitted work
+// above the new base has no harness commit, which is exactly what this leaves.
+//
+// The approval is discarded here rather than left for the next review to
+// overwrite: it described the change as it stood before the move, and the move
+// and the attempt after it both change what it described. A standing approval
+// for a diff nobody has seen is what the gate exists to rule out.
+//
+// It is also what a continued run calls when it finds a recorded conflict whose
+// move never happened — a process that died between the two, or a run whose own
+// budget was spent and that triage granted a repair — so it is safe to reach
+// with the conflict already recorded and only the move owed.
+//
+// The published branch is not touched here. Pushing the target alone as the run
+// branch would put a pull request's head inside its own base, which a forge can
+// read as the request having been merged; the next attempt's own commit replaces
+// the published branch instead, from exactly the commit the harness put there.
+func (a *activeRun) moveOntoTargetForRepair(ctx context.Context) error {
+	a.clearReviewEvidence()
+	rebase, err := a.pipeline.Worktrees.ReplayForRepair(ctx, a.worktree, integrationMessage(a.item, a.outcome))
+	if err != nil {
+		if recordErr := a.recordRebase(rebase); recordErr != nil {
+			return errors.Join(err, recordErr)
+		}
+		return fmt.Errorf("move the change onto the target for its author to reconcile: %w", err)
+	}
+	if rebase.HeadCommit != "" {
+		a.worktree.BaseCommit = rebase.BaseCommit
+		a.state.BaseCommit = rebase.BaseCommit
+		a.outcome.BaseCommit = rebase.BaseCommit
+		// The change is uncommitted work above the new base, so no harness commit
+		// is standing: the worktree's HEAD is the base itself.
+		harnessCommit := rebase.HeadCommit
+		if harnessCommit == rebase.BaseCommit {
+			harnessCommit = ""
+		}
+		a.recordHarnessCommit(harnessCommit)
+	}
+	a.state.ReplayConflict.Moved = true
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save the change moved onto the target: %w", err)
+	}
+	return nil
+}
+
+// reconcilingPublishedBranch reports a run whose published branch the next
+// attempt has to replace rather than extend: the change was moved onto the
+// target to be reconciled, so the branch the pull request carries is no longer
+// an ancestor of what the attempt committed.
+func (a *activeRun) reconcilingPublishedBranch() bool {
+	return a.state.ReplayConflict != nil && a.state.ReplayConflict.Moved && a.outcome.PullRequest != nil && a.state.HarnessCommit != ""
+}
+
+// recordReplayConflict makes the refused replay the run's outstanding repair
+// input. It clears the others for the reason each of them clears the rest: at
+// most one input describes the change now in the worktree.
+func (a *activeRun) recordReplayConflict(conflict runstate.ReplayConflict) {
+	a.state.CheckFailure = nil
+	a.state.PathRefusal = nil
+	recorded := conflict
+	a.state.ReplayConflict = &recorded
+}
+
+// recordedReplayConflict is what a refused replay carries into durable state and
+// into the developer's next attempt. A replay that stopped on more paths than the
+// bound allows names the first of them and counts the rest, because a listing
+// that stopped without saying so would read as the whole disagreement. A refusal
+// reported without its detail still produces a usable record: the branch is
+// known from the worktree, and what is missing is left out rather than guessed.
+func recordedReplayConflict(worktree gitworktree.Worktree, cause error) runstate.ReplayConflict {
+	recorded := runstate.ReplayConflict{
+		TargetBranch: worktree.TargetBranch,
+		Detail:       boundedTail(cause.Error(), runstate.MaxConflictDetailBytes),
+	}
+	var conflict *gitworktree.RebaseConflict
+	if !errors.As(cause, &conflict) {
+		return recorded
+	}
+	recorded.TargetCommit = conflict.TargetCommit
+	recorded.Paths = conflict.Paths
+	if len(conflict.Paths) > runstate.MaxConflictedPaths {
+		recorded.Paths = conflict.Paths[:runstate.MaxConflictedPaths]
+		recorded.Omitted = len(conflict.Paths) - runstate.MaxConflictedPaths
+	}
+	return recorded
+}
+
 // blockOnRebaseConflict ends a run whose change cannot be replayed onto what its
-// target became. Nothing is forced and nothing is resolved: the worktree and the
+// target became and whose repair budget leaves its developer no attempt to
+// reconcile it. Nothing is forced and nothing is resolved: the worktree and the
 // branch stay exactly as they were, and the conflict is recorded for whoever
 // owns the decision.
-func (a *activeRun) blockOnRebaseConflict(cause error) error {
-	if err := a.block(renderRebaseConflictNotes(a.outcome, cause.Error())); err != nil {
+func (a *activeRun) blockOnRebaseConflict(cause error, limit int) error {
+	if err := a.block(renderRebaseConflictNotes(a.outcome, cause.Error(), a.state.ReplayConflict, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the replay conflict as a blocker: %w", err))
 	}
 	return cause
@@ -2467,6 +2635,9 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			// decided ahead of them: no check ran on this attempt either.
 			var missing missingVerification
 			if errors.As(err, &missing) {
+				// The conflict is answered by the attempt that is owed evidence, so
+				// what is outstanding now is the evidence.
+				a.state.ReplayConflict = nil
 				if a.state.RepairAttempts >= limit {
 					a.observeCheckEnded(ctx, err, budgetSpent)
 					return a.blockOnMissingVerification(missing, limit)
@@ -2560,6 +2731,9 @@ func (a *activeRun) repair(ctx context.Context, prompt string) error {
 // rather than left to compete with the check for the next attempt.
 func (a *activeRun) recordCheckFailure(result checks.Result) {
 	a.clearReviewEvidence()
+	// A conflict handed back before this attempt has been answered by it: what
+	// is outstanding now is the check the answer fails.
+	a.state.ReplayConflict = nil
 	a.state.CheckFailure = &runstate.CheckFailure{
 		Command:  result.Command,
 		ExitCode: result.Process.ExitCode,
@@ -2575,6 +2749,7 @@ func (a *activeRun) recordCheckFailure(result checks.Result) {
 func (a *activeRun) recordPathRefusal(refusal runstate.PathRefusal) {
 	a.clearReviewEvidence()
 	a.state.CheckFailure = nil
+	a.state.ReplayConflict = nil
 	recorded := refusal
 	a.state.PathRefusal = &recorded
 }
@@ -3222,7 +3397,7 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 		blocked = errors.Join(blocked, recorded)
 	}
 	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
-	if err := a.block(renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, limit)); err != nil {
+	if err := a.block(renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, a.state.ReplayConflict, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
 	}
 	return cause
@@ -4638,6 +4813,12 @@ func (a *activeRun) verify(ctx context.Context) error {
 	// The change in the worktree now passes, so any failure an earlier attempt
 	// was handed is no longer this run's outstanding repair input.
 	a.state.CheckFailure = nil
+	// A replay conflict is cleared here too, and this is the moment it stops
+	// describing the change: it was moved into the worktree for its author to
+	// settle, and a change that passes its checks on top of the target is that
+	// settlement. Nothing later can say it — the promotion after it is an
+	// ordinary fast-forward, with no replay left to prove anything.
+	a.state.ReplayConflict = nil
 	return nil
 }
 
@@ -6745,6 +6926,46 @@ func checkRepairPrompt(invariants, scratchDirectory string, checks []string, fai
 // expensive way this could go wrong. The harness contract is repeated for the
 // reason every repair prompt repeats it: it bounds the attempt whether or not
 // the provider actually restored the session it was asked to resume.
+// replayConflictRepairPrompt hands a refused replay back to the developer that
+// wrote the change. What it describes is a worktree that has already been moved
+// onto the target, so both answers are in front of the developer with Git's
+// markers between them — the state a person resolving a rebase by hand works
+// in, and the only state in which this is answerable at all.
+//
+// It is deliberately not phrased as a Git operation to perform. Nothing is
+// half-applied waiting to be continued, and what is being asked for is a
+// judgement: two changes to the same lines, one of which this developer wrote,
+// reconciled into something that does the work the item asked for.
+func replayConflictRepairPrompt(invariants, scratchDirectory string, checks []string, conflict runstate.ReplayConflict, attempt, limit int) string {
+	var prompt strings.Builder
+	prompt.WriteString(developerContract(scratchDirectory, checks))
+	prompt.WriteString("\n\n")
+	prompt.WriteString(deliveredInvariantSection(invariants))
+	prompt.WriteString("# Integration conflict: repair required\n\n")
+	fmt.Fprintf(&prompt, "Your change passed its checks and was approved, but the branch it is to be integrated into moved while you were working, and your change could not be replayed onto where it went. This is repair attempt %d of %d. Your change has been moved onto the target for you, and the parts that would not merge are in your worktree between Git's conflict markers. Continue the change you already made instead of starting over, and settle every conflict.\n\n", attempt, limit)
+	fmt.Fprintf(&prompt, "Integration target: %s\n", conflict.TargetBranch)
+	if conflict.TargetCommit != "" {
+		fmt.Fprintf(&prompt, "Your worktree now sits on: %s\n", conflict.TargetCommit)
+	}
+	if len(conflict.Paths) > 0 {
+		prompt.WriteString("\nThe replay stopped on:\n\n")
+		for _, path := range conflict.Paths {
+			prompt.WriteString("- " + path + "\n")
+		}
+		if conflict.Omitted > 0 {
+			fmt.Fprintf(&prompt, "- and %d further path(s) not listed here\n", conflict.Omitted)
+		}
+	}
+	if conflict.Detail != "" {
+		prompt.WriteString("\nWhat Git reported when the replay was refused:\n\n```\n")
+		prompt.WriteString(conflict.Detail)
+		prompt.WriteString("\n```\n")
+	}
+	prompt.WriteString("\nWhat is in front of you is a disagreement rather than a mechanical merge: your change and the target branch each hold an answer for the same lines, and only one of them was yours. Read both, decide what each file should actually say, and edit it into that, leaving no conflict markers behind. Everything the target changed that your work did not touch is already in your worktree and is not yours to undo. `git status`, `git diff`, and `git log` all work, and the target's own history is in this same repository.\n")
+	prompt.WriteString("\nIf the two answers genuinely cannot both stand — the target has done your work differently, or has made it unnecessary — say so plainly in your summary rather than forcing a reconciliation you do not believe in. The checks and an independent review both run again on what you produce, so nothing your change was granted before carries over.")
+	return prompt.String()
+}
+
 func accountPrompt(invariants, scratchDirectory, reason string, checks []string) string {
 	var prompt strings.Builder
 	prompt.WriteString(developerContract(scratchDirectory, checks))
@@ -6899,10 +7120,10 @@ func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) s
 // What the run was already carrying when the provider killed it is a separate
 // question, and the note answers it rather than assuming. A provider can die
 // during a repair attempt as easily as during the first one, so the run may hold
-// a spent repair attempt, refused paths, a failing check, and a reviewer's
-// findings — all of which are named here, because a reader told only about the
+// a spent repair attempt, refused paths, a failing check, a reviewer's findings,
+// and a replay its target refused — all of which are named here, because a reader told only about the
 // provider would go looking for a clean change and find a dirty one.
-func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, checkFailure *runstate.CheckFailure, refusal *runstate.PathRefusal, limit int) string {
+func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, checkFailure *runstate.CheckFailure, refusal *runstate.PathRefusal, conflict *runstate.ReplayConflict, limit int) string {
 	lines := []string{
 		"Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
 		fmt.Sprintf("Relaunches: %d of %d permitted", outcome.TransientRelaunches, limit),
@@ -6926,7 +7147,10 @@ func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailur
 	if checkFailure != nil {
 		lines = append(lines, fmt.Sprintf("Last failing check: %s (exit %d)", checkFailure.Command, checkFailure.ExitCode))
 	}
-	lines = append(lines, relaunchBlockerVerdict(outcome, checkFailure))
+	if conflict != nil {
+		lines = append(lines, "Unreconciled replay conflict against: "+conflict.TargetBranch)
+	}
+	lines = append(lines, relaunchBlockerVerdict(outcome, checkFailure, conflict))
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
@@ -6936,8 +7160,8 @@ func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailur
 // what tells the reader to pick the work up rather than replan it. A run killed
 // inside its repair loop carries a failing check or a reviewer's findings, and
 // that same sentence would deny evidence recorded in the note around it.
-func relaunchBlockerVerdict(outcome Outcome, checkFailure *runstate.CheckFailure) string {
-	if outcome.RepairAttempts > 0 || checkFailure != nil || len(outcome.ReviewFindings) > 0 {
+func relaunchBlockerVerdict(outcome Outcome, checkFailure *runstate.CheckFailure, conflict *runstate.ReplayConflict) string {
+	if outcome.RepairAttempts > 0 || checkFailure != nil || conflict != nil || len(outcome.ReviewFindings) > 0 {
 		return "What stopped this run is the provider rather than a verdict on the change. The repair evidence recorded with this note is what the run was already carrying, and it is unresolved rather than dismissed. The branch, worktree, and developer session are preserved."
 	}
 	return "No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider."
@@ -6965,20 +7189,39 @@ func renderMissingPreservedChangeNotes(outcome Outcome, failure string) string {
 }
 
 // renderRebaseConflictNotes describes a change that cannot be replayed onto what
-// its target became. This is the one integration outcome that is genuinely a
-// decision rather than a retry, so it names both sides and says explicitly that
-// nothing was resolved automatically.
-func renderRebaseConflictNotes(outcome Outcome, failure string) string {
+// its target became, on a run whose repair budget leaves its developer no
+// attempt to reconcile it. It names both sides and says explicitly that nothing
+// was resolved automatically.
+//
+// It counts the repair attempts, because that is what changes what the reader is
+// being handed. A conflict the run's own developer was asked to settle and could
+// not is a disagreement worth a person's judgement; one reached with the budget
+// already spent on something else is work still waiting for that developer, and
+// a repair triage grants hands it exactly this conflict in the same session.
+func renderRebaseConflictNotes(outcome Outcome, failure string, conflict *runstate.ReplayConflict, limit int) string {
 	lines := []string{
 		"Yoyodyne stopped this item: its target branch moved, and this change conflicts with what the target now holds.",
-		"Nothing was force-merged, reset, or auto-resolved; which side of the conflict is right is a decision for a person.",
+		"Nothing was force-merged, reset, or auto-resolved; which side of the conflict is right is a decision, and the run's repair budget leaves its developer no attempt to reconcile it.",
+		fmt.Sprintf("Repair attempts: %d of %d permitted", outcome.RepairAttempts, limit),
 		"Failure: " + failure,
 		"Run: " + outcome.RunID,
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
 		"Base commit: " + outcome.BaseCommit,
-		"The branch and worktree are preserved exactly as they were; reconciling them against the target branch is what this needs.",
 	}
+	if conflict != nil {
+		if conflict.TargetCommit != "" {
+			lines = append(lines, "Target branch is at: "+conflict.TargetCommit)
+		}
+		if len(conflict.Paths) > 0 {
+			listed := "The replay stopped on: " + strings.Join(conflict.Paths, ", ")
+			if conflict.Omitted > 0 {
+				listed = fmt.Sprintf("%s, and %d more", listed, conflict.Omitted)
+			}
+			lines = append(lines, listed)
+		}
+	}
+	lines = append(lines, "The branch and worktree are preserved exactly as they were. A repair granted in triage continues this run's developer session with the conflict handed back to reconcile against the target; a re-run starts the change over on the target as it now stands.")
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 

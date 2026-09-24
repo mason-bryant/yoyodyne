@@ -78,9 +78,9 @@ package orchestrator
 // # What the developer is given
 //
 // Nothing here assembles it. The repair input the run recorded — the reviewer's
-// findings, the failing check, or the refused paths — is what the resumed run
-// hands back, rebuilt from durable state by the pipeline exactly as it is for a
-// run an interrupted process left mid-repair. Guidance a development manager
+// findings, the failing check, the refused paths, or the replay conflict — is
+// what the resumed run hands back, rebuilt from durable state by the pipeline
+// exactly as it is for a run an interrupted process left mid-repair. Guidance a development manager
 // wants to add travels in the work item's notes, which every run's context
 // bundle already carries, and which cannot grant a protected path.
 
@@ -590,8 +590,11 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 // development manager to a re-run of an undisputed change.
 //
 // The recorded repair input is the last of them and the one that makes this the
-// action it is. A run that stopped with no failure returned to it — a provider
-// that kept refusing, a replay that conflicted — has no repair loop to continue:
+// action it is. A replay that conflicted is one of them: the run records the
+// conflict before it stops, so a continuation hands the same developer the same
+// disagreement to reconcile on top of the target. A run that stopped with no
+// failure returned to it — a provider that kept refusing — has no repair loop to
+// continue:
 // what it needs is a re-run or a person, and handing it another repair budget
 // would buy attempts at a failure nobody ever showed the developer.
 //
@@ -621,7 +624,7 @@ func continuableRepair(prior runstate.State) error {
 	// left was a re-run — which starts over from the target branch and discards
 	// both the session and the uncommitted work in the preserved worktree.
 	if !handedBackRepair(prior) && !continuableStall(prior) {
-		return fmt.Errorf("run %s recorded no reviewer findings, failing check, or refused paths, and is not a provider the harness stopped with its session preserved, so no failure was ever returned to its developer and there is no attempt to carry on with: %s stopped for something a repair budget does not answer",
+		return fmt.Errorf("run %s recorded no reviewer findings, failing check, refused paths, or replay conflict, and is not a provider the harness stopped with its session preserved, so no failure was ever returned to its developer and there is no attempt to carry on with: %s stopped for something a repair budget does not answer",
 			prior.RunID, prior.RunID)
 	}
 	return nil

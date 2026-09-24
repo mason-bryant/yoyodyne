@@ -708,6 +708,30 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "integration requires no recorded protected-path refusal",
 		},
 		{
+			name:    "a replay conflict against no branch",
+			mutate:  func(state *State) { state.ReplayConflict = &ReplayConflict{Paths: []string{"README.md"}} },
+			problem: "replay_conflict: target_branch must be a local branch name",
+		},
+		{
+			name: "a replay conflict that carries more paths than the bound allows",
+			mutate: func(state *State) {
+				paths := make([]string, MaxConflictedPaths+1)
+				for index := range paths {
+					paths[index] = "README.md"
+				}
+				state.ReplayConflict = &ReplayConflict{TargetBranch: "main", Paths: paths}
+			},
+			problem: "replay_conflict: 51 conflicted paths are recorded",
+		},
+		{
+			name: "integration alongside a replay nobody reconciled",
+			mutate: func(state *State) {
+				state.ReplayConflict = &ReplayConflict{TargetBranch: "main", Paths: []string{"README.md"}}
+				state.Integration = &integration
+			},
+			problem: "integration requires no recorded replay conflict",
+		},
+		{
 			name: "a carried refusal nobody is named as having earned",
 			mutate: func(state *State) {
 				state.RefusedAmendments = []AmendmentRefusal{{Problem: "a change was not recorded"}}

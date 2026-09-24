@@ -1003,6 +1003,100 @@ func TestARepairRefusesToActWithoutWhatBoundsIt(t *testing.T) {
 	}
 }
 
+// yoyodyne-ifd.132 past the run's own budget: a replay conflict on a run with no
+// repair attempt left blocks, keeping the conflict on its record, and the repair
+// the development manager grants afterwards hands that conflict to the same
+// developer session — moved onto the target first — rather than leaving a fresh
+// run as the only way on.
+func TestARepairContinuationReconcilesAReplayConflictTheStoppedRunCouldNot(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopping := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("this run's version\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, "feature.txt", "someone else's version\n")
+		runPipelineGit(t, repository, "add", "feature.txt")
+		runPipelineGit(t, repository, "commit", "-m", "a conflicting edit on main")
+		return nil
+	}, approveVerdict)
+	build := func(provider *fakeBackend) Pipeline {
+		pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"test -f feature.txt"}), provider)
+		pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
+		return pipeline
+	}
+	pipeline := build(stopping)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !errors.Is(err, gitworktree.ErrRebaseConflict) {
+		t.Fatalf("Run() error = %v, want the conflict stopping a run with no attempt left", err)
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if stopped.ReplayConflict == nil || stopped.ReplayConflict.Moved {
+		t.Fatalf("stopped run recorded conflict %#v, want it kept and not yet moved", stopped.ReplayConflict)
+	}
+	docket := &memoryDocket{}
+	if _, err := docketerOverStore(docket, store, pipeline.Config).RecordStoppedRun(stopped); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	var markersSeen bool
+	continuing := roleBackend(func(request backend.RunRequest) error {
+		path := filepath.Join(request.WorkingDirectory, "feature.txt")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		markersSeen = strings.Contains(string(content), "<<<<<<<")
+		return os.WriteFile(path, []byte("both versions, reconciled\n"), 0o600)
+	}, approveVerdict)
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, outcome.RunID),
+		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	continuer := RepairContinuer{
+		Docket: docket, Runs: store, Intake: intake, Decisions: store.Triage(), Items: tracker, Worktrees: worktrees,
+		ConfiguredAttempts: 0,
+		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return build(continuing).Continue(ctx, workItemID, runID)
+		},
+	}
+
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: outcome.RunID, Reason: continueReasoning})
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || result.Outcome.RunID != outcome.RunID || result.Outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("result = %#v, closed = %t; want the same run continued and its reconciled change landed", result, tracker.closed)
+	}
+	if !markersSeen {
+		t.Fatal("the continued developer was not handed the change moved onto the target with the conflict left in it")
+	}
+	developerRequests := continuing.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 1 || developerRequests[0].SessionID != stopping.developerSession {
+		t.Fatalf("continued developer invocations = %d, want one in the stopped run's own session", len(developerRequests))
+	}
+	if !strings.Contains(developerRequests[0].Prompt, "Integration conflict: repair required") {
+		t.Fatalf("continued prompt does not hand back the conflict:\n%s", developerRequests[0].Prompt)
+	}
+	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "both versions, reconciled" {
+		t.Fatalf("integrated feature.txt = %q, want the reconciliation", integrated)
+	}
+}
+
 // The whole of it, over a real repository: a run that spends its repair budget
 // and blocks, then goes on under a grant — same branch, same worktree, same
 // developer session — and lands the change it already had.
