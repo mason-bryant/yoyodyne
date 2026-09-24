@@ -1010,6 +1010,37 @@ func TestAWokenTurnThatReIssuedNothingIsSaidWithoutInventingASecondRefusal(t *te
 	}
 }
 
+// The fourth way, and the one no turn was taken on: every wakeup the harness
+// made met a provider that never took it until the attempts ran out. It is said
+// critically like the others, and it must name the provider rather than any
+// turn of the role's, because the fix is a login or an outage ending.
+func TestWakeupsThatNeverReachedTheRoleAreSaidAsTheProviders(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
+		"turn":          4,
+		"role":          string(domain.RoleProductManager),
+		"actions":       2,
+		"problem":       "the product manager asked for tracker actions the harness cannot read: decode tracker actions: the tracker block is empty",
+		"woken":         false,
+		"refused_again": false,
+		"attempts":      3,
+		"never_taken":   "the provider answered nobody, so the wakeup was never taken: not logged in",
+	})}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Severity != report.SeverityCritical {
+		t.Fatalf("severity = %q, want a critical: the harness has stopped trying and the actions are still lost", notification.Event.Severity)
+	}
+	if !strings.Contains(message.Body, "tried 3 times") || !strings.Contains(message.Body, "provider never took the turn") {
+		t.Fatalf("message %q does not say the provider was what the wakeups met", message.Body)
+	}
+	for _, invented := range []string{"asked for no tracker action", "refused too", "never answered"} {
+		if strings.Contains(message.Body, invented) {
+			t.Fatalf("message %q describes a turn nobody took: %q", message.Body, invented)
+		}
+	}
+}
+
 // A block nobody could count is not a block that asked for nothing, and the
 // message must not read as one.
 func TestARefusedTrackerBlockNobodyCouldCountSaysSo(t *testing.T) {

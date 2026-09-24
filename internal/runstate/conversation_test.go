@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1239,10 +1240,14 @@ func TestAWakeupTheProviderRefusedIsGivenBackAndPaced(t *testing.T) {
 	if _, err := store.ClaimRefusalWakeup(identity, windowed); err != nil {
 		t.Fatalf("ClaimRefusalWakeup() error = %v", err)
 	}
-	if err := store.WithdrawRefusalWakeup(context.Background(), identity, 1); err != nil {
+	returned, err := store.WithdrawRefusalWakeup(context.Background(), identity, 1, "the provider declined this turn for want of capacity")
+	if err != nil {
 		t.Fatalf("WithdrawRefusalWakeup() error = %v", err)
 	}
 	given := loadRefusal(t, store, identity)
+	if returned.Turn != given.Turn || returned.Attempts != given.Attempts || !returned.WokenAt.IsZero() || returned.Escalated != "" {
+		t.Fatalf("WithdrawRefusalWakeup() = %#v, want the refusal as the record now holds it, %#v", returned, given)
+	}
 	// The turn is back, so the window has not spent the only one the refusal had;
 	// the attempt and the moment of it stand, so the retry is both bounded and
 	// paced rather than made on the very next pull and made for ever.
@@ -1292,10 +1297,11 @@ func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	// A provider that refuses every wakeup for want of capacity: each one claims,
-	// puts nothing in front of the role, and gives the turn back.
+	// A provider that never takes a wakeup — out of capacity, down, or signed out:
+	// each one claims, puts nothing in front of the role, and gives the turn back.
 	identity := conversation.Identity()
 	at := refused
+	var last time.Time
 	for attempt := 1; attempt <= MaxRefusalWakeups; attempt++ {
 		claimed, err := store.ClaimRefusalWakeup(identity, at)
 		if err != nil {
@@ -1304,9 +1310,16 @@ func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
 		if claimed.Attempts != attempt {
 			t.Fatalf("attempt %d recorded %d attempt(s), want the count to accumulate", attempt, claimed.Attempts)
 		}
-		if err := store.WithdrawRefusalWakeup(context.Background(), identity, 1); err != nil {
+		given, err := store.WithdrawRefusalWakeup(context.Background(), identity, 1, "the provider is answering nobody: not logged in")
+		if err != nil {
 			t.Fatalf("WithdrawRefusalWakeup() attempt %d error = %v", attempt, err)
 		}
+		// Every give-back but the last leaves the refusal owed a turn and says
+		// nothing to the operator; the last is the one that hands it over.
+		if exhausted := given.Escalated != ""; exhausted != (attempt == MaxRefusalWakeups) {
+			t.Fatalf("attempt %d gave back %#v, want it handed to the operator only on attempt %d", attempt, given, MaxRefusalWakeups)
+		}
+		last = at
 		at = at.Add(RefusalWakeupRetryDelay)
 	}
 
@@ -1320,6 +1333,34 @@ func TestWakeupsForOneRefusalAreBounded(t *testing.T) {
 	}
 	if _, err := store.ClaimRefusalWakeup(identity, at.Add(24*time.Hour)); !errors.Is(err, ErrNoRefusalAwaitingWakeup) {
 		t.Fatalf("ClaimRefusalWakeup() error = %v, want ErrNoRefusalAwaitingWakeup", err)
+	}
+	// And it did not go quiet. The record says why the harness stopped, and the
+	// conversation's own log carries the unresolved refusal every surface already
+	// says, stamped with the attempt that spent the bound.
+	if !strings.Contains(spent.Escalated, "provider never took the turn") || !spent.WokenAt.IsZero() {
+		t.Fatalf("refusal = %#v, want it handed to the operator as one no turn was ever taken for", spent)
+	}
+	events, err := store.LoadEvents(conversation.ConversationID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	if len(events) != 1 || events[0].Type != execution.EventTrackerRefusalUnresolved || !events[0].Timestamp.Equal(last) {
+		t.Fatalf("events = %#v, want exactly one unresolved refusal at %s", events, last)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatalf("decode the unresolved refusal: %v", err)
+	}
+	if payload["attempts"] != float64(MaxRefusalWakeups) || payload["never_taken"] != "the provider is answering nobody: not logged in" ||
+		payload["woken"] != false || payload["refused_again"] != false || payload["problem"] != spent.Problem {
+		t.Fatalf("payload = %#v, want the exhausted wakeups said with the refusal and what the last attempt met", payload)
+	}
+	recorded, err := store.Load(identity)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.LastSequence != events[0].Sequence {
+		t.Fatalf("last sequence = %d, want the record to carry the event it wrote, %d", recorded.LastSequence, events[0].Sequence)
 	}
 }
 
@@ -1346,7 +1387,7 @@ func TestAGiveBackNamingAnAnsweredRefusalChangesNothing(t *testing.T) {
 	if err := store.Save(conversation); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := store.WithdrawRefusalWakeup(context.Background(), conversation.Identity(), 1); err != nil {
+	if _, err := store.WithdrawRefusalWakeup(context.Background(), conversation.Identity(), 1, "the provider declined this turn for want of capacity"); err != nil {
 		t.Fatalf("WithdrawRefusalWakeup() error = %v", err)
 	}
 	standing := loadRefusal(t, store, conversation.Identity())

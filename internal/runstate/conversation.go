@@ -276,9 +276,10 @@ type TrackerRefusal struct {
 	// Attempts is how many wakeups have been claimed for this refusal, and
 	// LastAttemptAt when the most recent was. They are the pair that makes the
 	// retry below both bounded and paced, and neither is ever given back: a
-	// wakeup the provider refused returns the turn it never took and keeps its
-	// place in the count, which is what stops a window that never clears from
-	// being retried forever. See MaxRefusalWakeups.
+	// wakeup the provider never took — no capacity, an outage, a lapsed login —
+	// returns the turn it never took and keeps its place in the count, which is
+	// what stops a provider that never comes back from being retried forever. See
+	// MaxRefusalWakeups.
 	Attempts      int       `json:"attempts,omitempty"`
 	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
 	// Escalated is why the harness will not wake for this refusal and has put it
@@ -297,11 +298,18 @@ type TrackerRefusal struct {
 // that never clears end in abandonment rather than in a wakeup every quarter of
 // an hour for ever.
 //
+// The same count bounds the other ending that puts nothing in front of the role:
+// a provider answering nobody, because it is down or because the account's login
+// has lapsed. Unlike a window that one does not clear on its own schedule, which
+// is why it is bounded rather than ridden out for as long as it lasts.
+//
 // Three is what "briefly out of capacity" is worth riding out: paced by the delay
 // below, it spans half an hour from the first attempt. A refusal that exhausts it
 // still has the harness's own words at the top of its conversation, so what it
 // loses is the harness starting the turn — which is stated where the attempts run
-// out rather than left to be inferred from the quiet.
+// out rather than left to be inferred from the quiet: the give-back that spends
+// the last attempt marks the refusal Escalated and records it as unresolved, so
+// the operator is told. See WithdrawRefusalWakeup.
 const MaxRefusalWakeups = 3
 
 // RefusalWakeupRetryDelay is how long a wakeup that reached nobody is left alone
@@ -1172,36 +1180,96 @@ func (s *ConversationStore) ClaimRefusalWakeup(identity ConversationIdentity, at
 // pass one — and turn "retried while the window lasts" into "retried forever",
 // which is the loop this whole record exists to avoid.
 //
-// It is spent on one ending: a wakeup the provider refused for want of capacity,
-// where no model ever saw the message. Every other failure keeps its turn spent,
-// because a turn that may have reached the role is one this cannot claim did not.
+// It is spent on the endings where no model ever saw the message: the provider
+// refusing the turn for want of capacity, and the provider answering nobody at
+// all — an outage, or an account whose login has lapsed. Every other failure
+// keeps its turn spent, because a turn that may have reached the role is one this
+// cannot claim did not. why is what stopped the wakeup, in the caller's words.
+//
+// The give-back that would leave the refusal with no attempts left does not give
+// the turn back. It hands the refusal to the operator instead, recording as
+// Escalated why the harness stopped and writing the same news onto the
+// conversation's own log as an unresolved refusal, so the exhaustion is said
+// where every other unanswered refusal is said rather than inferred from a
+// wakeup that quietly never comes. A refusal left owed a turn with none to spend
+// on it would read as waiting on the harness when it is waiting on a person.
+//
+// It returns the refusal as the record now holds it, so the caller can say
+// whether the wakeup will be made again or the operator has it.
 //
 // The turn it names is checked against the record, because the refusal it was
 // claimed for may have been answered and replaced while the failed wakeup was
 // being reported: giving back a wakeup for a refusal that no longer exists would
 // re-open one somebody has already dealt with. A conversation with nothing to
 // give back is not a failure — the refusal moved on under it, which is the record
-// saying the wakeup is no longer owed.
-func (s *ConversationStore) WithdrawRefusalWakeup(ctx context.Context, identity ConversationIdentity, turn int) error {
+// saying the wakeup is no longer owed — and it returns the zero refusal.
+func (s *ConversationStore) WithdrawRefusalWakeup(ctx context.Context, identity ConversationIdentity, turn int, why string) (TrackerRefusal, error) {
 	hold, err := s.Claim(ctx, identity)
 	if err != nil {
-		return err
+		return TrackerRefusal{}, err
 	}
 	defer hold.Release()
 	conversation, err := s.Load(identity)
 	if err != nil {
-		return err
+		return TrackerRefusal{}, err
 	}
 	if conversation.RefusedBlock == nil ||
 		conversation.RefusedBlock.Turn != turn ||
 		conversation.RefusedBlock.WokenAt.IsZero() ||
 		conversation.RefusedBlock.Escalated != "" {
-		return nil
+		return TrackerRefusal{}, nil
 	}
 	given := *conversation.RefusedBlock
 	given.WokenAt = time.Time{}
+	if given.Attempts >= MaxRefusalWakeups {
+		given.Escalated = exhaustedRefusalWakeups(given)
+		if err := s.appendExhaustedRefusal(&conversation, given, why); err != nil {
+			return TrackerRefusal{}, err
+		}
+	}
 	conversation.RefusedBlock = &given
-	return s.Save(conversation)
+	if err := s.Save(conversation); err != nil {
+		return TrackerRefusal{}, err
+	}
+	return given, nil
+}
+
+// exhaustedRefusalWakeups is why a refusal whose every wakeup reached nobody is
+// the operator's now, in the words the record keeps.
+func exhaustedRefusalWakeups(refusal TrackerRefusal) string {
+	return fmt.Sprintf("the harness tried %d times to wake this conversation to correct the refusal of turn %d and the provider never took the turn",
+		refusal.Attempts, refusal.Turn)
+}
+
+// appendExhaustedRefusal writes the exhaustion onto the conversation's own log as
+// an unresolved refusal, which is the record every surface already says an
+// unanswered refusal from. It is stamped with the last attempt, which is the
+// moment the harness stopped trying.
+//
+// The payload is the one the conversation writes for the other two unresolved
+// endings, with the attempts beside it: nothing was refused again and the harness
+// never reached the role, and a reader told those apart from a role that answered
+// badly is a reader who knows the fix is signing in rather than rewording.
+func (s *ConversationStore) appendExhaustedRefusal(conversation *Conversation, refusal TrackerRefusal, why string) error {
+	event, err := execution.NewEvent(conversation.ConversationID, conversation.LastSequence+1, refusal.LastAttemptAt,
+		execution.EventTrackerRefusalUnresolved, "harness.correction", map[string]any{
+			"turn":          refusal.Turn,
+			"role":          string(conversation.Role),
+			"actions":       refusal.Actions,
+			"problem":       refusal.Problem,
+			"woken":         false,
+			"refused_again": false,
+			"attempts":      refusal.Attempts,
+			"never_taken":   boundRecordedText(why, MaxTrackerRefusalProblemBytes, truncatedNote(MaxTrackerRefusalProblemBytes)),
+		})
+	if err != nil {
+		return err
+	}
+	if err := s.AppendEvent(event); err != nil {
+		return fmt.Errorf("record that the wakeups for the refusal of turn %d are spent: %w", refusal.Turn, err)
+	}
+	conversation.LastSequence = event.Sequence
+	return nil
 }
 
 // Save replaces a role's conversation record atomically. Unlike a run, a

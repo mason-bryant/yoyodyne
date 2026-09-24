@@ -20,11 +20,14 @@ package orchestrator
 // A refusal is put to the role once. The claim is durable and is taken before the
 // turn, so a pass that dies between the two has recorded a wakeup nobody made
 // rather than made one nobody recorded — the second is what would fire again on
-// the next pass, and on every pass after it. The one wakeup that puts nothing in
-// front of the role is the one the provider refused for want of capacity: no
-// model saw the message, so the turn it never took comes back and is made again.
-// The attempt does not come back with it — that is what keeps the retry bounded
-// rather than a wakeup every quarter of an hour for ever.
+// the next pass, and on every pass after it. The wakeups that put nothing in
+// front of the role are the ones the provider never took — refused for want of
+// capacity, or answering nobody because it is down or the account's login has
+// lapsed: no model saw the message, so the turn it never took comes back and is
+// made again. The attempt does not come back with it — that is what keeps the
+// retry bounded rather than a wakeup every quarter of an hour for ever — and the
+// last attempt spent that way hands the refusal to the operator, said where every
+// other unanswered refusal is said, rather than leaving it to go quiet.
 //
 // What a turn that fails to put the actions back earns is the operator rather
 // than another wakeup. A role that sends a block refused again has shown that
@@ -43,9 +46,9 @@ package orchestrator
 // second invoker of one. The pull is where the harness is already deciding what to
 // do next, so a refusal recorded at any hour is woken for at the next interval
 // rather than at the next time somebody looks. And it runs on the non-model side,
-// so a provider window that stops turns does not stop the wakeup being scheduled
-// or silently spend it: a turn the window refused is given back and made again
-// once the window has had time to clear, a fixed number of times.
+// so a provider window or outage that stops turns does not stop the wakeup being
+// scheduled or silently spend it: a turn the provider never took is given back
+// and made again once the delay has passed, a fixed number of times.
 //
 // # The pause and not the intake hold
 //
@@ -85,15 +88,30 @@ type CorrectionConversations interface {
 // It is satisfied by *runstate.ConversationStore.
 type CorrectionClaims interface {
 	ClaimRefusalWakeup(identity runstate.ConversationIdentity, at time.Time) (runstate.TrackerRefusal, error)
-	WithdrawRefusalWakeup(ctx context.Context, identity runstate.ConversationIdentity, turn int) error
+	WithdrawRefusalWakeup(ctx context.Context, identity runstate.ConversationIdentity, turn int, why string) (runstate.TrackerRefusal, error)
 }
 
 // ErrProviderWindow reports a wakeup the provider refused for want of capacity.
-// It is its own sentinel because it is the one failure that provably put nothing
-// in front of the role and provably clears: no model saw the message, and the
-// window ends. Every other way a wakeup fails either reached the role or is
-// something a person has to change, and neither is worth asking again on a timer.
+// It is its own sentinel because it provably put nothing in front of the role and
+// provably clears: no model saw the message, and the window ends.
 var ErrProviderWindow = errors.New("the provider refused the wakeup for want of capacity")
+
+// ErrProviderAway reports a wakeup the provider refused because nobody is logged
+// into it or nobody can reach it. It put nothing in front of the role exactly as
+// a window does, and it is told apart from one because what ends it is different:
+// a window resets on its own, and an outage or a lapsed login ends when the
+// network or a person does something — so what the pass says names that.
+//
+// These two are the failures worth asking again on a timer. Every other way a
+// wakeup fails either reached the role or is something about the configuration a
+// person has to change, and neither is.
+var ErrProviderAway = errors.New("the provider answered nobody, so the wakeup was never taken")
+
+// neverTaken reports a wakeup failure the provider never took, whose turn is
+// given back and made again, paced and bounded.
+func neverTaken(err error) bool {
+	return errors.Is(err, ErrProviderWindow) || errors.Is(err, ErrProviderAway)
+}
 
 // CorrectionRole is a role's conversation as the harness reaches it: one message
 // sent into it, and what came back.
@@ -139,6 +157,11 @@ type Corrected struct {
 	// Woken reports a turn actually taken. A wakeup that never reached the role is
 	// never reported as one that did.
 	Woken bool `json:"woken"`
+	// Attempt is which of the refusal's MaxRefusalWakeups wakeups this was, and
+	// Exhausted says it was the last one the provider never took, so the refusal is
+	// the operator's now rather than one a later pass will wake for.
+	Attempt   int  `json:"attempt,omitempty"`
+	Exhausted bool `json:"exhausted,omitempty"`
 	// Actions is how many the woken turn got carried out, and CostUSD what the turn
 	// cost.
 	Actions int     `json:"actions,omitempty"`
@@ -259,11 +282,14 @@ func awaitingCorrection(conversations []runstate.Conversation, now time.Time) []
 // refusal falls back to is what it had before this existed: the harness's own
 // words opening the role's next turn, whenever one happens.
 //
-// The exception is the provider refusing the turn for want of capacity. That one
-// provably put nothing in front of the role and provably clears on its own, and
-// the wakeup running on the non-model side is worth nothing if a window silently
-// spends it — so the attempt is given back and the refusal keeps the turn it is
-// owed, bounded by MaxRefusalWakeups and paced by RefusalWakeupRetryDelay.
+// The exceptions are the provider refusing the turn for want of capacity, and the
+// provider answering nobody because it is down or the account's login has lapsed.
+// Each provably put nothing in front of the role, and the wakeup running on the
+// non-model side is worth nothing if an outage silently spends it — which is when
+// batches are most likely to be refused — so the turn is given back and the
+// refusal keeps it, bounded by MaxRefusalWakeups and paced by
+// RefusalWakeupRetryDelay. The give-back that spends the last attempt hands the
+// refusal to the operator instead, and the pass says so.
 func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation) (Corrected, bool, error) {
 	identity := conversation.Identity()
 	corrected := Corrected{
@@ -283,6 +309,7 @@ func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation)
 		return Corrected{}, false, fmt.Errorf("claim the wakeup owed to %s for the tracker block refused on turn %d: %w",
 			identity, conversation.RefusedBlock.Turn, err)
 	}
+	corrected.Attempt = claimed.Attempts
 	turn, wakeErr := c.Roles.Wake(ctx, identity, correctionMessage(claimed))
 	// What the turn cost is carried whichever way it went, because the provider
 	// charges for a turn that failed exactly as for one that answered.
@@ -292,8 +319,8 @@ func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation)
 	}
 	if wakeErr != nil {
 		corrected.Problem = describeFailedWakeup(identity, claimed, wakeErr)
-		if errors.Is(wakeErr, ErrProviderWindow) {
-			c.giveBack(ctx, identity, claimed, &corrected)
+		if neverTaken(wakeErr) {
+			c.giveBack(ctx, identity, claimed, wakeErr, &corrected)
 		}
 		return corrected, true, nil
 	}
@@ -320,7 +347,12 @@ func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation)
 }
 
 // giveBack returns a wakeup that reached the role with nothing, so the refusal
-// keeps the turn it is owed.
+// keeps the turn it is owed — or, where that was its last attempt, says that the
+// harness has stopped trying and the operator has it.
+//
+// What comes next is read from the record the give-back left rather than worked
+// out here from the count, because the store is what decides the refusal is
+// spent and what tells the operator so.
 //
 // It is written under a context detached from the wakeup's own, for the reason
 // the stopped-work delivery detaches its own records: a shutdown cancels the very
@@ -328,26 +360,42 @@ func (c Corrector) wake(ctx context.Context, conversation runstate.Conversation)
 // which is the largest class of the deaths a give-back exists for. One that
 // failed is said beside the wakeup rather than swallowed, because what it leaves
 // behind is an attempt spent on a turn nobody was asked.
-func (c Corrector) giveBack(ctx context.Context, identity runstate.ConversationIdentity, claimed runstate.TrackerRefusal, corrected *Corrected) {
+func (c Corrector) giveBack(ctx context.Context, identity runstate.ConversationIdentity, claimed runstate.TrackerRefusal, wakeErr error, corrected *Corrected) {
 	write, stopWriting := recordContext(ctx)
 	defer stopWriting()
-	if err := c.Claims.WithdrawRefusalWakeup(write, identity, claimed.Turn); err != nil {
+	given, err := c.Claims.WithdrawRefusalWakeup(write, identity, claimed.Turn, wakeErr.Error())
+	switch {
+	case err != nil:
 		corrected.Problem = fmt.Sprintf("%s; and the wakeup it never used could not be given back, so it has spent one of %d on a turn nobody was asked: %v",
 			corrected.Problem, runstate.MaxRefusalWakeups, err)
+	case given.Escalated != "":
+		corrected.Exhausted = true
+		corrected.Problem = fmt.Sprintf("%s; that was the last of %d wakeups, so the harness has stopped trying and the operator has it",
+			corrected.Problem, runstate.MaxRefusalWakeups)
+	case given.Turn != 0:
+		corrected.Problem = fmt.Sprintf("%s; it will be woken again once %s has passed",
+			corrected.Problem, runstate.RefusalWakeupRetryDelay)
 	}
 }
 
 // describeFailedWakeup says what became of a turn that did not answer, in the
-// words each failure earns. The three are different facts about the same wakeup:
+// words each failure earns. The four are different facts about the same wakeup:
 // a provider with no capacity put nothing in front of the role and will have
-// capacity again, a conversation that could never be opened asked the role
-// nothing and waits on somebody changing something, and a turn that started and
-// failed inside is neither.
+// capacity again, a provider answering nobody put nothing in front of it either
+// and comes back when the network or a login does, a conversation that could
+// never be opened asked the role nothing and waits on somebody changing
+// something, and a turn that started and failed inside is none of them.
+//
+// The two the provider never took say which attempt this was, and what happens
+// next is added by the give-back, which is where that is decided.
 func describeFailedWakeup(identity runstate.ConversationIdentity, claimed runstate.TrackerRefusal, err error) string {
 	switch {
 	case errors.Is(err, ErrProviderWindow):
-		return fmt.Sprintf("the provider had no capacity for the turn waking the %s to re-issue the tracker block refused on turn %d, so nothing was asked and it will be woken again once %s has passed: %v",
-			identity, claimed.Turn, runstate.RefusalWakeupRetryDelay, err)
+		return fmt.Sprintf("the provider had no capacity for the turn waking the %s to re-issue the tracker block refused on turn %d, so nothing was asked on attempt %d of %d: %v",
+			identity, claimed.Turn, claimed.Attempts, runstate.MaxRefusalWakeups, err)
+	case errors.Is(err, ErrProviderAway):
+		return fmt.Sprintf("the provider answered nobody — down, or its login lapsed — for the turn waking the %s to re-issue the tracker block refused on turn %d, so nothing was asked on attempt %d of %d: %v",
+			identity, claimed.Turn, claimed.Attempts, runstate.MaxRefusalWakeups, err)
 	case errors.Is(err, ErrRoleUnreachable):
 		return fmt.Sprintf("the %s could not be woken to re-issue the tracker block refused on turn %d, so nothing was asked and the refusal waits on its own conversation's next turn: %v",
 			identity, claimed.Turn, err)

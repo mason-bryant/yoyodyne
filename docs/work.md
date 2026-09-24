@@ -1182,13 +1182,17 @@ back goes to you rather than earning another wakeup — a second block refused w
 the first still unanswered, whether the harness woke that turn or somebody else
 did, or the woken turn answering without asking for any tracker action at all.
 Both leave the actions exactly as lost, and a second copy of the same message is
-not going to change that. A turn the provider refused for want of capacity put
-nothing in front of the role, so the turn is given back and made again a quarter
-of an hour later, three times in all before the harness stops; the attempt is
-kept either way, which is what makes that bound reachable. A conversation nothing
-can open keeps its turn spent, because what that waits on is somebody changing
-something rather than a window ending. Nothing about it is configured, and a pass
-with no refusal to wake for asks no provider anything.
+not going to change that. A turn the provider never took — refused for want of
+capacity, or answering nobody because it is down or the account's login has
+lapsed — put nothing in front of the role, so the turn is given back and made
+again a quarter of an hour later, three times in all before the harness stops;
+the attempt is kept either way, which is what makes that bound reachable, and
+the pass says which attempt each one was. When the last attempt is spent that
+way the refusal goes to you, said the same way as the other unanswered endings,
+rather than going quiet. A conversation nothing else can open — no agent fills
+the role, say — keeps its turn spent, because what that waits on is somebody
+changing something rather than a provider coming back. Nothing about it is
+configured, and a pass with no refusal to wake for asks no provider anything.
 
 **A pass also audits the claims the tracker holds against the runs the harness
 actually has**, and gives back the ones with nothing alive behind them. A run

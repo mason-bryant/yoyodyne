@@ -291,6 +291,8 @@ func newResolution() *resolution {
 			"execution.remote":                                    OriginDefault,
 			"execution.usage_limit_max_pause":                     OriginDefault,
 			"execution.usage_limit_in_process_pause":              OriginDefault,
+			"execution.usage_limit_unknown_reset_pause":           OriginDefault,
+			"execution.server_overload_pause":                     OriginDefault,
 			"execution.check_timeout":                             OriginDefault,
 			"execution.work_poll":                                 OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,

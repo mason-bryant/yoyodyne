@@ -70,8 +70,9 @@ type roleCorrection struct {
 // A conversation that could not be opened is reported as unreachable rather than
 // as a failed wakeup, and the difference is what the caller records: nothing was
 // asked, so the refusal is exactly where it was. The ordinary reasons opening
-// fails — the operator is mid-turn with the role, the provider is not signed in,
-// no agent fills the role — are all of that kind.
+// fails — the operator is mid-turn with the role, no agent fills the role — are
+// all of that kind. A provider nobody is signed in to is reported as the provider
+// answering nobody instead, because that one is retried; see notOpened.
 //
 // A woken turn whose own block is refused is not a failed turn either. The role
 // answered, and what it answered with was refused a second time — which is the
@@ -81,7 +82,7 @@ type roleCorrection struct {
 func (r roleCorrection) Wake(ctx context.Context, identity runstate.ConversationIdentity, message string) (orchestrator.CorrectionTurn, error) {
 	session, lease, err := openChat(ctx, identity.Role, identity.Agent, r.configPath, false, false, r.errors())
 	if err != nil {
-		return orchestrator.CorrectionTurn{}, fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
+		return orchestrator.CorrectionTurn{}, notOpened(err)
 	}
 	defer lease.Release()
 
@@ -117,20 +118,37 @@ func (r roleCorrection) Wake(ctx context.Context, identity runstate.Conversation
 // role, so what is recorded about the wakeup says so rather than claiming a turn
 // the role could have answered.
 //
-// It is the recurring trigger's mapping with one ending pulled out of it. A
-// provider with no capacity is the one failure worth making again on a timer:
-// no model saw the message, and the window ends by itself, so the wakeup is given
-// back rather than spent — which is what keeps a refusal recorded during a window
-// from falling back to waiting on a person. The operator's pause and a
-// cancellation are the harness's own doing and clear the same way, but the
-// corrector reads the pause at the top of every pass and a cancellation is the
-// harness stopping, so neither is worth a timer of its own; they are unreachable
-// like the rest.
+// It is the recurring trigger's mapping with two endings pulled out of it. A
+// provider with no capacity and a provider answering nobody — down, or its login
+// lapsed — are the failures worth making again on a timer: no model saw the
+// message, and each ends without anything about the refusal changing, so the
+// wakeup is given back rather than spent — which is what keeps a refusal recorded
+// during a window or an outage from falling back to waiting on a person. The
+// operator's pause and a cancellation are the harness's own doing and clear the
+// same way, but the corrector reads the pause at the top of every pass and a
+// cancellation is the harness stopping, so neither is worth a timer of its own;
+// they are unreachable like the rest.
 func notCorrected(err error) error {
 	if errors.Is(err, chat.ErrProviderCapacity) {
 		return fmt.Errorf("%w: %w", orchestrator.ErrProviderWindow, err)
 	}
+	if errors.Is(err, chat.ErrProviderAway) {
+		return fmt.Errorf("%w: %w", orchestrator.ErrProviderAway, err)
+	}
 	return notWoken(err)
+}
+
+// notOpened marks a conversation that could not be opened. Nearly every reason is
+// something a person has to change, and it is unreachable. The exception is an
+// account whose login has lapsed, which opening checks before any turn and which
+// is the provider answering nobody exactly as an outage met mid-turn is: it ends
+// when somebody signs in, so the wakeup is given back and made again rather than
+// spent on finding that out.
+func notOpened(err error) error {
+	if errors.Is(err, chat.ErrProviderAway) {
+		return fmt.Errorf("%w: %w", orchestrator.ErrProviderAway, err)
+	}
+	return fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 }
 
 func (r roleCorrection) errors() io.Writer {
