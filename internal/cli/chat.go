@@ -223,7 +223,7 @@ func converseWith(ctx context.Context, prepared preparedChat, request conversati
 		// the message itself exactly as it always has.
 		hold, err = prepared.store.TryClaim(prepared.identity)
 		if errors.Is(err, runstate.ErrConversationHeld) {
-			beside, loadErr := prepared.store.Load(prepared.identity)
+			beside, loadErr := prepared.store.Read(prepared.identity)
 			if loadErr == nil {
 				return askAside(ctx, prepared, request, beside.ConversationID, stdout, stderr)
 			}

@@ -224,6 +224,13 @@ type Batch struct {
 	// A run that finishes with nothing left to say still has to stop reading as
 	// working.
 	Statuses map[string]notify.Status
+	// Partial says this pass read past a record it could not read at all, so the
+	// streams above are not the whole of the product's: the stream that record
+	// would have named may be missing from them, and a cursor dropped on their
+	// account is one that stream loses for good. Every delivery is still posted
+	// and every cursor it moves still moves; only the forgetting waits for a pass
+	// that read everything.
+	Partial bool
 }
 
 // Feed is where the sink's messages come from. It is polled rather than
@@ -361,6 +368,12 @@ type HarnessFeed struct {
 	// before it is read past. It is the sink's own log, and it is never given a
 	// token to print.
 	Log func(format string, args ...any)
+
+	// unread is each record the feed is reading past because it could not be
+	// read, with what refused it, so each is said once while it stands rather
+	// than once a pass. A record that reads again is forgotten, so it is said
+	// afresh if it breaks again later.
+	unread map[string]string
 }
 
 // Poll reads every stream and reports what the cursors say has not been posted.
@@ -379,10 +392,23 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		productStream:   {},
 	}}
 	since := cursors.Since
+	// What this pass reads past, so what stopped standing can be forgotten once
+	// the pass is over.
+	unread := map[string]bool{}
 
-	states, err := f.Runs.Recorded()
+	// A run record this build cannot read is read past rather than failing the
+	// pass: the sink reports on each run independently, so one record nobody can
+	// read is a reason to say nothing about that run and not about every other
+	// stream as well. Its stream is kept among the pass's streams, so its cursor
+	// is where it was when the record reads again.
+	states, unreadable, err := f.Runs.RecordedReadable()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the recorded runs: %w", err)
+	}
+	for _, record := range unreadable {
+		batch.Streams[runStream(record.Record)] = struct{}{}
+		batch.Partial = true
+		f.readPast(unread, "run "+record.Record, record.Err)
 	}
 	// What is still in flight is counted from the same reading the crossings are
 	// selected from, rather than asked for a second time: a run is in flight or it
@@ -414,7 +440,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// it in the same pass.
 	batch.Statuses = itemStatuses(states, since)
 
-	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams)
+	conversed, err := f.conversationDeliveries(ctx, cursors, &batch, unread)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -477,7 +503,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, refused...)
 
-	outcomes, err := f.directiveDeliveries(cursors, batch.Streams)
+	outcomes, err := f.directiveDeliveries(cursors, batch.Streams, unread)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -487,11 +513,19 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// that say they were placed and lifted, and for what has stopped the line when
 	// the heartbeat below asks. Reading them apart would let one pass post a hold
 	// and derive a line nothing is holding.
+	//
+	// A hold that cannot be read is never taken for an absent one, so nothing
+	// derived from the switches is said on this pass — the holds themselves, the
+	// heartbeat, and the provider's outage — and every stream that does not turn
+	// on them carries on.
 	held, err := f.switches()
-	if err != nil {
-		return Batch{}, err
+	switched := err == nil
+	if switched {
+		batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
+	} else {
+		batch.Partial = true
+		f.readPast(unread, "the operator's holds", err)
 	}
-	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
 	// What is ready to pull is asked at most once a pass, however many of this
 	// pass's readings want it. One does today — the waiting line, which gates
@@ -500,11 +534,13 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// nothing and cannot disagree with the first about one queue.
 	ready := f.readyOnce()
 
-	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, awaitingForge, ready, batch.Streams)
-	if err != nil {
-		return Batch{}, err
+	if switched {
+		beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, awaitingForge, ready, batch.Streams)
+		if err != nil {
+			return Batch{}, err
+		}
+		batch.Deliveries = append(batch.Deliveries, beat...)
 	}
-	batch.Deliveries = append(batch.Deliveries, beat...)
 
 	// How old the binary choosing work is, from the same reading of the watch log
 	// and the same reading of the runs. Both are records that stamp the build that
@@ -553,7 +589,9 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// rather than part of it because the two are opposite waits: the hold lifts
 	// on the provider's clock, and this lifts when a person logs in or the
 	// network returns.
-	batch.Deliveries = append(batch.Deliveries, f.outageDeliveries(ctx, cursors.Streams[providerStream], held, batch.Streams)...)
+	if switched {
+		batch.Deliveries = append(batch.Deliveries, f.outageDeliveries(ctx, cursors.Streams[providerStream], held, batch.Streams)...)
+	}
 	// The claims the harness gave back, said beside the stall above because the two
 	// answer one question from opposite ends: that one asks whether anything has
 	// started, and this one asks whether what the tracker calls started actually
@@ -576,7 +614,37 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, improved...)
+	f.forgetReadable(unread)
 	return batch, nil
+}
+
+// readPast says that one record could not be read and is being read past, once
+// for as long as it stands with the same reason. Saying it every pass would be a
+// line every few seconds for as long as the record stands — the live sink logged
+// seven thousand of them over five records — which is how the one line that
+// matters becomes the one an operator filters out.
+func (f *HarnessFeed) readPast(unread map[string]bool, record string, err error) {
+	unread[record] = true
+	reason := err.Error()
+	if said, found := f.unread[record]; found && said == reason {
+		return
+	}
+	if f.unread == nil {
+		f.unread = map[string]string{}
+	}
+	f.unread[record] = reason
+	f.say("%s could not be read, so nothing is reported about it until it can be; every other stream is reported as usual: %v", record, err)
+}
+
+// forgetReadable forgets every record this pass read that an earlier pass could
+// not, so a record that breaks again later is said again rather than taken for
+// the one already said.
+func (f *HarnessFeed) forgetReadable(unread map[string]bool) {
+	for record := range f.unread {
+		if !unread[record] {
+			delete(f.unread, record)
+		}
+	}
 }
 
 // readyOnce answers what is ready to pull, asking the tracker at most once
@@ -805,7 +873,12 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 // other — which without this would answer them, by name, for every directive
 // they ever steered and settled. A flood of mentions about work that is long
 // over is the same trust erosion as silence, from the other side.
-func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+//
+// A directive record this build cannot read is read past with the rest of the
+// stream, said once, and the stream is taken up where its cursor stands once the
+// records read again: the stream advances by mark rather than by position, so
+// nothing is skipped by waiting, and every other stream carries on meanwhile.
+func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]struct{}, unread map[string]bool) ([]Delivery, error) {
 	if f.Directives == nil || f.Steers == nil {
 		return nil, nil
 	}
@@ -822,7 +895,8 @@ func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]st
 	}
 	recorded, err := f.Directives.List()
 	if err != nil {
-		return nil, fmt.Errorf("read what became of the recorded directives: %w", err)
+		f.readPast(unread, "the directive records", err)
+		return nil, nil
 	}
 	var deliveries []Delivery
 	advanced := cursor
@@ -948,13 +1022,22 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since t
 // holds is mostly the turn itself — provider messages, tools, the reply as it
 // was written — and the milestones are the few records among them where the
 // queue actually moved. Everything else advances the position and says nothing.
-func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+//
+// A conversation record or log this build cannot read is read past, for the
+// reason an unreadable run is. A record that will not decode cannot say which
+// conversation it was, so its stream cannot be kept by name and the batch is
+// marked partial instead, which keeps every cursor.
+func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursors, batch *Batch, unread map[string]bool) ([]Delivery, error) {
 	if f.Conversations == nil {
 		return nil, nil
 	}
-	conversations, err := f.Conversations.Recorded()
+	conversations, unreadable, err := f.Conversations.RecordedReadable()
 	if err != nil {
 		return nil, fmt.Errorf("read the recorded conversations: %w", err)
+	}
+	for _, record := range unreadable {
+		batch.Partial = true
+		f.readPast(unread, "the conversation record "+record.Record, record.Err)
 	}
 	var deliveries []Delivery
 	for _, conversation := range conversations {
@@ -962,10 +1045,11 @@ func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursor
 			return nil, err
 		}
 		stream := conversationStream(conversation.ConversationID)
-		streams[stream] = struct{}{}
+		batch.Streams[stream] = struct{}{}
 		events, skipped, err := f.Conversations.ScanEvents(conversation.ConversationID)
 		if err != nil {
-			return nil, fmt.Errorf("read the log of conversation %s: %w", conversation.ConversationID, err)
+			f.readPast(unread, "the log of conversation "+conversation.ConversationID, err)
+			continue
 		}
 		said, err := f.logDeliveries(stream, conversationLog(conversation), cursors.Streams[stream], len(events), skipped, cursors.Since,
 			func(index int) (time.Time, notify.Notification, error) {

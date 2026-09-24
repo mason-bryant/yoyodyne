@@ -365,7 +365,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			report.Owns = authority.Owns
 		}
 		identity := runstate.ConversationIdentity{Agent: name, Role: agent.Role}
-		recorded, err := store.Load(identity)
+		recorded, err := store.Read(identity)
 		switch {
 		case err == nil:
 			report.Conversation = &conversationReport{
