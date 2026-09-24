@@ -126,9 +126,9 @@ func TestBranchChangesBoundsALargeAccumulatedChange(t *testing.T) {
 	}
 }
 
-// A range that deletes a file it could not show names the deletion at zero
-// bytes, which is the file's size at that tip, rather than failing to measure
-// a path the tip no longer has.
+// A range that deletes a file describes the deletion at the base rather than
+// failing to measure a path the tip no longer has, and never names it among
+// the omissions: its size is read where the file still is.
 func TestBranchChangesMeasuresADeletedFileAtZero(t *testing.T) {
 	t.Parallel()
 
@@ -150,10 +150,14 @@ func TestBranchChangesMeasuresADeletedFileAtZero(t *testing.T) {
 	for _, file := range change.Changes.OmittedFiles {
 		omitted[file.Path] = file
 	}
-	// It carries no digest either, for the same reason the size is zero: the tip
-	// holds nothing to digest, which is the whole of the file's content there.
-	if got, ok := omitted["README.txt"]; !ok || got.Bytes != 0 || got.DiffBytes == 0 || got.Digest != "" {
-		t.Fatalf("omitted README = %#v, want the deletion named at zero bytes with its diff measured", got)
+	if _, ok := omitted["README.txt"]; ok || len(change.Changes.DeletedFiles) != 1 {
+		t.Fatalf("omitted = %#v, deleted = %#v, want the deletion described rather than omitted", omitted, change.Changes.DeletedFiles)
+	}
+	// The tip holds nothing, so the deletion carries no size or digest there; the
+	// base holds the whole of it, and that is what it is described by.
+	if got := change.Changes.DeletedFiles[0]; got.Path != "README.txt" || !got.Whole || got.BaseBytes != 5 ||
+		got.Bytes != 0 || got.Digest != "" || got.DiffBytes == 0 {
+		t.Fatalf("deleted README = %#v, want it measured at the base with its diff measured", got)
 	}
 	if got := omitted["first.txt"].Bytes; got != 1600 {
 		t.Fatalf("omitted first.txt = %#v, want it measured at the tip", omitted["first.txt"])

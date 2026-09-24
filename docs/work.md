@@ -156,6 +156,25 @@ there is nothing to measure. A reviewer that cannot tell a file the change deliv
 one it never wrote judges the delivery blind, and an absence it is told about is
 one it can hold the change to.
 
+**A removal is described rather than rendered, and is not held to the bound.**
+A file the change deletes whole is never shown as the diff removing it, which is
+the file's whole content with a minus on each line: it is named above the patch
+as deleted whole, with its size and its `git-blob:` digest at the base commit and
+where the whole of it can be opened there, as `git show <base>:<path>`. A file
+whose diff is nothing but removed lines is described the same way — with what is
+left of it at the tip beside it — once that diff would not fit in what the bound
+has left; one that fits is still shown, because which lines went is what a
+reviewer of a partial reduction reads. Neither counts against the bound or is an
+omission, so neither refuses the approval; the reviewer is told to judge each
+removal against the item's stated reason for it, and to raise a finding where the
+item names none. A file rewritten in part — any added line — is unchanged by
+this and still rendered, or omitted, under the bound. `yoyodyne-ifd.117.4` is why:
+it cut `docs/configuration.md` by 378,605 bytes, the removal outgrew the
+262,144-byte bound, and the document named as omitted refused an approval
+however sound the reduction was. The run's `review.started` event names the
+removed files with their base digests, as `deleted_files` and
+`deleted_digests`.
+
 The bound is spent in class order rather than in the order Git lists the files,
 which is alphabetical: source files first, then tests, then test data and
 generated or golden files — anything under a `testdata`, `fixtures`, `golden`,

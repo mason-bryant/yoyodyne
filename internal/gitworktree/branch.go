@@ -274,6 +274,21 @@ func (m *Manager) rangeDiff(ctx context.Context, baseCommit, headCommit string, 
 		return nil
 	}
 	for _, candidate := range candidates {
+		// A removal is described at the base rather than rendered, by the rule a
+		// worktree's change follows: a file deleted whole always, and one reduced
+		// by removal alone where its diff does not fit.
+		if whole, removed, ok := removalOnly(candidate.patch); ok && (whole || len(candidate.patch) > remaining) {
+			deleted, described, err := m.describeRemoval(ctx, baseCommit, candidate, whole, removed, func() (int64, string, error) {
+				return m.blobEntry(ctx, headCommit, candidate.path)
+			})
+			if err != nil {
+				return ChangeDiff{}, err
+			}
+			if described {
+				changes.DeletedFiles = append(changes.DeletedFiles, deleted)
+				continue
+			}
+		}
 		var err error
 		switch {
 		case containsBinaryDiff(candidate.patch):

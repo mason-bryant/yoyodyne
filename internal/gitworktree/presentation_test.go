@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -480,4 +481,164 @@ func sectionFor(t *testing.T, patch, path string) string {
 	}
 	t.Fatalf("%s is not in the patch:\n%s", path, patch)
 	return ""
+}
+
+// numberedLines is n distinct lines of about forty bytes each, so a removal of
+// some of them is a diff Git renders as removals alone rather than as a rewrite.
+func numberedLines(prefix string, from, to int) string {
+	var lines strings.Builder
+	for index := from; index < to; index++ {
+		fmt.Fprintf(&lines, "%s line %06d of the document, padded\n", prefix, index)
+	}
+	return lines.String()
+}
+
+// A file the change deletes whole is described at the base commit rather than
+// rendered as the removal of all of it, and a file reduced by removal alone is
+// described the same way once its diff would not fit. yoyodyne-ifd.117.4 cut
+// docs/configuration.md by 378,605 bytes, the removal diff outgrew the
+// 262,144-byte bound, and the omission of a document refused the approval
+// however sound the reduction was. A file rewritten in part is not a removal and
+// is still bounded, and omitted, exactly as before.
+func TestARemovalIsDescribedAtItsBaseRatherThanOmitted(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	lines := DefaultMaxDiffBytes/40 + 1000
+	deleted := numberedLines("deleted", 0, lines)
+	reduced := numberedLines("reduced", 0, lines)
+	rewritten := numberedLines("rewritten", 0, lines)
+	small := numberedLines("small", 0, 10)
+	for path, content := range map[string]string{
+		"docs/deleted.md": deleted, "docs/reduced.md": reduced, "docs/rewritten.md": rewritten, "docs/small.md": small,
+	} {
+		writeFile(t, repository, path, content)
+	}
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "the documents")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-ifd.429.7", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(worktree.Path, "docs", "deleted.md")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	left := numberedLines("reduced", 0, 500)
+	writeFile(t, worktree.Path, "docs/reduced.md", left)
+	writeFile(t, worktree.Path, "docs/rewritten.md", numberedLines("rewrote", 0, lines))
+	writeFile(t, worktree.Path, "docs/small.md", numberedLines("small", 0, 9))
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	base := worktree.BaseCommit
+	byPath := map[string]DeletedFile{}
+	for _, file := range changes.DeletedFiles {
+		byPath[file.Path] = file
+	}
+	if len(byPath) != 2 {
+		t.Fatalf("deleted files = %#v, want the deletion and the reduction", changes.DeletedFiles)
+	}
+	whole := byPath["docs/deleted.md"]
+	if !whole.Whole || whole.BaseCommit != base || whole.BaseBytes != int64(len(deleted)) ||
+		whole.BaseDigest != "git-blob:"+gitLine(t, repository, "rev-parse", base+":docs/deleted.md") ||
+		whole.Bytes != 0 || whole.Digest != "" || whole.RemovedLines != lines {
+		t.Errorf("deleted whole = %#v, want its size and blob at the base and nothing at the tip", whole)
+	}
+	described := whole.Describe()
+	for _, want := range []string{"docs/deleted.md", "deleted whole", fmt.Sprintf("%d bytes at base commit %s", len(deleted), base), "`git show " + base + ":docs/deleted.md`", whole.BaseDigest} {
+		if !strings.Contains(described, want) {
+			t.Errorf("described deletion = %q, want %q in it", described, want)
+		}
+	}
+	reduction := byPath["docs/reduced.md"]
+	if reduction.Whole || reduction.BaseBytes != int64(len(reduced)) || reduction.Bytes != int64(len(left)) ||
+		reduction.Digest != digestOf(left) || reduction.RemovedLines != lines-500 {
+		t.Errorf("reduction = %#v, want it described at the base with what is left at the tip", reduction)
+	}
+	if described := reduction.Describe(); !strings.Contains(described, "reduced by removal alone") || strings.Contains(described, "deleted whole") {
+		t.Errorf("described reduction = %q", described)
+	}
+
+	// Neither removal is in the patch or among the omissions; the small removal
+	// fits, so which line it took is still shown; the rewrite is still bounded.
+	for _, path := range []string{"docs/deleted.md", "docs/reduced.md"} {
+		if strings.Contains(changes.Patch, "a/"+path) {
+			t.Errorf("%s is rendered in the patch", path)
+		}
+	}
+	if section := sectionFor(t, changes.Patch, "docs/small.md"); !strings.Contains(section, "-small line 000009") {
+		t.Errorf("the small removal is not shown whole:\n%s", section)
+	}
+	if len(changes.OmittedFiles) != 1 || changes.OmittedFiles[0].Path != "docs/rewritten.md" {
+		t.Fatalf("omitted files = %#v, want the rewrite alone", changes.OmittedFiles)
+	}
+	problems := changes.UnreviewableOmissions()
+	if len(problems) != 1 || !strings.Contains(problems[0], "docs/rewritten.md") {
+		t.Errorf("unreviewable = %v, want the rewrite alone", problems)
+	}
+}
+
+// A branch's accumulated change describes a deletion the same way, at the base
+// the branch was grown from.
+func TestBranchChangesDescribesADeletionAtItsBase(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	content := numberedLines("deleted", 0, DefaultMaxDiffBytes/40+1000)
+	writeFile(t, repository, "docs/deleted.md", content)
+	runGit(t, repository, "add", "--all")
+	runGit(t, repository, "commit", "-m", "the document")
+	base := gitLine(t, repository, "rev-parse", "HEAD")
+	runGit(t, repository, "checkout", "-b", "accumulated")
+	runGit(t, repository, "rm", "-q", "docs/deleted.md")
+	runGit(t, repository, "commit", "-m", "delete the document")
+	runGit(t, repository, "checkout", "main")
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	change, err := manager.BranchChanges(context.Background(), BranchRequest{Branch: "accumulated", BaseRef: "main"}, DiffLimits{})
+	if err != nil {
+		t.Fatalf("BranchChanges() error = %v", err)
+	}
+	if change.Changes.Truncated || len(change.Changes.OmittedFiles) != 0 || change.Changes.Patch != "" {
+		t.Fatalf("the deletion was rendered or omitted: truncated=%t omitted=%#v", change.Changes.Truncated, change.Changes.OmittedFiles)
+	}
+	if len(change.Changes.DeletedFiles) != 1 {
+		t.Fatalf("deleted files = %#v, want the document", change.Changes.DeletedFiles)
+	}
+	deleted := change.Changes.DeletedFiles[0]
+	if !deleted.Whole || deleted.BaseCommit != base || deleted.BaseBytes != int64(len(content)) ||
+		deleted.BaseDigest != "git-blob:"+gitLine(t, repository, "rev-parse", base+":docs/deleted.md") {
+		t.Errorf("deleted = %#v, want it described at the branch's base", deleted)
+	}
+}
+
+// Only a diff of removed lines is a removal: an added line, a creation, a type
+// change, a mode change, and a binary change to a file that remains are not.
+func TestRemovalOnlyReadsTheDiff(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		patch   string
+		whole   bool
+		removed int
+		ok      bool
+	}{
+		"deleted whole":      {"diff --git a/x b/x\ndeleted file mode 100644\nindex 1..0\n--- a/x\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two\n", true, 2, true},
+		"deleted binary":     {"diff --git a/x b/x\ndeleted file mode 100644\nindex 1..0\nBinary files a/x and /dev/null differ\n", true, 0, true},
+		"reduced":            {"diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,3 +1,1 @@\n keep\n-one\n-two\n", false, 2, true},
+		"removed patch text": {"diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,2 +1,1 @@\n keep\n-diff --git a/y b/y\n", false, 1, true},
+		"rewritten":          {"diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-one\n+uno\n", false, 0, false},
+		"created":            {"diff --git a/x b/x\nnew file mode 100644\nindex 0..1\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+one\n", false, 0, false},
+		"type change":        {"diff --git a/x b/x\ndeleted file mode 100644\n--- a/x\n+++ /dev/null\n@@ -1 +0,0 @@\n-one\ndiff --git a/x b/x\nnew file mode 120000\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+target\n", false, 0, false},
+		"mode change":        {"diff --git a/x b/x\nold mode 100644\nnew mode 100755\n", false, 0, false},
+		"binary changed":     {"diff --git a/x b/x\nindex 1..2 100644\nBinary files a/x and b/x differ\n", false, 0, false},
+	} {
+		whole, removed, ok := removalOnly(test.patch)
+		if whole != test.whole || removed != test.removed || ok != test.ok {
+			t.Errorf("%s: removalOnly() = %t, %d, %t, want %t, %d, %t", name, whole, removed, ok, test.whole, test.removed, test.ok)
+		}
+	}
 }

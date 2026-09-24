@@ -2266,9 +2266,10 @@ func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
 
 // A change that deletes a file the base tracks is the most ordinary change
 // there is, and the path it deletes is one the worktree no longer has. The
-// deletion is in the patch whole, it is listed with Git's own status at zero
-// bytes, and when the bound cannot show it the omission carries the size of
-// the deletion's diff rather than a size read from a path that is gone.
+// deletion is described at the base rather than rendered — its size and blob
+// there, measured from the base rather than from a path that is gone — it is
+// listed with Git's own status at zero bytes, and however small the bound it is
+// never omitted by it (yoyodyne-ifd.429.7).
 func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	t.Parallel()
 
@@ -2298,8 +2299,21 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	if changes.Truncated || len(changes.OmittedFiles) != 0 {
 		t.Fatalf("a deleting change was reported as cut: %#v", changes.OmittedFiles)
 	}
-	if strings.Count(changes.Patch, "\n-an obsolete line") != 50 || !strings.Contains(changes.Patch, "deleted file mode") || !strings.Contains(changes.Patch, "-test\n") {
-		t.Fatalf("patch does not carry both deletions whole:\n%s", changes.Patch)
+	if changes.Patch != "" {
+		t.Fatalf("a deletion is rendered as a removal diff:\n%s", changes.Patch)
+	}
+	obsolete := strings.Repeat("an obsolete line\n", 50)
+	wantDeleted := []DeletedFile{
+		{Path: "README.txt", Whole: true, BaseCommit: worktree.BaseCommit, BaseBytes: 5,
+			BaseDigest: "git-blob:" + gitLine(t, repository, "rev-parse", worktree.BaseCommit+":README.txt"), RemovedLines: 1, Class: FileClassSource},
+		{Path: "obsolete.txt", Whole: true, BaseCommit: worktree.BaseCommit, BaseBytes: int64(len(obsolete)),
+			BaseDigest: "git-blob:" + gitLine(t, repository, "rev-parse", worktree.BaseCommit+":obsolete.txt"), RemovedLines: 50, Class: FileClassSource},
+	}
+	for index := range changes.DeletedFiles {
+		changes.DeletedFiles[index].DiffBytes = 0
+	}
+	if !reflect.DeepEqual(changes.DeletedFiles, wantDeleted) {
+		t.Fatalf("deleted files = %#v, want %#v", changes.DeletedFiles, wantDeleted)
 	}
 	want := []ChangedFile{
 		{Path: "README.txt", Status: "D", Bytes: 0, Class: FileClassSource},
@@ -2313,12 +2327,9 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() bounded error = %v", err)
 	}
-	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "obsolete.txt" ||
-		bounded.OmittedFiles[0].Bytes != 0 || bounded.OmittedFiles[0].DiffBytes == 0 {
-		t.Fatalf("omitted files = %#v, want the committed deletion named at zero bytes with its diff measured", bounded.OmittedFiles)
-	}
-	if !strings.Contains(bounded.Patch, "-test\n") {
-		t.Fatalf("the deletion that fits the bound is not shown:\n%s", bounded.Patch)
+	if bounded.Truncated || len(bounded.OmittedFiles) != 0 || len(bounded.DeletedFiles) != 2 {
+		t.Fatalf("under a small bound: truncated=%t omitted=%#v deleted=%#v, want both deletions described and nothing omitted",
+			bounded.Truncated, bounded.OmittedFiles, bounded.DeletedFiles)
 	}
 }
 
