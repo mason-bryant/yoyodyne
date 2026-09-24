@@ -76,6 +76,14 @@ product:
   designs: docs/designs
   decisions: docs/decisions
 
+# The dashboard serves under a stored token rather than a fresh one each start,
+# so a restart does not hand the operator a new token to paste (yoyodyne-ifd.432.3).
+# "file" names <state root>/products/yoyodyne/dashboard.token, a machine-local
+# file outside the repository; this line is the reference, never the token.
+services:
+  dashboard:
+    token: file
+
 execution:
   max_concurrent_developers: 3  # back to 3 on 2026-09-22 as the 09-21 raise promised, once the phantom-run fix (yoyodyne-ifd.428.4) landed and settled the two stalled runs; three live suites is what this machine carries. History: 3 on 09-04, 2 on 09-15, 3 on 09-18 morning, 2 on 09-18 evening, 3 on 09-19, 4 on 09-21 while two slots were phantoms.
                                 # lease serializes integrations underneath
