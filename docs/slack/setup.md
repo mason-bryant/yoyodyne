@@ -613,9 +613,12 @@ the forge to publish them:
 > intake after runs kept blocking, for 10 hours now, with 4 items ready to pull
 > and one promotion awaiting the forge.
 
-Four states count: the operator holding all harness activity, a held intake
-(whoever held it), a watch session that has found nothing it can start, and no
-watch session running at all. Each closes on who it is waiting on, in the words
+Five states count: the operator holding all harness activity, a held intake
+(whoever held it), a watch session that has found nothing it can start, a watch
+session whose last read of the harness's store failed and is being retried, and
+no watch session running at all. A retried read is never said as a session that
+found nothing: the queue was not read, and the move is the harness's, which reads
+it again until the store answers or the session gives up and stops. Each closes on who it is waiting on, in the words
 `yoyo status` puts on its attention line — for a held intake, the hold's own:
 yours for one you placed, the development manager's or the harness's for one
 the brake is working — naming which summons-and-probe cycle it is on and at
