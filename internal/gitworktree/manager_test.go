@@ -340,6 +340,7 @@ func TestConcurrentCreationSurvivesAGitCommandTheHarnessDidNotCompose(t *testing
 				result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 					Name:    "git",
 					Args:    args,
+					Env:     unfencedEnvironment(),
 					Timeout: loadScaledGitBudget(),
 				}, nil)
 				if err != nil || result.Status != execution.ProcessSucceeded {
@@ -372,12 +373,89 @@ func neighbourGitConfig(t *testing.T, repository, setting string) string {
 	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "config", "--get", setting},
+		Env:     unfencedEnvironment(),
 		Timeout: loadScaledGitBudget(),
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {
 		t.Fatalf("git config --get %s = %v (%v): %s", setting, result.Status, err, result.Stderr)
 	}
 	return strings.TrimSpace(result.Stdout)
+}
+
+// The Git command that loses a run is not one the harness launched directly: it
+// is a grandchild, started by an agent or a check whose working directory is a
+// worktree this package cut, and it reads the repository's config through that
+// worktree's link to the common Git directory. So the child here is a shell the
+// runner starts inside a created worktree, and the Git command is the shell's own.
+func TestAGitCommandAChildRunsInsideAWorktreeSeesMaintenanceOff(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	t.Cleanup(func() { disableBackgroundMaintenance(t, repository) })
+	runGit(t, repository, "config", "gc.auto", "1")
+	runGit(t, repository, "config", "maintenance.auto", "true")
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      "run-" + strings.Repeat("7", 32),
+		WorkItemID: "yoyodyne-fenced-child",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
+		Name:    "/bin/sh",
+		Args:    []string{"-c", "git rev-parse --git-common-dir && git config --get gc.auto && git config --get maintenance.auto"},
+		Dir:     worktree.Path,
+		Env:     unfencedEnvironment(),
+		Timeout: loadScaledGitBudget(),
+	}, nil)
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		t.Fatalf("the child's git commands = %v (%v): %s", result.Status, err, result.Stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("the child printed %q, want the common directory and two settings", result.Stdout)
+	}
+	// Proof the child's Git was addressing the shared repository through the
+	// worktree rather than some repository of its own.
+	if common := lines[0]; !filepath.IsAbs(common) || !strings.HasPrefix(evalPath(t, common), evalPath(t, filepath.Join(repository, ".git"))) {
+		t.Fatalf("the child's common Git directory is %q, want the repository's own under %s", common, repository)
+	}
+	if lines[1] != "0" {
+		t.Errorf("gc.auto = %q inside the worktree, want the fence's %q rather than the repository's own", lines[1], "0")
+	}
+	if lines[2] != "false" {
+		t.Errorf("maintenance.auto = %q inside the worktree, want the fence's %q rather than the repository's own", lines[2], "false")
+	}
+}
+
+// unfencedEnvironment is this process's environment with no Git configuration in
+// it, for a child whose fence has to come from the runner. A test the harness
+// itself launched already carries the fence, and a child inheriting that would
+// pass these tests with the runner fencing nothing.
+func unfencedEnvironment() []string {
+	var environment []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_CONFIG_COUNT=") && !strings.HasPrefix(entry, "GIT_CONFIG_KEY_") && !strings.HasPrefix(entry, "GIT_CONFIG_VALUE_") {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
+}
+
+// evalPath resolves symlinks, so a temporary directory reached through
+// /var and through /private/var compares as the one directory it is.
+func evalPath(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", path, err)
+	}
+	return resolved
 }
 
 // What two runs race over is the repository's bookkeeping rather than the
