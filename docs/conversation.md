@@ -1877,7 +1877,13 @@ it too, names the harness as the next mover, and prints the command — in one
 sentence saying the change is approved, what stopped it, and that `yoyo triage
 resume` is what it needs. The channel line for the stop ends on that same
 sentence, and so does the refusal `yoyo triage repair` gives if it is asked for
-such a run instead. The
+such a run instead. The entry says so while the run's branch is there, which
+it asks the repository each time the docket is built, by the look and the rule
+the pull's hold and `yoyo status` ask too. A stop whose branch is gone is one
+the resume would refuse, so its entry names no resume: it says the branch is
+gone, what was found of the worktree, and that a re-run is the way on, and it
+names the development manager as the next mover — or the harness, where a
+decision of hers about the stoppage is recorded and not yet carried out. The
 resume then makes the run live again at exactly that step, with the approval
 it already has, and the pipeline promotes — replay onto where the target now
 stands, push, merge request — without invoking anybody: no developer attempt,

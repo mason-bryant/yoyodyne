@@ -383,6 +383,45 @@ func ResumeIntegrationSays(runID, phase, cause, title string) string {
 		runID, phase, cause, title, runID)
 }
 
+// IntegrationResumable reports whether an approved change the environment
+// stopped can still be resumed, from what the repository held of its run. The
+// resume restores the checkout from the branch and promotes the reviewed commit
+// on it, so the branch is the whole of the answer: a worktree without it is
+// nothing a resume can promote, and a branch without a worktree is one it puts
+// the checkout back from. A look that could not be made answers yes, for the
+// reason Found.Holds holds such a run — the other direction abandons a change
+// that may still be there.
+//
+// found is nil on an entry or a listing written before the look existed, which
+// answers from the run's own removal flag and nothing else.
+//
+// It is the one rule the docket's next mover, the hold the pull reads, and `yoyo
+// status` all ask. Before it the docket named the harness and the resume on
+// every integration stop while the hold had stopped doing so for a stop whose
+// branch was gone, and one stoppage with two next movers is a disagreement only
+// the operator can settle.
+func IntegrationResumable(found *Found, branchRemoved bool) bool {
+	if found == nil {
+		return !branchRemoved
+	}
+	return found.Unknown || found.BranchThere
+}
+
+// IntegrationGoneSays is the one sentence every surface says of an approved
+// change the environment stopped and whose branch is gone since: that there is
+// nothing left for a resume to promote, and that a re-run is the way on. what is
+// what was found of the run's change, in the words the surface already says it
+// in. The re-run is said before the reason for it, because a listing folds this
+// to a line and the way on is the part that must survive the fold. It names no
+// verb that would refuse, and it does not say whose move the
+// re-run is: that is the hold's and the docket's to close on, from whatever
+// triage has already decided about the stoppage.
+func IntegrationGoneSays(runID, what string) string {
+	return fmt.Sprintf(
+		"run %s's branch is gone (%s), so a re-run is the way on: its approved change has nothing left for a resume to promote",
+		runID, what)
+}
+
 // Prerequisite is one thing an item's own statement asks of the tree that the
 // tree does not have. It is declared here rather than imported from the package
 // that reads it for the reason Finding is: what reaches a development manager
@@ -1575,8 +1614,14 @@ func (e Entry) renderIntegrationStop() string {
 		return ""
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      %s. Nothing here is a verdict on the change, and this item's counters stay where the review left them.\n",
-		ResumeIntegrationSays(e.RunID, stopped.Phase, stopped.Cause, nonEmpty(stopped.Title, "the environment rather than the work")))
+	title := nonEmpty(stopped.Title, "the environment rather than the work")
+	if e.integrationResumable() {
+		fmt.Fprintf(&rendered, "      %s. Nothing here is a verdict on the change, and this item's counters stay where the review left them.\n",
+			ResumeIntegrationSays(e.RunID, stopped.Phase, stopped.Cause, title))
+	} else {
+		fmt.Fprintf(&rendered, "      %s. It was stopped at the %s phase by %s (%s), which is no verdict on the change.\n",
+			IntegrationGoneSays(e.RunID, e.remains()), stopped.Phase, stopped.Cause, title)
+	}
 	if detail := strings.TrimSpace(stopped.Detail); detail != "" {
 		rendered.WriteString(indented("What the harness found", detail))
 	}
@@ -1608,18 +1653,42 @@ func (e Entry) renderIntegrationStop() string {
 //
 // An approved change the environment stopped is the one stoppage whose next
 // mover is neither: the harness resumes it, and what it waits on is the cause
-// clearing and somebody asking.
+// clearing and somebody asking — while its branch is there. Once the branch is
+// gone there is nothing for the resume to promote, and the stop is answered as
+// every other stoppage is, with the re-run named as the way on: that is what the
+// hold the pull reads says of the same run, by the same rule.
 func (e Entry) renderNextMover() string {
+	gone := ""
 	if e.IntegrationStop != nil {
-		return "      Next mover: the harness — this change is approved and the environment stopped it, so what it needs is `yoyo triage resume` once the cause has cleared, not a decision.\n"
+		if e.integrationResumable() {
+			return "      Next mover: the harness — this change is approved and the environment stopped it, so what it needs is `yoyo triage resume` once the cause has cleared, not a decision.\n"
+		}
+		gone = "this approved change's branch is gone, so a re-run is the way on; "
 	}
 	if e.CountersProblem != "" {
-		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
+		return "      Next mover: unknown — " + gone + "this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
 	}
 	if e.Counters.AwaitingCarryOut() {
-		return "      Next mover: the harness — a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+		return "      Next mover: the harness — " + gone + "a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
 	}
-	return "      Next mover: you — nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
+	return "      Next mover: you — " + gone + "nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
+}
+
+// integrationResumable is IntegrationResumable over what this entry last found
+// of its run's change.
+func (e Entry) integrationResumable() bool {
+	return IntegrationResumable(e.Artifacts.Found, e.Artifacts.BranchRemoved)
+}
+
+// remains is what this entry last found of its run's change, as one clause.
+func (e Entry) remains() string {
+	if found := e.Artifacts.Found; found != nil {
+		return found.Describe()
+	}
+	if e.Artifacts.BranchRemoved {
+		return fmt.Sprintf("branch %s removed as the run's record says, not checked", e.Artifacts.Branch)
+	}
+	return fmt.Sprintf("branch %s preserved as the run's record says, not checked", e.Artifacts.Branch)
 }
 
 // renderDecisions says what triage has already decided about this item, in the
