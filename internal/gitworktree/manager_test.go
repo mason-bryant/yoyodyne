@@ -2587,8 +2587,12 @@ func removeLinkedWorktrees(t *testing.T, repository string) {
 	}
 	for _, path := range linkedWorktreePaths(t, repository) {
 		// A worktree whose directory a test deleted on purpose cannot be
-		// removed, only pruned. One that is still on disk must come off here.
-		if output, err := attemptGit(repository, "worktree", "remove", "--force", path); err != nil {
+		// removed, only pruned. One that is still on disk must come off here —
+		// including one a killed `git worktree add` left locked as
+		// "initializing", which a single --force refuses; the tests that kill an
+		// add on purpose leave that registration behind depending on where the
+		// kill landed.
+		if output, err := attemptGit(repository, "worktree", "remove", "--force", "--force", path); err != nil {
 			if _, statErr := os.Stat(path); statErr == nil {
 				t.Errorf("cleanup could not remove worktree %s: %v: %s", path, err, output)
 			}
