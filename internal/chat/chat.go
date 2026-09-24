@@ -1496,8 +1496,9 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		Prompt:           prompt,
 		SystemPrompt:     systemPrompt,
 		// The session this turn may continue from, which is empty where the last
-		// turn was served by a different provider: that provider's session is not
-		// this one's to resume, and what stands in for it is the context rebuilt
+		// turn was served by a different provider — that provider's session is not
+		// this one's to resume — or where the provider refused the session as too
+		// long and it was set aside. What stands in for it is the context rebuilt
 		// from the record below.
 		SessionID:    s.resumableSession(),
 		Model:        s.options.Model,
@@ -1521,7 +1522,8 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	policy := s.failoverPolicy()
 	// A conversation that has taken turns and has no session to resume is one that
 	// crossed providers and is now being asked back on its own — the window it was
-	// waiting out has lifted. The turn's prompt carries no history, because every
+	// waiting out has lifted — or one whose session was set aside as too long and
+	// whose fresh one never got as far as the record. The turn's prompt carries no history, because every
 	// turn but the first is written for a session that already holds it, so the
 	// same rebuild the crossing made is made here for the crossing back. A rebuild
 	// that fails leaves the turn as it stands and says so: an answer with less
@@ -1558,6 +1560,10 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		// way the invocation ended.
 		refusal     error
 		notReissued error
+		// replaced says this turn has already set aside a session the provider
+		// refused as too long, so a fresh session refused the same way ends the
+		// turn rather than setting aside the one it just opened.
+		replaced bool
 	)
 	// What this invocation costs is counted across the attempts it took. An
 	// exchange is charged per invocation rather than per message, and an attempt
@@ -1577,6 +1583,24 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 			lastSequence = result.LastEvent
 		}
 		request.LastSequence = lastSequence
+		// A session the provider will no longer continue — too long to send, and
+		// not compacted in time — is set aside once, and the turn is asked again in a
+		// fresh session with the context rebuilt from the record, under the same
+		// conversation. Only a turn that resumed a session is answered this way: one
+		// that already carried the rebuild has nothing a fresh session would drop.
+		resumed := request.SessionID != "" || policy.AlternateSessionID != ""
+		if why := refusedAsTooLong(result, err); why != "" && resumed && !replaced {
+			replaced = true
+			s.state.LastSequence = lastSequence
+			request = s.replaceSession(request, why)
+			lastSequence = s.state.LastSequence
+			// The alternate's session is the conversation's session, and it was set
+			// aside with it, so the failover is asked afresh rather than holding on to
+			// a session nothing will resume.
+			policy = s.failoverPolicy()
+			s.stream.interrupted()
+			continue
+		}
 		limit := refusedForUsageLimit(result, err)
 		if limit == nil {
 			break
