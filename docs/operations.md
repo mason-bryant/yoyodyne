@@ -767,7 +767,7 @@ the availability check failed outright and counted toward the intake brake.
 From 2026-09-17 18:17 local the Claude Code login on the operator's machine had
 expired; three runs blocked in a row, the brake tripped, every recurring pass
 recorded 0 turns, and the maintenance job restarted the watch 158 times. Nothing
-told him. He learned by asking, three days later.
+told them. They learned by asking, three days later.
 
 **A provider that is not authenticated or cannot be reached is a named wait
 that spends nothing.** Two conditions earn it, and they are told apart only by

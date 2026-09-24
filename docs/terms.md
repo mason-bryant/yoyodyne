@@ -62,9 +62,9 @@ in every spelling — not only in the command's output. What keeps it out of a
 sentence that could have said *repeat the merge request* is the reviewer, not
 the check.
 
-One entry is the operator's word rather than the project's. He introduced
+One entry is the operator's word rather than the project's. They introduced
 `seat` on 2026-09-19 and wants to keep using it, so its row is what makes it
-read the way he means it wherever it is met. The distinction the row draws is
+read the way they mean it wherever it is met. The distinction the row draws is
 instance against capacity: a seat is the running persona that does the work,
 and a developer slot is one unit of `max_concurrent_developers`, the capacity
 that seat fills. So the configuration guide, the status line, and the scheduler
