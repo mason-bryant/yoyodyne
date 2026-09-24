@@ -440,8 +440,10 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// says what stopped it, and no developer was invoked and no change delivered.
 	// The claim was spent on the machine having been too busy rather than on the
 	// work, so it goes back and the stoppage keeps the re-run its decision
-	// authorized. Everything else is settled, whatever the run came to.
-	if refusedBeforeAnythingRan(outcome) {
+	// authorized. A run the provider's usage window stopped is the same nothing
+	// for the same reason: whatever it produced, nothing judged it. Everything
+	// else is settled, whatever the run came to.
+	if refusedBeforeAnythingRan(outcome) || stoppedByUsageWindow(outcome.Environmental) {
 		return r.withdrawEnvironmental(ctx, entry, outcome, result), runErr
 	}
 	result.Outcome = outcome
@@ -738,10 +740,17 @@ func refusedBeforeAnythingRan(outcome Outcome) bool {
 // sentence it prints is an accounting claim: a stoppage told it kept its re-run
 // when the record still holds the claim is exactly the disagreement the
 // give-back exists to prevent. What stopped it is reported beside the run.
+//
+// A fresh run the provider's usage window stopped is given back the same way.
+// An agent may have been asked something before the window closed, but nothing
+// the run produced was judged, so what the claim bought is still nothing.
 func (r Rerunner) withdrawEnvironmental(ctx context.Context, entry triage.Entry, outcome Outcome, result RerunResult) RerunResult {
 	result.Outcome = outcome
-	result.ClaimGivenBack = r.giveBack(ctx, entry, fmt.Sprintf(
-		"the fresh run of %s was refused by the environment before any agent of it ran", entry.WorkItemID), &result) == ""
+	met := fmt.Sprintf("the fresh run of %s was refused by the environment before any agent of it ran", entry.WorkItemID)
+	if stoppedByUsageWindow(outcome.Environmental) {
+		met = fmt.Sprintf("the fresh run of %s was stopped by the provider's usage window before anything it produced was judged", entry.WorkItemID)
+	}
+	result.ClaimGivenBack = r.giveBack(ctx, entry, met, &result) == ""
 	return result
 }
 

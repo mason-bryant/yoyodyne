@@ -506,10 +506,16 @@ polls under exactly the same rule, because it is unknown rather than
 unwaitable: the monthly overage allowance reports this way while the ordinary
 rolling window keeps resetting on its usual schedule, so it waits the same
 interval and asks again. Unifying the two was the point — one polling
-discipline, whether or not a deadline was quoted. A limit the harness genuinely
-cannot wait for — a reset that is not in the future, or one that no longer fits
-the run's remaining budget — stops the run and records a blocker rather than
-guessing a wait. An exhausted limit is not the only thing a run waits out:
+discipline, whether or not a deadline was quoted. A reset that is not in the
+future is one the harness genuinely cannot wait for, so it stops the run and
+records a blocker rather than guessing a wait. A reset that no longer fits the
+run's remaining budget is different: the wait is well defined, only longer than
+the harness will take, so nobody has anything to decide. The run ends cancelled
+as an environmental stop of cause `usage-window` naming the reset, gives its
+claim back, and keeps its branch and worktree. It spends nothing — no brake
+count, no review round, repair grant, or re-run — and a watching session holds
+the item under "waiting on the provider's usage window" until the reset passes,
+then pulls it again by itself. An exhausted limit is not the only thing a run waits out:
 [an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
 same machinery on a much shorter clock.
 
@@ -2077,8 +2083,10 @@ held on provider capacity, one run and one conversation at a time, under
 is each thing the provider has stopped on its own. `runs` lists each work item's
 latest run that is either `waiting` — in flight and asleep on a recorded
 deadline, still counted on the running line — or `capacity-blocked`, which is a
-run the provider refused and the harness would not wait for, so it stopped with
-a blocker on its item. Each says what refused it, since when, the reset it is
+run the provider refused and the harness would not wait for. One stopped by a
+usage window resetting past the maximum pause gave its item back to the queue
+and names the reset it is pulled again after; any other stopped with a blocker
+on its item. Each says what refused it, since when, the reset it is
 waiting out or none, how much of `execution.usage_limit_max_pause` it has spent
 (`waited_seconds`), whether its change is preserved, and what a person can do about it — for a
 waiting run, that nothing needs doing. `conversations` lists each conversation

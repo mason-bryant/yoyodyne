@@ -1243,6 +1243,14 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		excluded, held := tried[started.WorkItemID]
 		if held {
 			excluded.reason = excludedBecause(*started)
+			// A run the provider's usage window stopped holds its item until the
+			// window resets and no longer. That is a wait with an end rather than a
+			// memory of having tried: the item is pulled again the moment the reset
+			// passes, and a run started before then is refused the same way.
+			excluded.until = time.Time{}
+			if resetsAt, windowed := usageWindowReset(started.Outcome); windowed {
+				excluded.until = resetsAt
+			}
 		}
 		// And the one ending that leaves no record anywhere else. A dispatch that
 		// failed before a run was reserved wrote nothing to the run store, so every
@@ -2207,6 +2215,9 @@ func (s Scheduler) cooling(tried map[string]attempt, item beads.WorkItem) bool {
 	if !attempted {
 		return false
 	}
+	if !recorded.until.IsZero() {
+		return s.now().Before(recorded.until)
+	}
 	return !s.Watching || recorded.fingerprint == fingerprint(item)
 }
 
@@ -2222,6 +2233,19 @@ type attempt struct {
 	fingerprint string
 	title       string
 	reason      string
+	// until is when the exclusion lifts by itself, and zero for every exclusion
+	// but one: a run the provider's usage window stopped, which is held until the
+	// window resets and is then pulled again whatever became of the item.
+	until time.Time
+}
+
+// usageWindowReset is when the provider's usage window that stopped a run
+// resets, where that is what stopped it.
+func usageWindowReset(outcome Outcome) (time.Time, bool) {
+	if !stoppedByUsageWindow(outcome.Environmental) || outcome.Environmental.ResetsAt == nil {
+		return time.Time{}, false
+	}
+	return outcome.Environmental.ResetsAt.UTC(), true
 }
 
 // unstartedAttempt reports a start that failed with no run behind it: the
@@ -2241,6 +2265,10 @@ func unstartedAttempt(started Started) bool {
 // derived once, as the start settles, rather than by whoever reads the exclusion
 // later: the outcome is in hand here and nowhere afterwards.
 func excludedBecause(started Started) string {
+	if stoppedByUsageWindow(started.Outcome.Environmental) {
+		return fmt.Sprintf("run %s was stopped by the provider's usage window rather than by anything about the work, and the item was given back to the queue: %s",
+			started.Outcome.RunID, started.Outcome.Environmental.ResetSays())
+	}
 	switch {
 	case started.Declined != "":
 		return "this session started it and the work went to another process: " + started.Declined
@@ -3348,14 +3376,26 @@ func (p *idlePoll) pass(id string, class runstate.PassedOverClass, role domain.A
 }
 
 // passTried records one item this session has already started and will not start
-// again, with what excluded it. It is the one class that carries a reason, and it
-// carries one because it is the only class whose cause is not somewhere a reader
-// can go and look: every other exclusion names a state of the item, the queue, or
-// the machine, and this one names an attempt only this process remembers.
+// again, with what excluded it. It is one of the two classes that carry a
+// reason, and both carry one because their cause is not somewhere a reader can go
+// and look: every other exclusion names a state of the item, the queue, or the
+// machine, and these name a run only this process remembers.
 func (p *idlePoll) passTried(id, reason string) {
 	p.passed = append(p.passed, readmodel.PassedOverItem{
 		ID:     id,
 		Class:  runstate.PassedOverAlreadyTried,
+		Reason: reason,
+	})
+}
+
+// passWindow records one item this session is holding until the provider's
+// usage window that stopped its run resets. It carries its reason for the reason
+// passTried does — only this process remembers the run — and it is a class of
+// its own because nothing about the item was tried and found wanting.
+func (p *idlePoll) passWindow(id, reason string) {
+	p.passed = append(p.passed, readmodel.PassedOverItem{
+		ID:     id,
+		Class:  runstate.PassedOverWaitingOnUsageWindow,
 		Reason: reason,
 	})
 }
@@ -3649,6 +3689,11 @@ func (w providerWindow) standing(now time.Time) bool {
 // for an operator hold, a directive, or work it depends on is waiting on
 // something the surfaces already say.
 func windowFrom(outcome Outcome) providerWindow {
+	// A run the window stopped rather than parked brought the same answer back,
+	// and the item it gave up waits on exactly that reset.
+	if resetsAt, windowed := usageWindowReset(outcome); windowed {
+		return providerWindow{waiting: true, resetsAt: resetsAt}
+	}
 	if !outcome.Paused || outcome.PauseCause != runstate.PauseUsageLimit {
 		return providerWindow{}
 	}

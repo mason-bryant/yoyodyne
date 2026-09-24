@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -1688,6 +1689,41 @@ func TestAFreshRunTheEnvironmentRefusedBeforeAnythingRanGivesTheClaimBack(t *tes
 	}
 	if len(harness.started) != 2 {
 		t.Fatalf("starts = %d, want the refused attempt and the one that ran", len(harness.started))
+	}
+}
+
+// A fresh run the provider's usage window stopped keeps the re-run its decision
+// authorized, even though an agent was asked something before the window
+// closed: nothing it produced was judged, so what the claim bought is nothing.
+// The window lifts by itself, and asking again after it carries out the same
+// decision.
+func TestAFreshRunTheUsageWindowStoppedGivesTheClaimBack(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	freshRunID := "run-fedcba9876543210fedcba9876543210"
+	resetsAt := docketedNow.Add(92 * time.Hour)
+	harness.outcome = Outcome{
+		RunID:      freshRunID,
+		WorkItemID: docketedItem,
+		Status:     runstate.StatusCancelled,
+		Environmental: &runstate.EnvironmentalRefusal{
+			Cause:      runstate.CauseUsageWindow,
+			RecordedAt: docketedNow,
+			ResetsAt:   &resetsAt,
+			Settled:    true,
+			Refused:    true,
+		},
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if !result.ClaimGivenBack || result.RecordProblem != "" {
+		t.Fatalf("result = %#v, want the claim given back cleanly", result)
+	}
+	if _, claimed, err := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
 	}
 }
 

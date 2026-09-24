@@ -165,6 +165,47 @@ func TestARunTheHarnessWouldNotWaitForIsCapacityBlocked(t *testing.T) {
 	}
 }
 
+// A run the provider's usage window stopped is capacity-blocked too, read from
+// the refusal it ended on, because its ending cleared the pause the reading
+// above keys on. What it says is the reset and that nothing needs doing: the
+// item went back to the queue rather than to a person.
+func TestARunTheUsageWindowStoppedIsCapacityBlockedUntilItsReset(t *testing.T) {
+	t.Parallel()
+
+	stopped := capacityReadAt.Add(-2 * time.Hour)
+	resetsAt := capacityReadAt.Add(89 * time.Hour)
+	run := runstate.State{
+		RunID:          "run-7a6b5c4d",
+		WorkItemID:     "yoyodyne-ifd.428.12",
+		Status:         runstate.StatusCancelled,
+		Phase:          runstate.PhaseDeveloping,
+		StartedAt:      stopped.Add(-time.Minute),
+		UpdatedAt:      stopped,
+		CompletedAt:    &stopped,
+		Branch:         "yoyodyne/yoyodyne-ifd-428-12/run-7a6b5c4d",
+		WorktreePath:   "/state/worktrees/run-7a6b5c4d",
+		UsageLimitKind: "seven_day",
+		Failure:        "this run was refused by an exhausted seven_day usage limit and the harness will not wait for it",
+		Environmental: &runstate.EnvironmentalRefusal{
+			Cause: runstate.CauseUsageWindow, RecordedAt: stopped, ResetsAt: &resetsAt, Settled: true, Refused: true,
+		},
+	}
+	blocked := ReadCapacityBlocked([]runstate.State{run}, nil, capacityReadAt, 30*time.Minute)
+	if len(blocked.Runs) != 1 {
+		t.Fatalf("runs = %+v, want the stopped run", blocked.Runs)
+	}
+	entry := blocked.Runs[0]
+	if entry.State != CapacityStateBlocked || entry.RefusedBy != "an exhausted seven_day usage limit" {
+		t.Fatalf("run = %+v, want it capacity-blocked on the seven_day limit", entry)
+	}
+	if entry.ResetsAt == nil || !entry.ResetsAt.Equal(resetsAt) || !entry.Since.Equal(stopped) || !entry.Preserved {
+		t.Fatalf("run = %+v, want the reset, the moment it stopped, and its change preserved", entry)
+	}
+	if !strings.HasPrefix(entry.Remedy, "nothing needs doing") || strings.Contains(entry.Remedy, "development manager") {
+		t.Fatalf("remedy = %q, want it to say the item went back to the queue rather than to a person", entry.Remedy)
+	}
+}
+
 // A run waiting out a transient overload is parked on the provider's capacity
 // as much as one waiting out a limit, on a shorter clock; a run waiting on a
 // login nobody renewed shares the deadline field and is not capacity at all.

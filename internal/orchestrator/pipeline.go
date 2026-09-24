@@ -52,6 +52,10 @@ type WorkTracker interface {
 	// Block records a durable blocker. The harness uses it when a run stops on
 	// something no further attempt of its own can resolve.
 	Block(ctx context.Context, id, reason string) (beads.WorkItem, error)
+	// Release gives the claimed item back to the queue. The harness uses it when
+	// a run ends on something that is nobody's decision and lifts by itself — the
+	// provider's usage window — so the item is pulled again once it has.
+	Release(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	// Reopen returns a claimed item to the backlog under the parking it is given.
 	// The harness uses it when a run integrated its change and claimed that change
@@ -2781,6 +2785,13 @@ func (a *activeRun) roundDelivered(ctx context.Context, refusal *runstate.Enviro
 	if refusal.NothingRan {
 		return false, nil
 	}
+	// A round the provider's usage window ended delivered nothing anybody judged,
+	// whatever the refused invocation left in the worktree: no check and no
+	// reviewer read it, and the branch keeps it for the run that is pulled once
+	// the window resets.
+	if refusal.Cause.EndsTheRoundUnjudged() {
+		return false, nil
+	}
 	// A run with no worktree recorded delivered nothing, and that is proved rather
 	// than assumed: the harness never gave it anywhere to deliver to. It is the
 	// state a run refused before its worktree could be cut is in, which is exactly
@@ -3586,7 +3597,7 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 		if spent > 0 {
 			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
 		}
-		return a.blockOnUsageLimit(reason)
+		return a.stopOnUsageWindow(reason, limit.ResetsAt, unknownReset)
 	}
 	// The deadline becomes durable before the wait starts, so a process that dies
 	// during the wait honors the same deadline on restart rather than retrying
@@ -3719,8 +3730,15 @@ func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 	// says nothing about a run that has already spent everything it was allowed to
 	// spend waiting.
 	if a.state.UsageLimitPaused() > p.Config.Execution.UsageLimitMaxPause.Duration() {
-		return a.blockOnUsageLimit(fmt.Sprintf("this run has committed %s to waiting, which is past the %s maximum pause",
-			a.state.UsageLimitPaused(), p.Config.Execution.UsageLimitMaxPause))
+		reason := fmt.Sprintf("this run has committed %s to waiting, which is past the %s maximum pause",
+			a.state.UsageLimitPaused(), p.Config.Execution.UsageLimitMaxPause)
+		// A usage limit is a window with an end, and ends the run the way any wait
+		// past the bound on one does. An overload has no window to wait for, so it
+		// stops the way it always has.
+		if capacityWindow(a.state.PauseCause) {
+			return a.stopOnUsageWindow(reason, deadline, a.state.UsageLimitResetUnknown)
+		}
+		return a.blockOnUsageLimit(reason)
 	}
 	// The operator may have released this wait while no process was serving it,
 	// so it is asked before anything is decided about sleeping or exiting.
@@ -3855,10 +3873,12 @@ func (a *activeRun) clearUsageLimitPause() error {
 }
 
 // blockOnUsageLimit ends a run the provider refused and whose wait the harness
-// will not take: an unusable reset time, or a wait beyond the configured
-// maximum. Guessing a wait is the one thing that must not happen here, so what
-// stopped the run is recorded on the work item and a person decides what to do
-// about it. It serves both refusals, because what is undecidable about them is
+// will not take: an unusable reset time, or a server overload that outlasted the
+// configured maximum. A usage limit whose reset merely lies past the maximum is
+// not one of these; it ends in stopOnUsageWindow, because nothing about it is a
+// person's to decide. Guessing a wait is the one thing that must not happen
+// here, so what stopped the run is recorded on the work item and a person
+// decides what to do about it. It serves both refusals, because what is undecidable about them is
 // the same thing — how long to wait — whichever one asked.
 func (a *activeRun) blockOnUsageLimit(reason string) error {
 	cause := fmt.Errorf("this run was refused by %s and cannot wait for it: %s",
@@ -3867,6 +3887,78 @@ func (a *activeRun) blockOnUsageLimit(reason string) error {
 		return errors.Join(cause, fmt.Errorf("record the provider's refusal as a blocker: %w", err))
 	}
 	return cause
+}
+
+// capacityWindow reports a pause cause that is an exhausted usage limit: a
+// window on the provider's clock with an end the harness can name. The empty
+// cause is one, because every deadline written before the cause was carried was
+// a usage limit's.
+func capacityWindow(cause string) bool {
+	return cause == runstate.PauseUsageLimit || cause == ""
+}
+
+// stopOnUsageWindow ends a run the provider's usage window refused, where the
+// reset lies past what the run may still wait. It is the counterpart of
+// blockOnUsageLimit for the one refusal whose wait is perfectly well defined and
+// merely longer than the harness will take: nothing about it is a person's to
+// decide, so nothing is blocked. What stopped the run is recorded as an
+// environmental refusal naming the reset, which is what keeps the stop off the
+// failure-storm brake, gives back what the round was charged, and tells the
+// watch session when to pull the item again. The run itself ends in stop, where
+// the claim is given back.
+func (a *activeRun) stopOnUsageWindow(reason string, resetsAt time.Time, resetUnknown bool) error {
+	refused := fmt.Sprintf("this run was refused by %s and the harness will not wait for it: %s",
+		runstate.DescribePause(a.state.PauseCause, a.state.UsageLimitKind), reason)
+	a.recordEnvironmentalRefusal(runstate.CauseUsageWindow, refused, ranAnyway)
+	reset := resetsAt.UTC()
+	a.state.Environmental.ResetsAt = &reset
+	a.state.Environmental.ResetUnknown = resetUnknown
+	return usageWindowStop{reason: refused}
+}
+
+// usageWindowStop is a run the provider's usage window refused for longer than
+// the harness will wait. It is an error only so that it travels the path every
+// ending travels; it is deliberately not a failure, and stop ends the run on it
+// as cancelled with its claim given back.
+type usageWindowStop struct{ reason string }
+
+func (e usageWindowStop) Error() string { return e.reason }
+
+// endOnUsageWindow ends a run stopped by the provider's usage window. It is
+// recorded cancelled rather than failed, in the read model's own vocabulary for
+// an ending nothing judged, and it leaves nobody a decision: no blocker is
+// written, the branch and worktree are left exactly as a stopped run's are, and
+// the claim is given back so the item is ready to be pulled again once the
+// window resets. The environmental refusal recorded where the wait was refused
+// is settled by fail, which is what returns the round and the grant.
+//
+// A claim that could not be given back is reported rather than swallowed. The
+// run is terminal either way, so the claim audit gives it back on its next pass;
+// until then the item reads as claimed, which is worth an operator knowing.
+func (a *activeRun) endOnUsageWindow(stopped usageWindowStop) (Outcome, error) {
+	outcome, err := a.fail(stopped, runstate.StatusCancelled)
+	// fail hands back the stop itself, joined with anything that went wrong
+	// recording it, and only the second is a problem.
+	var problems []error
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, part := range joined.Unwrap() {
+			if !errors.Is(part, stopped) {
+				problems = append(problems, part)
+			}
+		}
+	} else if err != nil && !errors.Is(err, stopped) {
+		problems = append(problems, err)
+	}
+	if a.claimed {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, releaseErr := a.pipeline.Tracker.Release(releaseCtx, a.state.WorkItemID, renderUsageWindowReleaseNotes(outcome))
+		cancel()
+		if releaseErr != nil {
+			problems = append(problems, fmt.Errorf("give back the claim on %s after the provider's usage window stopped run %s; the claim audit gives it back once it finds the run ended: %w",
+				a.state.WorkItemID, a.state.RunID, releaseErr))
+		}
+	}
+	return outcome, errors.Join(problems...)
 }
 
 // usageLimitPause reports a run that stopped short of finishing because it is
@@ -4965,6 +5057,13 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	var operatorHeld operatorHoldPause
 	if errors.As(cause, &operatorHeld) {
 		return a.pauseForOperatorHold(operatorHeld)
+	}
+	// A usage window past the maximum pause is neither a pause nor a failure: the
+	// harness will not wait for it, and nothing about the work was judged, so the
+	// run ends cancelled with its claim given back.
+	var windowed usageWindowStop
+	if errors.As(cause, &windowed) {
+		return a.endOnUsageWindow(windowed)
 	}
 	// An escalation is the one ending here that is neither a pause nor a failure
 	// of anything. The role that raised it did its job and the run did too: what
@@ -7239,6 +7338,26 @@ func renderInvariantNotes(outcome Outcome) []string {
 	return lines
 }
 
+// stoppedByUsageWindow reports an environmental refusal by the provider's usage
+// window, which every reader of a run's ending names apart from a failure.
+func stoppedByUsageWindow(refused *runstate.EnvironmentalRefusal) bool {
+	return refused != nil && refused.Cause == runstate.CauseUsageWindow
+}
+
+// renderUsageWindowReleaseNotes is what the item's notes say about its claim
+// being given back after the provider's usage window stopped its run. The
+// outcome note written just before it carries the account; this says only what
+// became of the claim, and when the item will be pulled again.
+func renderUsageWindowReleaseNotes(outcome Outcome) string {
+	note := "Yoyodyne gave this item back to the queue: run " + outcome.RunID + " was stopped by the provider's usage window rather than by anything about the work, and nothing was charged to the item for it."
+	if outcome.Environmental != nil {
+		if said := outcome.Environmental.ResetSays(); said != "" {
+			note += " " + strings.ToUpper(said[:1]) + said[1:] + ", and a watching session pulls the item again once that has passed."
+		}
+	}
+	return note
+}
+
 // renderFailureNotes describes a failed run on its work item.
 //
 // No headline here claims preservation, and neither does any line below one.
@@ -7260,6 +7379,9 @@ func renderFailureNotes(outcome Outcome) string {
 		// blocker says which. This headline deliberately does not: naming one of
 		// them would be wrong more often than not.
 		headline = "Yoyodyne blocked this item; the blocker recorded on the item says what stopped it."
+	}
+	if stoppedByUsageWindow(outcome.Environmental) {
+		headline = "Yoyodyne stopped this run without judging anything: the provider's usage window refused it and resets later than the harness will wait, so the item goes back to the queue and is pulled again once the window resets."
 	}
 	lines := []string{
 		headline,

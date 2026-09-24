@@ -3254,6 +3254,10 @@ type fakeTracker struct {
 	completeFailures     int
 	transientCompleteErr error
 	blockErr             error
+	// released and releaseReason are the claim given back to the queue by a run
+	// that ended on something nobody has to decide about.
+	released      bool
+	releaseReason string
 	// reopened and reopenReason are the item put back in the backlog by a run
 	// that integrated its change and claimed the change does not discharge the
 	// item. They are apart from the closure above because the whole point of the
@@ -3411,6 +3415,15 @@ func (f *fakeTracker) Block(_ context.Context, _ string, reason string) (beads.W
 	f.blocked = true
 	f.blockReason = reason
 	f.item.Status = "blocked"
+	return f.item, nil
+}
+
+func (f *fakeTracker) Release(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+	f.calls = append(f.calls, "release")
+	f.released = true
+	f.releaseReason = reason
+	f.claimed = false
+	f.item.Status = "open"
 	return f.item, nil
 }
 
@@ -5000,20 +5013,11 @@ func TestRunStopsWithABlockerWhenAUsageLimitResetIsUnusable(t *testing.T) {
 		wantReason string
 	}{
 		{
-			// A limit naming no reset time is deliberately absent here: it is
-			// waitable rather than unusable, so it polls instead of stopping.
-			// TestRunPollsAUsageLimitThatNamesNoResetTime covers it.
-			name:       "no reset time, beyond the configured maximum pause",
-			limit:      backend.UsageLimit{Kind: "seven_day"},
-			maxPause:   time.Minute,
-			wantReason: "named no reset time, and waiting",
-		},
-		{
-			name:       "reset beyond the configured maximum pause",
-			limit:      backend.UsageLimit{Kind: "seven_day", ResetsAt: baseTime.Add(7 * 24 * time.Hour)},
-			wantReason: "would take this run past the 6h0m0s maximum pause",
-		},
-		{
+			// A reset past the maximum pause is a wait with an end the harness will
+			// not take, which is deliberately absent here: it is no person's to
+			// decide, so it stops the run without a blocker.
+			// TestAUsageWindowResettingPastTheMaximumPauseEndsTheRunUnjudged covers it.
+			//
 			// A limit still refusing while naming a reset that has already passed
 			// is not describing a wait. Honoring it would reissue immediately into
 			// the same refusal, with nothing bounding the attempts.
@@ -5068,6 +5072,129 @@ func TestRunStopsWithABlockerWhenAUsageLimitResetIsUnusable(t *testing.T) {
 			// The change is preserved for whoever picks the item up.
 			if _, statErr := os.Stat(stopped.WorktreePath); statErr != nil {
 				t.Fatalf("the stopped run's worktree did not survive: %v", statErr)
+			}
+		})
+	}
+}
+
+// A usage window resetting later than the harness will wait is a wait it will not
+// take, not a verdict on anything. This replays 2026-09-23: a developer run
+// refused on an exhausted seven_day limit whose reset is four days out, against
+// the six-hour maximum pause. The run ends cancelled as a named environmental
+// stop carrying the reset, gives its claim back, keeps its branch and worktree,
+// and leaves every budget the item is counted against where it was. The brake
+// and the watch session's side of the same stop are in
+// TestAUsageWindowStopCountsTowardNothingInAWatchingSession.
+func TestAUsageWindowResettingPastTheMaximumPauseEndsTheRunUnjudged(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name         string
+		limit        backend.UsageLimit
+		maxPause     time.Duration
+		wantReason   string
+		wantReset    time.Time
+		resetUnknown bool
+	}{
+		{
+			name:       "seven_day reset four days out",
+			limit:      backend.UsageLimit{Kind: "seven_day", ResetsAt: baseTime.Add(92*time.Hour + 10*time.Minute)},
+			maxPause:   6 * time.Hour,
+			wantReason: "would take this run past the 6h0m0s maximum pause",
+			wantReset:  baseTime.Add(92*time.Hour + 10*time.Minute),
+		},
+		{
+			// A limit naming no reset is asked again after the configured probe
+			// interval, and a probe the budget cannot cover is the same wait past
+			// the bound, with the probe standing in for the reset.
+			name:         "no reset time, beyond the configured maximum pause",
+			limit:        backend.UsageLimit{Kind: "seven_day"},
+			maxPause:     time.Minute,
+			wantReason:   "named no reset time, and waiting",
+			resetUnknown: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			limit := testCase.limit
+			provider := usageLimitBackend(1, &limit, approveVerdict)
+			pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+			clock := &pausingClock{now: baseTime}
+			pipeline = waiting(automatic(pipeline, provider), clock, testCase.maxPause, testCase.maxPause)
+			before, err := store.Triage().Counters(tracker.item.ID)
+			if err != nil {
+				t.Fatalf("Counters() error = %v", err)
+			}
+
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			if err != nil {
+				t.Fatalf("Run() error = %v, want the run ended on the window rather than failed", err)
+			}
+			if outcome.Paused || len(clock.slept) != 0 {
+				t.Fatalf("paused=%t waits=%v, want a run that did not wait at all", outcome.Paused, clock.slept)
+			}
+			// The stop class: cancelled rather than failed, no blocker, and the
+			// environmental refusal naming the window and its reset.
+			if outcome.Status != runstate.StatusCancelled || outcome.Blocked || tracker.blocked {
+				t.Fatalf("outcome = %s blocked=%t tracker blocked=%t; want cancelled with nothing blocked", outcome.Status, outcome.Blocked, tracker.blocked)
+			}
+			stopped, err := store.Load(outcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if stopped.Status != runstate.StatusCancelled || strings.TrimSpace(stopped.Blocker) != "" {
+				t.Fatalf("stopped = %s with blocker %q, want a cancelled run nobody has to decide about", stopped.Status, stopped.Blocker)
+			}
+			if got := stopped.Outcome(); got != runstate.OutcomeCancelled {
+				t.Fatalf("outcome = %q, want %q", got, runstate.OutcomeCancelled)
+			}
+			if stopped.DiedInItsOwnProcess() {
+				t.Fatal("the stop reads as a run that died, which dockets it for the development manager")
+			}
+			refused := stopped.Environmental
+			if refused == nil || refused.Cause != runstate.CauseUsageWindow || !refused.Settled || !refused.Refused || refused.Problem != "" {
+				t.Fatalf("environmental = %#v, want a settled usage-window refusal", refused)
+			}
+			if refused.ResetsAt == nil || refused.ResetUnknown != testCase.resetUnknown {
+				t.Fatalf("reset = %v unknown=%t, want the reset recorded", refused.ResetsAt, refused.ResetUnknown)
+			}
+			if !testCase.wantReset.IsZero() && !refused.ResetsAt.Equal(testCase.wantReset) {
+				t.Fatalf("reset = %s, want the provider's %s", refused.ResetsAt, testCase.wantReset)
+			}
+			if !strings.Contains(stopped.Failure, testCase.wantReason) || !strings.Contains(stopped.Failure, "seven_day") {
+				t.Fatalf("failure = %q, want the window and why it was not waited", stopped.Failure)
+			}
+			if stopped.UsageLimitKind != "seven_day" {
+				t.Fatalf("the record does not name the limit that stopped the run: %q", stopped.UsageLimitKind)
+			}
+			// The claim is given back, saying when the item is pulled again.
+			if !tracker.released || tracker.item.Status != "open" {
+				t.Fatalf("released=%t status=%q, want the claim given back", tracker.released, tracker.item.Status)
+			}
+			if said := refused.ResetSays(); !strings.Contains(strings.ToLower(tracker.releaseReason), strings.ToLower(said)) {
+				t.Fatalf("release note = %q, want it to say %q", tracker.releaseReason, said)
+			}
+			if !strings.Contains(tracker.notes, "usage window") {
+				t.Fatalf("the item's notes do not name the window:\n%s", tracker.notes)
+			}
+			// The branch and worktree are kept as a stopped run's are.
+			if _, statErr := os.Stat(stopped.WorktreePath); statErr != nil {
+				t.Fatalf("the stopped run's worktree did not survive: %v", statErr)
+			}
+			if !stopped.Artifacts().Preserved() {
+				t.Fatalf("artifacts = %#v, want the branch and worktree preserved", stopped.Artifacts())
+			}
+			// And nothing the item is counted against moved.
+			after, err := store.Triage().Counters(tracker.item.ID)
+			if err != nil {
+				t.Fatalf("Counters() error = %v", err)
+			}
+			if after.ReviewRounds != before.ReviewRounds || after.CommittedRounds != before.CommittedRounds ||
+				after.RepairGrants != before.RepairGrants || after.Reruns != before.Reruns {
+				t.Fatalf("counters after the stop = %#v, want them as they were: %#v", after, before)
 			}
 		})
 	}
@@ -5176,8 +5303,8 @@ func TestRunBoundsItsTotalUsageLimitWaitAcrossConsecutivePauses(t *testing.T) {
 	pipeline = waiting(automatic(pipeline, provider), clock, 3*time.Hour, 3*time.Hour)
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
-	if err == nil {
-		t.Fatalf("Run() error = nil, want the run stopped by its total pause budget")
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the run ended on the window rather than failed", err)
 	}
 	// One probe of thirty minutes is taken; the second refusal names a reset three
 	// and a half hours out, which no longer fits in what the run has left of its
@@ -5185,8 +5312,12 @@ func TestRunBoundsItsTotalUsageLimitWaitAcrossConsecutivePauses(t *testing.T) {
 	if clock.waited() != 30*time.Minute {
 		t.Fatalf("waited %s, want the one probe taken before the budget could not cover the next reset", clock.waited())
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "already committed 30m0s to waiting") {
-		t.Fatalf("the exhausted budget left no blocker naming what was spent:\n%s", tracker.blockReason)
+	if outcome.Status != runstate.StatusCancelled || tracker.blocked || !tracker.released {
+		t.Fatalf("outcome = %s, blocked=%t released=%t; want the run ended on the window with its claim given back",
+			outcome.Status, tracker.blocked, tracker.released)
+	}
+	if !strings.Contains(outcome.Failure, "already committed 30m0s to waiting") {
+		t.Fatalf("the ending does not name what was spent:\n%s", outcome.Failure)
 	}
 	if developerRuns := len(provider.requestsForRole(domain.RoleDeveloper)); developerRuns != 2 {
 		t.Fatalf("developer invocations = %d, want the refusals the budget allowed and no more", developerRuns)

@@ -48,10 +48,12 @@ const (
 	// provider again by itself; nothing about it is waiting on a person.
 	CapacityStateWaiting CapacityState = "waiting"
 	// CapacityStateBlocked is a run the provider refused and the harness would not
-	// wait for — a wait past the configured maximum pause, or a reset that was
-	// not in the future — so it stopped and handed its item to a person; and a
-	// conversation whose turn the provider refused with nothing serving it,
-	// while that refusal still stands. Neither carries on by itself.
+	// wait for, and a conversation whose turn the provider refused with nothing
+	// serving it while that refusal still stands. A run stopped by a usage window
+	// resetting past the configured maximum pause gave its item back to the queue
+	// and is pulled again once the window resets; one refused on a reset that
+	// was not in the future, or on an overload that outlasted the budget, handed
+	// its item to a person. None of them carries on by itself.
 	CapacityStateBlocked CapacityState = "capacity-blocked"
 )
 
@@ -150,6 +152,7 @@ func (c CapacityBlocked) Held() bool {
 const (
 	waitingRunRemedy  = "nothing needs doing: the run asks the provider again by itself at its next probe and carries on once it is served; `yoyo resume` with the work item named asks now instead of at the probe"
 	blockedRunRemedy  = "the run stopped and its item is back with the development manager; what lets it run again is more provider capacity, a longer execution.usage_limit_max_pause, or a replan"
+	windowRunRemedy   = "nothing needs doing: the run stopped without anything being judged and gave its item back to the queue, and a watching session pulls it again once the window resets; more provider capacity or a longer execution.usage_limit_max_pause is what would have let it wait instead"
 	refusedTurnRemedy = "nothing waits on it: the turn failed where it was asked for, and asking again once the window lifts is what serves it; enabling failover on the agent is what would move the next turn onto another model before then"
 )
 
@@ -164,7 +167,9 @@ const (
 // with a durable blocker while still recording one of those two causes, which
 // is what the pipeline leaves when it refuses a wait — the cause is cleared
 // with the deadline on every run that resumed, so a run that paused once and
-// later stopped on something else records no cause and is not here either.
+// later stopped on something else records no cause and is not here either. A
+// run the provider's usage window stopped is blocked too, read from the
+// environmental refusal it ended on, which is what carries its reset.
 //
 // One run per work item, and only the item's latest: a run a later run has
 // superseded is history whatever it stopped on. What the run records cannot
@@ -243,6 +248,9 @@ func ReadCapacityBlocked(runs []runstate.State, refusals []runstate.UsageLimitEx
 // capacityBlockedRun is one run as this reading names it, and whether it is
 // parked or held on capacity at all.
 func capacityBlockedRun(run runstate.State) (CapacityBlockedRun, bool) {
+	if refused := run.Environmental; run.Status.Terminal() && refused != nil && refused.Cause == runstate.CauseUsageWindow {
+		return usageWindowRun(run, *refused), true
+	}
 	if !capacityPause(run.PauseCause, run.UsageLimitResetsAt != nil) {
 		return CapacityBlockedRun{}, false
 	}
@@ -280,6 +288,32 @@ func capacityBlockedRun(run runstate.State) (CapacityBlockedRun, bool) {
 		return CapacityBlockedRun{}, false
 	}
 	return entry, true
+}
+
+// usageWindowRun is a run the provider's usage window stopped, as this reading
+// names it. It is read from the refusal the run recorded rather than from its
+// pause, because the run ended rather than waited and its ending cleared the
+// pause; the refusal is what kept the reset.
+func usageWindowRun(run runstate.State, refused runstate.EnvironmentalRefusal) CapacityBlockedRun {
+	entry := CapacityBlockedRun{
+		RunID:         run.RunID,
+		WorkItemID:    run.WorkItemID,
+		Phase:         run.Phase,
+		State:         CapacityStateBlocked,
+		RefusedBy:     runstate.DescribePause(runstate.PauseUsageLimit, run.UsageLimitKind),
+		Since:         run.UpdatedAt.UTC(),
+		WaitedSeconds: run.UsageLimitPausedSeconds,
+		Preserved:     run.Artifacts().Preserved(),
+		Remedy:        windowRunRemedy,
+	}
+	if run.CompletedAt != nil {
+		entry.Since = run.CompletedAt.UTC()
+	}
+	if refused.ResetsAt != nil {
+		resetsAt := refused.ResetsAt.UTC()
+		entry.ResetsAt = &resetsAt
+	}
+	return entry
 }
 
 // capacityPause reports a pause cause that is the provider's capacity rather

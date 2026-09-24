@@ -3290,6 +3290,10 @@ func (h *realScheduleHarness) Block(_ context.Context, id, _ string) (beads.Work
 	return h.setStatus(id, "blocked")
 }
 
+func (h *realScheduleHarness) Release(_ context.Context, id, _ string) (beads.WorkItem, error) {
+	return h.setStatus(id, "open")
+}
+
 func (h *realScheduleHarness) Complete(_ context.Context, id, _ string) (beads.WorkItem, error) {
 	return h.setStatus(id, "closed")
 }
