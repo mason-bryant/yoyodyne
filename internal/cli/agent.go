@@ -143,6 +143,8 @@ func runAgentCommand(ctx context.Context, args []string, stdin io.Reader, stdout
 		return showAgent(args[1:], stdout, stderr)
 	case "chat":
 		return chatWithAgent(ctx, args[1:], stdin, stdout, stderr)
+	case "memory":
+		return showAgentMemory(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown agent command %q\n\n", args[0])
 		printAgentUsage(stderr)
@@ -555,10 +557,11 @@ func appendProblem(existing, addition string) string {
 }
 
 func printAgentUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo agent <list|show|chat> [options] [<name>]
+	fmt.Fprintln(writer, `Usage: yoyo agent <list|show|memory|chat> [options] [<name>]
 
   list                       the configured agents, and what each is in the middle of
   show [options] <name>      one agent in full, with the work its role is executing
+  memory [options] <name>    what one agent remembers, each memory with its history
   chat [options] <name>      talk to one agent; <name> is its name or its role
 
 Options:

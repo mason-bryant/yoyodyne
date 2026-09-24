@@ -1210,6 +1210,7 @@ func TestFlagsAreReadOnEitherSideOfTheIdEveryCommandThatTakesOne(t *testing.T) {
 		"exchange show":      {[]string{"exchange", "show"}, "exchange-0123456789abcdef0123456789abcdef", []string{"--json"}},
 		"agent show":         {[]string{"agent", "show"}, "developer", []string{"--json"}},
 		"agent chat":         {[]string{"agent", "chat"}, "developer", []string{"--message", "what are you working on?"}},
+		"agent memory":       {[]string{"agent", "memory"}, "architect", []string{"--json"}},
 		"run":                {[]string{"run"}, "yoyodyne-ifd.74", []string{"--json"}},
 		"triage rerun":       {[]string{"triage", "rerun"}, "run-0123456789abcdef0123456789abcdef", []string{"--json"}},
 		"triage repair":      {[]string{"triage", "repair"}, "run-0123456789abcdef0123456789abcdef", nil},
