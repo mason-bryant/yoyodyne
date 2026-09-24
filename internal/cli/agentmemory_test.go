@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -125,6 +128,86 @@ func TestAgentMemoryRendersEveryMemoryWithItsHistoryAndProvenance(t *testing.T) 
 	}
 	if branch := decoded.Memories[1]; !branch.Retired || branch.Subject != "yoyodyne-ifd.9" {
 		t.Fatalf("branch-stands = %#v", branch)
+	}
+}
+
+// memoryRecordingBackend is a provider whose one answer ends on a memory block,
+// which is how a management turn records what it learned.
+type memoryRecordingBackend struct{}
+
+func (memoryRecordingBackend) Run(context.Context, backendapi.RunRequest) (backendapi.RunResult, error) {
+	return backendapi.RunResult{
+		Backend:       domain.BackendClaudeCode,
+		SessionID:     "session-1",
+		ResolvedModel: "claude-opus-5-20260514",
+		FinalText: "Noted.\n\n```yoyodyne-memory\n" +
+			`{"memories":[{"action":"remember","memory":"checks-are-slow","text":"make race takes eleven minutes here."}]}` +
+			"\n```\n",
+	}, nil
+}
+
+// What a conversation records is what the operator reads: a memory an
+// architect's turn wrote into the store is listed by `yoyo agent memory`, as the
+// revision that turn wrote. Nothing between the turn and the listing is replaced
+// but the provider, and the store is the one both open under the state root.
+func TestAgentMemoryListsWhatAConversationRecorded(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, hierarchyConfig)
+
+	conversations, err := runstate.NewConversationStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	memories, err := runstate.NewMemoryStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewMemoryStore() error = %v", err)
+	}
+	session, err := chat.Open(chat.Options{
+		Role:         domain.RoleArchitect,
+		Agent:        "architect",
+		Backend:      memoryRecordingBackend{},
+		Store:        conversations,
+		Memories:     memories,
+		Model:        "opus",
+		Provider:     domain.BackendClaudeCode,
+		AccountAlias: config.DefaultAccountAlias,
+		Repository:   filepath.Join(stateRoot, "repository"),
+		ProductID:    "yoyodyne",
+		RepositoryID: "yoyodyne",
+		Briefing:     chat.Briefing{Text: "the product is a harness", GatheredAt: time.Now().UTC()},
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	reply, err := session.Send(context.Background(), "The race check is slow, remember that.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Memories) != 1 || !reply.Memories[0].Recorded {
+		t.Fatalf("reply.Memories = %+v, want the one write recorded", reply.Memories)
+	}
+	recorded, err := conversations.Load(runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	conversation := recorded.ConversationID
+
+	stdout, stderr, code := runCLI(t, "agent", "memory", "--config", configPath, "architect")
+	if code != 0 {
+		t.Fatalf("agent memory code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"## checks-are-slow\n\nAbout the agent's own work. 1 revision.",
+		"> make race takes eleven minutes here.",
+		"- written by conversation " + conversation + ", turn 1",
+		"- claude-code, model opus (served as claude-opus-5-20260514), account " + config.DefaultAccountAlias,
+		"- under the architect role",
+		"- drawn from conversation " + conversation,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
 	}
 }
 
