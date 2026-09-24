@@ -726,9 +726,12 @@ workflow's publish step and fails on the flag by name.
 The archives are built at the commit the tag names. A binary records the commit
 it was built from beside the version it is stamped with, and v0.5.0's local cut
 built its archives before its own housekeeping commit, so they named a commit
-the tag did not and were rebuilt by hand. The workflow's checkout is the tag's
-own commit, and a step ahead of the build asserts `HEAD` is what the tag
-resolves to rather than trusting that it is.
+the tag did not and were rebuilt by hand. A cut makes no such commit any more
+— [it writes nothing to `main`](#cutting-a-release), and tags the commit its
+archives were built from — so a local cut's archives and its tag now name the
+same commit. What ships is still the workflow's own build rather than a local
+one: its checkout is the tag's own commit, and a step ahead of the build
+asserts `HEAD` is what the tag resolves to rather than trusting that it is.
 
 [`scripts/release-body.sh`](../scripts/release-body.sh) is the composition,
 kept as a script rather than inline in the workflow because workflow YAML on a

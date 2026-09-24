@@ -1848,7 +1848,7 @@ Not startable (4 of 7 admitted items; 1 awaits the development manager's decisio
   yoyodyne-ifd.153 — run run-5035c832 stopped on it and its change is preserved (branch and worktree checked and there), so a fresh run would start over on top of work that is still there; the development manager decides what happens to it, and nothing pulls it until she has
   yoyodyne-ifd.150 — run run-a17c9b40 stopped on it and its change is preserved (branch checked and there), so a fresh run would start over on top of work that is still there; the development manager has already decided what happens to it, so what is outstanding is the harness carrying that decision out rather than a decision
 Needs a human (3):
-  directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
+  directive directive-4f2c… is unresolved: which branch does this land on? — the operator's — the work it affects waits until `yoyo directive resolve` settles it
   1 admitted item awaits the development manager's decision — the development manager's — nothing pulls a stopped item until she decides what happens to it
   1 admitted item awaits carry-out of a decision already recorded — the harness's — the decision is made, and what is outstanding is the harness acting on it
 ```
