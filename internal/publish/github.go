@@ -698,7 +698,9 @@ type BranchProtection struct {
 // do not arrive through a pull request, both ways the forge can protect one:
 // the older per-branch protection, and a ruleset whose rules apply to the
 // branch. It is the question scripts/cut-release.sh asks before a release cut,
-// asked here the same way so the two cannot disagree about one branch.
+// with one difference: per-branch protection is read from the branch's own
+// protected flag, which any reader of the repository can see, rather than from
+// the protection endpoint only an administrator can read.
 //
 // A branch with per-branch protection is protected whatever that protection
 // requires. A ruleset protects it where it carries a rule that keeps a direct
@@ -713,19 +715,31 @@ func (g GitHub) Protection(ctx context.Context, branch string) (BranchProtection
 	if err := validateArgument("branch", branch); err != nil {
 		return BranchProtection{}, err
 	}
-	protection, err := g.api(ctx, "repos/{owner}/{repo}/branches/"+branch+"/protection")
+	// Per-branch protection is read off the branch itself rather than off its
+	// protection endpoint. That endpoint needs administrator rights, and the
+	// forge can answer a caller without them with the same 404 it gives an
+	// unprotected branch, so a branch protected only that way would read as open
+	// to the account the harness runs under. The branch's own protected flag is
+	// visible to anybody who can read the repository.
+	branchInfo, err := g.api(ctx, "repos/{owner}/{repo}/branches/"+branch)
 	if err != nil {
 		return BranchProtection{}, fmt.Errorf("ask the forge whether %s is protected: %w", branch, err)
 	}
-	if protection.Status == execution.ProcessSucceeded {
-		return BranchProtection{Protected: true, By: "branch protection"}, nil
-	}
-	// The forge answers an unprotected branch here with a 404. Anything else —
-	// a 403 for an account that may not read the rule, a forge that is down —
-	// is a question nobody answered.
-	if answer := strings.TrimSpace(protection.Stderr + "\n" + protection.Stdout); !strings.Contains(answer, "HTTP 404") {
+	if branchInfo.Status != execution.ProcessSucceeded {
 		return BranchProtection{}, fmt.Errorf("ask the forge whether %s is protected: exit code %d: %s",
-			branch, protection.ExitCode, g.redact(firstLine(answer)))
+			branch, branchInfo.ExitCode, g.redact(firstLine(strings.TrimSpace(branchInfo.Stderr+"\n"+branchInfo.Stdout))))
+	}
+	var reported struct {
+		Protected *bool `json:"protected"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(branchInfo.Stdout)), &reported); err != nil {
+		return BranchProtection{}, fmt.Errorf("decode what the forge says about %s: %w", branch, err)
+	}
+	if reported.Protected == nil {
+		return BranchProtection{}, fmt.Errorf("the forge's answer about %s does not say whether it is protected", branch)
+	}
+	if *reported.Protected {
+		return BranchProtection{Protected: true, By: "branch protection"}, nil
 	}
 	rules, err := g.api(ctx, "repos/{owner}/{repo}/rules/branches/"+branch)
 	if err != nil {

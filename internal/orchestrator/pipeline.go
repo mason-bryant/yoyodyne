@@ -822,9 +822,12 @@ type Outcome struct {
 	// and never moves the local target, and an unprotected one is promoted
 	// locally first. It is set by a publishing run that reached its promotion.
 	TargetProtection string `json:"target_protection,omitempty"`
-	// PublishFailure reports a promotion that could not be published. The local
-	// target branch is the authoritative one and it already moved, so this is an
-	// outstanding publication rather than a failed run.
+	// PublishFailure reports a promotion that could not be published. On an
+	// unprotected target the local target branch is the authoritative one and it
+	// already moved, so this is an outstanding publication rather than a failed
+	// run. A landing through the pull request moved no local branch: there it is
+	// either bookkeeping left after a merge the forge made, or — where the forge
+	// did not merge — the reason the run was stopped and the item blocked.
 	PublishFailure string `json:"publish_failure,omitempty"`
 	// Catchup is the local aftermath of a merge the forge performed: the target
 	// branch brought onto the merge commit the forge made above the promotion,

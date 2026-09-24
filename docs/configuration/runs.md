@@ -358,7 +358,10 @@ that loses the race for the last slot is reported as declined, not as a failure.
 Integration stays serial: at most one promotion into a given target branch
 happens at a time, and a change whose target moved while it was being reviewed is
 replayed onto where the target went and promoted by fast-forward, or blocked if
-it will not replay. Nothing is ever forced.
+it will not replay — or, on a target the forge protects, replayed the same way
+and then landed through its pull request rather than by a local fast-forward
+([a protected target lands through its pull request](publishing.md#a-protected-target-lands-through-its-pull-request)). Nothing is ever
+forced.
 
 Eleven things keep an item out of a pass, reported at two different grains. The
 first eight are named against the item, because nothing else would report that

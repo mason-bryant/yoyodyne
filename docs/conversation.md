@@ -1811,7 +1811,10 @@ out — and still standing, since a later decision about the same run supersedes
 it: **one re-arm per publication**, after which a further drop is an escalation
 rather than another re-arm, and the blocker the sweep leaves for a second drop
 says exactly that. Your hold on intake does not apply, because a re-arm chooses
-no work — it finishes the publication of work that is already integrated.
+no work — it repeats a merge an approving verdict already authorized, for a
+change that already passed every gate, whether that change is already on the
+local target or, on a target the forge protects, only on its pull request
+([configuration](configuration.md#a-protected-target-lands-through-its-pull-request)).
 
 The harness carries out none of the other three: a re-scope, a wait, and an
 escalation ask for no action at all. The budget is spent when the decision is

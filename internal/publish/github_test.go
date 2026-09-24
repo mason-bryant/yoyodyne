@@ -1020,47 +1020,52 @@ func TestGitHubProtectionAsksBothWaysAForgeProtectsABranch(t *testing.T) {
 	t.Parallel()
 
 	url := execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"}
-	unprotected := execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "gh: Branch not protected (HTTP 404)\n"}
+	open := execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"name":"main","protected":false}`}
 	cases := []struct {
-		name       string
-		protection execution.ProcessResult
-		rules      *execution.ProcessResult
-		want       BranchProtection
-		wantErr    string
+		name    string
+		branch  execution.ProcessResult
+		rules   *execution.ProcessResult
+		want    BranchProtection
+		wantErr string
 	}{
 		{
-			name:       "per-branch protection",
-			protection: execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"required_pull_request_reviews":{}}`},
-			want:       BranchProtection{Protected: true, By: "branch protection"},
+			name:   "per-branch protection",
+			branch: execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"name":"main","protected":true}`},
+			want:   BranchProtection{Protected: true, By: "branch protection"},
 		},
 		{
-			name:       "a ruleset requiring a pull request",
-			protection: unprotected,
-			rules:      &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[{"type":"deletion"},{"type":"pull_request"}]`},
-			want:       BranchProtection{Protected: true, By: "ruleset"},
+			name:   "a ruleset requiring a pull request",
+			branch: open,
+			rules:  &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[{"type":"deletion"},{"type":"pull_request"}]`},
+			want:   BranchProtection{Protected: true, By: "ruleset"},
 		},
 		{
-			name:       "a ruleset that only shapes what is pushed",
-			protection: unprotected,
-			rules:      &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[{"type":"deletion"},{"type":"non_fast_forward"}]`},
-			want:       BranchProtection{},
+			name:   "a ruleset that only shapes what is pushed",
+			branch: open,
+			rules:  &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[{"type":"deletion"},{"type":"non_fast_forward"}]`},
+			want:   BranchProtection{},
 		},
 		{
-			name:       "nothing at all",
-			protection: unprotected,
-			rules:      &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[]`},
-			want:       BranchProtection{},
+			name:   "nothing at all",
+			branch: open,
+			rules:  &execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `[]`},
+			want:   BranchProtection{},
 		},
 		{
-			name:       "an account that may not read the rule",
-			protection: execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "gh: Resource not accessible by integration (HTTP 403)\n"},
-			wantErr:    "HTTP 403",
+			name:    "a branch the forge would not describe",
+			branch:  execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "gh: Not Found (HTTP 404)\n"},
+			wantErr: "HTTP 404",
 		},
 		{
-			name:       "rulesets the forge would not list",
-			protection: unprotected,
-			rules:      &execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "gh: Server Error (HTTP 502)\n"},
-			wantErr:    "HTTP 502",
+			name:    "an answer that does not say",
+			branch:  execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"name":"main"}`},
+			wantErr: "does not say whether it is protected",
+		},
+		{
+			name:    "rulesets the forge would not list",
+			branch:  open,
+			rules:   &execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "gh: Server Error (HTTP 502)\n"},
+			wantErr: "HTTP 502",
 		},
 	}
 	for _, tc := range cases {
@@ -1068,7 +1073,9 @@ func TestGitHubProtectionAsksBothWaysAForgeProtectsABranch(t *testing.T) {
 			t.Parallel()
 			runner := &scriptedRunner{}
 			runner.reply("remote get-url", url)
-			runner.reply("branches/main/protection", tc.protection)
+			// Keyed so it cannot match the ruleset endpoint, whose path also
+			// carries branches/main.
+			runner.reply("{repo}/branches/main", tc.branch)
 			if tc.rules != nil {
 				runner.reply("rules/branches/main", *tc.rules)
 			}
@@ -1084,6 +1091,10 @@ func TestGitHubProtectionAsksBothWaysAForgeProtectsABranch(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("Protection() = %#v, want %#v", got, tc.want)
+			}
+			// The administrator-only protection endpoint is never what decides it.
+			if asked := runner.matching("/protection"); len(asked) != 0 {
+				t.Errorf("the admin-only protection endpoint was asked: %v", asked)
 			}
 			if scope := apiRepositoryScope(runner); scope != "example.invalid/acme/thing" {
 				t.Errorf("GH_REPO = %q, want the repository derived from the remote's URL", scope)

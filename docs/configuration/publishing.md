@@ -347,7 +347,12 @@ on the work item.
 ## Losing a race for the target branch
 
 A run promotes its change by fast-forwarding the branch it was written against,
-which requires that branch to still be where the run started from. It may not
+which requires that branch to still be where the run started from. On a target
+the forge protects the local branch is not fast-forwarded — the change lands
+through its pull request ([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request))
+— but the same requirement holds, and a remote target that moves between the
+landing being prepared and the forge being asked to merge is a lost race too,
+answered by the same replay and the same budget. It may not
 be: another run can promote into the same branch first, and an operator who
 commits to it while a run is working moves it just as effectively. The
 promotion fails closed in both cases — nothing is force-merged and nothing is

@@ -2182,7 +2182,10 @@ that loses the race for the last slot is reported as declined, not as a failure.
 Integration stays serial: at most one promotion into a given target branch
 happens at a time, and a change whose target moved while it was being reviewed is
 replayed onto where the target went and promoted by fast-forward, or blocked if
-it will not replay. Nothing is ever forced.
+it will not replay — or, on a target the forge protects, replayed the same way
+and then landed through its pull request rather than by a local fast-forward
+([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)). Nothing is ever
+forced.
 
 Eleven things keep an item out of a pass, reported at two different grains. The
 first eight are named against the item, because nothing else would report that
@@ -3738,7 +3741,12 @@ and says what the conversation shows on screen while it waits.
 ## Losing a race for the target branch
 
 A run promotes its change by fast-forwarding the branch it was written against,
-which requires that branch to still be where the run started from. It may not
+which requires that branch to still be where the run started from. On a target
+the forge protects the local branch is not fast-forwarded — the change lands
+through its pull request ([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request))
+— but the same requirement holds, and a remote target that moves between the
+landing being prepared and the forge being asked to merge is a lost race too,
+answered by the same replay and the same budget. It may not
 be: another run can promote into the same branch first, and an operator who
 commits to it while a run is working moves it just as effectively. The
 promotion fails closed in both cases — nothing is force-merged and nothing is
@@ -4392,7 +4400,11 @@ the run that made the publication terminally recorded, and no run of the item in
 flight — which is the precondition a live incident bought, where a publication
 re-armed under a live run left a hand-written amendment stranded on a preserved
 branch. The intake hold does not apply, because a re-arm chooses no work: it
-finishes the publication of work that is already integrated.
+repeats a merge request an approving verdict already authorized, for a change
+that already passed every gate. On an unprotected target that change is already
+integrated locally; on a protected one it is on its pull request and nowhere
+else ([a protected target lands through its pull request](#a-protected-target-lands-through-its-pull-request)), and the re-arm
+is how it lands — either way, nothing new is selected.
 
 It takes the target branch's promotion lease before it asks the forge for
 anything, so it queues behind whatever is promoting into that branch now — a
