@@ -246,13 +246,26 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 // it; implying one had gone missing would report an ordinary act as a fault in
 // the record. A stoppage reconciliation settled on a run that was already
 // terminal is no longer such a case: the sweep writes its own reason where the
-// record gives none, so what is read here is either the run's account of how it
-// ended or the sweep's account of settling it.
+// record gives none, and a record settled before it did still carries the
+// blocker, which runstate.EndingReason reads where the failure is empty.
+//
+// The derivation is the read model's, so `yoyo status` and this line give one
+// reason for one run. What this adds is the channel's own phrasing around it: a
+// round the environment refused is said before the failure, and an outstanding
+// publication, which status prints under its own label, is the account where
+// the record gives nothing else.
 func endingReason(state runstate.State) string {
-	if reason := blockerText(state); reason != "" {
-		return reason
+	reason := state.EndingReason()
+	if reason == "" {
+		reason = strings.TrimSpace(state.PublishFailure)
 	}
-	return runstate.NoReasonSays
+	if reason == "" {
+		return runstate.NoReasonSays
+	}
+	if strings.TrimSpace(state.Failure) != "" {
+		return environmentallyRefused(state) + reason
+	}
+	return reason
 }
 
 // resumeMove is whose move follows an approved change the environment stopped:
@@ -1206,16 +1219,6 @@ func endedBadly(state runstate.State) bool {
 // critical line for a stoppage a person already owns.
 func handedToAPerson(state runstate.State) bool {
 	return state.Outcome() == runstate.OutcomeStopped
-}
-
-// blockerText is what the record gives as the reason. A publication that could
-// not be pushed is an outstanding publication rather than a failed run, so it is
-// only read where nothing else said why the run stopped.
-func blockerText(state runstate.State) string {
-	if failure := strings.TrimSpace(state.Failure); failure != "" {
-		return environmentallyRefused(state) + failure
-	}
-	return strings.TrimSpace(state.PublishFailure)
 }
 
 // environmentallyRefused says a round the environment refused before the words

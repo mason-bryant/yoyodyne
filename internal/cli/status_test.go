@@ -763,6 +763,18 @@ func TestStatusSaysARecordWithNoReasonNamesNone(t *testing.T) {
 			CompletedAt: &completedAt,
 		}
 	}
+	// A record that gives a blocker and no failure is said by its blocker, which
+	// is the stoppage settled onto an already-terminal run before the sweep wrote
+	// its own reason there. Saying the absence over it would be false.
+	blocked := ended(runstate.StatusCancelled, runstate.OutcomeStopped)
+	blocked.Blocker = "no attempt of the harness can finish it"
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{blocked}}, "", true)
+	if rendered := out.String(); !strings.Contains(rendered, "reason: no attempt of the harness can finish it") ||
+		strings.Contains(rendered, runstate.NoReasonSays) {
+		t.Fatalf("stopped run with a blocker and no failure rendered = %q, want the blocker as its reason", rendered)
+	}
+
 	want := "reason: " + runstate.NoReasonSays
 	for _, run := range []runstate.RunSummary{
 		ended(runstate.StatusCancelled, runstate.OutcomeStopped),
@@ -1061,6 +1073,37 @@ func saveRun(t *testing.T, store *runstate.Store, state runstate.State) {
 // second question. So naming an item reports what triage has given it and what
 // it has cost in review rounds, against the caps those are measured by, from the
 // item's record alone.
+// The status command, reading a stored record rather than a summary built by
+// hand: a stoppage settled onto a run a killed process had already left
+// cancelled carries the blocker and no failure, and `yoyo status` says the
+// blocker as the reason, which is what the channel line says of the same run.
+func TestStatusSaysTheBlockerOfAStoppageSettledOntoATerminalRun(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	stopped := recordedRun(t, store, runstate.StatusCancelled, "yoyodyne-ifd.428.1", time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
+	stopped.Phase = runstate.PhaseChecking
+	stopped.Blocker = runstate.RecordBlocker("the run was interrupted in the checking phase, and no attempt of the harness can finish it")
+	saveRun(t, store, stopped)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.428.1")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "reason: the run was interrupted in the checking phase, and no attempt of the harness can finish it") {
+		t.Fatalf("stdout = %q, want the blocker said as the reason", stdout)
+	}
+	if strings.Contains(stdout, runstate.NoReasonSays) {
+		t.Fatalf("stdout = %q, says the record names no reason over a record that names one", stdout)
+	}
+}
+
 func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	// Not parallel: the state root the command addresses is set here.
 	stateRoot := t.TempDir()

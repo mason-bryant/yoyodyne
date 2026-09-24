@@ -993,7 +993,10 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		label string
 		text  string
 	}{
-		{label: "reason", text: runReason(run)},
+		// The read model's reason, so this line and the channel's say one thing
+		// about a run: its failure, the blocker where it recorded none, and the
+		// absence stated where a run that ended badly gives neither.
+		{label: "reason", text: run.EndingReason()},
 		{label: "outstanding publication", text: run.PublishFailure},
 		{label: "outstanding cleanup", text: run.CleanupFailure},
 		{label: "completion recorded late", text: run.CompletionRecordingFailure},
@@ -1078,22 +1081,6 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		printed = true
 	}
 	return printed
-}
-
-// runReason is the reason line of a run: the reason its record gives, or, on a
-// run that ended without succeeding and gives none, the absence said in the
-// words the channel line uses. Leaving the line out there reads as a run with
-// nothing to explain, which is the one thing a stopped run is not. A run whose
-// record names only an outstanding publication keeps that as its account, as the
-// channel line does, because it says more than the absence would.
-func runReason(run runstate.RunSummary) string {
-	if run.Failure != "" || !run.Status.Terminal() || run.Outcome == runstate.OutcomeSucceeded {
-		return run.Failure
-	}
-	if strings.TrimSpace(run.PublishFailure) != "" {
-		return ""
-	}
-	return runstate.NoReasonSays
 }
 
 // printRunArtifacts names what a run that did not succeed left behind, which is

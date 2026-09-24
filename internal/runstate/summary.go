@@ -134,6 +134,41 @@ func Ending(status Status, handedToAPerson bool) RunOutcome {
 // instead reads as a run whose reason the operator had already seen.
 const NoReasonSays = "the record names no reason"
 
+// EndingReason is the reason every surface gives for why this run ended. It is
+// derived here rather than in each surface for the reason Outcome is: the
+// channel line and `yoyo status` must not give two answers about one run.
+//
+// The run's own failure comes first, and the blocker stands in where there is
+// none: a stoppage settled onto a record some killed process had already left
+// terminal can carry the words the item was blocked in and no failure, and
+// saying the record names no reason over it would be false. Only where the
+// record gives neither is the absence said, and only of a run that ended without
+// succeeding. A record whose one account is an outstanding publication yields
+// nothing here, because a publication that could not be pushed is not a reason
+// the work ended; each surface says it under its own label.
+func (s State) EndingReason() string {
+	return endingReason(s.Status, s.Outcome(), s.Failure, s.Blocker, s.PublishFailure)
+}
+
+// EndingReason is State.EndingReason over the summary, which carries the same
+// fields it is derived from.
+func (r RunSummary) EndingReason() string {
+	return endingReason(r.Status, r.Outcome, r.Failure, r.Blocker, r.PublishFailure)
+}
+
+func endingReason(status Status, outcome RunOutcome, failure, blocker, publishFailure string) string {
+	if failure = strings.TrimSpace(failure); failure != "" {
+		return failure
+	}
+	if blocker = strings.TrimSpace(blocker); blocker != "" {
+		return blocker
+	}
+	if !status.Terminal() || outcome == OutcomeSucceeded || strings.TrimSpace(publishFailure) != "" {
+		return ""
+	}
+	return NoReasonSays
+}
+
 // Artifacts is what a run's record says survives of its change: the branch and
 // the worktree it made, and the harness's own record of which of them it
 // removed. It is a type rather than four fields read in place because the
@@ -262,6 +297,11 @@ type RunSummary struct {
 	// that a run failed or stopped is a second classification the listing it
 	// prints beside will contradict.
 	Failure string `json:"failure,omitempty"`
+	// Blocker is the words the run's work item was handed back in, where it was.
+	// It is carried so the reason a surface prints can fall back to it on a run
+	// that recorded a blocker and no failure, which is what EndingReason reads.
+	// What became of the run is still Outcome's to say.
+	Blocker string `json:"blocker,omitempty"`
 	// FailingCheck is the deterministic check that was still failing when the
 	// record was last written. It is what a repair attempt was handed, so on a
 	// failed run it is usually the thing behind the reason rather than a second
@@ -464,6 +504,7 @@ func (s *Store) summarize(state State) RunSummary {
 		ConfigRevision:      state.ConfigRevision,
 		Build:               state.Build,
 		Failure:             state.Failure,
+		Blocker:             state.Blocker,
 		ReportProblem:       state.ReportProblem,
 		AmendmentProblem:    state.AmendmentProblem,
 		PublishFailure:      state.PublishFailure,

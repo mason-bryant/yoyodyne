@@ -1100,36 +1100,25 @@ func TestAStoppageRecordedAfterTheRunAlreadyEndedIsStillSaid(t *testing.T) {
 
 // Both lines finish on the reason the record gives, and a run can honestly have
 // none: a cancellation is the operator stopping it without owing anybody a
-// sentence, and a blocker can reach a record whose failure is empty, which is
-// what every stoppage settled onto an already-terminal run left before the sweep
-// began writing its own reason there. The line has to stay a sentence in both
-// cases rather than trailing off a colon, and it must not report an ordinary act
-// as a record that lost something.
+// sentence. The line has to stay a sentence rather than trailing off a colon,
+// and it must not report an ordinary act as a record that lost something.
 func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
 	before := running()
 	for _, ending := range []struct {
-		status  runstate.Status
-		blocker string
-		kind    Kind
+		status runstate.Status
+		kind   Kind
 	}{
-		{runstate.StatusCancelled, "", KindRunEnded},
-		{runstate.StatusTimedOut, "", KindRunEnded},
-		// A blocker recorded on a run whose failure is empty reaches the critical
-		// line with the same absence, and a record written before the sweep filled
-		// that reason in is exactly such a run.
-		{runstate.StatusFailed, "the interrupted run left a worktree nothing could settle", KindBlockerRecorded},
+		{runstate.StatusCancelled, KindRunEnded},
+		{runstate.StatusTimedOut, KindRunEnded},
 	} {
 		after := endedRun(before, ending.status)
-		if ending.blocker != "" {
-			after.Blocker = runstate.RecordBlocker(ending.blocker)
-		}
 		_, notifications := crossed(t, before, after)
 		said := only(t, notifications, ending.kind)
 		message, err := Render(said.Topic, said.Speaker, said.Event)
 		if err != nil {
 			t.Fatalf("render %s with no reason recorded: %v", ending.status, err)
 		}
-		if !strings.Contains(message.Body, "the record names no reason") {
+		if !strings.Contains(message.Body, runstate.NoReasonSays) {
 			t.Fatalf("a %s run with no reason is said as %q, which does not state the absence", ending.status, message.Body)
 		}
 		// The absence is stated as itself rather than as words that went missing,
@@ -1140,6 +1129,29 @@ func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
 		if strings.Contains(message.Body, ": .") || strings.Contains(message.Body, ": Next:") {
 			t.Fatalf("a %s run with no reason trails off a colon: %q", ending.status, message.Body)
 		}
+	}
+}
+
+// A blocker can reach a record whose failure is empty, which is what a stoppage
+// settled onto an already-terminal run left before the sweep began writing its
+// own reason there. The record names a reason then — the words the item was
+// blocked in — so the critical line says them rather than the absence, as
+// `yoyo status` does from the same derivation.
+func TestAStoppageWithABlockerAndNoFailureIsSaidByItsBlocker(t *testing.T) {
+	before := running()
+	after := endedRun(before, runstate.StatusFailed)
+	after.Blocker = runstate.RecordBlocker("the interrupted run left a worktree nothing could settle")
+	_, notifications := crossed(t, before, after)
+	said := only(t, notifications, KindBlockerRecorded)
+	message, err := Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render a stoppage with a blocker and no failure: %v", err)
+	}
+	if !strings.Contains(message.Body, "the interrupted run left a worktree nothing could settle") {
+		t.Fatalf("a stoppage with a blocker and no failure is said as %q, which leaves the blocker out", message.Body)
+	}
+	if strings.Contains(message.Body, runstate.NoReasonSays) {
+		t.Fatalf("a stoppage whose record names a blocker is said as naming no reason: %q", message.Body)
 	}
 }
 
