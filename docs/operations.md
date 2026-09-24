@@ -1125,9 +1125,9 @@ attempt it is owed starts from.
 
 **A stall at the review is owed the review, not another attempt.** A run whose
 developer attempt finished and whose reviewer the harness then stopped — or
-whose process went at its checks — is settled and docketed the same way, and
-its entry says the repair continues it at that step rather than in the
-developer session. `yoyo triage repair` then puts the run back at the step it
+whose process went at its checks — with nothing yet handed back to its
+developer is settled and docketed the same way, and its entry says the repair
+continues it at that step rather than in the developer session. `yoyo triage repair` then puts the run back at the step it
 stalled in: the review is asked again (or the checks re-run) on the change the
 attempt left, on the same branch and in the same worktree, with no developer
 invoked. That continuation counts no repair attempt either, and it is held to
@@ -1136,6 +1136,8 @@ to still hold the change, because that change is what the step judges. Before
 2026-09-24 only a stall in the developing phase was continuable, so a stalled
 review left a re-run as the only decision, and a re-run discards the branch the
 finished attempt produced.
+A run already in its repair loop that stalls at its review or checks is not
+this: a failure was returned to it, so it is re-entered as a repair.
 
 Until 2026-09-23 the repair was refused for a stoppage like that, for want of a
 repair input, which left a re-run as the only decision that could be carried

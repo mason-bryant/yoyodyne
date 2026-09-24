@@ -1772,11 +1772,16 @@ func resumesAnExistingChange(state runstate.State) bool {
 // is read from the same phase resumesAnExistingChange reads, because the two
 // have to agree: a continuation this admitted and that gate then refused would
 // spend the item's grant on a run the pipeline stops at its first step. A stall
-// mid-attempt is owed that attempt, so it is admitted only where nothing was
-// handed back — a run carrying a failure is a repair's — and its worktree need
-// not hold anything yet. A stall past the attempt is admitted whatever the run
-// recorded before it, because what it stalled in judges the change as it now
-// stands, and its worktree has to hold that change exactly as a repair's does.
+// mid-attempt is owed that attempt, and its worktree need not hold anything yet;
+// a stall past the attempt is owed that step, and its worktree has to hold the
+// change exactly as a repair's does.
+//
+// Either way it is admitted only where nothing was ever handed back. A run
+// carrying a failure — findings, a failing check, refused paths — is in its
+// repair loop: something did judge the work, so it is a repair's to carry out,
+// and everything this admission makes the entry, the reason, and the
+// continuation say ("nothing was judged", no attempt counted) would be false of
+// it.
 func continuableStall(state runstate.State) bool {
 	if state.Environmental == nil || state.Environmental.Cause != runstate.CauseProcessVanished {
 		return false
@@ -1796,10 +1801,11 @@ func continuableStall(state runstate.State) bool {
 	if state.WorktreeRemoved || state.BranchRemoved {
 		return false
 	}
+	if handedBackRepair(state) {
+		return false
+	}
 	switch state.Phase {
-	case runstate.PhaseDeveloping:
-		return !handedBackRepair(state)
-	case runstate.PhaseChecking, runstate.PhaseReviewing:
+	case runstate.PhaseDeveloping, runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:
 		return false

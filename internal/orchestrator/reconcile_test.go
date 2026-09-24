@@ -1699,6 +1699,21 @@ func TestAStallAtTheReviewIsHeldToTheRepairsContentCheck(t *testing.T) {
 	if !continuableStall(state) || continuedPhase(state, true) != runstate.PhaseChecking {
 		t.Fatalf("a checks-phase stall is not continued at its checks")
 	}
+	// A run in its repair loop that stalls at its review or its checks had its
+	// work judged before, and a failure returned: it is a repair's, not a stall's,
+	// so nothing on its entry or its continuation says nothing was judged.
+	for _, phase := range []runstate.Phase{runstate.PhaseReviewing, runstate.PhaseChecking} {
+		repairing := state
+		repairing.Phase = phase
+		repairing.RepairAttempts = 1
+		repairing.ReviewFindingDetails = []runstate.Finding{{Severity: "major", Message: "fix it"}}
+		if continuableStall(repairing) || stallResumesPastTheAttempt(repairing) || continuedPhase(repairing, continuableStall(repairing)) != runstate.PhaseDeveloping {
+			t.Fatalf("a %s-phase run carrying the reviewer's findings was admitted as a stall rather than a repair", phase)
+		}
+		if err := continuableRepair(repairing); err != nil {
+			t.Fatalf("continuableRepair() = %v, want a repair-loop run still carried out as a repair", err)
+		}
+	}
 	// A stall mid-attempt is still continued at the attempt, and still only where
 	// nothing was handed back.
 	state.Phase = runstate.PhaseDeveloping
