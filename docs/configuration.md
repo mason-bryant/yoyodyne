@@ -3544,7 +3544,9 @@ whichever selector the item's own labels chose under
 [`execution.developer_models`](#a-developer-model-chosen-by-the-items-label) —
 which is the developer agent's `model` for an item that mapping names no label
 of, and the mapped one otherwise. `yoyo agent list` says so for every pinned
-agent rather than leaving it to be assumed.
+agent rather than leaving it to be assumed. A recurring task's pass is the
+agent's own turn and carries the pin, unless the task
+[names another model](#a-tasks-own-model), which carries none.
 
 ## Relaunching a run the provider killed
 
@@ -4882,6 +4884,8 @@ These are all errors, reported before any work is claimed:
   carry, naming no usable model selector, or naming a label an earlier entry
   already mapped — since the first match in the mapping's order is what an item
   takes, so a second entry for one label is one nothing would ever reach;
+- a `recurring_tasks` entry whose `model` is written and is not a usable model
+  selector, by the rule and with the reason an agent's `model` is refused;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;
@@ -5525,7 +5529,8 @@ recurring_tasks:
       root-cause work with the product manager for every fix you make.
 ```
 
-**Configuration decides which role is woken and when, and nothing else.** There is
+**Configuration decides which role is woken, when, and on which model, and
+nothing else.** There is
 no key here for a capability, a tool, an account, or an authority of any kind,
 and the absence is deliberate rather than an omission to be filled in later: a
 role woken on a cadence holds exactly what its role already holds, resolved from
@@ -5542,6 +5547,74 @@ written under a task fails the configuration rather than being ignored.
 | `enabled` | the switch. It is explicit so a task can be turned off for a week without deleting its prompt and cadence. |
 | `prompt` | what the role is told. It is the task, not a personality. |
 | `max_turns` | how many turns one firing may take, defaulting to 3 and capped at 10. |
+| `model` | the model this task's turns ask for. Optional: leave it out and the turns ask for the role's own configured `model`, which is what every task did before the key existed. See [a task's own model](#a-tasks-own-model). |
+
+### A task's own model
+
+**Model spend follows the work rather than the role.** A routine pass over a
+domain and a decision about one stoppage are both the development manager's
+turns, in the same conversation, and only the decision needs the role's model.
+A task that names a `model` has its turns ask for that one, and every turn the
+task does not cover — a message you send, a docket decision, a directive, a
+summons delivered some other way — asks for the role's own model as before:
+
+```yaml
+recurring_tasks:
+  development-manager-sweep:
+    role: development-manager
+    every: 1h
+    enabled: true
+    max_turns: 4
+    model: sonnet
+    prompt: |
+      ...
+  report-triage:
+    role: product-manager
+    every: 12h
+    enabled: true
+    model: sonnet
+    prompt: |
+      ...
+```
+
+It is the operator's direction of 2026-09-19, off the same seven-day reading as
+[the developer mapping](#a-developer-model-chosen-by-the-items-label): the
+management roles on their own model were $317 of $1,431, and most of it was
+routine sweep passes. The lines are the operator's to paste into the project's
+own configuration by hand, because `.yoyodyne/` is a
+[protected path](#protected-paths-in-a-developers-change) no run may write; a
+task whose block does not carry the key runs on the role's model.
+
+**It selects a model for the task's turns and nothing more.** The turn is taken
+in the role's own conversation, under the account that role's agent names,
+holding the authority the role holds and reading the persona it reads — so
+configuration still selects and never widens what a role may do. The
+[account pool](#pooling-work-across-several-accounts) and the
+[failover rules](#serving-a-turn-from-a-permitted-alternate-model) apply
+unchanged: a pass whose model has no capacity is served by the agent's
+alternate where it has enabled one. Two things follow from the model being
+another one. A [pinned version](#pinning-an-agent-to-a-model-version) is a
+version of the agent's own family, so a task naming another model carries no
+pin — and a task naming the agent's own model keeps it. And an alternate that
+*is* the task's model, on the agent's own provider, is dropped for that pass,
+because failing over to the endpoint whose window just closed is a second
+refusal rather than an alternate.
+
+**The model is validated exactly as an agent's is**, and refused when the
+configuration loads with the same reason: a selector longer than the bound, one
+with whitespace in it, and one that begins with `-`. Leaving the key out, or
+writing it empty, is not a refusal; it is the role's model.
+
+**Every pass records the model it ran on**, beside its turns and its cost, as a
+run's record names its developer's model. It is the model that served — the
+task's own, the role's where the task names none, or the alternate where a
+failover answered — and [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found)
+prints it on each pass's header. [`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+reads the same records and adds a table under its totals: each task's passes,
+turns, and cost, by the model they ran on. It is a split of the conversations
+figure above it rather than an addition to it, since a pass is conversation
+turns. A pass recorded before passes named their model is shown as
+`(not recorded)`.
 
 **A firing costs what conversation turns cost.** The cadence is therefore the
 spending decision: `every: 1h` is a turn an hour for as long as a `yoyo work

@@ -3036,6 +3036,16 @@ money was; `yoyo cost` carries the side threads into its total on a `SIDE
 THREADS` row, with each one's cost listed under the table against that
 conversation.
 
+A [recurring task](configuration.md#recurring-tasks)'s passes are turns of the
+role's own conversation, so their cost is already in the conversations figure.
+What the spend report adds under its totals, whenever it covers conversations
+and names nothing in particular, is that figure's recurring part: each task's
+passes, turns, and cost by the model the passes ran on, read from the passes'
+own records over the same window. It is a split rather than an addition, and it
+is how a sweep moved onto a cheaper model with
+[`model`](configuration.md#a-tasks-own-model) is told from the decisions beside
+it on the role's own. The JSON carries it as `sweeps`.
+
 An [exchange](conversation.md#roles-asking-each-other-things) is priced beside the
 streams and is the only thing that is never followed: its record is the thread itself,
 revised as it goes, rather than a stream of events, so it appears in the spend
@@ -3165,6 +3175,12 @@ rest. `--json` is never bounded and always carries the whole log.
 
 It is read-only. A sweep is written once and never revised, and nothing here
 fires one, retires one, or decides anything about what a pass found.
+
+Each pass's header names the model its turns ran on — the task's own
+[`model`](configuration.md#a-tasks-own-model) where it names one, the role's
+configured model where it does not, and the alternate where a failover answered
+— and `--json` carries it as `model`. A pass recorded before passes named their
+model, or one that took no turn, has none.
 
 Each entry leads with **the questions the pass could not settle itself**, because
 that is the one part of a report that asks for anything: a report with no

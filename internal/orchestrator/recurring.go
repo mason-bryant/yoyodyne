@@ -13,8 +13,12 @@ package orchestrator
 //
 // # What configuration decides, and what it cannot
 //
-// Which role, how often, what to say, and whether the task is on. That is the
-// whole of it. There is no configuration key here for a capability, a tool, an
+// Which role, how often, what to say, whether the task is on, and which model
+// its turns ask for where it names one. That is the whole of it. The model is a
+// spend decision rather than an authority: the turn is the role's, under the
+// role's account and failover, holding what the role holds, and a turn the task
+// does not cover asks for the role's own model. There is no configuration key
+// here for a capability, a tool, an
 // account, or an authority of any kind, and the absence is the point: a schedule
 // that could widen what a role may do would make the schedule the place to look
 // for what the harness is allowed to do, which is exactly what keeping capability
@@ -115,8 +119,14 @@ type RecurringForge interface {
 // Nothing here decides anything on the role's behalf and nothing carries its
 // decisions out. What comes back is read from what it actually said, so a firing
 // answered in prose with no account reports exactly that.
+//
+// The model is the task's own selector, and empty where the task names none: the
+// turn then asks for the role's configured model, as every firing did before a
+// task could name one. It is this turn's alone — nothing about the conversation
+// the role keeps changes, so the next message the operator sends into it asks
+// for the role's model again.
 type RecurringRole interface {
-	Wake(ctx context.Context, role domain.AgentRole, message string) (Turn, error)
+	Wake(ctx context.Context, role domain.AgentRole, model, message string) (Turn, error)
 }
 
 // Turn is what one turn of a firing came to.
@@ -128,6 +138,11 @@ type Turn struct {
 	// it. A turn that failed carries what it cost too: the provider charged for
 	// it exactly as it charges for one that answered.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Model is the model that served the turn: the one it asked for, or the
+	// alternate that answered where the provider moved it. It is carried back so
+	// the pass's record names what it actually ran on rather than what the
+	// configuration hoped for.
+	Model string `json:"model,omitempty"`
 	// Result is the account the role gave of the pass, where it gave one.
 	Result *sweep.Result `json:"result,omitempty"`
 	// ResultProblem names an account that could not be read, or a turn that
@@ -155,6 +170,8 @@ type Fired struct {
 	// are on the record whichever way the firing went.
 	Turns   int     `json:"turns"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Model is what the firing's turns ran on, and empty where no turn was taken.
+	Model string `json:"model,omitempty"`
 	// Findings and SilentRepairs are what the pass found and how many of its
 	// fixes filed nothing for their root cause. They are counts here because this
 	// is the line a session prints; the whole account is in the durable report.
@@ -434,11 +451,16 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	var merged *sweep.Result
 	var problems []string
 	for turn := 0; turn < task.Turns(); turn++ {
-		answered, err := t.Roles.Wake(ctx, task.Role, message)
+		answered, err := t.Roles.Wake(ctx, task.Role, task.ModelSelector(), message)
 		// What the turn cost is carried whichever way it went, because the provider
-		// charges for a turn that failed exactly as for one that answered.
+		// charges for a turn that failed exactly as for one that answered — and so
+		// is the model it cost that on, which is what the spend is attributed to.
 		fired.CostUSD += answered.CostUSD
 		recorded.CostUSD += answered.CostUSD
+		if model := strings.TrimSpace(answered.Model); model != "" && len(model) <= runstate.MaxSweepModelBytes {
+			recorded.Model = model
+			fired.Model = model
+		}
 		if conversation := strings.TrimSpace(answered.ConversationID); conversation != "" {
 			recorded.ConversationID = conversation
 		}

@@ -20,8 +20,10 @@ var recurringNow = time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
 // what it was told to answer.
 type wokenRole struct {
 	messages []string
-	answers  []scriptedTurn
-	failure  error
+	// models is the model each turn was asked on, empty where the task named none.
+	models  []string
+	answers []scriptedTurn
+	failure error
 }
 
 // scriptedTurn is one turn a test hands back: the account the role gave, what it
@@ -33,10 +35,13 @@ type scriptedTurn struct {
 	problem string
 	err     error
 	cost    float64
+	// model is the model the turn says served it.
+	model string
 }
 
-func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, message string) (Turn, error) {
+func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, model, message string) (Turn, error) {
 	r.messages = append(r.messages, message)
+	r.models = append(r.models, model)
 	if r.failure != nil {
 		return Turn{}, r.failure
 	}
@@ -45,7 +50,7 @@ func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, message string) 
 	}
 	answer := r.answers[0]
 	r.answers = r.answers[1:]
-	return Turn{ConversationID: "chat-1", CostUSD: answer.cost, Result: answer.result, ResultProblem: answer.problem}, answer.err
+	return Turn{ConversationID: "chat-1", CostUSD: answer.cost, Model: answer.model, Result: answer.result, ResultProblem: answer.problem}, answer.err
 }
 
 func sweepStore(t *testing.T) *runstate.SweepStore {
@@ -71,6 +76,52 @@ func hourlyTask(prompt string) map[string]config.RecurringTask {
 
 func complete(summary string, findings ...sweep.Finding) *sweep.Result {
 	return &sweep.Result{Status: sweep.StatusComplete, Summary: summary, Findings: findings}
+}
+
+// A task that names its own model asks for it on every turn of its pass, and
+// the pass's record names the model that served; a task naming none asks for
+// nothing in particular, which is the role's own model.
+func TestAFiringAsksForTheTasksModelAndRecordsWhatServed(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	tasks := hourlyTask("look")
+	task := tasks["a-sweep"]
+	task.Model = "sonnet"
+	tasks["a-sweep"] = task
+	role := &wokenRole{answers: []scriptedTurn{
+		{result: &sweep.Result{Status: sweep.StatusMore, Summary: "half"}, cost: 0.1, model: "sonnet"},
+		{result: complete("the rest"), cost: 0.1, model: "sonnet"},
+	}}
+	trigger := Trigger{Tasks: tasks, Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	fired, err := trigger.Fire(context.Background())
+	if err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(role.models) != 2 || role.models[0] != "sonnet" || role.models[1] != "sonnet" {
+		t.Fatalf("turns asked for %v, want the task's sonnet on both", role.models)
+	}
+	if fired.Fired[0].Model != "sonnet" {
+		t.Errorf("fired model = %q, want sonnet", fired.Fired[0].Model)
+	}
+	recorded, _, err := store.List()
+	if err != nil || len(recorded) != 1 || recorded[0].Model != "sonnet" {
+		t.Fatalf("recorded = %+v (%v), want one pass naming sonnet", recorded, err)
+	}
+
+	unnamed := sweepStore(t)
+	plain := &wokenRole{answers: []scriptedTurn{{result: complete("nothing"), model: "fable"}}}
+	trigger = Trigger{Tasks: hourlyTask("look"), Claims: unnamed, Reports: unnamed, Roles: plain, Clock: recurringClock{}}
+	if _, err := trigger.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(plain.models) != 1 || plain.models[0] != "" {
+		t.Fatalf("turns asked for %q, want no model named so the role's own applies", plain.models)
+	}
+	recorded, _, err = unnamed.List()
+	if err != nil || len(recorded) != 1 || recorded[0].Model != "fable" {
+		t.Fatalf("recorded = %+v (%v), want the role's model the turn reported serving", recorded, err)
+	}
 }
 
 func TestFiringWakesTheRoleAndRecordsWhatItFound(t *testing.T) {

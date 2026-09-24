@@ -8,8 +8,9 @@ package config
 // is configuration because what runs and how often is a project's judgement,
 // changed by editing a file rather than by a release.
 //
-// What configuration decides here is exactly two things: which role is woken,
-// and when. It cannot decide what that role may then do. There is no key for a
+// What configuration decides here is which role is woken, when, and — where the
+// task names one — which model its turns ask for. It cannot decide what that
+// role may then do. There is no key for a
 // capability, a tool, an account, or an authority of any kind, and that is not
 // an omission to be filled in later: a role woken by a task acts under the
 // authority its role already holds, resolved from the harness's own registry the
@@ -80,6 +81,24 @@ type RecurringTask struct {
 	// DefaultRecurringTurns, so a task that does not think about it still
 	// iterates rather than truncating.
 	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	// Model is the model selector this task's turns ask for, where the task
+	// names one. Empty is the role's own configured model, which is what every
+	// firing asked for before the key existed.
+	//
+	// It is spend following the work rather than the role: a routine pass over a
+	// domain and a decision in the same conversation are both the role's turns,
+	// and only the decision needs the role's model. It covers this task's turns
+	// and nothing else — a message the operator sends, a docket decision, and a
+	// directive in the same conversation still ask for the role's model — and it
+	// selects a model and nothing more. The account the turn is served under, the
+	// failover alternate, and what the role may do are the agent's, unchanged.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// ModelSelector is the model this task's turns ask for, or empty where the task
+// names none and the role's configured model applies.
+func (t RecurringTask) ModelSelector() string {
+	return strings.TrimSpace(t.Model)
 }
 
 // Turns is the turn bound in force for this task, with the default applied.
@@ -128,6 +147,14 @@ func (t RecurringTask) problems(name string, agents map[string]AgentConfig) []st
 	}
 	if t.MaxTurns > MaxRecurringTurns {
 		problems = append(problems, fmt.Sprintf("recurring task %q max_turns is %d, limit is %d", name, t.MaxTurns, MaxRecurringTurns))
+	}
+	// Held to the rule an agent's own model is held to, so a selector refused
+	// there is refused here with the same reason. Leaving it out is the role's
+	// model; writing it empty is the same thing and is not refused.
+	if t.Model != "" {
+		if err := validateModelSelector(t.Model); err != nil {
+			problems = append(problems, fmt.Sprintf("recurring task %q %s", name, err))
+		}
 	}
 	return problems
 }

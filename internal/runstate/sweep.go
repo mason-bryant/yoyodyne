@@ -71,6 +71,12 @@ const maxEncodedSweepBytes = 512 << 10
 // report is lost over the description of a smaller failure.
 const MaxSweepTextBytes = 4 << 10
 
+// MaxSweepModelBytes bounds the model a record names. A selector is a short
+// name, and a served model on another provider is that name with the provider
+// beside it, so this is far above either; it is exported so the writer can hold
+// what it records to it rather than lose the pass's report over the model.
+const MaxSweepModelBytes = 1 << 10
+
 // SweepClaim is the durable record of one recurring task's cadence: when it last
 // fired, and what stopped that firing where something did.
 //
@@ -170,6 +176,13 @@ type Sweep struct {
 	// week of these is read for.
 	Turns   int     `json:"turns"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Model is the model the pass's turns ran on, as the provider served them:
+	// the task's own where it names one, the role's configured model where it
+	// does not, and the alternate where a failover answered instead. It is what
+	// the pass's cost is attributed to, as a run's record names the model its
+	// developer ran on. It is absent on a pass that took no turn, and on every
+	// record written before passes named one.
+	Model string `json:"model,omitempty"`
 	// Result is the account the role gave, merged across the turns of this
 	// firing. It is absent where the pass produced none — a turn that failed, or
 	// one that answered in prose without the block — and Problem then says why.
@@ -315,6 +328,9 @@ func (s Sweep) Validate() error {
 	}
 	if len(s.Summoned) > MaxSweepTextBytes {
 		problems = append(problems, fmt.Errorf("summoned is %d bytes, limit is %d", len(s.Summoned), MaxSweepTextBytes))
+	}
+	if len(s.Model) > MaxSweepModelBytes {
+		problems = append(problems, fmt.Errorf("model is %d bytes, limit is %d", len(s.Model), MaxSweepModelBytes))
 	}
 	// A noticed request is stated as a finding, so a record naming requests and
 	// carrying no account would be one whose findings are nowhere to be read.
