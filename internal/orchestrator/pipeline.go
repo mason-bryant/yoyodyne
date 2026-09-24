@@ -90,6 +90,11 @@ type WorktreeManager interface {
 	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
 	SummarizeChanges(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.ChangeSummary, error)
 	UnifiedChanges(ctx context.Context, worktree gitworktree.Worktree, limits gitworktree.DiffLimits) (gitworktree.ChangeDiff, error)
+	// FileAtCommit reads one path as a commit holds it. It is what the reviewer's
+	// copy of a document the change is measured against is read with, because
+	// that copy has to be the one at the change's own base rather than whatever
+	// the checkout holds by the time the review is asked for.
+	FileAtCommit(ctx context.Context, commit, path string, maxBytes int64) (gitworktree.FileAt, error)
 	// ChangedPaths names every path the change touches. It is what the gate in
 	// front of the checks decides on, so it is separate from the summary and the
 	// patch above: those are bounded for a reader, and a gate that saw a bounded
@@ -6031,6 +6036,41 @@ func refusedReviewForUsageLimit(limit *backend.UsageLimit, err error) (backend.U
 	return *limit, true
 }
 
+// reviewedContext is the work-item context the reviewer judges the change
+// against, with every file the item references read at the change's recorded
+// base and labelled with that commit.
+//
+// The developer's context was read from the checkout when the item was claimed,
+// which was the base then. By the time a review is asked for the checkout may
+// hold a later revision — anything else promoted meanwhile moves it — and a
+// document read there beside a patch measured against the older base makes a
+// correct change read as a divergent one: yoyodyne-ifd.117.3 spent three repair
+// rounds on an extraction judged against docs/configuration.md as main had it
+// rather than as the branch's base did.
+func (a *activeRun) reviewedContext(ctx context.Context, baseCommit string) (string, error) {
+	p := a.pipeline
+	// A change that names no base has nothing to read at, and its evidence says
+	// so; the context the developer was given is what there is.
+	if baseCommit == "" {
+		return a.context, nil
+	}
+	revision := &contextbundle.Revision{
+		Name: "base commit " + baseCommit,
+		Read: func(path string, maxBytes int64) (int64, []byte, error) {
+			file, err := p.Worktrees.FileAtCommit(ctx, baseCommit, path, maxBytes)
+			if errors.Is(err, gitworktree.ErrNotAtCommit) {
+				return 0, nil, fmt.Errorf("%w: %w", contextbundle.ErrNotAtRevision, err)
+			}
+			return file.Size, file.Content, err
+		},
+	}
+	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: a.item, Revision: revision})
+	if err != nil {
+		return "", fmt.Errorf("assemble reviewed work item context at %s: %w", baseCommit, err)
+	}
+	return bundle.Text, nil
+}
+
 // refusedReviewForServerOverload reports a review the provider's own servers
 // could not serve, on the same rule: a review that still produced a verdict is
 // evidence rather than a refusal.
@@ -6073,11 +6113,18 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	a.state.ReviewHeadCommit = changes.HeadCommit
 	a.outcome.ReviewBaseCommit = changes.BaseCommit
 	a.outcome.ReviewHeadCommit = changes.HeadCommit
+	reviewedContext, err := a.reviewedContext(ctx, changes.BaseCommit)
+	if err != nil {
+		return "", providerEvidence{}, err
+	}
 	account := a.account()
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
 		RunID:      a.state.RunID,
 		WorkItemID: a.state.WorkItemID,
-		Context:    a.context,
+		// The item as the developer was given it, with every file it references
+		// read at the base the patch is measured against rather than at whatever
+		// the checkout holds now.
+		Context: reviewedContext,
 		// The invariants reach the reviewer's evidence by the same delivery that
 		// reached the developer's context, so a change that violates one is judged
 		// against it whether or not the work item ever mentioned it.

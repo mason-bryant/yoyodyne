@@ -126,6 +126,20 @@ than the item asked for and approved on the passing tests instead
 shown, so a verdict hedged that way is a finding about the reviewer rather than
 about the evidence.
 
+**A file the item references is shown to the reviewer as that same base holds
+it**, and its heading names the commit — `## Referenced file: docs/guide.md (at
+base commit <id>)`, the same label on an excerpt and on a reference stated as
+left out. The developer's context reads those files from the checkout when the
+item is claimed, which is the base then; by the time a review is asked for,
+anything else promoted meanwhile has moved the checkout on, and a document read
+there beside a patch measured against the older base makes a correct change read
+as a divergent one. `yoyodyne-ifd.117.3` spent three repair rounds that way, on
+guides extracted from `docs/configuration.md` and judged against the file as the
+target branch had it later. The reviewer is told to judge against the labelled
+copy and not to report a difference from a later revision it may know of. A path
+the base does not hold — a document the change itself creates — is not carried as
+a reference, because the patch is where it is read.
+
 The patch is bounded, and the bound is spent whole file by whole file rather
 than cutting the patch at a byte count: a patch cut tail-first keeps whichever
 files Git rendered first and loses the rest without naming them, so a reviewer

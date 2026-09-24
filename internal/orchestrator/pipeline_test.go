@@ -3300,6 +3300,10 @@ func (partialWorktreeManager) UnifiedChanges(context.Context, gitworktree.Worktr
 	return gitworktree.ChangeDiff{}, nil
 }
 
+func (partialWorktreeManager) FileAtCommit(context.Context, string, string, int64) (gitworktree.FileAt, error) {
+	return gitworktree.FileAt{}, gitworktree.ErrNotAtCommit
+}
+
 func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree) ([]string, error) {
 	return nil, nil
 }

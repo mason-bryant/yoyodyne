@@ -141,31 +141,150 @@ func TestBaselineDocumentDisclosesEveryFieldNoTraceHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", baselineDocument, err)
 	}
-	prose := baselineFencedBlock.ReplaceAllString(string(document), "")
-	body, gaps, found := strings.Cut(prose, baselineGapHeading)
-	if !found {
-		t.Fatalf("%s carries no %q section, which is where it says what it does not measure", baselineDocument, baselineGapHeading)
+	undisclosed, named, err := baselineUndisclosedFields(string(document), baselineRecordedNames(t))
+	if err != nil {
+		t.Fatalf("%s: %v", baselineDocument, err)
 	}
-
-	held := baselineRecordedNames(t)
-	named := map[string]bool{}
-	for _, quoted := range baselineQuoted.FindAllStringSubmatch(body, -1) {
-		name := quoted[1]
-		if !baselineFieldName.MatchString(name) || named[name] {
-			continue
-		}
-		named[name] = true
-		if held[name] || strings.Contains(gaps, name) {
-			continue
-		}
-		t.Errorf("%s states %q and no trace holds it: record a trace that carries the field, or name it under %q",
-			baselineDocument, name, baselineGapHeading)
+	for _, field := range undisclosed {
+		t.Errorf("%s states %q and no trace holds it: record a trace that carries the field, or name it under %q.\nThe sentence stating it: %s",
+			baselineDocument, field.name, baselineGapHeading, field.sentence)
 	}
 	// A document naming no fields at all would pass every assertion above while
 	// measuring nothing, which is the way this check could quietly stop working.
-	if len(named) == 0 {
+	if named == 0 {
 		t.Errorf("%s named no durable fields, so this check compared nothing", baselineDocument)
 	}
+}
+
+// TestBaselineDisclosureCheckNamesTheFieldAndTheSentence holds the check above to
+// the failure it exists to report, on a document written for the purpose: a
+// field the traces do not carry and the gap list does not name is reported with
+// the sentence that states it, and one the gap list names, one a trace carries,
+// and one only a command mentions are not.
+func TestBaselineDisclosureCheckNamesTheFieldAndTheSentence(t *testing.T) {
+	t.Parallel()
+
+	document := strings.Join([]string{
+		"# A baseline",
+		"",
+		"Every run writes `recorded_field` first. Then it writes `undisclosed_field` at the",
+		"end, which nothing records.",
+		"",
+		"| Phase | What it writes |",
+		"| --- | --- |",
+		"| `developing` | `recorded_field`, `table_field` |",
+		"",
+		"- A list item naming `disclosed_field` and not.",
+		"",
+		"```sh",
+		"go test -run `command_field`",
+		"```",
+		"",
+		baselineGapHeading,
+		"",
+		"- `disclosed_field`, which no trace holds.",
+	}, "\n")
+	held := map[string]bool{"recorded_field": true}
+
+	undisclosed, named, err := baselineUndisclosedFields(document, held)
+	if err != nil {
+		t.Fatalf("baselineUndisclosedFields() error = %v", err)
+	}
+	want := []baselineUndisclosedField{
+		{name: "undisclosed_field", sentence: "Then it writes `undisclosed_field` at the end, which nothing records."},
+		{name: "table_field", sentence: "| `developing` | `recorded_field`, `table_field` |"},
+	}
+	if len(undisclosed) != len(want) {
+		t.Fatalf("undisclosed = %+v, want %+v", undisclosed, want)
+	}
+	for i := range want {
+		if undisclosed[i] != want[i] {
+			t.Errorf("undisclosed[%d] = %+v, want %+v", i, undisclosed[i], want[i])
+		}
+	}
+	if named != 4 {
+		t.Errorf("named = %d, want 4: recorded, undisclosed, table, and disclosed, and not the one only a command mentions", named)
+	}
+
+	if _, _, err := baselineUndisclosedFields("no gap list here", held); err == nil {
+		t.Errorf("a document without %q was accepted", baselineGapHeading)
+	}
+}
+
+// baselineUndisclosedField is one durable field the document states that no trace
+// carries and the gap list does not name, with the sentence it was first stated in
+// so whoever reads the failure can find the claim without searching for it.
+type baselineUndisclosedField struct {
+	name     string
+	sentence string
+}
+
+// baselineUndisclosedFields compares the durable field names a baseline document
+// states above its gap list against the names the traces hold and the gap list
+// itself, and returns those neither accounts for in the order the document first
+// states them. named is how many distinct field names it compared.
+func baselineUndisclosedFields(document string, held map[string]bool) (undisclosed []baselineUndisclosedField, named int, err error) {
+	prose := baselineFencedBlock.ReplaceAllString(document, "")
+	body, gaps, found := strings.Cut(prose, baselineGapHeading)
+	if !found {
+		return nil, 0, fmt.Errorf("carries no %q section, which is where it says what it does not measure", baselineGapHeading)
+	}
+	seen := map[string]bool{}
+	for _, quoted := range baselineQuoted.FindAllStringSubmatchIndex(body, -1) {
+		name := body[quoted[2]:quoted[3]]
+		if !baselineFieldName.MatchString(name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if held[name] || strings.Contains(gaps, name) {
+			continue
+		}
+		undisclosed = append(undisclosed, baselineUndisclosedField{name: name, sentence: baselineSentence(body, quoted[0], quoted[1])})
+	}
+	return undisclosed, len(seen), nil
+}
+
+// baselineSentenceEnd is a full stop, question mark, or exclamation mark followed
+// by whitespace. A dot inside a name -- `execution.check_timeout`, `baseline_test.go`
+// -- is followed by more of the name and does not end anything.
+var baselineSentenceEnd = regexp.MustCompile(`[.?!]\s`)
+
+// baselineSentence is the sentence of body that contains the span [start, end),
+// on one line. A table row is its own sentence, since a cell read without its row
+// says nothing about which phase or scenario it belongs to; otherwise a sentence
+// is bounded by the paragraph, a list item, or a sentence end.
+func baselineSentence(body string, start, end int) string {
+	lineStart := strings.LastIndex(body[:start], "\n") + 1
+	lineEnd := len(body)
+	if at := strings.Index(body[end:], "\n"); at >= 0 {
+		lineEnd = end + at
+	}
+	if strings.HasPrefix(strings.TrimSpace(body[lineStart:lineEnd]), "|") {
+		return strings.TrimSpace(body[lineStart:lineEnd])
+	}
+
+	from := 0
+	if at := strings.LastIndex(body[:start], "\n\n"); at >= 0 {
+		from = at + 2
+	}
+	if at := strings.LastIndex(body[:start], "\n- "); at >= 0 && at+3 > from {
+		from = at + 3
+	}
+	if ends := baselineSentenceEnd.FindAllStringIndex(body[from:start], -1); len(ends) > 0 {
+		from += ends[len(ends)-1][1]
+	}
+
+	to := len(body)
+	if at := strings.Index(body[end:], "\n\n"); at >= 0 {
+		to = end + at
+	}
+	if at := strings.Index(body[end:], "\n- "); at >= 0 && end+at < to {
+		to = end + at
+	}
+	if at := baselineSentenceEnd.FindStringIndex(body[end:to]); at != nil {
+		to = end + at[0] + 1
+	}
+	return strings.Join(strings.Fields(body[from:to]), " ")
 }
 
 // baselineRecordedNames is every key and every string value in every recorded
