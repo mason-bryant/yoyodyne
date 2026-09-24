@@ -234,18 +234,28 @@ and a suite in shell run from Go: the wait is for the process, and the working
 directory is one the suite owns rather than a package directory beside a census
 that will list what the shell leaves there.
 
-One bound the rule does not reach is the harness's own on a local Git command,
-which the tests that exercise Git — the orchestrator's, the worktree manager's
-— run under as production does. It was a flat thirty seconds, and at a load
-average near forty that flat figure killed `git worktree list` and `git status`
-in the middle of a suite that was passing, a class of failure no test could
-convert to a signal because the bound is the code's. So the figure is the idle
-machine's, and the manager scales it by how far the one-minute load average
-exceeds the cores, per command and capped at ten times
-(`internal/gitworktree`); a test that runs Git beside the manager gives it the
-same scaled budget rather than a constant of its own. What a suite is held to
-in total is still [`execution.check_timeout`](configuration.md#how-long-a-check-may-take),
-which is the operator's to set against the concurrency they run.
+One bound the rule does not reach is the harness's own on a local Git command.
+It was a flat thirty seconds, and at a load average near forty that flat figure
+killed `git worktree list` and `git status` in the middle of a suite that was
+passing, a class of failure no test could convert to a signal because the bound
+is the code's. So the figure is the idle machine's, and the manager scales it by
+how far the one-minute load average exceeds the cores, per command and capped at
+ten times (`internal/gitworktree`). The orchestrator's tests run their Git under
+that scaled budget as production does.
+
+The worktree manager's own tests do not, because that budget has been reached
+under a suite's load by Git that was working: a one-file checkout was killed at
+its scaled 36.4 seconds with the load at 19, and took 1.6 on its own.
+Those tests are about what Git and the manager do, never about how long Git
+took, so they name a budget of their own, `testGitBudget`, ten minutes, for
+every Git command they run through a manager or beside one. The exception is
+the tests whose subject is the production budget itself. Ten minutes catches a
+Git command that has hung, which any figure does, and it sits under
+`TEST_TIMEOUT` so the hang is reported as the command it was. The tracker's
+conformance checks in `internal/beads` bound each `bd` command the same way and
+for the same reason. What a suite is held to in total is still
+[`execution.check_timeout`](configuration.md#how-long-a-check-may-take), which
+is the operator's to set against the concurrency they run.
 
 The rule was checked the way the failures arrived: `make race` ten times in a
 row with a second `make race` looping beside it on the same tree, at one-minute

@@ -91,6 +91,7 @@ func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -170,6 +171,7 @@ func TestManagerReturnsCreatedIdentityWhenPostCreateInspectionFails(t *testing.T
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -230,6 +232,7 @@ func TestManagerCreatesConcurrentWorktreesWithoutLosingAny(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -340,7 +343,7 @@ func TestConcurrentCreationSurvivesAGitCommandTheHarnessDidNotCompose(t *testing
 				result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 					Name:    "git",
 					Args:    args,
-					Timeout: loadScaledGitBudget(),
+					Timeout: testGitBudget,
 				}, nil)
 				if err != nil || result.Status != execution.ProcessSucceeded {
 					t.Errorf("the neighbouring git %v in round %d = %v (%v): %s", args, round, result.Status, err, result.Stderr)
@@ -372,7 +375,7 @@ func neighbourGitConfig(t *testing.T, repository, setting string) string {
 	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "config", "--get", setting},
-		Timeout: loadScaledGitBudget(),
+		Timeout: testGitBudget,
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {
 		t.Fatalf("git config --get %s = %v (%v): %s", setting, result.Status, err, result.Stderr)
@@ -400,6 +403,7 @@ func TestManagerCreationQueuesAcrossManagersOnOneRepository(t *testing.T) {
 			Runner:         runner,
 			RepositoryRoot: repository,
 			WorktreeRoot:   filepath.Join(t.TempDir(), fmt.Sprintf("worktrees-%d", group)),
+			Timeout:        testGitBudget,
 		})
 		if err != nil {
 			t.Fatalf("New(%d) error = %v", group, err)
@@ -495,6 +499,7 @@ func TestManagerReadsTheWorktreeListingAgainWhenItCrossesACreation(t *testing.T)
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -538,6 +543,7 @@ func TestManagerListsAroundARegistrationAnotherRunNeverFinishedWriting(t *testin
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -632,6 +638,7 @@ func TestManagerReportsAWorktreeListingThatKeepsFailing(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -665,6 +672,7 @@ func TestManagerDoesNotReadAWorktreeListingAgainAfterATimeout(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -755,6 +763,7 @@ func TestManagerRunsAnyGitCommandAgainWhenItCrossesACreation(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -768,6 +777,72 @@ func TestManagerRunsAnyGitCommandAgainWhenItCrossesACreation(t *testing.T) {
 	}
 	if runs, refused := runner.observed(); refused != 1 || runs < 2 {
 		t.Fatalf("runs = %d after %d refusal(s), want the refusal to have been followed by another run", runs, refused)
+	}
+}
+
+// A removal crosses a walk as surely as a creation does, and Git says so in
+// words of its own: the entry's lock marker gone between being seen and being
+// read, or the entry itself gone between its commondir being read and the
+// common directory being resolved through it. The second is what failed
+// TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn over its own
+// creation loop's removals. Both pass with the instant, so both are run again.
+func TestManagerRunsAnyGitCommandAgainWhenItCrossesARemoval(t *testing.T) {
+	t.Parallel()
+
+	for name, stderr := range map[string]string{
+		"the lock marker":  "fatal: failed to read '.git/worktrees/creation-loop-27/locked': No such file or directory\n",
+		"the entry itself": "fatal: Invalid path '/private/var/folders/tmp/repository/.git/worktrees/creation-loop-27': No such file or directory\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := newRepository(t)
+			runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: 1, command: []string{"rev-parse", "--verify"}, stderr: stderr}
+			manager, err := New(Options{
+				Runner:         runner,
+				RepositoryRoot: repository,
+				WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+				Timeout:        testGitBudget,
+			})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if _, err := manager.Create(context.Background(), CreateRequest{
+				RunID:      testRunID,
+				WorkItemID: "yoyodyne-crossed-removal",
+				BaseRef:    "HEAD",
+			}); err != nil {
+				t.Fatalf("Create() error = %v, want the command that crossed a removal to have been run again", err)
+			}
+			if runs, refused := runner.observed(); refused != 1 || runs < 2 {
+				t.Fatalf("runs = %d after %d refusal(s), want the refusal to have been followed by another run", runs, refused)
+			}
+		})
+	}
+}
+
+// The pattern is Git's wording and nothing wider: a refusal naming a file or a
+// path that is not one entry of the registrations is Git's answer about
+// something else, and running it again would only make it slower.
+func TestACrossedRegistrationIsGitsWordingForAnEntryAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		stderr  string
+		crossed bool
+	}{
+		{"fatal: failed to read .git/worktrees/yoyodyne-other-2113a23c/commondir: Result too large", true},
+		{"fatal: failed to read '.git/worktrees/loop-3/locked': No such file or directory", true},
+		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27': No such file or directory", true},
+		{`fatal: Invalid path 'C:\repository\.git\worktrees\creation-loop-27': No such file or directory`, true},
+		{"fatal: failed to read .git/worktrees/loop-3/gitdir: Is a directory", false},
+		{"fatal: Invalid path '/tmp/repository/src': No such file or directory", false},
+		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27/nested': No such file or directory", false},
+		{"fatal: Needed a single revision", false},
+	} {
+		if got := crossedRegistration.MatchString(tc.stderr); got != tc.crossed {
+			t.Errorf("crossedRegistration(%q) = %t, want %t", tc.stderr, got, tc.crossed)
+		}
 	}
 }
 
@@ -788,6 +863,7 @@ func TestManagerBelievesAGitRefusalThatIsNotACrossing(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -823,6 +899,7 @@ func TestManagerCreatesAcrossARegistrationAKilledAddLeftBehind(t *testing.T) {
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -883,6 +960,7 @@ func TestManagerWaitsOutTheGraceBeforeClearingAYoungRegistration(t *testing.T) {
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1019,6 +1097,7 @@ func TestManagerGitCommandsNeverStartAutomaticMaintenance(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1074,6 +1153,7 @@ func TestManagerRemovalQueuesOnTheWorktreeRegistryLease(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1159,6 +1239,7 @@ func TestRegistrationWalksAndCreationsRunBesideEachOtherWithoutFailing(t *testin
 			Runner:         execution.OSProcessRunner{},
 			RepositoryRoot: repository,
 			WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+			Timeout:        testGitBudget,
 		})
 		if err != nil {
 			t.Fatalf("New() error = %v", err)
@@ -1271,6 +1352,7 @@ func TestManagerRemovesTheBranchOfAWorktreeItCouldNotAdd(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1302,6 +1384,7 @@ func TestManagerQueuesARegistrationWalkingCommandBehindAWrite(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1369,6 +1452,7 @@ func TestManagerReadsTheRegistrationsUnderItsOwnWrite(t *testing.T) {
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1414,6 +1498,7 @@ func TestManagerDoesNotQueueACommandThatWalksNoRegistrations(t *testing.T) {
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1519,6 +1604,7 @@ func TestManagerAllowsOnlyConfiguredPrimaryControlPlaneChanges(t *testing.T) {
 		RepositoryRoot:        repository,
 		WorktreeRoot:          filepath.Join(t.TempDir(), "worktrees"),
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1562,6 +1648,7 @@ func TestManagerReadiesThroughAnExportBeingRewritten(t *testing.T) {
 		RepositoryRoot:        repository,
 		WorktreeRoot:          filepath.Join(t.TempDir(), "worktrees"),
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -2454,7 +2541,7 @@ func TestManagerRejectsUnsafeRootsAndTamperedOwnership(t *testing.T) {
 	repository := newRepository(t)
 	runner := execution.OSProcessRunner{}
 	for _, root := range []string{string(filepath.Separator), filepath.Join(repository, "worktrees"), filepath.Dir(repository)} {
-		if _, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: root}); err == nil {
+		if _, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: root, Timeout: testGitBudget}); err == nil {
 			t.Errorf("New() root %q error = nil", root)
 		}
 	}
@@ -2534,6 +2621,7 @@ func newManager(t *testing.T, repository, worktreeRoot string) *Manager {
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   worktreeRoot,
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -2734,6 +2822,7 @@ func TestManagerBoundsGitCommandsByAFlatDeadlineOnly(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -2876,6 +2965,7 @@ func TestCreatingAWorktreeBudgetsTheCheckoutToTheTreeItWrites(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -2907,11 +2997,10 @@ func TestCreatingAWorktreeBudgetsTheCheckoutToTheTreeItWrites(t *testing.T) {
 	if add == 0 || reading == 0 {
 		t.Fatalf("add bound = %s, reading bound = %s; want both recorded", add, reading)
 	}
-	// The load scaling multiplies every budget by the same factor and is never
-	// below one, so the unscaled figure is the floor whatever the machine running
-	// this test is doing.
-	if want := defaultTimeout + time.Duration(files)*checkoutFileBudget; add < want {
-		t.Fatalf("checkout bound = %s, want at least %s for %d file(s)", add, want, files)
+	// A named budget is not scaled, so the add's bound is exactly that budget
+	// plus the tree's allowance whatever the machine running this test is doing.
+	if want := testGitBudget + time.Duration(files)*checkoutFileBudget; add != want {
+		t.Fatalf("checkout bound = %s, want %s: the named budget plus %d file(s)", add, want, files)
 	}
 	// And a command that writes no tree is still held to the figure it always
 	// was, so the allowance is the checkout's rather than every Git command's.
@@ -2943,6 +3032,7 @@ func TestAWorktreeCheckoutKilledByItsBudgetIsSaidInOneSentence(t *testing.T) {
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -3004,6 +3094,7 @@ func TestACountKilledByItsBudgetRefusesTheCreationAsAKilledCheckout(t *testing.T
 		Runner:         runner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -3042,6 +3133,7 @@ func TestACountThatFailedLeavesTheCreationBudgetedAsAnUncountedTree(t *testing.T
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Note:           func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) },
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -3072,7 +3164,7 @@ func TestACountThatFailedLeavesTheCreationBudgetedAsAnUncountedTree(t *testing.T
 	if want := uncountedCheckoutFiles; checkoutAllowanceFiles(0, false) != want {
 		t.Fatalf("uncounted allowance = %d file(s), want %d", checkoutAllowanceFiles(0, false), want)
 	}
-	if got := manager.checkoutTimeout(0, false); got < defaultTimeout+uncountedCheckoutFiles*checkoutFileBudget {
+	if got := manager.checkoutTimeout(0, false); got != testGitBudget+uncountedCheckoutFiles*checkoutFileBudget {
 		t.Fatalf("uncounted budget = %s, want at least the stand-in tree's allowance", got)
 	}
 }

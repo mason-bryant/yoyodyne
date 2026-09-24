@@ -96,13 +96,24 @@ func TestAManagerLeftToTheDefaultBudgetScalesItAndANamedBudgetIsKept(t *testing.
 	}
 }
 
-// loadScaledGitBudget is the budget a test gives a Git command it runs itself,
-// beside the manager: the manager's own default, scaled by the load the same
-// way, so a suite run beside another does not kill its own Git at the idle
-// figure.
-func loadScaledGitBudget() time.Duration {
-	return (&Manager{}).localTimeout()
-}
+// testGitBudget is the budget this package's tests give every Git command they
+// run, through a manager or beside one, except where the production budget is
+// itself the thing under test (the default-budget tests above).
+//
+// It is the tests' own figure rather than the manager's, because the manager's
+// is sized for a run, and under a suite's load it has been reached by Git that
+// was working: a one-file checkout was killed at its 36.4s scaled budget with
+// the load at 19, and took 1.6s on its own. A test here is about
+// what Git and the manager do, never about how long Git took, so the only
+// thing its budget has to catch is a Git command that has hung — and that is
+// caught by any figure, however long. Ten minutes sits under the Makefile's
+// TEST_TIMEOUT, so a hung command is still ended by the runner and reported
+// as the command it was, rather than by the binary's own timeout.
+//
+// A named budget is not scaled, and a creation's checkout gets its allowance on
+// top of it (checkoutTimeout), so what every test here runs under is this
+// figure plus the tree, whatever the machine is doing.
+const testGitBudget = 10 * time.Minute
 
 // budgetRecordingRunner keeps the budget of the last command it was handed.
 type budgetRecordingRunner struct {
