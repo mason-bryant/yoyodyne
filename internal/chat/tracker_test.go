@@ -1058,6 +1058,10 @@ func TestTrackerOutcomeRendersWhatHappenedRatherThanWhatWasAskedFor(t *testing.T
 // start of its next turn, verbatim. The second half of the test is what the first
 // half is for: a later process, holding nothing but the record, re-issues the
 // actions from the refusal it was given rather than from anybody carrying it in.
+//
+// The refusal is handed back within the same message first, and here the round it
+// is handed back in never comes back — the provider fails it — which is the case
+// the record still has to cover.
 func TestARefusedTrackerBlockIsRecordedAndReachesTheRoleThatSentIt(t *testing.T) {
 	t.Parallel()
 
@@ -1074,20 +1078,17 @@ func TestARefusedTrackerBlockIsRecordedAndReachesTheRoleThatSentIt(t *testing.T)
 	refusing.Tracker = tracker
 	refused := openTestSession(t, refusing)
 
-	_, err := refused.Send(context.Background(), "deal with the pile")
-	var unreadable *TrackerError
-	if !errors.As(err, &unreadable) {
-		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	handing, err := refused.Send(context.Background(), "deal with the pile")
+	if err == nil || len(handing.HandedBack) != 1 {
+		t.Fatalf("Send() = %v with %d hand-back(s), want the refusal handed back and the round after it failed", err, len(handing.HandedBack))
 	}
+	refusal := handing.HandedBack[0]
 	// The whole block was refused, so nothing reached the tracker.
 	if len(tracker.closed) != 0 {
 		t.Fatalf("closed = %#v, want a refused block to have changed nothing", tracker.closed)
 	}
 	// How much was lost is part of the refusal rather than something a reader has
-	// to count from a reply nobody kept.
-	if unreadable.Actions != len(tooMany) {
-		t.Fatalf("refusal counted %d action(s), want %d", unreadable.Actions, len(tooMany))
-	}
+	// to count from a reply nobody kept; the payload below carries the count.
 	payload := onlyEventPayload(t, root, refused, execution.EventTrackerBlockRefused)
 	for _, wanted := range []string{
 		`"role":"product-manager"`,
@@ -1118,7 +1119,7 @@ func TestARefusedTrackerBlockIsRecordedAndReachesTheRoleThatSentIt(t *testing.T)
 		t.Fatalf("the resumed conversation made no provider call")
 	}
 	prompt := backend.requests[0].Prompt
-	if !strings.Contains(prompt, unreadable.Error()) {
+	if !strings.Contains(prompt, refusal) {
 		t.Fatalf("the next turn does not carry the refusal verbatim:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "refused whole") || !strings.Contains(prompt, "Issue the actions you still want again") {
@@ -1165,14 +1166,11 @@ func TestARefusedTrackerBlockNobodyCanCountIsStillHandedBack(t *testing.T) {
 	options.Tracker = &fakeTracker{}
 	session := openTestSession(t, options)
 
-	_, err := session.Send(context.Background(), "tidy the queue")
-	var unreadable *TrackerError
-	if !errors.As(err, &unreadable) {
-		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	handing, err := session.Send(context.Background(), "tidy the queue")
+	if err == nil || len(handing.HandedBack) != 1 {
+		t.Fatalf("Send() = %v with %d hand-back(s), want the refusal handed back and the round after it failed", err, len(handing.HandedBack))
 	}
-	if unreadable.Actions != 0 {
-		t.Fatalf("refusal counted %d action(s), want none counted at all", unreadable.Actions)
-	}
+	refusal := handing.HandedBack[0]
 	if payload := onlyEventPayload(t, root, session, execution.EventTrackerBlockRefused); !strings.Contains(payload, `"actions":0`) {
 		t.Fatalf("the recorded refusal invented a count: %s", payload)
 	}
@@ -1185,7 +1183,7 @@ func TestARefusedTrackerBlockNobodyCanCountIsStillHandedBack(t *testing.T) {
 		t.Fatalf("Send() error = %v", err)
 	}
 	prompt := backend.requests[0].Prompt
-	if !strings.Contains(prompt, unreadable.Error()) {
+	if !strings.Contains(prompt, refusal) {
 		t.Fatalf("the next turn does not carry the refusal verbatim:\n%s", prompt)
 	}
 	// Nothing counted is said by saying nothing about a count, rather than by
@@ -1214,11 +1212,13 @@ func TestARefusedTrackerBlockRecordsTheWakeupItIsOwed(t *testing.T) {
 	options.Tracker = &fakeTracker{}
 	session := openTestSession(t, options)
 
-	_, err := session.Send(context.Background(), "park ifd.7")
-	var unreadable *TrackerError
-	if !errors.As(err, &unreadable) {
-		t.Fatalf("Send() error = %v, want a TrackerError", err)
+	// The round the refusal is handed back in fails at the provider, so nothing
+	// answered it and the wakeup is still owed.
+	handing, err := session.Send(context.Background(), "park ifd.7")
+	if err == nil || len(handing.HandedBack) != 1 {
+		t.Fatalf("Send() = %v with %d hand-back(s), want the refusal handed back and the round after it failed", err, len(handing.HandedBack))
 	}
+	refusal := handing.HandedBack[0]
 	recorded := loadTestConversation(t, root, options)
 	if recorded.RefusedBlock == nil {
 		t.Fatalf("the conversation records no refused block, so nothing can wake the role for it")
@@ -1228,7 +1228,7 @@ func TestARefusedTrackerBlockRecordsTheWakeupItIsOwed(t *testing.T) {
 	}
 	// The record carries the refusal in the harness's own words, so a wakeup made
 	// from it and the turn the role reads are about the same thing.
-	if !strings.Contains(recorded.RefusedBlock.Problem, unreadable.Error()) {
+	if !strings.Contains(recorded.RefusedBlock.Problem, refusal) {
 		t.Fatalf("recorded refusal = %q, want the refusal itself", recorded.RefusedBlock.Problem)
 	}
 	if recorded.RefusedBlock.Turn != 1 {
@@ -1394,5 +1394,197 @@ func TestATurnNobodyWokeThatReIssuedNothingIsNotEscalated(t *testing.T) {
 		if event.Type == execution.EventTrackerRefusalUnresolved {
 			t.Fatalf("a turn nobody woke was escalated to the operator: %s", event.Payload)
 		}
+	}
+}
+
+// refusalOf is what a message says about a tracker block the harness refused
+// whole: the error where the refusal ended the message, and the hand-back where
+// the harness gave it back to the role within the message instead.
+func refusalOf(reply Reply, err error) string {
+	refusals := append([]string(nil), reply.HandedBack...)
+	if err != nil {
+		refusals = append(refusals, err.Error())
+	}
+	return strings.Join(refusals, "\n")
+}
+
+// A refused block is handed back to the role as a further round of the same
+// message, and the corrected block lands before the reply ends.
+//
+// Four times in the week to 2026-09-25 the product manager's block was refused
+// whole and nothing landed until the operator's assistant relayed the refusal.
+// The wakeup covered it at the next pull, a turn later; a tracker block's results
+// already came back within the message, and a refusal is a result. So nobody
+// relays it, and nothing is left owing a wakeup.
+func TestARefusedTrackerBlockIsCorrectedWithinTheSameMessage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	backend := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Closing it and settling the report.",
+			`{"action":"close","id":"yoyodyne-1","reason":"the work landed"}`,
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+		{SessionID: "session-1", FinalText: trackerReply("The report identifier was wrong; re-issuing the close alone.",
+			`{"action":"close","id":"yoyodyne-1","reason":"the work landed"}`)},
+		{SessionID: "session-1", FinalText: "Closed."},
+	}}
+	options := testOptions(t, backend)
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "close yoyodyne-1 and settle the report")
+	if err != nil {
+		t.Fatalf("Send() error = %v, want the corrected block to have ended the message well", err)
+	}
+	if len(reply.HandedBack) != 1 || !strings.Contains(reply.HandedBack[0], "not a report identifier") {
+		t.Fatalf("handed back = %#v, want the refusal said to the operator", reply.HandedBack)
+	}
+	// The corrected block landed within the message, on the round after the one
+	// that was refused.
+	if len(tracker.closed) != 1 || tracker.closed[0][0] != "yoyodyne-1" {
+		t.Fatalf("closed = %#v, want the re-issued close", tracker.closed)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the re-issued action applied", reply.Actions)
+	}
+	// The round it was handed back in is the harness's own words, verbatim, with
+	// the rounds this message has left.
+	if len(backend.requests) != 3 {
+		t.Fatalf("provider calls = %d, want the refused round, the hand-back, and the round after the actions", len(backend.requests))
+	}
+	handBack := backend.requests[1].Prompt
+	for _, wanted := range []string{
+		reply.HandedBack[0],
+		"refused whole",
+		"further round of the same message",
+		"This message has " + strconv.Itoa(maxTrackerRounds-1) + " round(s) of tracker actions left",
+		"handed to the operator",
+	} {
+		if !strings.Contains(handBack, wanted) {
+			t.Fatalf("the hand-back round does not say %q:\n%s", wanted, handBack)
+		}
+	}
+	// And nothing is owed afterwards: no wakeup for a pass to make, no refusal for
+	// the next turn to open with, and nothing said to the operator as lost.
+	recorded := loadTestConversation(t, root, options)
+	if recorded.RefusedBlock != nil {
+		t.Fatalf("refused block = %#v, want it cleared by the correction within the message", *recorded.RefusedBlock)
+	}
+	if strings.Contains(recorded.PendingTrackerResults, "refused whole") {
+		t.Fatalf("the refusal is still carried for the next turn: %q", recorded.PendingTrackerResults)
+	}
+	onlyEventPayload(t, root, session, execution.EventTrackerBlockRefused)
+	for _, event := range loadTestEvents(t, root, session) {
+		if event.Type == execution.EventTrackerRefusalUnresolved {
+			t.Fatalf("a refusal corrected within the message was escalated: %s", event.Payload)
+		}
+	}
+}
+
+// A block refused again on the round it was handed back in goes to the operator,
+// exactly as a woken turn's does, rather than being handed back a second time or
+// left owing a wakeup.
+func TestABlockRefusedAgainWithinTheMessageGoesToTheOperator(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Settling the report.",
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+		{SessionID: "session-1", FinalText: trackerReply("Trying again.",
+			`{"action":"handle","report":"still-not-a-report-id","reason":"already fixed"}`)},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = &fakeTracker{}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "settle the report")
+	var unreadable *TrackerError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("Send() error = %v, want the second refusal to end the message", err)
+	}
+	if len(reply.HandedBack) != 1 {
+		t.Fatalf("handed back = %#v, want the first refusal handed back once", reply.HandedBack)
+	}
+	recorded := loadTestConversation(t, root, options)
+	if recorded.RefusedBlock == nil || recorded.RefusedBlock.AwaitingWakeup(fixedClock{}.Now()) {
+		t.Fatalf("refused block = %#v, want one the harness will not wake for", recorded.RefusedBlock)
+	}
+	if !strings.Contains(recorded.RefusedBlock.Escalated, "handed the refusal of turn 1 back within the same message") {
+		t.Fatalf("escalation reason = %q, want it to say the refusal was handed back", recorded.RefusedBlock.Escalated)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventTrackerRefusalUnresolved)
+	for _, wanted := range []string{`"handed_back":true`, `"woken":false`, `"refused_again":true`, "still-not-a-report-id"} {
+		if !strings.Contains(payload, wanted) {
+			t.Fatalf("the recorded escalation does not carry %q: %s", wanted, payload)
+		}
+	}
+}
+
+// A hand-back round that answers in prose and re-issues nothing has ended the
+// correction with the actions still lost, so the operator is told, as with a
+// woken turn that did the same.
+func TestAHandBackAnsweredWithNoActionsReachesTheOperator(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Settling the report.",
+			`{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)},
+		{SessionID: "session-1", FinalText: "I will leave the report for now."},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = &fakeTracker{}
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "settle the report"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if recorded := loadTestConversation(t, root, options); recorded.RefusedBlock != nil {
+		t.Fatalf("refused block = %#v, want it cleared by the round that answered", *recorded.RefusedBlock)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventTrackerRefusalUnresolved)
+	for _, wanted := range []string{`"handed_back":true`, `"refused_again":false`, "not a report identifier"} {
+		if !strings.Contains(payload, wanted) {
+			t.Fatalf("the recorded loss does not carry %q: %s", wanted, payload)
+		}
+	}
+}
+
+// A refusal on the message's last round has no round to be handed back in, so it
+// is left to the role's next turn and the wakeup the harness owes it.
+func TestARefusalOnTheLastRoundIsLeftToTheWakeup(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	results := make([]backendapi.RunResult, 0, maxTrackerRounds)
+	for round := 1; round < maxTrackerRounds; round++ {
+		results = append(results, backendapi.RunResult{SessionID: "session-1",
+			FinalText: trackerReply("Reading.", `{"action":"read","id":"yoyodyne-ifd.404"}`)})
+	}
+	results = append(results, backendapi.RunResult{SessionID: "session-1",
+		FinalText: trackerReply("Settling the report.", `{"action":"handle","report":"not-a-report-id","reason":"already fixed"}`)})
+	backend := &fakeBackend{results: results}
+	options := testOptions(t, backend)
+	options.Store = newTestStore(t, root)
+	options.Tracker = &fakeTracker{}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "look into it and settle the report")
+	var unreadable *TrackerError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("Send() error = %v, want the last round's refusal to end the message", err)
+	}
+	if len(reply.HandedBack) != 0 || len(backend.requests) != maxTrackerRounds {
+		t.Fatalf("handed back %#v over %d call(s), want nothing handed back past the last round", reply.HandedBack, len(backend.requests))
+	}
+	recorded := loadTestConversation(t, root, options)
+	if recorded.RefusedBlock == nil || !recorded.RefusedBlock.AwaitingWakeup(fixedClock{}.Now()) {
+		t.Fatalf("refused block = %#v, want one still owed its wakeup", recorded.RefusedBlock)
+	}
+	if !strings.Contains(recorded.PendingTrackerResults, unreadable.Error()) {
+		t.Fatalf("the refusal is not carried for the next turn: %q", recorded.PendingTrackerResults)
 	}
 }

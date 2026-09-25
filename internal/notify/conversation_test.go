@@ -1010,6 +1010,38 @@ func TestAWokenTurnThatReIssuedNothingIsSaidWithoutInventingASecondRefusal(t *te
 	}
 }
 
+// A refusal the harness handed back within the same message is said as that,
+// both ways it can end: the block sent back refused too, and a round that put
+// nothing back. Neither claims a wakeup, because none was made.
+func TestAHandBackThatDidNotTakeIsSaidAsAHandBack(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	for _, testCase := range []struct {
+		refusedAgain bool
+		want         string
+	}{
+		{refusedAgain: true, want: "handed the refusal back within the same message, and the block it sent back was refused too"},
+		{refusedAgain: false, want: "handed the refusal back within the same message and the round it took asked for no tracker action at all"},
+	} {
+		events := []execution.Event{recorded(t, 1, execution.EventTrackerRefusalUnresolved, map[string]any{
+			"turn":          2,
+			"role":          string(domain.RoleProductManager),
+			"actions":       1,
+			"problem":       "the product manager asked for tracker actions the harness cannot read: decode tracker actions: the tracker block is empty",
+			"previous":      "the product manager asked for tracker actions the harness cannot read: invalid tracker actions: actions[0]: a title is 212 bytes, limit is 200",
+			"woken":         false,
+			"handed_back":   true,
+			"refused_again": testCase.refusedAgain,
+		})}
+		_, message := said(t, conversation, events, 0)
+		if !strings.Contains(message.Body, testCase.want) {
+			t.Fatalf("message %q does not say %q", message.Body, testCase.want)
+		}
+		if strings.Contains(message.Body, "woke") {
+			t.Fatalf("message %q claims a wakeup the harness never made", message.Body)
+		}
+	}
+}
+
 // The fourth way, and the one no turn was taken on: every wakeup the harness
 // made met a provider that never took it until the attempts ran out. It is said
 // critically like the others, and it must name the provider rather than any

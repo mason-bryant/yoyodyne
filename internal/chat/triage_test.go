@@ -471,9 +471,9 @@ func TestATriageDecisionIsRefusedWhenItNamesNoDecisionOrNoStoppage(t *testing.T)
 				"yoyodyne-ifd.90": {ID: "yoyodyne-ifd.90", Title: "the item that stopped", Status: "open"},
 			}}
 			options := triageOptions(t, tracker, nil, trackerReply("Decided.", testCase.action))
-			_, err := openTestSession(t, options).Send(context.Background(), "Work the docket.")
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("Send() error = %v, want it to contain %q", err, testCase.want)
+			reply, err := openTestSession(t, options).Send(context.Background(), "Work the docket.")
+			if refusal := refusalOf(reply, err); !strings.Contains(refusal, testCase.want) {
+				t.Fatalf("Send() refusal = %q, want it to contain %q", refusal, testCase.want)
 			}
 			if len(tracker.updates) != 0 || len(tracker.blocked) != 0 {
 				t.Fatalf("a refused block changed the tracker: updates %#v, blocked %#v", tracker.updates, tracker.blocked)
@@ -1475,8 +1475,8 @@ func TestABrakeDecisionIsRecordedOnTheBrakesOwnHold(t *testing.T) {
 		options = triageOptions(t, tracker, nil, trackerReply("Deciding.", block))
 		options.Reports = &fakeReports{}
 		options.Intake = intake
-		if _, err := openTestSession(t, options).Send(context.Background(), "Work the docket."); err == nil {
-			t.Fatalf("block %s: Send() error = nil, want the malformed decision refused whole", block)
+		if reply, err := openTestSession(t, options).Send(context.Background(), "Work the docket."); refusalOf(reply, err) == "" {
+			t.Fatalf("block %s: Send() refused nothing, want the malformed decision refused whole", block)
 		}
 	}
 	if len(intake.decisions) != 1 {

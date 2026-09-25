@@ -666,6 +666,13 @@ type Session struct {
 	// takes all meet the same refusal, and one stoppage somebody needs to be told
 	// about is one entry in the log rather than one per probe.
 	notedRefusal string
+	// handedBack says the refused tracker block the record holds was handed back
+	// to the role as a further round of this message. It lives here rather than on
+	// the record because it is about this message and nothing later: a hand-back
+	// round that never came back leaves the refusal exactly as one on the last
+	// round is, owed its wakeup, and the turn somebody drives after that is not
+	// one the harness put in front of it.
+	handedBack bool
 	// titled says a run this conversation reported renamed the operator's
 	// terminal window, so the conversation knows to put the name back when it
 	// ends rather than leaving it announcing work that finished.
@@ -829,6 +836,12 @@ type Reply struct {
 	// the operator knows the exchange stopped where it did because the budget ran
 	// out rather than because the product manager was finished.
 	ResultsCarriedOver bool `json:"results_carried_over,omitempty"`
+	// HandedBack is each tracker block the harness refused whole while answering
+	// and handed back to the role as a further round of this message, in the
+	// harness's own words. The actions it asked for did not happen as that block
+	// asked for them; what the role re-issued is in Actions, and a block refused
+	// again is the reply's error rather than another entry here.
+	HandedBack []string `json:"handed_back,omitempty"`
 	// Reports are what the product manager noticed and filed for the operator
 	// while it answered. They are collected rather than acted on: a report
 	// changes nothing about the turn that carried it, exactly as it changes
@@ -1148,6 +1161,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// under a later message is told again rather than passed over as old news.
 	s.usageLimitWaited = 0
 	s.notedRefusal = ""
+	s.handedBack = false
 	// And what it may spend waiting out a tracker that would not answer, over the
 	// same span: every tracker call the message makes shares one window, and a
 	// wait the last message's ending cut short does not close this one's.
@@ -1224,13 +1238,29 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// the turn, and a report that could not be read is noted rather than
 		// returned: the rest of the answer is unaffected by either.
 		s.collectReply(&reply, parsed)
-		// A tracker block the harness would not read is recorded and handed back
-		// to the role that sent it before the turn ends. Everything else about
-		// the failure is unchanged: the answer above is real, the turn is
-		// returned as failed, and nothing in the block was carried out.
+		// A tracker block the harness would not read is recorded, and handed back
+		// to the role that sent it as a further round of this same message, so it
+		// can re-issue the actions before its reply ends rather than waiting for
+		// somebody to relay the refusal. A refusal is what that round of actions
+		// came to, so it spends a round like any other result.
+		//
+		// Two cases are not handed back, and each ends the message as a refused
+		// block always has — the answer above is real, the turn is returned as
+		// failed, and nothing in the block was carried out. A refusal with one
+		// still unanswered goes to the operator, which is what a block refused
+		// again on the round it was handed back in comes to. And one on the last
+		// round has no round to be handed back in, so it waits for the role's next
+		// turn and the wakeup the harness owes it.
 		var refused *TrackerError
 		if errors.As(err, &refused) {
-			return reply, errors.Join(err, s.recordRefusedTrackerBlock(refused))
+			trackerRounds++
+			handBack := s.state.RefusedBlock == nil && trackerRounds < maxTrackerRounds
+			if problem := s.recordRefusedTrackerBlock(refused, handBack); problem != nil || !handBack {
+				return reply, errors.Join(err, problem)
+			}
+			reply.HandedBack = append(reply.HandedBack, refused.Error())
+			prompt = renderHandedBackTrackerBlock(refused, maxTrackerRounds-trackerRounds)
+			continue
 		}
 		// The block was readable, so a refusal waiting on a correction has had one.
 		// It is settled here rather than after the rest of the parse is judged:
@@ -2913,7 +2943,15 @@ func (s *Session) await(ctx context.Context, screen console.Console, read func(i
 // the actions that failed beside the ones that worked, because a queue the
 // operator believes was reorganized is worse than one they know was not.
 func (s *Session) reportTrackerActions(out io.Writer, reply Reply) {
+	// A block handed back is said before what came of it, so an operator reading
+	// the actions below knows they are the re-issue rather than the first asking.
+	for _, refusal := range reply.HandedBack {
+		fmt.Fprintf(out, "%s\nNothing in that block was carried out; the harness handed the refusal back within this message so it could re-issue the actions.\n", refusal)
+	}
 	if len(reply.Actions) == 0 {
+		if len(reply.HandedBack) > 0 {
+			fmt.Fprintln(out)
+		}
 		return
 	}
 	fmt.Fprint(out, renderTrackerOutcomes(s.state.Role, reply.Actions))

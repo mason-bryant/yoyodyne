@@ -128,6 +128,28 @@ where the spend an action makes before it writes is the case this exists for. Th
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
+**A block the harness refuses is handed straight back, inside the same
+message.** A refused block is refused whole, so nothing in it happens: one title
+over 200 bytes loses all ten actions beside it. The refusal is a result like any
+other, so it comes back to the role as a further round of the message you sent,
+in the harness's own words and saying how many rounds of tracker actions the
+message has left, and the role reissues the corrected block before its reply
+ends. You are shown the refusal and then what the reissue did, and nobody has to
+relay anything. In the week to 2026-09-25 that relay was done by hand four times,
+because a refusal used to wait for the role's next turn. A refused round counts
+against the message's four rounds. Anything else the refused reply asked for —
+a proposal, a question, a read, a memory — was not taken up either, and the role
+is told so.
+
+A block refused again on the round it was handed back in goes to you as
+critical, and so does a round that answers without asking for any tracker
+action. Both leave the actions lost, and a second copy of the same message would
+not fix them. A refusal on a message's last round has no round left to come back
+in. It opens the role's next turn instead, and the harness
+[wakes the role for it](work.md#letting-the-harness-choose-the-work) at the next
+pull. The same happens when the round it was handed back in never came back:
+the provider failed it, or the process ended first.
+
 A tracker call that fails in a way a later attempt could survive — a `bd` killed
 at its timeout, a contended store — is waited out and asked again, under the
 rule and the window of

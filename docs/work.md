@@ -1231,10 +1231,14 @@ and every firing ends in a durable report that
 project that schedules nothing has none of this and its passes are unchanged.
 
 **A pass also wakes a role whose block of tracker actions the harness refused.**
-A block it cannot read is refused whole, so nothing in it happens, and the
-refusal in the harness's own words has always opened that role's next turn — but
-nothing started that turn, so the correction waited on somebody opening the
-conversation. Now the pass starts it: one turn per refusal, at most one per pass,
+A block it cannot read is refused whole, so nothing in it happens. Most refusals
+never reach a pass: the refusal is
+[handed back inside the message that earned it](conversation.md#the-conversation),
+and the role reissues the block before its reply ends. What reaches a pass is a
+refusal on a message's last round, or one whose hand-back round never came back.
+That refusal opens the role's next turn in the harness's own words, but nothing
+starts that turn, so the correction would wait for somebody to open the
+conversation. The pass starts it: one turn per refusal, at most one per pass,
 and the role re-issues the actions itself. A turn that does not put the actions
 back goes to you rather than earning another wakeup — a second block refused with
 the first still unanswered, whether the harness woke that turn or somebody else
