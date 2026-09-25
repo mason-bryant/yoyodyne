@@ -30,15 +30,15 @@ func TestARepairDispatchCreatesNoWorktree(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	docket := &memoryDocket{}
 
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, docket)
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	worktreesBefore := worktreeDirectories(t, worktreeRoot)
-	runsBefore := runsRecordedFor(t, store, tracker.item.ID)
+	runsBefore := runsRecordedFor(t, store, tracker.Item.ID)
 
 	second := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
@@ -58,7 +58,7 @@ func TestARepairDispatchCreatesNoWorktree(t *testing.T) {
 	if cut := worktreesCutSince(t, worktreeRoot, worktreesBefore); len(cut) != 0 {
 		t.Fatalf("worktrees cut by the dispatch = %v, want none", cut)
 	}
-	if after := runsRecordedFor(t, store, tracker.item.ID); after != runsBefore {
+	if after := runsRecordedFor(t, store, tracker.Item.ID); after != runsBefore {
 		t.Fatalf("recorded runs = %d, want the dispatch to have reserved none beyond the %d already recorded", after, runsBefore)
 	}
 }
@@ -71,11 +71,11 @@ func TestARepairDispatchRefusesWhereTheRunItNamesIsNotInFlight(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	// Somebody puts the item back, which is what lets a fresh run past every
 	// other gate. The run itself is still stopped: nothing re-entered it.
-	tracker.item.Status = "open"
+	tracker.Item.Status = "open"
 	worktreesBefore := worktreeDirectories(t, worktreeRoot)
 
 	fresh := roleBackend(func(request backend.RunRequest) error {
@@ -85,7 +85,7 @@ func TestARepairDispatchRefusesWhereTheRunItNamesIsNotInFlight(t *testing.T) {
 	dispatching := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, fresh, []string{"exit 0"}), fresh)
 	dispatching.NewRunID = runstate.NewRunID
 
-	_, err := dispatching.Continue(context.Background(), tracker.item.ID, stopped.RunID)
+	_, err := dispatching.Continue(context.Background(), tracker.Item.ID, stopped.RunID)
 	if !errors.Is(err, ErrNoRunToContinue) {
 		t.Fatalf("Continue() error = %v, want the dispatch refused for finding no run to continue", err)
 	}
@@ -95,8 +95,8 @@ func TestARepairDispatchRefusesWhereTheRunItNamesIsNotInFlight(t *testing.T) {
 			t.Fatalf("refusal = %v, is missing %q", err, want)
 		}
 	}
-	if len(fresh.requests) != 0 {
-		t.Fatalf("provider invocations = %d, want nothing spent", len(fresh.requests))
+	if len(fresh.Requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(fresh.Requests))
 	}
 	inFlight, err := store.Incomplete()
 	if err != nil {
@@ -117,7 +117,7 @@ func TestARepairDispatchRefusesADifferentRunInFlight(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	// The run that is actually going, made live exactly as a re-entry leaves one.
 	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseDeveloping)
@@ -132,7 +132,7 @@ func TestARepairDispatchRefusesADifferentRunInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunID() error = %v", err)
 	}
-	_, err = dispatching.Continue(context.Background(), tracker.item.ID, decided)
+	_, err = dispatching.Continue(context.Background(), tracker.Item.ID, decided)
 	if !errors.Is(err, ErrNoRunToContinue) {
 		t.Fatalf("Continue() error = %v, want the dispatch refused for naming a run that is not the one in flight", err)
 	}
@@ -140,8 +140,8 @@ func TestARepairDispatchRefusesADifferentRunInFlight(t *testing.T) {
 	if !errors.As(err, &mismatch) || mismatch.InFlight != stopped.RunID {
 		t.Fatalf("refusal = %v, want it to name %s as the run in flight", err, stopped.RunID)
 	}
-	if len(other.requests) != 0 {
-		t.Fatalf("provider invocations = %d, want nothing spent", len(other.requests))
+	if len(other.Requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(other.Requests))
 	}
 	// The run that is going was left exactly as it was, so the decision about it
 	// is still there to be carried out.
@@ -162,7 +162,7 @@ func TestARepairDispatchRefusesARunThatIsNotAResumableRepair(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	// The run is live again, but at a phase no repair loop is re-entered at: this
 	// is a run in the middle of being integrated rather than one owed an attempt.
@@ -184,7 +184,7 @@ func TestARepairDispatchRefusesARunThatIsNotAResumableRepair(t *testing.T) {
 	}, approveVerdict)
 	dispatching := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	_, err = dispatching.Continue(context.Background(), tracker.item.ID, stopped.RunID)
+	_, err = dispatching.Continue(context.Background(), tracker.Item.ID, stopped.RunID)
 	if !errors.Is(err, ErrNoRunToContinue) {
 		t.Fatalf("Continue() error = %v, want the dispatch refused for a run that is not a repair loop", err)
 	}
@@ -193,8 +193,8 @@ func TestARepairDispatchRefusesARunThatIsNotAResumableRepair(t *testing.T) {
 	if !strings.Contains(err.Error(), string(runstate.PhaseIntegrating)) {
 		t.Fatalf("refusal = %v, want it to name the phase the run is actually at", err)
 	}
-	if len(provider.requests) != 0 {
-		t.Fatalf("provider invocations = %d, want nothing spent", len(provider.requests))
+	if len(provider.Requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(provider.Requests))
 	}
 }
 
@@ -208,7 +208,7 @@ func TestARepairDispatchContinuesUnderAPolicyThatHoldsIntegration(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseDeveloping)
 
@@ -224,7 +224,7 @@ func TestARepairDispatchContinuesUnderAPolicyThatHoldsIntegration(t *testing.T) 
 		t.Fatalf("integration policy = %q, want a fixture whose policy is not automatic", continuing.Config.Approvals.Integration)
 	}
 
-	_, err := continuing.Continue(context.Background(), tracker.item.ID, stopped.RunID)
+	_, err := continuing.Continue(context.Background(), tracker.Item.ID, stopped.RunID)
 	// The two refusals a policy-conditioned re-entry would produce: `yoyo run`
 	// under this policy reports the run in flight as somebody else's rather than
 	// picking its repair loop up, and that is exactly what a dispatch must not do

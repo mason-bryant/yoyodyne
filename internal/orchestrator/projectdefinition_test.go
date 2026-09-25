@@ -191,7 +191,7 @@ func TestADeliveryDefinitionAProjectGotWrongStopsTheRunBeforeItClaims(t *testing
 			provider := roleBackend(baselineImplements, approveVerdict)
 			pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 			pipeline.ConfigPath = configPath
-			outcome, err := pipeline.Run(context.Background(), fixture.tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), fixture.tracker.Item.ID)
 			if err == nil {
 				t.Fatalf("the run went ahead on a definition that %s", broken.name)
 			}
@@ -204,7 +204,7 @@ func TestADeliveryDefinitionAProjectGotWrongStopsTheRunBeforeItClaims(t *testing
 			if !strings.Contains(err.Error(), broken.defect) {
 				t.Errorf("the refusal is %q and does not name %q, which is what is wrong with the file", err, broken.defect)
 			}
-			if fixture.tracker.claimed {
+			if fixture.tracker.Claimed {
 				t.Errorf("the work item was claimed by a run whose own definition was refused")
 			}
 			if _, err := fixture.store.LoadWorkflowInstance(deliveryInstanceID(pipelineRunID)); err == nil {
@@ -275,7 +275,7 @@ func TestAProjectDefinitionCannotPromoteWithoutTheGate(t *testing.T) {
 	provider := roleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.ConfigPath = configPath
-	outcome, err := pipeline.Run(context.Background(), fixture.tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), fixture.tracker.Item.ID)
 	if err == nil {
 		t.Fatalf("the run went ahead on a definition that promotes what nothing judged")
 	}
@@ -288,7 +288,7 @@ func TestAProjectDefinitionCannotPromoteWithoutTheGate(t *testing.T) {
 	if !strings.Contains(err.Error(), separation.IntegrationFollowsEvidence) {
 		t.Errorf("the refusal is %q and does not name the policy that refused it", err)
 	}
-	if fixture.tracker.claimed {
+	if fixture.tracker.Claimed {
 		t.Errorf("the work item was claimed by a run whose definition was refused")
 	}
 }

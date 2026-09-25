@@ -67,14 +67,14 @@ func TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			repository, worktreeRoot, store := restartableFixture(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 			provider := roleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			halting := &haltingStore{StateStore: store, at: test.haltAt, after: test.haltAfter}
 			pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
 
-			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+			if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 				t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 			}
 			interrupted, err := store.Load(pipelineRunID)
@@ -88,7 +88,7 @@ func TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary(t *testing.T) {
 			if promoted := base != interrupted.BaseCommit; promoted != test.wantPromoted {
 				t.Fatalf("main promoted = %t, want %t", promoted, test.wantPromoted)
 			}
-			providerRequests := len(provider.requests)
+			providerRequests := len(provider.Requests)
 
 			results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
 			if len(results) != 1 || results[0].RunID != interrupted.RunID {
@@ -99,8 +99,8 @@ func TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary(t *testing.T) {
 			}
 			// The whole point of reconciliation is that a lost process handle
 			// never buys the item a second developer.
-			if len(provider.requests) != providerRequests {
-				t.Fatalf("reconciliation issued %d provider request(s)", len(provider.requests)-providerRequests)
+			if len(provider.Requests) != providerRequests {
+				t.Fatalf("reconciliation issued %d provider request(s)", len(provider.Requests)-providerRequests)
 			}
 
 			settled, err := store.Load(interrupted.RunID)
@@ -118,12 +118,12 @@ func TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary(t *testing.T) {
 
 			// Reconciling again settles nothing, because nothing is left
 			// outstanding: a second sweep must not re-close or re-block an item.
-			calls := len(tracker.calls)
+			calls := len(tracker.Calls)
 			if again := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(again) != 0 {
 				t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
 			}
-			if len(tracker.calls) != calls {
-				t.Fatalf("second reconciliation made %v", tracker.calls[calls:])
+			if len(tracker.Calls) != calls {
+				t.Fatalf("second reconciliation made %v", tracker.Calls[calls:])
 			}
 		})
 	}
@@ -137,13 +137,13 @@ func assertBlockedAndPreserved(t *testing.T, repository string, tracker *fakeTra
 	if settled.Status != runstate.StatusFailed || settled.Integration != nil {
 		t.Fatalf("settled state = %#v, want a failed run with nothing integrated", settled)
 	}
-	if !tracker.blocked || tracker.closed {
+	if !tracker.Blocked || tracker.Closed {
 		t.Fatalf("tracker = %#v, want a blocked and unclosed item", tracker)
 	}
-	if !strings.Contains(tracker.blockReason, "No developer was restarted") ||
-		!strings.Contains(tracker.blockReason, "Preserved worktree: "+settled.WorktreePath) ||
-		!strings.Contains(tracker.blockReason, "Preserved branch: "+settled.Branch) {
-		t.Fatalf("blocker reason = %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "No developer was restarted") ||
+		!strings.Contains(tracker.BlockReason, "Preserved worktree: "+settled.WorktreePath) ||
+		!strings.Contains(tracker.BlockReason, "Preserved branch: "+settled.Branch) {
+		t.Fatalf("blocker reason = %q", tracker.BlockReason)
 	}
 	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
 		t.Fatalf("blocked run lost its preserved change: %v", err)
@@ -166,10 +166,10 @@ func assertCompletedAndCleaned(t *testing.T, repository string, tracker *fakeTra
 	if settled.Integration == nil || !settled.WorktreeRemoved || !settled.BranchRemoved || settled.CleanupFailure != "" {
 		t.Fatalf("settled state = %#v, want recorded integration and removed artifacts", settled)
 	}
-	if !tracker.closed || tracker.blocked {
+	if !tracker.Closed || tracker.Blocked {
 		t.Fatalf("tracker = %#v, want a closed and unblocked item", tracker)
 	}
-	if closes := countCalls(tracker.calls, "complete"); closes != 1 {
+	if closes := countCalls(tracker.Calls, "complete"); closes != 1 {
 		t.Fatalf("item closed %d time(s), want exactly once", closes)
 	}
 	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != settled.Integration.SourceCommit {
@@ -190,7 +190,7 @@ func TestReconcileFinishesCleanupThatNeverRan(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -200,7 +200,7 @@ func TestReconcileFinishesCleanupThatNeverRan(t *testing.T) {
 		beforeCleanup:   func() error { return errors.New("worktree is busy") },
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -217,8 +217,8 @@ func TestReconcileFinishesCleanupThatNeverRan(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	assertCompletedAndCleaned(t, repository, tracker, settled)
-	if len(provider.requests) != 2 {
-		t.Fatalf("provider requests = %d, want the original developer and reviewer only", len(provider.requests))
+	if len(provider.Requests) != 2 {
+		t.Fatalf("provider requests = %d, want the original developer and reviewer only", len(provider.Requests))
 	}
 }
 
@@ -229,7 +229,7 @@ func TestReconcileSettlesARunWhoseArtifactsAreAlreadyGone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -238,7 +238,7 @@ func TestReconcileSettlesARunWhoseArtifactsAreAlreadyGone(t *testing.T) {
 	losing := &interruptingStore{StateStore: store, failPhase: runstate.PhaseComplete, failAlways: true}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, losing, tracker, provider, []string{"exit 0"}), provider)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -264,7 +264,7 @@ func TestReconcileSettlesARunWhoseArtifactsAreAlreadyGone(t *testing.T) {
 	assertCompletedAndCleaned(t, repository, tracker, settled)
 	// The item was already closed by the run itself, so reconciliation records
 	// no second closure and no second outcome note.
-	if closes := countCalls(tracker.calls, "complete"); closes != 1 {
+	if closes := countCalls(tracker.Calls, "complete"); closes != 1 {
 		t.Fatalf("item closed %d time(s), want exactly once", closes)
 	}
 }
@@ -275,14 +275,14 @@ func TestReconcileLeavesAResumableRepairLoopAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	write := func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}
 	interrupted := &interruptedStore{StateStore: store, atAttempt: 2}
 	first := roleBackend(write, repairVerdict)
 	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{"exit 0"}), first)
-	if _, err := firstPipeline.Run(context.Background(), tracker.item.ID); err == nil || !interrupted.stopped {
+	if _, err := firstPipeline.Run(context.Background(), tracker.Item.ID); err == nil || !interrupted.stopped {
 		t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
 	}
 	before, err := store.Load(pipelineRunID)
@@ -301,7 +301,7 @@ func TestReconcileLeavesAResumableRepairLoopAlone(t *testing.T) {
 	if after.Status != before.Status || after.Phase != before.Phase || after.RepairAttempts != before.RepairAttempts {
 		t.Fatalf("reconciliation changed a resumable run: %#v", after)
 	}
-	if tracker.blocked || tracker.closed {
+	if tracker.Blocked || tracker.Closed {
 		t.Fatalf("reconciliation acted on the item of a resumable run: %#v", tracker)
 	}
 
@@ -309,7 +309,7 @@ func TestReconcileLeavesAResumableRepairLoopAlone(t *testing.T) {
 	// it up and finishes it rather than starting a second run for the item.
 	second := roleBackend(write, approveVerdict)
 	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
-	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	outcome, err := resumed.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -324,13 +324,13 @@ func TestReconcileLeavesRunsALiveProcessHolds(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 
@@ -348,8 +348,8 @@ func TestReconcileLeavesRunsALiveProcessHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if held.Status.Terminal() || tracker.blocked {
-		t.Fatalf("reconciliation settled a held run: state = %#v, blocked = %t", held, tracker.blocked)
+	if held.Status.Terminal() || tracker.Blocked {
+		t.Fatalf("reconciliation settled a held run: state = %#v, blocked = %t", held, tracker.Blocked)
 	}
 }
 
@@ -359,14 +359,14 @@ func TestReconcileFailsARunThatLeftNothingBehind(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	now := execution.RealClock{}.Now()
 	if err := store.Create(runstate.State{
 		SchemaVersion: runstate.StateSchemaVersion,
 		RunID:         pipelineRunID,
 		ProductID:     "yoyodyne",
 		RepositoryID:  "yoyodyne",
-		WorkItemID:    tracker.item.ID,
+		WorkItemID:    tracker.Item.ID,
 		Backend:       "claude-code",
 		Status:        runstate.StatusPending,
 		StartedAt:     now,
@@ -388,11 +388,11 @@ func TestReconcileFailsARunThatLeftNothingBehind(t *testing.T) {
 	if remains := results[0].Artifacts().Describe(); remains != "no artifacts recorded" {
 		t.Errorf("what remains = %q, want the absence stated rather than work reported as removed", remains)
 	}
-	if tracker.blocked {
+	if tracker.Blocked {
 		t.Fatal("reconciliation blocked an item that has nothing preserved")
 	}
-	if !strings.Contains(tracker.notes, "left nothing behind") || !strings.Contains(tracker.notes, "No worktree was recorded") {
-		t.Fatalf("notes = %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "left nothing behind") || !strings.Contains(tracker.Notes, "No worktree was recorded") {
+		t.Fatalf("notes = %q", tracker.Notes)
 	}
 	settled, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -413,13 +413,13 @@ func TestReconcileRecordsAStoppageSettledOntoAnAlreadyTerminalRun(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 
@@ -509,13 +509,13 @@ func TestReconcileBlocksAnUnapprovedPromotionItFinds(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// Strip the approval the run recorded, leaving the promoted commit without
@@ -545,11 +545,11 @@ func TestReconcileBlocksAnUnapprovedPromotionItFinds(t *testing.T) {
 	if remains := results[0].Artifacts().Describe(); remains != "work preserved" {
 		t.Errorf("what remains = %q, want the preserved change named", remains)
 	}
-	if !tracker.blocked || tracker.closed {
+	if !tracker.Blocked || tracker.Closed {
 		t.Fatalf("tracker = %#v, want a blocked and unclosed item", tracker)
 	}
-	if !strings.Contains(tracker.blockReason, "no approving review") {
-		t.Fatalf("blocker reason = %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "no approving review") {
+		t.Fatalf("blocker reason = %q", tracker.BlockReason)
 	}
 	settled, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -567,13 +567,13 @@ func TestReconcileBlocksAPromotionItCannotRecord(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// Integration insists on two demonstrably separate invocations. A run whose
@@ -591,11 +591,11 @@ func TestReconcileBlocksAPromotionItCannotRecord(t *testing.T) {
 	if len(results) != 1 || results[0].Action != ActionBlocked {
 		t.Fatalf("reconciliation = %#v, want the unrecordable promotion blocked", results)
 	}
-	if !tracker.blocked || tracker.closed {
+	if !tracker.Blocked || tracker.Closed {
 		t.Fatalf("tracker = %#v, want a blocked and unclosed item", tracker)
 	}
-	if !strings.Contains(tracker.blockReason, "does not support recording that promotion") {
-		t.Fatalf("blocker reason = %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "does not support recording that promotion") {
+		t.Fatalf("blocker reason = %q", tracker.BlockReason)
 	}
 	settled, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -614,13 +614,13 @@ func TestReconcileBlocksARecordedIntegrationTheTargetDoesNotCarry(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	interrupted, err := store.Load(pipelineRunID)
@@ -640,12 +640,12 @@ func TestReconcileBlocksARecordedIntegrationTheTargetDoesNotCarry(t *testing.T) 
 	}
 	// The run itself closed the item when it recorded the promotion, so the
 	// blocker is what reopens the question rather than a note beside it.
-	if !tracker.blocked || tracker.item.Status != "blocked" {
+	if !tracker.Blocked || tracker.Item.Status != "blocked" {
 		t.Fatalf("tracker = %#v, want the item blocked for a person", tracker)
 	}
-	if !strings.Contains(tracker.blockReason, "does not contain it") ||
-		!strings.Contains(tracker.blockReason, interrupted.Integration.SourceCommit) {
-		t.Fatalf("blocker reason = %q, want the recorded commit and the target that lacks it", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "does not contain it") ||
+		!strings.Contains(tracker.BlockReason, interrupted.Integration.SourceCommit) {
+		t.Fatalf("blocker reason = %q, want the recorded commit and the target that lacks it", tracker.BlockReason)
 	}
 	settled, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -681,13 +681,13 @@ func TestReconcileDoesNotLeaveAContradictedPromotionReadingAsSucceeded(t *testin
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	interrupted, err := store.Load(pipelineRunID)
@@ -711,7 +711,7 @@ func TestReconcileDoesNotLeaveAContradictedPromotionReadingAsSucceeded(t *testin
 	if len(results) != 1 || results[0].Action != ActionBlocked {
 		t.Fatalf("reconciliation = %#v, want the uncarried promotion blocked", results)
 	}
-	if !tracker.blocked || tracker.item.Status != "blocked" {
+	if !tracker.Blocked || tracker.Item.Status != "blocked" {
 		t.Fatalf("tracker = %#v, want the item blocked for a person", tracker)
 	}
 	settled, err := store.Load(pipelineRunID)
@@ -752,13 +752,13 @@ func TestReconcileCompletesARecordedIntegrationTheTargetMovedPast(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// Somebody else's commit lands on the target, so it no longer stands where
@@ -773,8 +773,8 @@ func TestReconcileCompletesARecordedIntegrationTheTargetMovedPast(t *testing.T) 
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the promotion the target still carries completed", results)
 	}
-	if tracker.blocked {
-		t.Fatalf("reconciliation blocked a promotion the target carries: %q", tracker.blockReason)
+	if tracker.Blocked {
+		t.Fatalf("reconciliation blocked a promotion the target carries: %q", tracker.BlockReason)
 	}
 	settled, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -792,13 +792,13 @@ func TestReconcileLeavesARunOutstandingWhenItsCleanupFails(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 
@@ -840,13 +840,13 @@ func TestReconcileReportsEveryRunEvenWhenOneCannotBeSettled(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// A second recorded run, interrupted before it built anything. It is
@@ -857,7 +857,7 @@ func TestReconcileReportsEveryRunEvenWhenOneCannotBeSettled(t *testing.T) {
 		RunID:         "run-abcdef0123456789abcdef0123456789",
 		ProductID:     "yoyodyne",
 		RepositoryID:  "yoyodyne",
-		WorkItemID:    tracker.item.ID,
+		WorkItemID:    tracker.Item.ID,
 		Backend:       "claude-code",
 		Status:        runstate.StatusPending,
 		StartedAt:     now,
@@ -962,7 +962,7 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	resetsAt := baseTime.Add(2 * time.Hour)
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 
@@ -972,7 +972,7 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 	firstClock := &pausingClock{now: baseTime}
 	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
 		firstClock, 6*time.Hour, time.Minute)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
@@ -995,8 +995,8 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 	if after.Status != before.Status || after.Phase != before.Phase || after.UsageLimitResetsAt == nil {
 		t.Fatalf("reconciliation disturbed a paused run: %#v", after)
 	}
-	if tracker.blocked || tracker.closed {
-		t.Fatalf("reconciliation acted on the item of a paused run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	if tracker.Blocked || tracker.Closed {
+		t.Fatalf("reconciliation acted on the item of a paused run: blocked=%t closed=%t", tracker.Blocked, tracker.Closed)
 	}
 
 	// The run is still exactly as resumable afterwards: once the deadline passes
@@ -1005,7 +1005,7 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 	secondClock := &pausingClock{now: resetsAt.Add(time.Minute)}
 	resumed := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second),
 		secondClock, 6*time.Hour, time.Minute)
-	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	outcome, err := resumed.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -1024,10 +1024,10 @@ func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	first := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
 	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
@@ -1055,13 +1055,13 @@ func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
 	if after.Status != before.Status || after.Phase != before.Phase || after.ProviderStop != before.ProviderStop {
 		t.Fatalf("reconciliation disturbed a stopped run: %#v", after)
 	}
-	if tracker.blocked || tracker.closed {
-		t.Fatalf("reconciliation acted on the item of a stopped run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	if tracker.Blocked || tracker.Closed {
+		t.Fatalf("reconciliation acted on the item of a stopped run: blocked=%t closed=%t", tracker.Blocked, tracker.Closed)
 	}
 
 	second := providerStopBackend(0, execution.ProcessStalled, approveVerdict)
 	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
-	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	outcome, err := resumed.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -1084,10 +1084,10 @@ func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	first := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
 	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
@@ -1098,7 +1098,7 @@ func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
 	// The process that hosted the run has returned: nothing holds the lease, and
 	// the item still reads as claimed, which is exactly the state the two runs of
 	// 2026-09-20 were found in.
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
 	if err != nil {
@@ -1170,8 +1170,8 @@ func TestReconcileSettlesAStoppedRunNothingContinued(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "partial.txt")); err != nil {
 		t.Fatalf("the stopped attempt's work is not where it was left: %v", err)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "the harness settled it as an environmental stop") {
-		t.Fatalf("item blocked = %t with reason %q, want the item blocked with the sweep's account", tracker.blocked, tracker.blockReason)
+	if !tracker.Blocked || !strings.Contains(tracker.BlockReason, "the harness settled it as an environmental stop") {
+		t.Fatalf("item blocked = %t with reason %q, want the item blocked with the sweep's account", tracker.Blocked, tracker.BlockReason)
 	}
 
 	// The slot and the in-flight guard read the same listing, and the run is no
@@ -1242,12 +1242,12 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first attempt leaves the check failing; the repair attempt the check
 	// hands back is the one the harness stops on time.
-	stalling := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	stalling := &fakeBackend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
 	attempts := 0
-	stalling.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	stalling.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role != domain.RoleDeveloper {
 			return backend.RunResult{}, fmt.Errorf("unexpected role %q before the repair attempt stalled", request.Role)
 		}
@@ -1257,18 +1257,18 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 				return backend.RunResult{}, err
 			}
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: stalling.developerSession, ResolvedModel: developerResolved,
+				Backend: domain.BackendClaudeCode, SessionID: stalling.DeveloperSession, ResolvedModel: developerResolved,
 				FinalText: "implemented the work item", Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
 			}, nil
 		}
 		return backend.RunResult{
-			Backend: domain.BackendClaudeCode, SessionID: stalling.developerSession, IsError: true,
+			Backend: domain.BackendClaudeCode, SessionID: stalling.DeveloperSession, IsError: true,
 			StopReason: string(execution.ProcessStalled), Process: execution.ProcessResult{Status: execution.ProcessStalled, ExitCode: -1}, LastEvent: request.LastSequence,
 		}, nil
 	}
 	checks := []string{"test -f fixed.txt"}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
 		t.Fatalf("Run() error = %v, outcome = %#v, want the repair attempt stopped on time", err, paused)
 	}
@@ -1279,7 +1279,7 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 	if stopped.CheckFailure == nil || stopped.RepairAttempts != 1 {
 		t.Fatalf("stopped run = %#v, want the failing check on the record with one repair attempt spent", stopped)
 	}
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	docket := &memoryDocket{}
 	reconciler := Reconciler{
@@ -1303,7 +1303,7 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 	// The development manager decides repair-continue about the docketed
 	// stoppage, exactly as the conversation records one, and the carry-out
 	// re-enters the run rather than refusing for want of a stoppage.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -1336,11 +1336,11 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
 	}
-	if !result.Continued || result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
-		t.Fatalf("result = %#v, closed = %t, want the same run continued and its change landed", result, tracker.closed)
+	if !result.Continued || result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.Closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run continued and its change landed", result, tracker.Closed)
 	}
-	continued := continuing.requestsForRole(domain.RoleDeveloper)
-	if len(continued) != 1 || continued[0].SessionID != stalling.developerSession || continued[0].WorkingDirectory != stopped.WorktreePath {
+	continued := continuing.RequestsForRole(domain.RoleDeveloper)
+	if len(continued) != 1 || continued[0].SessionID != stalling.DeveloperSession || continued[0].WorkingDirectory != stopped.WorktreePath {
 		t.Fatalf("continued attempts = %#v, want one, in the stopped run's own session and worktree", continued)
 	}
 	// The vanished process's account belonged to the round the continuation
@@ -1367,14 +1367,14 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first developer attempt writes half of the change and is then stopped
 	// on time, which is the whole of what a stall leaves: a session, a worktree
 	// with uncommitted work in it, and nothing anybody judged.
 	stalling := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
 	checks := []string{"exit 0"}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
 		t.Fatalf("Run() error = %v, outcome = %#v, want the first attempt stopped on time", err, paused)
 	}
@@ -1390,7 +1390,7 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 	if stopped.ProviderSessionID == "" {
 		t.Fatalf("stopped run = %#v, want the developer session it stalled in preserved", stopped)
 	}
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	docket := &memoryDocket{}
 	reconciler := Reconciler{
@@ -1431,11 +1431,11 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 
 	// The development manager records a repair about that stoppage, exactly as
 	// the conversation records one.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	roundsBefore, err := store.Triage().Counters(tracker.item.ID)
+	roundsBefore, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1482,7 +1482,7 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 
 	// The same session, in the same worktree, with the half-written work still
 	// in it.
-	continued := continuing.requestsForRole(domain.RoleDeveloper)
+	continued := continuing.RequestsForRole(domain.RoleDeveloper)
 	if len(continued) != 1 || continued[0].SessionID != stopped.ProviderSessionID || continued[0].WorkingDirectory != stopped.WorktreePath {
 		t.Fatalf("continued attempts = %#v, want one, in the stalled run's own session and worktree", continued)
 	}
@@ -1503,7 +1503,7 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 	if landed.RepairAttempts != 0 {
 		t.Fatalf("repair attempts = %d, want a stall to count none", landed.RepairAttempts)
 	}
-	roundsAfter, err := store.Triage().Counters(tracker.item.ID)
+	roundsAfter, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1526,14 +1526,14 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stalling := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	stalling.run = stoppingReviewer(stalling.run, stalling.reviewerSession)
+	stalling.Respond = stoppingReviewer(stalling.Respond, stalling.ReviewerSession)
 	checks := []string{"test -f feature.txt"}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
 		t.Fatalf("Run() error = %v, outcome = %#v, want the review stopped on time", err, paused)
 	}
@@ -1544,7 +1544,7 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 	if stopped.Phase != runstate.PhaseReviewing || stopped.RepairAttempts != 0 || handedBackRepair(stopped) {
 		t.Fatalf("stopped run = %#v, want a first attempt stopped at its review with nothing handed back", stopped)
 	}
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	docket := &memoryDocket{}
 	reconciler := Reconciler{
@@ -1590,7 +1590,7 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 		}
 	}
 
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -1609,8 +1609,8 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 	continuing := roleBackend(func(request backend.RunRequest) error {
 		return errors.New("a stall at the review is owed no developer attempt")
 	}, approveVerdict)
-	reviewing := continuing.run
-	continuing.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	reviewing := continuing.Respond
+	continuing.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer && request.WorkingDirectory == stopped.WorktreePath {
 			if content, err := os.ReadFile(filepath.Join(request.WorkingDirectory, "feature.txt")); err == nil && string(content) == "implemented\n" {
 				reviewedTheAttempt = true
@@ -1639,8 +1639,8 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 	if !result.Continued || !result.Stall || result.ResumesAt != runstate.PhaseReviewing {
 		t.Fatalf("result = %#v, want the stall continued at the review", result)
 	}
-	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
-		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.closed)
+	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.Closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.Closed)
 	}
 	if !strings.Contains(result.Reason, "continued at the reviewing phase") || !strings.Contains(result.Render(), "at the reviewing phase, the step it stalled in") {
 		t.Fatalf("result does not say it was continued at the review:\nreason: %s\n%s", result.Reason, result.Render())
@@ -1648,10 +1648,10 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 
 	// No developer attempt, and the review asked again on the attempt's change in
 	// the preserved worktree.
-	if developers := continuing.requestsForRole(domain.RoleDeveloper); len(developers) != 0 {
+	if developers := continuing.RequestsForRole(domain.RoleDeveloper); len(developers) != 0 {
 		t.Fatalf("developer invocations = %#v, want none for a stall at the review", developers)
 	}
-	if reviews := continuing.requestsForRole(domain.RoleReviewer); len(reviews) != 1 {
+	if reviews := continuing.RequestsForRole(domain.RoleReviewer); len(reviews) != 1 {
 		t.Fatalf("review invocations = %d, want the review asked again once", len(reviews))
 	}
 	if !reviewedTheAttempt {
@@ -1686,15 +1686,15 @@ func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stalling := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	stalling.run = stoppingReviewer(stalling.run, stalling.reviewerSession)
+	stalling.Respond = stoppingReviewer(stalling.Respond, stalling.ReviewerSession)
 	checksLog := filepath.Join(t.TempDir(), "checks.log")
 	checks := []string{"test -f feature.txt && echo ran >> " + checksLog}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
 		t.Fatalf("Run() error = %v, outcome = %#v, want the run stopped on time", err, paused)
 	}
@@ -1702,7 +1702,7 @@ func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	docket := &memoryDocket{}
 	reconciler := Reconciler{
@@ -1735,7 +1735,7 @@ func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T
 		t.Fatalf("entry does not name the checks as where the repair continues it:\n%s", rendered)
 	}
 
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -1771,13 +1771,13 @@ func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T
 	if !result.Continued || !result.Stall || result.ResumesAt != runstate.PhaseChecking {
 		t.Fatalf("result = %#v, want the stall continued at the checks", result)
 	}
-	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
-		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.closed)
+	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.Closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.Closed)
 	}
-	if developers := continuing.requestsForRole(domain.RoleDeveloper); len(developers) != 0 {
+	if developers := continuing.RequestsForRole(domain.RoleDeveloper); len(developers) != 0 {
 		t.Fatalf("developer invocations = %#v, want none for a stall at the checks", developers)
 	}
-	if reviews := continuing.requestsForRole(domain.RoleReviewer); len(reviews) != 1 {
+	if reviews := continuing.RequestsForRole(domain.RoleReviewer); len(reviews) != 1 {
 		t.Fatalf("review invocations = %d, want the review asked once after the checks", len(reviews))
 	}
 	// Once in the first attempt, and once more on the continuation over the

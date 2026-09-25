@@ -98,7 +98,7 @@ func newBranchReviewer(t *testing.T, repository string, provider *fakeBackend) (
 
 // branchProvider answers one reviewer invocation with a fixed reply.
 func branchProvider(reply string) *fakeBackend {
-	return &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+	return &fakeBackend{Respond: func(request backend.RunRequest) (backend.RunResult, error) {
 		return backend.RunResult{
 			Backend:       domain.BackendClaudeCode,
 			SessionID:     "branch-review-session",
@@ -141,7 +141,7 @@ func TestBranchReviewJudgesEveryCommitTogetherAndRecordsTheVerdict(t *testing.T)
 
 	// One provider invocation, made as the reviewer, with no tools and nothing
 	// to write with — the independence a per-item review is held to.
-	requests := provider.requestsForRole(domain.RoleReviewer)
+	requests := provider.RequestsForRole(domain.RoleReviewer)
 	if len(requests) != 1 {
 		t.Fatalf("reviewer invocations = %d", len(requests))
 	}
@@ -236,7 +236,7 @@ func TestBranchReviewRecordsTheEventStreamOfItsInvocation(t *testing.T) {
 	repository := accumulatedRepository(t)
 	// The provider emits its own result event through the sink it was handed,
 	// exactly as the real backend does, because that event is what carries cost.
-	provider := &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+	provider := &fakeBackend{Respond: func(request backend.RunRequest) (backend.RunResult, error) {
 		event, err := execution.NewEvent(request.RunID, request.LastSequence+1, time.Now(), execution.EventRunCompleted, "claude-code", map[string]any{
 			"total_cost_usd": 1.25,
 		})
@@ -298,7 +298,7 @@ func TestBranchReviewRecordsAReviewThatNeverAnswered(t *testing.T) {
 	t.Parallel()
 
 	repository := accumulatedRepository(t)
-	provider := &fakeBackend{run: func(backend.RunRequest) (backend.RunResult, error) {
+	provider := &fakeBackend{Respond: func(backend.RunRequest) (backend.RunResult, error) {
 		return backend.RunResult{}, errors.New("claude is not installed")
 	}}
 	reviewer, reviews, _ := newBranchReviewer(t, repository, provider)
@@ -330,7 +330,7 @@ func TestABranchReviewTheProviderRefusedRecordsTheExhaustedLimit(t *testing.T) {
 
 	repository := accumulatedRepository(t)
 	resetsAt := fixedBranchClock{}.Now().Add(3 * time.Hour)
-	provider := &fakeBackend{run: func(backend.RunRequest) (backend.RunResult, error) {
+	provider := &fakeBackend{Respond: func(backend.RunRequest) (backend.RunResult, error) {
 		return backend.RunResult{
 			IsError:    true,
 			StopReason: "usage_limit",
@@ -417,8 +417,8 @@ func TestBranchReviewRefusesABranchThatAccumulatedNothing(t *testing.T) {
 		t.Fatalf("Review() of an empty range error = %v", err)
 	}
 	// Nothing was invoked and nothing was recorded: there was no change to judge.
-	if len(provider.requests) != 0 {
-		t.Errorf("the provider was invoked %d times for an empty range", len(provider.requests))
+	if len(provider.Requests) != 0 {
+		t.Errorf("the provider was invoked %d times for an empty range", len(provider.Requests))
 	}
 	if recorded, err := reviews.List(); err != nil || len(recorded) != 0 {
 		t.Fatalf("List() = %#v, %v", recorded, err)

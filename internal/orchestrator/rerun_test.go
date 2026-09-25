@@ -755,12 +755,12 @@ func TestARerunSupersedesTheClaimATerminalStoppedRunLeft(t *testing.T) {
 	pipelined = newPipelinedRerun(t, func() {
 		// The release has landed by the time the fresh run starts, which is what
 		// the pipeline's own start reads the item for.
-		if pipelined.tracker.item.Status != "open" {
-			t.Errorf("item status = %q when the fresh run starts, want the stale claim given back", pipelined.tracker.item.Status)
+		if pipelined.tracker.Item.Status != "open" {
+			t.Errorf("item status = %q when the fresh run starts, want the stale claim given back", pipelined.tracker.Item.Status)
 		}
 	})
-	pipelined.tracker.item.Status = "in_progress"
-	pipelined.tracker.claimed = true
+	pipelined.tracker.Item.Status = "in_progress"
+	pipelined.tracker.Claimed = true
 
 	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
@@ -769,22 +769,22 @@ func TestARerunSupersedesTheClaimATerminalStoppedRunLeft(t *testing.T) {
 	if !result.Started || result.Outcome.Integration == nil {
 		t.Fatalf("result = %#v, want the fresh run started and integrated", result)
 	}
-	if !pipelined.tracker.released {
+	if !pipelined.tracker.Released {
 		t.Fatalf("the claim the stopped run left was never given back")
 	}
 	// What moved the status and why is on the item, in the note the release carried.
 	for _, want := range []string{"released this item's in_progress claim", priorRunID, "no run of this item is in flight", decidedIn} {
-		if !strings.Contains(pipelined.tracker.releaseReason, want) {
-			t.Fatalf("release note = %q, want it to say %q", pipelined.tracker.releaseReason, want)
+		if !strings.Contains(pipelined.tracker.ReleaseReason, want) {
+			t.Fatalf("release note = %q, want it to say %q", pipelined.tracker.ReleaseReason, want)
 		}
 	}
-	if result.SupersededClaim != pipelined.tracker.releaseReason {
-		t.Fatalf("result says the note was %q, the item was given %q", result.SupersededClaim, pipelined.tracker.releaseReason)
+	if result.SupersededClaim != pipelined.tracker.ReleaseReason {
+		t.Fatalf("result says the note was %q, the item was given %q", result.SupersededClaim, pipelined.tracker.ReleaseReason)
 	}
 	// Given back before the fresh run claimed it, and claimed by that run again.
-	release, claim := slices.Index(pipelined.tracker.calls, "release"), slices.Index(pipelined.tracker.calls, "claim")
+	release, claim := slices.Index(pipelined.tracker.Calls, "release"), slices.Index(pipelined.tracker.Calls, "claim")
 	if release < 0 || claim < 0 || release > claim {
-		t.Fatalf("tracker calls = %v, want the stale claim released before the fresh run's claim", pipelined.tracker.calls)
+		t.Fatalf("tracker calls = %v, want the stale claim released before the fresh run's claim", pipelined.tracker.Calls)
 	}
 	if !strings.Contains(result.Render(), "was released first") {
 		t.Fatalf("render = %q, want the release said", result.Render())
@@ -1121,7 +1121,7 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	if result.Outcome.Integration == nil {
 		t.Fatalf("the fresh run did not integrate: %#v", result.Outcome)
 	}
-	developer := pipelined.provider.requestsForRole(domain.RoleDeveloper)
+	developer := pipelined.provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developer) != 1 {
 		t.Fatalf("developer invocations = %d, want the fresh attempt", len(developer))
 	}
@@ -1175,7 +1175,7 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	if result.PausedBeforeStarting.RunID != "" || result.PausedBeforeStarting.Integration != nil {
 		t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.PausedBeforeStarting)
 	}
-	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+	if invocations := len(pipelined.provider.RequestsForRole(domain.RoleDeveloper)); invocations != 0 {
 		t.Fatalf("developer invocations = %d, want none under a hold", invocations)
 	}
 	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
@@ -1261,7 +1261,7 @@ func TestAPauseMetWhereTheFreshRunWouldStartGivesTheClaimBack(t *testing.T) {
 			if result.PausedBeforeStarting.RunID != "" || result.PausedBeforeStarting.Integration != nil {
 				t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.PausedBeforeStarting)
 			}
-			if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+			if invocations := len(pipelined.provider.RequestsForRole(domain.RoleDeveloper)); invocations != 0 {
 				t.Fatalf("developer invocations = %d, want none behind a pause", invocations)
 			}
 			if result.RecordProblem != "" {
@@ -1350,7 +1350,7 @@ func TestARerunRacedForTheLastSlotGivesTheClaimBackAndLaunchesLater(t *testing.T
 	if result.Started || result.CapacityFull == nil {
 		t.Fatalf("result = %#v, want a full harness reported and nothing started", result)
 	}
-	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+	if invocations := len(pipelined.provider.RequestsForRole(domain.RoleDeveloper)); invocations != 0 {
 		t.Fatalf("developer invocations = %d, want none behind a reservation that was refused", invocations)
 	}
 	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
@@ -1386,7 +1386,7 @@ func TestARerunOnABlockedItemIsCarriedOutWithoutAnybodyReopeningIt(t *testing.T)
 	pipelined := newPipelinedRerun(t, nil)
 	// What stopping the run did to the item, which is the state a docketed
 	// stoppage is ordinarily found in.
-	pipelined.tracker.item.Status = "blocked"
+	pipelined.tracker.Item.Status = "blocked"
 	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
 	if err != nil {
 		t.Fatalf("Rerun() on a blocked item error = %v, want the decision carried out", err)
@@ -1426,7 +1426,7 @@ func TestARerunRefusedByThePipelineGivesTheClaimBackAndLaunchesLater(t *testing.
 	if result.Started {
 		t.Fatalf("result = %#v, want nothing reported as started", result)
 	}
-	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+	if invocations := len(pipelined.provider.RequestsForRole(domain.RoleDeveloper)); invocations != 0 {
 		t.Fatalf("developer invocations = %d, want none behind a run that was never reserved", invocations)
 	}
 	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
@@ -1475,7 +1475,7 @@ type pipelinedRerun struct {
 func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 	t.Helper()
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &fakeTracker{Item: beads.WorkItem{
 		ID:     docketedItem,
 		Title:  docketedTitle,
 		Status: "open",

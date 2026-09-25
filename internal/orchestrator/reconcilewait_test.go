@@ -28,7 +28,7 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	resetsAt := baseTime.Add(2 * time.Hour)
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 
@@ -38,7 +38,7 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 	firstClock := &pausingClock{now: baseTime}
 	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
 		firstClock, 6*time.Hour, time.Minute)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
@@ -49,7 +49,7 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 	if exited.UsageLimitResetsAt == nil || !exited.UsageLimitResetsAt.Equal(resetsAt) {
 		t.Fatalf("exited run = %#v, want the deadline recorded", exited)
 	}
-	tracker.item.Status = "in_progress"
+	tracker.Item.Status = "in_progress"
 
 	// Inside the deadline the run is the wait it is, whether or not a process
 	// is asleep on it, and a sweep with a continuation wired continues nothing.
@@ -116,7 +116,7 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 		t.Fatalf("ContinueWaits() = %#v with %d continuation(s), want the one exited run continued once", continuations, continued)
 	}
 	continuation := continuations[0]
-	if continuation.RunID != paused.RunID || continuation.WorkItemID != tracker.item.ID || !continuation.Continued || continuation.Failure != "" {
+	if continuation.RunID != paused.RunID || continuation.WorkItemID != tracker.Item.ID || !continuation.Continued || continuation.Failure != "" {
 		t.Fatalf("continuation = %#v, want the exited run continued without failure", continuation)
 	}
 	if !continuation.Deadline.Equal(resetsAt) || !strings.Contains(continuation.Waited, "five_hour usage limit") {
@@ -130,8 +130,8 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 	if continuation.Outcome.WorktreePath != exited.WorktreePath || continuation.Outcome.ProviderSessionID != exited.ProviderSessionID {
 		t.Fatalf("continued outcome = %#v, want the exited run's worktree %q and session %q", continuation.Outcome, exited.WorktreePath, exited.ProviderSessionID)
 	}
-	if len(serving.requests) == 0 || serving.requests[0].SessionID != exited.ProviderSessionID {
-		t.Fatalf("continued attempt requests = %#v, want the developer session the refused attempt established", serving.requests)
+	if len(serving.Requests) == 0 || serving.Requests[0].SessionID != exited.ProviderSessionID {
+		t.Fatalf("continued attempt requests = %#v, want the developer session the refused attempt established", serving.Requests)
 	}
 
 	// The record says the sweep continued it, and says what it saw.
@@ -176,13 +176,13 @@ func TestTheSweepLeavesAWaitALiveProcessIsServing(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	resetsAt := baseTime.Add(2 * time.Hour)
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 	first := usageLimitBackend(1, limit, approveVerdict)
 	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
 		&pausingClock{now: baseTime}, 6*time.Hour, time.Minute)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}
@@ -240,12 +240,12 @@ func TestTheSweepLeavesARunParkedOnTheOperatorsPauseAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	holds := newOperatorHoldStore(t)
 	// The operator pauses as the item is claimed, so the run parks at its first
 	// developer attempt: in the developing phase, with its worktree cut, which is
 	// the shape a usage-limit wait has and the one the exclusion is asked about.
-	tracker.onClaim = func() error {
+	tracker.OnClaim = func() error {
 		_, err := holds.Hold(baseTime)
 		return err
 	}
@@ -257,12 +257,12 @@ func TestTheSweepLeavesARunParkedOnTheOperatorsPauseAlone(t *testing.T) {
 	pipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider),
 		&pausingClock{now: baseTime}, 6*time.Hour, 0)
 	pipeline.Holds = holds
-	parked, err := pipeline.Run(context.Background(), tracker.item.ID)
+	parked, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !parked.Paused || parked.PausedByOperator == nil {
 		t.Fatalf("Run() error = %v, outcome = %#v, want a run parked on the operator's pause", err, parked)
 	}
-	if len(provider.requests) != 0 {
-		t.Fatalf("the provider was invoked under the operator's pause: %#v", provider.requests)
+	if len(provider.Requests) != 0 {
+		t.Fatalf("the provider was invoked under the operator's pause: %#v", provider.Requests)
 	}
 	before, err := store.Load(parked.RunID)
 	if err != nil {
@@ -325,8 +325,8 @@ func TestTheSweepLeavesARunParkedOnTheOperatorsPauseAlone(t *testing.T) {
 	if len(after.SweepContinuations) != 0 || after.OperatorHeldSince == nil || after.Status != before.Status || after.Phase != before.Phase {
 		t.Fatalf("the sweep disturbed a run the operator parked: %#v", after)
 	}
-	if tracker.blocked || tracker.closed {
-		t.Fatalf("the sweep acted on the item of a parked run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	if tracker.Blocked || tracker.Closed {
+		t.Fatalf("the sweep acted on the item of a parked run: blocked=%t closed=%t", tracker.Blocked, tracker.Closed)
 	}
 }
 
@@ -372,8 +372,8 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		// Each served attempt also writes a file of its own, so the change the
 		// second promotion replays onto the first's landing is not one the target
 		// already carries whole.
-		served, own := providers[item].run, item+".txt"
-		providers[item].run = func(request backend.RunRequest) (backend.RunResult, error) {
+		served, own := providers[item].Respond, item+".txt"
+		providers[item].Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 			result, err := served(request)
 			if err == nil && request.Role == domain.RoleDeveloper {
 				err = os.WriteFile(filepath.Join(request.WorkingDirectory, own), []byte("implemented\n"), 0o600)
@@ -417,7 +417,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		gate.arrive()
 	}
 	reconciler := Reconciler{
-		Tracker:   &fakeTracker{item: beads.WorkItem{ID: items[0], Title: "Task", Status: "in_progress"}},
+		Tracker:   &fakeTracker{Item: beads.WorkItem{ID: items[0], Title: "Task", Status: "in_progress"}},
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     sweepStore,
 		Clock:     &pausingClock{now: resetsAt.Add(time.Minute)},
@@ -447,7 +447,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		if continuation.Outcome.WorktreePath != was.WorktreePath || continuation.Outcome.ProviderSessionID != was.ProviderSessionID {
 			t.Fatalf("continued outcome for %s = %#v, want its own worktree %q and session %q", continuation.WorkItemID, continuation.Outcome, was.WorktreePath, was.ProviderSessionID)
 		}
-		requests := providers[continuation.WorkItemID].requests
+		requests := providers[continuation.WorkItemID].Requests
 		if len(requests) == 0 || requests[0].SessionID != was.ProviderSessionID {
 			t.Fatalf("continued attempt requests for %s = %#v, want its own developer session resumed", continuation.WorkItemID, requests)
 		}
@@ -475,7 +475,7 @@ func exitedPipeline(t *testing.T, repository, stateRoot, worktreeRoot, item, sta
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: item, Title: "Task", Status: status}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: item, Title: "Task", Status: status}}
 	pipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider),
 		clock, 6*time.Hour, time.Minute)
 	pipeline.Config.Execution.MaxConcurrentDevelopers = 2
@@ -493,13 +493,13 @@ func TestAContinuationThePipelineRefusesIsReportedAsAFailure(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	resetsAt := baseTime.Add(2 * time.Hour)
 	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
 	first := usageLimitBackend(1, limit, approveVerdict)
 	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
 		&pausingClock{now: baseTime}, 6*time.Hour, time.Minute)
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !paused.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
 	}

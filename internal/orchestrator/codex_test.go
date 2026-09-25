@@ -50,7 +50,7 @@ func TestARunOnCodexReachesTheProviderWithThePostureItsRoleRequires(t *testing.T
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	pipeline, store := newAutomaticPipeline(t, repository, tracker,
 		roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
 
@@ -66,7 +66,7 @@ func TestARunOnCodexReachesTheProviderWithThePostureItsRoleRequires(t *testing.T
 	cli := &scriptedCodexCLI{}
 	pipeline.Backend = codex.Backend{Runner: cli}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestARunNamesTheBackendWhoseCLIIsMissing(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker,
 		roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
 	pipeline.Config.Agents["developer"] = config.AgentConfig{
@@ -114,11 +114,11 @@ func TestARunNamesTheBackendWhoseCLIIsMissing(t *testing.T) {
 	}
 	pipeline.Backend = codex.Backend{Runner: &scriptedCodexCLI{absent: true}}
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "codex backend is not installed") {
 		t.Fatalf("Run() error = %v, want it to name the backend the agents selected", err)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Error("a run whose provider is not installed claimed the work item anyway")
 	}
 }

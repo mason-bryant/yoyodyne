@@ -102,7 +102,7 @@ func TestTheModelARunStartsOnIsChosenByTheItemsLabels(t *testing.T) {
 			t.Parallel()
 
 			repository := pipelineRepository(t)
-			tracker := &fakeTracker{item: beads.WorkItem{
+			tracker := &fakeTracker{Item: beads.WorkItem{
 				ID: "yoyodyne-task", Title: "Work", Status: "open", Labels: replay.labels,
 			}}
 			provider := roleBackend(func(request backend.RunRequest) error {
@@ -111,7 +111,7 @@ func TestTheModelARunStartsOnIsChosenByTheItemsLabels(t *testing.T) {
 			pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 			pipeline.Config.Execution.DeveloperModels = mapping
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -134,7 +134,7 @@ func TestTheModelARunStartsOnIsChosenByTheItemsLabels(t *testing.T) {
 			// The first verdict sends the change back, so this run made two
 			// developer attempts. Both matter: a repair is where a run that
 			// resolved the mapping again per invocation would be visible.
-			attempts := provider.requestsForRole(domain.RoleDeveloper)
+			attempts := provider.RequestsForRole(domain.RoleDeveloper)
 			if len(attempts) < 2 {
 				t.Fatalf("the run made %d developer attempt(s), want the first and its repair", len(attempts))
 			}
@@ -145,7 +145,7 @@ func TestTheModelARunStartsOnIsChosenByTheItemsLabels(t *testing.T) {
 			}
 			// The reviewer's model is not the mapping's to move: its posture is a
 			// safety property, and the mapping has no key that could name it.
-			reviews := provider.requestsForRole(domain.RoleReviewer)
+			reviews := provider.RequestsForRole(domain.RoleReviewer)
 			if len(reviews) == 0 {
 				t.Fatal("the run obtained no verdict")
 			}
@@ -165,13 +165,13 @@ func TestARunUnderNoMappingRecordsNoModelChoice(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open", Labels: []string{"docs"}}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open", Labels: []string{"docs"}}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestARunUnderNoMappingRecordsNoModelChoice(t *testing.T) {
 		t.Fatalf("recorded %q for %q, want nothing recorded where no mapping was read",
 			state.DeveloperModel, state.DeveloperModelReason)
 	}
-	for _, request := range provider.requestsForRole(domain.RoleDeveloper) {
+	for _, request := range provider.RequestsForRole(domain.RoleDeveloper) {
 		if request.Model != testDeveloperModel {
 			t.Fatalf("developer attempt asked for %q, want the configured %q", request.Model, testDeveloperModel)
 		}

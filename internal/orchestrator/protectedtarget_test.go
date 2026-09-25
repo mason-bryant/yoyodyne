@@ -41,14 +41,14 @@ func newProtectedRun(t *testing.T, forge *fakeForge) *protectedRun {
 	t.Helper()
 	repository, remote := publishedRepository(t)
 	protectBranch(t, remote, "main")
-	forge.remote = remote
+	forge.Remote = remote
 	run := &protectedRun{
 		repository: repository,
 		remote:     remote,
-		tracker:    &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
+		tracker:    &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
 		forge:      forge,
 	}
-	forge.onMerge = func() { run.atMerge = publishedCommit(t, repository, "main") }
+	forge.OnMerge = func() { run.atMerge = publishedCommit(t, repository, "main") }
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -73,20 +73,20 @@ func (r *protectedRun) assertMainNotAhead(t *testing.T) {
 }
 
 func runGitQuiet(directory string, arguments ...string) error {
-	_, err := (&fakeForge{remote: directory}).git(arguments...)
+	_, err := (&fakeForge{Remote: directory}).Git(arguments...)
 	return err
 }
 
 func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *testing.T) {
 	t.Parallel()
 
-	run := newProtectedRun(t, &fakeForge{protection: publish.BranchProtection{Protected: true, By: "ruleset"}})
+	run := newProtectedRun(t, &fakeForge{TargetProtection: publish.BranchProtection{Protected: true, By: "ruleset"}})
 	outcome, err := run.pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(run.forge.protectionAsked) == 0 || run.forge.protectionAsked[0] != "main" {
-		t.Fatalf("protection asked about %v, want the target branch", run.forge.protectionAsked)
+	if len(run.forge.ProtectionAsked) == 0 || run.forge.ProtectionAsked[0] != "main" {
+		t.Fatalf("protection asked about %v, want the target branch", run.forge.ProtectionAsked)
 	}
 	// The forge was asked to merge while local main still stood at the base: the
 	// promotion wrote nothing to it first.
@@ -122,8 +122,8 @@ func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *te
 	if state.Integration == nil || !state.Integration.ThroughPullRequest {
 		t.Errorf("durable integration = %#v, want the landing recorded as through the pull request", state.Integration)
 	}
-	if !strings.Contains(run.tracker.notes, "main is protected on the forge by ruleset") {
-		t.Errorf("tracker notes do not say which path the protected target took:\n%s", run.tracker.notes)
+	if !strings.Contains(run.tracker.Notes, "main is protected on the forge by ruleset") {
+		t.Errorf("tracker notes do not say which path the protected target took:\n%s", run.tracker.Notes)
 	}
 	run.assertMainNotAhead(t)
 }
@@ -133,7 +133,7 @@ func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *te
 func TestAnUnaskableForgeTakesTheProtectedPath(t *testing.T) {
 	t.Parallel()
 
-	run := newProtectedRun(t, &fakeForge{protectionErr: errors.New("gh: Resource not accessible by integration (HTTP 403)")})
+	run := newProtectedRun(t, &fakeForge{ProtectionErr: errors.New("gh: Resource not accessible by integration (HTTP 403)")})
 	outcome, err := run.pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -159,8 +159,8 @@ func TestARefusedMergeOnAProtectedTargetLeavesMainWhereTheForgeHasIt(t *testing.
 	t.Parallel()
 
 	run := newProtectedRun(t, &fakeForge{
-		protection: publish.BranchProtection{Protected: true, By: "branch protection"},
-		mergeErr: publish.MergeRefused{
+		TargetProtection: publish.BranchProtection{Protected: true, By: "branch protection"},
+		MergeErr: publish.MergeRefused{
 			Number: 1,
 			Method: publish.MergeCommit,
 			Status: "BLOCKED",
@@ -171,15 +171,15 @@ func TestARefusedMergeOnAProtectedTargetLeavesMainWhereTheForgeHasIt(t *testing.
 	if err == nil {
 		t.Fatalf("Run() = %#v, want the run stopped on the unlanded change", outcome)
 	}
-	if outcome.WorkItemClosed || run.tracker.closed {
-		t.Fatalf("an unmerged change closed the item as integrated: %q", run.tracker.closeReason)
+	if outcome.WorkItemClosed || run.tracker.Closed {
+		t.Fatalf("an unmerged change closed the item as integrated: %q", run.tracker.CloseReason)
 	}
-	if !run.tracker.blocked {
+	if !run.tracker.Blocked {
 		t.Fatal("the unlanded change was not handed to a person")
 	}
 	for _, want := range []string{"did not merge it", "was not moved", "approving review is required", "triage rearm"} {
-		if !strings.Contains(run.tracker.blockReason, want) {
-			t.Errorf("blocker does not say %q:\n%s", want, run.tracker.blockReason)
+		if !strings.Contains(run.tracker.BlockReason, want) {
+			t.Errorf("blocker does not say %q:\n%s", want, run.tracker.BlockReason)
 		}
 	}
 	if local := publishedCommit(t, run.repository, "main"); local != outcome.BaseCommit {
@@ -215,13 +215,13 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	protectBranch(t, fixture.remote, "main")
-	fixture.forge.protection = publish.BranchProtection{Protected: true, By: "branch protection"}
+	fixture.forge.TargetProtection = publish.BranchProtection{Protected: true, By: "branch protection"}
 	outcome := fixture.run(t)
 
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.BaseCommit {
 		t.Fatalf("local main = %q after a queued merge, want the base %q", local, outcome.BaseCommit)
 	}
-	if outcome.WorkItemClosed || fixture.tracker.closed {
+	if outcome.WorkItemClosed || fixture.tracker.Closed {
 		t.Fatal("a queued merge closed the item before the forge merged it")
 	}
 	if outcome.CleanupFailure != "" || outcome.WorktreeRemoved {
@@ -235,7 +235,7 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 		t.Fatal("the queued landing is not outstanding, so nothing would ever settle it")
 	}
 
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the queued landing settled", results)
@@ -245,7 +245,7 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 		t.Errorf("local main = %q, want it fast-forwarded onto the forge's merge %q", local, remoteTarget)
 	}
 	assertRemoteCarriesPromotion(t, fixture.repository, fixture.remote, "main", outcome.Integration.SourceCommit)
-	if !fixture.tracker.closed {
+	if !fixture.tracker.Closed {
 		t.Error("the confirmed landing did not close the item")
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
@@ -264,10 +264,10 @@ func TestAnUnprotectedTargetIsStillPromotedLocallyFirst(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	var atMerge string
-	forge := &fakeForge{remote: remote}
-	forge.onMerge = func() { atMerge = publishedCommit(t, repository, "main") }
+	forge := &fakeForge{Remote: remote}
+	forge.OnMerge = func() { atMerge = publishedCommit(t, repository, "main") }
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -296,11 +296,11 @@ func TestAProtectedTargetThatMovesBeforeTheMergeIsReplayedOnto(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first merge is dropped and the remote target moves during the wait
 	// that follows, so the re-read in front of the retried merge finds it moved.
-	forge := &fakeForge{remote: remote, mergeResets: 1, protection: publish.BranchProtection{Protected: true, By: "ruleset"}}
-	forge.afterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
+	forge := &fakeForge{Remote: remote, MergeResets: 1, TargetProtection: publish.BranchProtection{Protected: true, By: "ruleset"}}
+	forge.AfterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -311,8 +311,8 @@ func TestAProtectedTargetThatMovesBeforeTheMergeIsReplayedOnto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.IntegrationRetries != 1 || len(forge.merges) != 1 {
-		t.Fatalf("integration retries = %d, merges = %d; want one replay and one merge of the replayed change", outcome.IntegrationRetries, len(forge.merges))
+	if outcome.IntegrationRetries != 1 || len(forge.Merges) != 1 {
+		t.Fatalf("integration retries = %d, merges = %d; want one replay and one merge of the replayed change", outcome.IntegrationRetries, len(forge.Merges))
 	}
 	if outcome.PublishFailure != "" || !outcome.WorkItemClosed {
 		t.Fatalf("outcome = %#v, want the replayed change landed cleanly", outcome)
@@ -345,12 +345,12 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 	}{
 		{name: "left open", answer: func(*testing.T, *fakeForge, string) {}},
 		{name: "merged", answer: func(t *testing.T, forge *fakeForge, landed string) {
-			if err := forge.mergeIntoRemote("main", landed); err != nil {
+			if err := forge.MergeIntoRemote("main", landed); err != nil {
 				t.Fatalf("merge the request: %v", err)
 			}
-			forge.merged = true
+			forge.Merged = true
 		}},
-		{name: "queued", answer: func(_ *testing.T, forge *fakeForge, _ string) { forge.queued = true }},
+		{name: "queued", answer: func(_ *testing.T, forge *fakeForge, _ string) { forge.Queued = true }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -358,14 +358,14 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			fixture := newQueuedFixture(t)
 			protectBranch(t, fixture.remote, "main")
 			forge := fixture.forge
-			forge.queueMerge = false
-			forge.protection = publish.BranchProtection{Protected: true, By: "branch protection"}
+			forge.QueueMerge = false
+			forge.TargetProtection = publish.BranchProtection{Protected: true, By: "branch protection"}
 			// The forge declines, so the run goes on past the merge request and stops;
 			// what a killed process leaves is the record as it stood when the forge
 			// was asked, which is taken here and put back afterwards.
-			forge.mergeErr = publish.MergeRefused{Number: 1, Method: publish.MergeCommit, Status: "BLOCKED", Reason: "held"}
+			forge.MergeErr = publish.MergeRefused{Number: 1, Method: publish.MergeCommit, Status: "BLOCKED", Reason: "held"}
 			var killed runstate.State
-			forge.onMerge = func() {
+			forge.OnMerge = func() {
 				recorded, err := fixture.store.Load(pipelineRunID)
 				if err != nil {
 					t.Fatalf("Load() at the merge request error = %v", err)
@@ -376,7 +376,7 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			pipeline := publishing(automatic(newSharedPipeline(t, fixture.repository, fixture.worktreeRoot, fixture.store, fixture.tracker, provider, []string{"exit 0"}), provider), forge)
-			outcome, _ := pipeline.Run(context.Background(), fixture.tracker.item.ID)
+			outcome, _ := pipeline.Run(context.Background(), fixture.tracker.Item.ID)
 			if killed.Integration == nil || !killed.Integration.ThroughPullRequest || killed.Status.Terminal() {
 				t.Fatalf("record at the merge request = status %q, integration %#v; want a live landing on the record", killed.Status, killed.Integration)
 			}
@@ -385,9 +385,9 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			if err := fixture.store.Save(killed); err != nil {
 				t.Fatalf("Save() error = %v", err)
 			}
-			fixture.tracker.blocked, fixture.tracker.blockReason, fixture.tracker.closed = false, "", false
-			fixture.tracker.item.Status = "in_progress"
-			forge.mergeErr = nil
+			fixture.tracker.Blocked, fixture.tracker.BlockReason, fixture.tracker.Closed = false, "", false
+			fixture.tracker.Item.Status = "in_progress"
+			forge.MergeErr = nil
 			landed := killed.Integration.SourceCommit
 			tc.answer(t, forge, landed)
 
@@ -402,8 +402,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			local := publishedCommit(t, fixture.repository, "main")
 			switch tc.name {
 			case "left open":
-				if results[0].Action != ActionBlocked || fixture.tracker.closed || !fixture.tracker.blocked {
-					t.Fatalf("action = %q, closed = %t, blocked = %t; want the unlanded change handed to a person", results[0].Action, fixture.tracker.closed, fixture.tracker.blocked)
+				if results[0].Action != ActionBlocked || fixture.tracker.Closed || !fixture.tracker.Blocked {
+					t.Fatalf("action = %q, closed = %t, blocked = %t; want the unlanded change handed to a person", results[0].Action, fixture.tracker.Closed, fixture.tracker.Blocked)
 				}
 				if local != outcome.BaseCommit {
 					t.Errorf("local main = %q, want the base %q it never left", local, outcome.BaseCommit)
@@ -415,8 +415,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Errorf("second reconciliation = %#v, want nothing owed by a run handed to a person", again)
 				}
 			case "merged":
-				if results[0].Action != ActionCompleted || !fixture.tracker.closed {
-					t.Fatalf("action = %q, closed = %t; want the merged landing completed", results[0].Action, fixture.tracker.closed)
+				if results[0].Action != ActionCompleted || !fixture.tracker.Closed {
+					t.Fatalf("action = %q, closed = %t; want the merged landing completed", results[0].Action, fixture.tracker.Closed)
 				}
 				if remote := publishedCommit(t, fixture.remote, "main"); local != remote {
 					t.Errorf("local main = %q, want it caught up onto the forge's merge %q", local, remote)
@@ -425,8 +425,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Errorf("worktree removed = %t, branch removed = %t; want the landed run cleaned up", settled.WorktreeRemoved, settled.BranchRemoved)
 				}
 			case "queued":
-				if results[0].Action != ActionQueued || fixture.tracker.closed {
-					t.Fatalf("action = %q, closed = %t; want the queued landing left waiting", results[0].Action, fixture.tracker.closed)
+				if results[0].Action != ActionQueued || fixture.tracker.Closed {
+					t.Fatalf("action = %q, closed = %t; want the queued landing left waiting", results[0].Action, fixture.tracker.Closed)
 				}
 				if local != outcome.BaseCommit {
 					t.Errorf("local main = %q, want the base %q until the forge merges", local, outcome.BaseCommit)
@@ -435,12 +435,12 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Fatalf("settled = %#v, want a finished run waiting on its queued merge", settled)
 				}
 				// The forge merges, and the ordinary queued-merge settlement lands it.
-				if err := forge.mergeIntoRemote("main", landed); err != nil {
+				if err := forge.MergeIntoRemote("main", landed); err != nil {
 					t.Fatalf("merge the request: %v", err)
 				}
-				forge.queued, forge.merged = false, true
-				if again := fixture.reconcile(t); len(again) != 1 || again[0].Action != ActionCompleted || !fixture.tracker.closed {
-					t.Fatalf("second reconciliation = %#v, closed = %t; want the queued landing completed", again, fixture.tracker.closed)
+				forge.Queued, forge.Merged = false, true
+				if again := fixture.reconcile(t); len(again) != 1 || again[0].Action != ActionCompleted || !fixture.tracker.Closed {
+					t.Fatalf("second reconciliation = %#v, closed = %t; want the queued landing completed", again, fixture.tracker.Closed)
 				}
 				if remote, local := publishedCommit(t, fixture.remote, "main"), publishedCommit(t, fixture.repository, "main"); local != remote {
 					t.Errorf("local main = %q, want it caught up onto the forge's merge %q", local, remote)

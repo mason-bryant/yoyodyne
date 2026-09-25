@@ -47,8 +47,8 @@ func TestAQueuedMergeIsOnTheRecordTheRunCompletesWith(t *testing.T) {
 	if recorded.PullRequest.Number != outcome.PullRequest.Number || !recorded.PullRequest.MergeQueued {
 		t.Fatalf("recorded pull request = %#v, want #%d with its merge queued, as the outcome reports", recorded.PullRequest, outcome.PullRequest.Number)
 	}
-	if len(fixture.forge.merges) != 1 {
-		t.Fatalf("forge merges = %d, want the one request the run made", len(fixture.forge.merges))
+	if len(fixture.forge.Merges) != 1 {
+		t.Fatalf("forge merges = %d, want the one request the run made", len(fixture.forge.Merges))
 	}
 	if recorded.PublishFailure != "" {
 		t.Fatalf("publish failure = %q on a merge the forge accepted", recorded.PublishFailure)
@@ -56,7 +56,7 @@ func TestAQueuedMergeIsOnTheRecordTheRunCompletesWith(t *testing.T) {
 
 	// The forge merges seconds later, with no run watching, and the next sweep
 	// finishes the publication rather than leaving the record at the run's death.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the queued merge settled", results)
@@ -80,7 +80,7 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	tracker := newOutcomeTracker()
-	forge := &fakeForge{remote: remote}
+	forge := &fakeForge{Remote: remote}
 	provider := roleBackend(writeFeature, escalateVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
 	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
@@ -89,7 +89,7 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	}
 	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -101,8 +101,8 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	}
 	// Nothing authorized a merge, so nothing asked for one: an escalated change
 	// on the forge is one only a person merges.
-	if len(forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want none for an escalated change", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want none for an escalated change", forge.Merges)
 	}
 	recorded, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -111,8 +111,8 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	if recorded.PullRequest == nil || recorded.PullRequest.Number != outcome.PullRequest.Number {
 		t.Fatalf("recorded pull request = %#v, want #%d as the outcome reports", recorded.PullRequest, outcome.PullRequest.Number)
 	}
-	if !strings.Contains(tracker.notes, "Pull request: #1") {
-		t.Errorf("the work item does not name the request:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Pull request: #1") {
+		t.Errorf("the work item does not name the request:\n%s", tracker.Notes)
 	}
 	// The entry is what the development manager reads before deciding, and the
 	// request is an artifact of the run exactly as its branch is.
@@ -157,7 +157,7 @@ func TestCompletionRefusesARunWhoseRecordLostItsPullRequest(t *testing.T) {
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
 	run := &activeRun{
 		pipeline: Pipeline{Tracker: tracker, Store: store},
 		claimed:  true,
@@ -180,8 +180,8 @@ func TestCompletionRefusesARunWhoseRecordLostItsPullRequest(t *testing.T) {
 	}
 	// Nothing about the run was recorded as finished: the item was not closed,
 	// and what the tracker was told is the refusal rather than the outcome.
-	if tracker.closed || countCalls(tracker.calls, "complete") != 0 {
-		t.Errorf("the tracker was asked for %v on a refused completion, want no closure", tracker.calls)
+	if tracker.Closed || countCalls(tracker.Calls, "complete") != 0 {
+		t.Errorf("the tracker was asked for %v on a refused completion, want no closure", tracker.Calls)
 	}
 	refused, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestCompletionRefusesARecordWhoseArmingStateDisagreesWithTheSummary(t *test
 	reported.MergeQueued = true
 	reported.MergeMethod = string(mergeMethod)
 	run := &activeRun{
-		pipeline: Pipeline{Tracker: &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}, Store: store},
+		pipeline: Pipeline{Tracker: &fakeTracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}, Store: store},
 		claimed:  true,
 		state:    state,
 		outcome:  Outcome{PullRequest: &reported},
@@ -280,8 +280,8 @@ func TestAPromotionWithoutARequestIsRecordedAsAnOutstandingPublication(t *testin
 	if err := run.publishIntegration(context.Background()); err != nil {
 		t.Fatalf("publishIntegration() error = %v", err)
 	}
-	if len(forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want nothing asked of the forge without a request to merge", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked of the forge without a request to merge", forge.Merges)
 	}
 	for _, want := range []string{"holds no pull request for branch " + state.Branch, "nothing was asked of the forge", "yoyo reconcile"} {
 		if !strings.Contains(run.outcome.PublishFailure, want) {
@@ -324,8 +324,8 @@ func TestReconcileRecoversAndArmsThePullRequestOfAPromotionThatRecordedNone(t *t
 	}
 	// The forge holds the request open with no merge queued for it, which is what
 	// a run that never asked leaves behind.
-	fixture.forge.queued = false
-	fixture.forge.merges = nil
+	fixture.forge.Queued = false
+	fixture.forge.Merges = nil
 
 	recoveries := fixture.recover(t)
 	if len(recoveries) != 1 || !recoveries[0].Recovered || !recoveries[0].Armed || recoveries[0].Failure != "" || recoveries[0].Refused != "" {
@@ -336,10 +336,10 @@ func TestReconcileRecoversAndArmsThePullRequestOfAPromotionThatRecordedNone(t *t
 	}
 	// The request the forge took is the run's own: the promoted commit, by the
 	// method the run's merge is made by.
-	if len(fixture.forge.merges) != 1 {
-		t.Fatalf("forge merges = %#v, want exactly the armed request", fixture.forge.merges)
+	if len(fixture.forge.Merges) != 1 {
+		t.Fatalf("forge merges = %#v, want exactly the armed request", fixture.forge.Merges)
 	}
-	if merge := fixture.forge.merges[0]; merge.Number != outcome.PullRequest.Number || merge.HeadCommit != outcome.Integration.SourceCommit || merge.Method != mergeMethod {
+	if merge := fixture.forge.Merges[0]; merge.Number != outcome.PullRequest.Number || merge.HeadCommit != outcome.Integration.SourceCommit || merge.Method != mergeMethod {
 		t.Errorf("merge request = %#v, want pull request %d pinned to %s by the %s method", merge, outcome.PullRequest.Number, outcome.Integration.SourceCommit, mergeMethod)
 	}
 	recovered, err := fixture.store.Load(pipelineRunID)
@@ -373,7 +373,7 @@ func TestReconcileRecoversAndArmsThePullRequestOfAPromotionThatRecordedNone(t *t
 	}
 	// The forge merges, and the next sweep finishes the publication as it finishes
 	// any queued merge.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the armed merge settled", results)
@@ -436,8 +436,8 @@ func TestAPromotionWithoutARequestIsDocketedAndCountedBeforeReconcileRuns(t *tes
 
 	// The recovery arms the merge and dockets nothing further: the request joins
 	// the entry the run already has rather than opening a second.
-	fixture.forge.queued = false
-	fixture.forge.merges = nil
+	fixture.forge.Queued = false
+	fixture.forge.Merges = nil
 	if recoveries := fixture.recover(t); len(recoveries) != 1 || !recoveries[0].Armed {
 		t.Fatalf("recoveries = %#v, want the merge armed", recoveries)
 	}
@@ -446,7 +446,7 @@ func TestAPromotionWithoutARequestIsDocketedAndCountedBeforeReconcileRuns(t *tes
 	}
 	// The forge merges, the settlement finishes the publication, and the entry
 	// closes with it: nothing about the publication is outstanding any more.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].DocketProblem != "" {
 		t.Fatalf("reconciliation = %#v, want the armed merge settled and its entry closed", results)
@@ -471,14 +471,14 @@ func TestReconcileSettlesARecoveredRequestSomebodyQueuedByHand(t *testing.T) {
 	loseThePublication(t, fixture)
 	// The forge is still holding the merge the run queued, which from the record's
 	// side is a merge somebody else armed.
-	asked := len(fixture.forge.merges)
+	asked := len(fixture.forge.Merges)
 
 	recoveries := fixture.recover(t)
 	if len(recoveries) != 1 || !recoveries[0].Recovered || recoveries[0].Armed || recoveries[0].Failure != "" {
 		t.Fatalf("recoveries = %#v, want the queued request recorded and nothing armed", recoveries)
 	}
-	if !strings.Contains(recoveries[0].Kept, "already holds a merge") || len(fixture.forge.merges) != asked {
-		t.Fatalf("kept = %q, merges = %#v; want the held merge named and no further request made", recoveries[0].Kept, fixture.forge.merges)
+	if !strings.Contains(recoveries[0].Kept, "already holds a merge") || len(fixture.forge.Merges) != asked {
+		t.Fatalf("kept = %q, merges = %#v; want the held merge named and no further request made", recoveries[0].Kept, fixture.forge.Merges)
 	}
 	recovered, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -493,7 +493,7 @@ func TestReconcileSettlesARecoveredRequestSomebodyQueuedByHand(t *testing.T) {
 	if !recovered.Outstanding() {
 		t.Fatal("the queued merge left the run settled, so nothing would finish the publication")
 	}
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the hand-queued merge settled", results)
@@ -521,7 +521,7 @@ func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
 	}
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	forge := &fakeForge{number: 7}
+	forge := &fakeForge{Number: 7}
 	reconciler := Reconciler{
 		Tracker:   newOutcomeTracker(),
 		Worktrees: newObserver(t, repository, worktreeRoot),
@@ -529,8 +529,8 @@ func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
 		Publisher: forge,
 	}
 	recovery := reconciler.armRecoveredMerge(context.Background(), unapproved, runstate.PullRequest{Number: 7, HeadCommit: rearmedCommit}, PublicationRecovery{RunID: unapproved.RunID})
-	if recovery.Armed || len(forge.merges) != 0 {
-		t.Fatalf("recovery = %#v, merges = %#v; want nothing armed without an approving verdict", recovery, forge.merges)
+	if recovery.Armed || len(forge.Merges) != 0 {
+		t.Fatalf("recovery = %#v, merges = %#v; want nothing armed without an approving verdict", recovery, forge.Merges)
 	}
 	if !strings.Contains(recovery.Failure, `review decision "repair"`) || !strings.Contains(recovery.Failure, "nothing authorizes the merge") {
 		t.Errorf("failure = %q, want the missing approval named", recovery.Failure)
@@ -549,8 +549,8 @@ func TestAnInterruptedRecoveryLeavesTheRecordForTheNextSweep(t *testing.T) {
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
 	lost := loseThePublication(t, fixture)
-	fixture.forge.queued = false
-	fixture.forge.merges = nil
+	fixture.forge.Queued = false
+	fixture.forge.Merges = nil
 
 	interrupted := fixture.reconciler(t)
 	interrupted.Store = &refusingPromotionLease{ReconcileStore: fixture.store}
@@ -561,8 +561,8 @@ func TestAnInterruptedRecoveryLeavesTheRecordForTheNextSweep(t *testing.T) {
 	if len(recoveries) != 1 || recoveries[0].Recovered || recoveries[0].Armed || !strings.Contains(recoveries[0].Failure, "held the lease") {
 		t.Fatalf("recoveries = %#v, want nothing recovered or armed, and the lease named", recoveries)
 	}
-	if len(fixture.forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want nothing asked while the promotion lease was held", fixture.forge.merges)
+	if len(fixture.forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked while the promotion lease was held", fixture.forge.Merges)
 	}
 	untouched, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -609,9 +609,9 @@ func TestAReconciledMergeTheForgeRefusesIsDocketedForTriage(t *testing.T) {
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
 	loseThePublication(t, fixture)
-	fixture.forge.queued = false
-	fixture.forge.merges = nil
-	fixture.forge.mergeErr = errors.New("GraphQL: Pull request is not mergeable: the base branch requires a review")
+	fixture.forge.Queued = false
+	fixture.forge.Merges = nil
+	fixture.forge.MergeErr = errors.New("GraphQL: Pull request is not mergeable: the base branch requires a review")
 
 	recoveries := fixture.recover(t)
 	if len(recoveries) != 1 || !recoveries[0].Recovered || recoveries[0].Armed || recoveries[0].Failure != "" {
@@ -666,9 +666,9 @@ func TestReconcileDoesNotArmARecoveredRequestThatMoved(t *testing.T) {
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
 	loseThePublication(t, fixture)
-	fixture.forge.queued = false
-	fixture.forge.merges = nil
-	fixture.forge.headCommit = rearmedCommit
+	fixture.forge.Queued = false
+	fixture.forge.Merges = nil
+	fixture.forge.HeadCommit = rearmedCommit
 
 	recoveries := fixture.recover(t)
 	if len(recoveries) != 1 || !recoveries[0].Recovered || recoveries[0].Armed {
@@ -679,8 +679,8 @@ func TestReconcileDoesNotArmARecoveredRequestThatMoved(t *testing.T) {
 			t.Errorf("refused = %q, want it to say %q", recoveries[0].Refused, want)
 		}
 	}
-	if len(fixture.forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want nothing asked for a request that moved", fixture.forge.merges)
+	if len(fixture.forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked for a request that moved", fixture.forge.Merges)
 	}
 	recovered, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -699,9 +699,9 @@ func TestReconcileFinishesARecoveredRequestTheForgeAlreadyMerged(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	loseThePublication(t, fixture)
-	fixture.forge.merges = nil
+	fixture.forge.Merges = nil
 
 	recoveries := fixture.recover(t)
 	if len(recoveries) != 1 || !recoveries[0].Recovered || recoveries[0].Armed || recoveries[0].Failure != "" {
@@ -710,8 +710,8 @@ func TestReconcileFinishesARecoveredRequestTheForgeAlreadyMerged(t *testing.T) {
 	if !strings.Contains(recoveries[0].Kept, "merged") {
 		t.Errorf("kept = %q, want the merge named as the reason nothing was armed", recoveries[0].Kept)
 	}
-	if len(fixture.forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want nothing asked for a merged request", fixture.forge.merges)
+	if len(fixture.forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked for a merged request", fixture.forge.Merges)
 	}
 	// Before anything finishes it, the record already says the truth: the request
 	// is merged and the merge is unconfirmed — never that nothing was asked.
@@ -760,7 +760,7 @@ func TestReconcileReportsAPromotionWhoseRequestTheForgeDoesNotHold(t *testing.T)
 		Tracker:   newOutcomeTracker(),
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     store,
-		Publisher: &fakeForge{stateErr: errors.New("no pull request exists for branch " + state.Branch)},
+		Publisher: &fakeForge{StateErr: errors.New("no pull request exists for branch " + state.Branch)},
 	}
 	recoveries, err := reconciler.RecoverPublications(context.Background())
 	if err != nil {

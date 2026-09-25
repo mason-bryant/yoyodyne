@@ -41,11 +41,11 @@ func TestAnHonestNotDoableYetLandingIntegratesAndReParksItsItem(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "The conversion is not doable yet; this change lands the diagnosis.\n\n" +
+	provider.DeveloperFinalText = "The conversion is not doable yet; this change lands the diagnosis.\n\n" +
 		landingBlock(`{"outcome":"evidence","why":"the management-conversion design has not landed, so the anchor stays open"}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -57,39 +57,39 @@ func TestAnHonestNotDoableYetLandingIntegratesAndReParksItsItem(t *testing.T) {
 	if outcome.WorkItemClosed {
 		t.Fatal("the run closed an item its own landing said it does not discharge")
 	}
-	if tracker.closed {
-		t.Fatalf("the tracker closed the item; calls = %v", tracker.calls)
+	if tracker.Closed {
+		t.Fatalf("the tracker closed the item; calls = %v", tracker.Calls)
 	}
-	if !tracker.reopened {
-		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.calls)
+	if !tracker.Reopened {
+		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.Calls)
 	}
-	if tracker.item.Status != "open" {
-		t.Errorf("item status = %q, want open", tracker.item.Status)
+	if tracker.Item.Status != "open" {
+		t.Errorf("item status = %q, want open", tracker.Item.Status)
 	}
 	// The reason has to be on the item, or the item afterwards reads as work
 	// somebody walked away from.
-	if !strings.Contains(tracker.reopenReason, "the anchor stays open") {
-		t.Errorf("the item does not carry the developer's account: %q", tracker.reopenReason)
+	if !strings.Contains(tracker.ReopenReason, "the anchor stays open") {
+		t.Errorf("the item does not carry the developer's account: %q", tracker.ReopenReason)
 	}
-	if !strings.Contains(tracker.reopenReason, outcome.RunID) {
-		t.Errorf("the item does not name the run whose evidence landed: %q", tracker.reopenReason)
+	if !strings.Contains(tracker.ReopenReason, outcome.RunID) {
+		t.Errorf("the item does not name the run whose evidence landed: %q", tracker.ReopenReason)
 	}
 	// And the parking is what keeps the item out of the next pull. Without it the
 	// item is back in the queue as ordinary open work, the run that made it is
 	// recorded as succeeded so no brake counts it, and the next selection buys
 	// another run of the same diagnosis.
-	if !tracker.item.Parking.Parked() {
-		t.Fatalf("the item went back to the backlog unparked; calls = %v", tracker.calls)
+	if !tracker.Item.Parking.Parked() {
+		t.Fatalf("the item went back to the backlog unparked; calls = %v", tracker.Calls)
 	}
-	if !strings.Contains(tracker.item.Parking.Reason(), "the anchor stays open") {
-		t.Errorf("the parking reason does not name what would release the item: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "the anchor stays open") {
+		t.Errorf("the parking reason does not name what would release the item: %q", tracker.Item.Parking)
 	}
-	if len(tracker.blockers) > 0 {
-		t.Errorf("a landing that named no impediment made the item wait on one: %v", tracker.blockers)
+	if len(tracker.Blockers) > 0 {
+		t.Errorf("a landing that named no impediment made the item wait on one: %v", tracker.Blockers)
 	}
 	// The notes an operator reads must not open by describing a completed item.
-	if !strings.Contains(tracker.notes, "the item is parked") {
-		t.Errorf("the recorded outcome reads as a discharged item: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "the item is parked") {
+		t.Errorf("the recorded outcome reads as a discharged item: %q", tracker.Notes)
 	}
 	if outcome.Landing != landing.OutcomeEvidence {
 		t.Errorf("outcome landing = %q, want %q", outcome.Landing, landing.OutcomeEvidence)
@@ -114,10 +114,10 @@ func TestAnApprovalOfEvidenceLeavesTheItemOpenInTheReviewersWords(t *testing.T) 
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveEvidenceVerdict)
-	provider.developerFinalText = "the machinery this item is written against has not landed; this change is the diagnosis"
+	provider.DeveloperFinalText = "the machinery this item is written against has not landed; this change is the diagnosis"
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -135,25 +135,25 @@ func TestAnApprovalOfEvidenceLeavesTheItemOpenInTheReviewersWords(t *testing.T) 
 	if outcome.Landing != "" {
 		t.Fatalf("the developer claimed %q; this replay is the run that claimed nothing", outcome.Landing)
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("the item closed against a change its reviewer called evidence; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("the item closed against a change its reviewer called evidence; calls = %v", tracker.Calls)
 	}
-	if !tracker.reopened || tracker.item.Status != "open" {
-		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.calls)
+	if !tracker.Reopened || tracker.Item.Status != "open" {
+		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.Calls)
 	}
 	// Parked, because the marker is the developer's channel and a reviewer has
 	// none: an item returned bare is the one the next pull selects.
-	if !tracker.item.Parking.Parked() {
-		t.Fatalf("the item went back to the backlog unparked; calls = %v", tracker.calls)
+	if !tracker.Item.Parking.Parked() {
+		t.Fatalf("the item went back to the backlog unparked; calls = %v", tracker.Calls)
 	}
 	// In the reviewer's words. Nobody else wrote an account of this decision.
-	for _, where := range []string{tracker.item.Parking.Reason(), tracker.reopenReason, tracker.notes} {
+	for _, where := range []string{tracker.Item.Parking.Reason(), tracker.ReopenReason, tracker.Notes} {
 		if !strings.Contains(where, "the design it needs has not landed") {
 			t.Errorf("the item does not carry the reviewer's account: %q", where)
 		}
 	}
-	if !strings.Contains(tracker.notes, "approved the change as evidence") {
-		t.Errorf("the notes do not say which reader withheld the closure: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "approved the change as evidence") {
+		t.Errorf("the notes do not say which reader withheld the closure: %q", tracker.Notes)
 	}
 	// The record is durable, because the closure is not always made by the process
 	// that read the verdict.
@@ -183,12 +183,12 @@ func TestAnApprovalThatSaysNothingIsAskedForAgain(t *testing.T) {
 	provider := roleBackend(writeFeature, unstated, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.Integration == nil || !tracker.closed {
-		t.Fatalf("the re-asked review did not settle the run: %#v, closed = %t", outcome, tracker.closed)
+	if outcome.Integration == nil || !tracker.Closed {
+		t.Fatalf("the re-asked review did not settle the run: %#v, closed = %t", outcome, tracker.Closed)
 	}
 	// The re-ask is a second review rather than a second developer attempt: the
 	// change said nothing wrong, the reviewer did.
@@ -207,38 +207,38 @@ func TestAnApprovalThatSaysNothingIsAskedForAgain(t *testing.T) {
 func TestALandingThatNamesItsImpedimentLeavesTheItemOpenWaitingOnIt(t *testing.T) {
 	t.Parallel()
 
-	tracker := newOutcomeTracker().holds("yoyodyne-impediment")
+	tracker := newOutcomeTracker().Holds("yoyodyne-impediment")
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the diagnosis\n\n" +
+	provider.DeveloperFinalText = "the diagnosis\n\n" +
 		landingBlock(`{"outcome":"evidence","why":"the conversion needs yoyodyne-impediment to land first","blocked_by":"yoyodyne-impediment"}`)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("a landing that does not discharge closed its item; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("a landing that does not discharge closed its item; calls = %v", tracker.Calls)
 	}
-	if tracker.item.Parking.Parked() {
-		t.Errorf("an item that names what it waits on was parked as well: %q", tracker.item.Parking)
+	if tracker.Item.Parking.Parked() {
+		t.Errorf("an item that names what it waits on was parked as well: %q", tracker.Item.Parking)
 	}
-	if len(tracker.blockers) != 1 || tracker.blockers[0] != "yoyodyne-impediment" {
-		t.Fatalf("the item was not made to wait on the impediment it named: %v", tracker.blockers)
+	if len(tracker.Blockers) != 1 || tracker.Blockers[0] != "yoyodyne-impediment" {
+		t.Fatalf("the item was not made to wait on the impediment it named: %v", tracker.Blockers)
 	}
 	// The dependency is recorded before the status. Between an item being made
 	// open and being made to wait there is a window a watch session polling the
 	// queue pulls it in, which is the bare openness this marker replaces.
-	blocker := slices.Index(tracker.calls, "blocker")
-	reopen := slices.Index(tracker.calls, "reopen")
+	blocker := slices.Index(tracker.Calls, "blocker")
+	reopen := slices.Index(tracker.Calls, "reopen")
 	if blocker < 0 || reopen < 0 || blocker > reopen {
-		t.Errorf("the item was returned to the backlog before it waited on anything: %v", tracker.calls)
+		t.Errorf("the item was returned to the backlog before it waited on anything: %v", tracker.Calls)
 	}
 	if outcome.LandingBlockedBy != "yoyodyne-impediment" {
 		t.Errorf("outcome landing marker = %q, want the item it named", outcome.LandingBlockedBy)
 	}
-	if !strings.Contains(tracker.notes, "yoyodyne-impediment") {
-		t.Errorf("the item's notes do not say what it is waiting for: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "yoyodyne-impediment") {
+		t.Errorf("the item's notes do not say what it is waiting for: %q", tracker.Notes)
 	}
 }
 
@@ -263,7 +263,7 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			// Nothing waits on itself, and the tracker refuses the dependency as a
 			// cycle.
 			name:    "a marker naming the item it was claimed on",
-			marker:  func(tracker *fakeTracker) string { return tracker.item.ID },
+			marker:  func(tracker *fakeTracker) string { return tracker.Item.ID },
 			saysWhy: "nothing waits on itself",
 		},
 		{
@@ -279,7 +279,7 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			// in the queue unparked behind it.
 			name: "a marker naming work that is already closed",
 			marker: func(tracker *fakeTracker) string {
-				tracker.holdsItem(beads.WorkItem{ID: "yoyodyne-already-done", Title: "Done", Status: "closed"})
+				tracker.HoldsItem(beads.WorkItem{ID: "yoyodyne-already-done", Title: "Done", Status: "closed"})
 				return "yoyodyne-already-done"
 			},
 			saysWhy: "already closed",
@@ -290,9 +290,9 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			// a cycle.
 			name: "a marker naming work that already waits on this item",
 			marker: func(tracker *fakeTracker) string {
-				tracker.holdsItem(beads.WorkItem{
+				tracker.HoldsItem(beads.WorkItem{
 					ID: "yoyodyne-follows-this", Title: "Follow-on", Status: "open",
-					Dependencies: []beads.Dependency{{ID: tracker.item.ID, Type: "blocks"}},
+					Dependencies: []beads.Dependency{{ID: tracker.Item.ID, Type: "blocks"}},
 				})
 				return "yoyodyne-follows-this"
 			},
@@ -304,11 +304,11 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 
 			tracker := newOutcomeTracker()
 			provider := roleBackend(writeFeature, approveVerdict)
-			provider.developerFinalText = "the diagnosis\n\n" +
+			provider.DeveloperFinalText = "the diagnosis\n\n" +
 				landingBlock(`{"outcome":"evidence","why":"not doable yet","blocked_by":"`+unusable.marker(tracker)+`"}`)
 			pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			// The run finishes. A marker the harness cannot use must not cost a run
 			// whose change has already been promoted.
 			if err != nil {
@@ -317,11 +317,11 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
 				t.Fatalf("an unusable marker cost the run its integration: %#v", outcome)
 			}
-			if len(tracker.blockers) > 0 {
-				t.Fatalf("the item was made to wait on a marker nothing could use: %v", tracker.blockers)
+			if len(tracker.Blockers) > 0 {
+				t.Fatalf("the item was made to wait on a marker nothing could use: %v", tracker.Blockers)
 			}
-			if !tracker.item.Parking.Parked() {
-				t.Fatalf("a marker that named nothing usable left the item unparked; calls = %v", tracker.calls)
+			if !tracker.Item.Parking.Parked() {
+				t.Fatalf("a marker that named nothing usable left the item unparked; calls = %v", tracker.Calls)
 			}
 			if outcome.LandingBlockedBy != "" {
 				t.Errorf("outcome landing marker = %q, want none", outcome.LandingBlockedBy)
@@ -331,11 +331,11 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 			if !strings.Contains(outcome.LandingImpedimentProblem, unusable.saysWhy) {
 				t.Errorf("the outcome does not say why the marker was not used: %q", outcome.LandingImpedimentProblem)
 			}
-			if !strings.Contains(tracker.item.Parking.Reason(), unusable.saysWhy) {
-				t.Errorf("the parking reason does not say why the item is parked rather than waiting: %q", tracker.item.Parking)
+			if !strings.Contains(tracker.Item.Parking.Reason(), unusable.saysWhy) {
+				t.Errorf("the parking reason does not say why the item is parked rather than waiting: %q", tracker.Item.Parking)
 			}
-			if !strings.Contains(tracker.notes, unusable.saysWhy) {
-				t.Errorf("the item's notes do not say why the marker was not used: %q", tracker.notes)
+			if !strings.Contains(tracker.Notes, unusable.saysWhy) {
+				t.Errorf("the item's notes do not say why the marker was not used: %q", tracker.Notes)
 			}
 		})
 	}
@@ -351,14 +351,14 @@ func TestAMarkerTheHarnessCannotUseTakesTheParkingInstead(t *testing.T) {
 func TestADependencyRefusedAtTheSettlementSaysParkedOnEverySurface(t *testing.T) {
 	t.Parallel()
 
-	tracker := newOutcomeTracker().holds("yoyodyne-impediment")
-	tracker.blockerErr = errors.New("bd: adding this dependency would create a cycle")
+	tracker := newOutcomeTracker().Holds("yoyodyne-impediment")
+	tracker.BlockerErr = errors.New("bd: adding this dependency would create a cycle")
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the diagnosis\n\n" +
+	provider.DeveloperFinalText = "the diagnosis\n\n" +
 		landingBlock(`{"outcome":"evidence","why":"the conversion needs yoyodyne-impediment to land first","blocked_by":"yoyodyne-impediment"}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	// The run finishes. A dependency the tracker will not write must not cost a run
 	// whose change has already been promoted.
 	if err != nil {
@@ -368,8 +368,8 @@ func TestADependencyRefusedAtTheSettlementSaysParkedOnEverySurface(t *testing.T)
 		t.Fatalf("a refused dependency cost the run its integration: %#v", outcome)
 	}
 	// Where the item actually went.
-	if !tracker.item.Parking.Parked() {
-		t.Fatalf("the item went back unparked behind a dependency the tracker refused; calls = %v", tracker.calls)
+	if !tracker.Item.Parking.Parked() {
+		t.Fatalf("the item went back unparked behind a dependency the tracker refused; calls = %v", tracker.Calls)
 	}
 	// And what every surface says about it. `yoyo status` and the conversation both
 	// derive the disposition from these two fields, so a run that kept the marker
@@ -385,11 +385,11 @@ func TestADependencyRefusedAtTheSettlementSaysParkedOnEverySurface(t *testing.T)
 	}
 	// The notes are recorded before the item's status is settled, so this is what
 	// asserts the arrangement happens ahead of them rather than after.
-	if strings.Contains(tracker.notes, "stays open waiting on") {
-		t.Errorf("the recorded outcome names a disposition the item did not get: %q", tracker.notes)
+	if strings.Contains(tracker.Notes, "stays open waiting on") {
+		t.Errorf("the recorded outcome names a disposition the item did not get: %q", tracker.Notes)
 	}
-	if !strings.Contains(tracker.notes, "the item is parked") {
-		t.Errorf("the recorded outcome does not say the item was parked: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "the item is parked") {
+		t.Errorf("the recorded outcome does not say the item was parked: %q", tracker.Notes)
 	}
 	// And the durable record, because the run that made the claim is not always the
 	// process that describes it afterwards.
@@ -423,17 +423,17 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 
 		tracker := newOutcomeTracker()
 		provider := roleBackend(writeFeature, approveVerdict)
-		provider.developerFinalText = "the diagnosis\n\n" +
+		provider.DeveloperFinalText = "the diagnosis\n\n" +
 			landingBlock(`{"outcome":"evidence","why":"the design this needs has not landed"}`)
 		pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
-		if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+		if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
 		// The tracker reports the item as ready, because it is open and nothing
 		// blocks it — which is exactly why the parking has to be the thing that
 		// holds it back. Selection is asked about the axis the tracker does not know.
-		settled := tracker.item
+		settled := tracker.Item
 		for pull := 1; pull <= pulls; pull++ {
 			queue := backlog.Order([]beads.WorkItem{settled}, []string{settled.ID}, backlog.ReadHolds(nil))
 			if next, ok := queue.Next(); ok {
@@ -456,12 +456,12 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 	t.Run("the impediment a landing named", func(t *testing.T) {
 		t.Parallel()
 
-		tracker := newOutcomeTracker().holds("yoyodyne-impediment")
+		tracker := newOutcomeTracker().Holds("yoyodyne-impediment")
 		provider := roleBackend(writeFeature, approveVerdict)
-		provider.developerFinalText = "the diagnosis\n\n" +
+		provider.DeveloperFinalText = "the diagnosis\n\n" +
 			landingBlock(`{"outcome":"evidence","why":"it needs yoyodyne-impediment first","blocked_by":"yoyodyne-impediment"}`)
 		pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
-		if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+		if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
 
@@ -470,9 +470,9 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 		// only relays it, so a test that assembled that answer itself would be
 		// asserting its own bookkeeping; the gate every run passes through on the way
 		// in is this repository's code and reads the same relation.
-		calls := len(tracker.calls)
+		calls := len(tracker.Calls)
 		for pull := 1; pull <= pulls; pull++ {
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("pull %d error = %v", pull, err)
 			}
@@ -486,27 +486,27 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 		// Nothing was claimed and no developer ran, which is what picking it zero
 		// times has to mean: a refusal that still spent a run is the cost this exists
 		// to avoid.
-		if extra := tracker.calls[calls:]; len(extra) > 0 {
+		if extra := tracker.Calls[calls:]; len(extra) > 0 {
 			t.Errorf("the refused pulls still wrote to the tracker: %v", extra)
 		}
 		// The release nobody has to remember to make: the impediment closes and the
 		// same gate lets the work through, which is what the marker buys over the
 		// parking.
-		for index := range tracker.item.Dependencies {
-			tracker.item.Dependencies[index].Status = "closed"
+		for index := range tracker.Item.Dependencies {
+			tracker.Item.Dependencies[index].Status = "closed"
 		}
 		// A fresh pipeline over the same tracker, because a run identifier is spent
 		// once and this fixture's is fixed. What is being asked is the gate, and the
 		// gate decides from the item rather than from the run store.
 		released, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
-		outcome, err := released.Run(context.Background(), tracker.item.ID)
+		outcome, err := released.Run(context.Background(), tracker.Item.ID)
 		if err != nil {
 			t.Fatalf("Run() after the impediment closed error = %v", err)
 		}
 		if outcome.Paused {
 			t.Fatalf("the item was still held back after its impediment closed: %#v", outcome)
 		}
-		if !tracker.claimed {
+		if !tracker.Claimed {
 			t.Error("the released item was never claimed, so nothing actually picked it up")
 		}
 	})
@@ -520,10 +520,10 @@ func TestSelectionNeverPicksAnUndischargedItemUntilItIsReleased(t *testing.T) {
 func TestSettlingAnUndischargedItemTwiceMakesItWaitOnce(t *testing.T) {
 	t.Parallel()
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
 	state := runstate.State{
 		RunID:            "run-abcdef0123456789abcdef0123456789",
-		WorkItemID:       tracker.item.ID,
+		WorkItemID:       tracker.Item.ID,
 		TargetBranch:     "main",
 		LandingOutcome:   runstate.LandingEvidence,
 		LandingReason:    "it needs yoyodyne-impediment first",
@@ -534,11 +534,11 @@ func TestSettlingAnUndischargedItemTwiceMakesItWaitOnce(t *testing.T) {
 			t.Fatalf("settleUndischarged() attempt %d error = %v", attempt, err)
 		}
 	}
-	if len(tracker.blockers) != 1 {
-		t.Fatalf("the item was made to wait %d times: %v", len(tracker.blockers), tracker.blockers)
+	if len(tracker.Blockers) != 1 {
+		t.Fatalf("the item was made to wait %d times: %v", len(tracker.Blockers), tracker.Blockers)
 	}
-	if tracker.item.Parking.Parked() {
-		t.Errorf("an item waiting on its impediment was parked as well: %q", tracker.item.Parking)
+	if tracker.Item.Parking.Parked() {
+		t.Errorf("an item waiting on its impediment was parked as well: %q", tracker.Item.Parking)
 	}
 }
 
@@ -551,11 +551,11 @@ func TestSettlingAnUndischargedItemTwiceMakesItWaitOnce(t *testing.T) {
 func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(t *testing.T) {
 	t.Parallel()
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
-	tracker.blockerErr = errors.New("bd: adding this dependency would create a cycle")
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+	tracker.BlockerErr = errors.New("bd: adding this dependency would create a cycle")
 	state := runstate.State{
 		RunID:            "run-abcdef0123456789abcdef0123456789",
-		WorkItemID:       tracker.item.ID,
+		WorkItemID:       tracker.Item.ID,
 		TargetBranch:     "main",
 		LandingOutcome:   runstate.LandingEvidence,
 		LandingReason:    "it needs yoyodyne-impediment first",
@@ -565,11 +565,11 @@ func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(
 	if err != nil {
 		t.Fatalf("settleUndischarged() error = %v, want the parking fallback rather than a failure", err)
 	}
-	if tracker.item.Status != "open" {
-		t.Fatalf("the item was left claimed by a run that has ended: status = %q", tracker.item.Status)
+	if tracker.Item.Status != "open" {
+		t.Fatalf("the item was left claimed by a run that has ended: status = %q", tracker.Item.Status)
 	}
-	if !tracker.item.Parking.Parked() {
-		t.Fatalf("the item went back unparked behind a dependency that was refused; calls = %v", tracker.calls)
+	if !tracker.Item.Parking.Parked() {
+		t.Fatalf("the item went back unparked behind a dependency that was refused; calls = %v", tracker.Calls)
 	}
 	// The settlement answers with the run's landing fields as they now stand. A
 	// caller that recorded the state it went in with would say the item stays open
@@ -582,11 +582,11 @@ func TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement(
 	}
 	// What the tracker would not do is on the item, because that is where somebody
 	// reads it.
-	if !strings.Contains(tracker.item.Parking.Reason(), "would not make this item wait") {
-		t.Errorf("the parking reason does not say the dependency was refused: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "would not make this item wait") {
+		t.Errorf("the parking reason does not say the dependency was refused: %q", tracker.Item.Parking)
 	}
-	if !strings.Contains(tracker.notes, "would not make this item wait") {
-		t.Errorf("the item's notes do not say the dependency was refused: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "would not make this item wait") {
+		t.Errorf("the item's notes do not say the dependency was refused: %q", tracker.Notes)
 	}
 }
 
@@ -601,7 +601,7 @@ func TestDecidingWhereAnUndischargedItemGoesReportsATrackerItCouldNotRead(t *tes
 
 	// A tracker that holds some other work, so the item this run served is one it
 	// cannot answer for.
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-other", Title: "Another", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-other", Title: "Another", Status: "open"}}
 	state := runstate.State{
 		RunID:            "run-abcdef0123456789abcdef0123456789",
 		WorkItemID:       "yoyodyne-task",
@@ -613,8 +613,8 @@ func TestDecidingWhereAnUndischargedItemGoesReportsATrackerItCouldNotRead(t *tes
 	if _, _, err := arrangeUndischarged(context.Background(), tracker, state); err == nil {
 		t.Fatal("arrangeUndischarged() returned no error for an item it could not read")
 	}
-	if len(tracker.blockers) > 0 {
-		t.Errorf("a dependency was written for an item that was never read: %v", tracker.blockers)
+	if len(tracker.Blockers) > 0 {
+		t.Errorf("a dependency was written for an item that was never read: %v", tracker.Blockers)
 	}
 	// The parking needs nothing of the read but the reason it supersedes, so it
 	// settles anyway: a sentence lost there must not cost the settlement of a
@@ -634,12 +634,12 @@ func TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried(t *testing.T) 
 	t.Parallel()
 
 	operatorParked := domain.WorkItemParking("deferred by the scope decision until the quarter turns")
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &fakeTracker{Item: beads.WorkItem{
 		ID: "yoyodyne-task", Title: "Task", Status: "in_progress", Parking: operatorParked,
 	}}
 	state := runstate.State{
 		RunID:            "run-abcdef0123456789abcdef0123456789",
-		WorkItemID:       tracker.item.ID,
+		WorkItemID:       tracker.Item.ID,
 		TargetBranch:     "main",
 		LandingOutcome:   runstate.LandingEvidence,
 		LandingReason:    "it needs yoyodyne-impediment first",
@@ -648,11 +648,11 @@ func TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried(t *testing.T) 
 	if _, err := settleUndischarged(context.Background(), tracker, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
-	if tracker.item.Parking != operatorParked {
-		t.Errorf("the settlement rewrote a parking somebody else placed: %q", tracker.item.Parking)
+	if tracker.Item.Parking != operatorParked {
+		t.Errorf("the settlement rewrote a parking somebody else placed: %q", tracker.Item.Parking)
 	}
-	if len(tracker.blockers) != 1 {
-		t.Errorf("the item was not made to wait on its impediment: %v", tracker.blockers)
+	if len(tracker.Blockers) != 1 {
+		t.Errorf("the item was not made to wait on its impediment: %v", tracker.Blockers)
 	}
 }
 
@@ -665,12 +665,12 @@ func TestTheParkingDefaultRecordsTheReasonItSuperseded(t *testing.T) {
 	t.Parallel()
 
 	operatorParked := domain.WorkItemParking("deferred by the scope decision until the quarter turns")
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &fakeTracker{Item: beads.WorkItem{
 		ID: "yoyodyne-task", Title: "Task", Status: "in_progress", Parking: operatorParked,
 	}}
 	state := runstate.State{
 		RunID:          "run-abcdef0123456789abcdef0123456789",
-		WorkItemID:     tracker.item.ID,
+		WorkItemID:     tracker.Item.ID,
 		TargetBranch:   "main",
 		LandingOutcome: runstate.LandingEvidence,
 		LandingReason:  "the design this needs has not landed",
@@ -678,20 +678,20 @@ func TestTheParkingDefaultRecordsTheReasonItSuperseded(t *testing.T) {
 	if _, err := settleUndischarged(context.Background(), tracker, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
-	if !strings.Contains(tracker.item.Parking.Reason(), "the design this needs has not landed") {
-		t.Errorf("the run's account did not become the parking reason: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "the design this needs has not landed") {
+		t.Errorf("the run's account did not become the parking reason: %q", tracker.Item.Parking)
 	}
-	if !strings.Contains(tracker.notes, operatorParked.Reason()) {
-		t.Errorf("the superseded parking reason was lost: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, operatorParked.Reason()) {
+		t.Errorf("the superseded parking reason was lost: %q", tracker.Notes)
 	}
 	// An item nobody had parked has nothing to supersede, and a note saying so
 	// would be a sentence about a decision nobody took.
-	unparked := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+	unparked := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
 	if _, err := settleUndischarged(context.Background(), unparked, state); err != nil {
 		t.Fatalf("settleUndischarged() error = %v", err)
 	}
-	if strings.Contains(unparked.notes, "replaces the parking reason") {
-		t.Errorf("the notes claim a parking reason that never existed: %q", unparked.notes)
+	if strings.Contains(unparked.Notes, "replaces the parking reason") {
+		t.Errorf("the notes claim a parking reason that never existed: %q", unparked.Notes)
 	}
 }
 
@@ -753,18 +753,18 @@ func TestADischargingLandingClosesItsItem(t *testing.T) {
 
 			tracker := newOutcomeTracker()
 			provider := roleBackend(writeFeature, approveVerdict)
-			provider.developerFinalText = claimed.reply
+			provider.DeveloperFinalText = claimed.reply
 			pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if !outcome.WorkItemClosed || !tracker.closed || tracker.item.Status != "closed" {
-				t.Fatalf("a discharging landing did not close its item: outcome = %#v, calls = %v", outcome, tracker.calls)
+			if !outcome.WorkItemClosed || !tracker.Closed || tracker.Item.Status != "closed" {
+				t.Fatalf("a discharging landing did not close its item: outcome = %#v, calls = %v", outcome, tracker.Calls)
 			}
-			if tracker.reopened {
-				t.Errorf("a discharging landing put its item back in the backlog; calls = %v", tracker.calls)
+			if tracker.Reopened {
+				t.Errorf("a discharging landing put its item back in the backlog; calls = %v", tracker.Calls)
 			}
 		})
 	}
@@ -780,24 +780,24 @@ func TestAnUnreadableLandingClaimWithholdsTheClosure(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "worked on it\n\n" + landingBlock(`{"outcome":"partly","why":"some of it"}`)
+	provider.DeveloperFinalText = "worked on it\n\n" + landingBlock(`{"outcome":"partly","why":"some of it"}`)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Integration == nil {
 		t.Fatalf("an unreadable claim cost the run its integration: %#v", outcome)
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("the item closed on a claim nobody could read; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("the item closed on a claim nobody could read; calls = %v", tracker.Calls)
 	}
 	if outcome.LandingProblem == "" {
 		t.Fatal("an unreadable claim left no trace on the outcome")
 	}
-	if !tracker.reopened || !strings.Contains(tracker.reopenReason, "could not be read") {
-		t.Errorf("the item does not say why it was not closed: %q", tracker.reopenReason)
+	if !tracker.Reopened || !strings.Contains(tracker.ReopenReason, "could not be read") {
+		t.Errorf("the item does not say why it was not closed: %q", tracker.ReopenReason)
 	}
 	// The prose the developer wrote is the run's evidence, and a refused claim
 	// must not take it.
@@ -813,22 +813,22 @@ func TestALaterAttemptReplacesTheLandingTheEarlierOneClaimed(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, repairVerdict, approveVerdict)
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperFinalTextByAttempt = []string{
 		"not doable yet\n\n" + landingBlock(`{"outcome":"evidence","why":"the dependency has not landed"}`),
 		"the reviewer was right, and it was doable after all",
 	}
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 2
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Landing != "" || outcome.LandingReason != "" {
 		t.Errorf("the second attempt inherited the first one's claim: %q / %q", outcome.Landing, outcome.LandingReason)
 	}
-	if !outcome.WorkItemClosed || tracker.reopened {
-		t.Fatalf("the finished work was not closed: outcome = %#v, calls = %v", outcome, tracker.calls)
+	if !outcome.WorkItemClosed || tracker.Reopened {
+		t.Fatalf("the finished work was not closed: outcome = %#v, calls = %v", outcome, tracker.Calls)
 	}
 }
 
@@ -841,11 +841,11 @@ func TestTheReviewerIsShownWhichLandingWasClaimed(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the diagnosis\n\n" +
+	provider.DeveloperFinalText = "the diagnosis\n\n" +
 		landingBlock(`{"outcome":"evidence","why":"the design this needs has not landed"}`)
 	var reviewerPrompt string
-	underlying := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	underlying := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			reviewerPrompt = request.Prompt
 		}
@@ -853,7 +853,7 @@ func TestTheReviewerIsShownWhichLandingWasClaimed(t *testing.T) {
 	}
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !strings.Contains(reviewerPrompt, "Claimed landing outcome") {
@@ -904,10 +904,10 @@ func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
 
 			tracker := newOutcomeTracker()
 			provider := roleBackend(writeFeature, approveVerdict)
-			provider.developerFinalText = landed.reply
+			provider.DeveloperFinalText = landed.reply
 			var reviewerPrompt string
-			underlying := provider.run
-			provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+			underlying := provider.Respond
+			provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 				if request.Role == domain.RoleReviewer {
 					reviewerPrompt = request.Prompt
 				}
@@ -915,14 +915,14 @@ func TestTheReviewersDirectionNeverReachesTheWorkItem(t *testing.T) {
 			}
 			pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+			if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 			// Everything the run leaves on the item, read together: the outcome notes,
 			// the reason it was closed with, the reason it went back to the backlog,
 			// and the parking it sits under.
 			onTheItem := strings.Join([]string{
-				tracker.notes, tracker.closeReason, tracker.reopenReason, tracker.item.Parking.Reason(),
+				tracker.Notes, tracker.CloseReason, tracker.ReopenReason, tracker.Item.Parking.Reason(),
 			}, "\n")
 			for _, directed := range []string{"Judge the change against that claim", "Approve it as evidence instead"} {
 				if strings.Contains(onTheItem, directed) {
@@ -960,14 +960,14 @@ func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, repairVerdict, approveVerdict)
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperFinalTextByAttempt = []string{
 		"the recurring-task machinery this item needs is on a branch that has not landed; this change is the diagnosis",
 		"the diagnosis stands\n\n" +
 			landingBlock(`{"outcome":"evidence","why":"the machinery this item is written against has not landed"}`),
 	}
 	var reviewerPrompts []string
-	underlying := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	underlying := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			reviewerPrompts = append(reviewerPrompts, request.Prompt)
 		}
@@ -976,7 +976,7 @@ func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 2
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -992,14 +992,14 @@ func TestADiagnosisWithNoClaimIsSentBackRatherThanClosingItsItem(t *testing.T) {
 		t.Errorf("the reviewer was not told what approving the default does: %q", reviewerPrompts[0])
 	}
 	// And the item is where the evidence says it belongs, not closed against it.
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("the item closed against a diagnosis; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("the item closed against a diagnosis; calls = %v", tracker.Calls)
 	}
-	if !tracker.reopened || !tracker.item.Parking.Parked() {
-		t.Fatalf("the item was not put back parked; calls = %v", tracker.calls)
+	if !tracker.Reopened || !tracker.Item.Parking.Parked() {
+		t.Fatalf("the item was not put back parked; calls = %v", tracker.Calls)
 	}
-	if !strings.Contains(tracker.item.Parking.Reason(), "has not landed") {
-		t.Errorf("the parking reason does not name what would release the item: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "has not landed") {
+		t.Errorf("the parking reason does not name what would release the item: %q", tracker.Item.Parking)
 	}
 }
 
@@ -1043,35 +1043,35 @@ func TestReconciliationSettlesAnInterruptedRunByTheLandingItClaimed(t *testing.T
 			t.Parallel()
 
 			repository, worktreeRoot, store := restartableFixture(t)
-			tracker := (&fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}).
-				holds("yoyodyne-impediment")
+			tracker := (&fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}).
+				Holds("yoyodyne-impediment")
 			provider := roleBackend(writeFeature, approveVerdict)
-			provider.developerFinalText = settled.reply
+			provider.DeveloperFinalText = settled.reply
 			// Killed after the promotion and before the item was settled, which is
 			// the boundary reconciliation exists for.
 			halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
 			pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+			if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 				t.Fatal("interrupted Run() error = nil")
 			}
-			if tracker.closed || tracker.reopened {
-				t.Fatalf("the interrupted run settled the item itself; calls = %v", tracker.calls)
+			if tracker.Closed || tracker.Reopened {
+				t.Fatalf("the interrupted run settled the item itself; calls = %v", tracker.Calls)
 			}
 
 			results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
 			if len(results) != 1 {
 				t.Fatalf("reconciled %d runs, want the one this test made", len(results))
 			}
-			if tracker.closed != settled.wantClosed {
-				t.Errorf("closed = %t, want %t; calls = %v", tracker.closed, settled.wantClosed, tracker.calls)
+			if tracker.Closed != settled.wantClosed {
+				t.Errorf("closed = %t, want %t; calls = %v", tracker.Closed, settled.wantClosed, tracker.Calls)
 			}
-			if tracker.reopened == settled.wantClosed {
-				t.Errorf("reopened = %t, want %t; calls = %v", tracker.reopened, !settled.wantClosed, tracker.calls)
+			if tracker.Reopened == settled.wantClosed {
+				t.Errorf("reopened = %t, want %t; calls = %v", tracker.Reopened, !settled.wantClosed, tracker.Calls)
 			}
-			if tracker.item.Parking.Parked() != settled.wantParked {
-				t.Errorf("parked = %q, want parked = %t", tracker.item.Parking, settled.wantParked)
+			if tracker.Item.Parking.Parked() != settled.wantParked {
+				t.Errorf("parked = %q, want parked = %t", tracker.Item.Parking, settled.wantParked)
 			}
-			if waits := strings.Join(tracker.blockers, ","); waits != settled.wantWaits {
+			if waits := strings.Join(tracker.Blockers, ","); waits != settled.wantWaits {
 				t.Errorf("the item waits on %q, want %q", waits, settled.wantWaits)
 			}
 			// The words the sweep leaves say which way it went. The note is written
@@ -1083,8 +1083,8 @@ func TestReconciliationSettlesAnInterruptedRunByTheLandingItClaimed(t *testing.T
 			if !settled.wantClosed {
 				said, unsaid = unsaid, said
 			}
-			if !strings.Contains(tracker.notes, said) || strings.Contains(tracker.notes, unsaid) {
-				t.Errorf("the reconciled note says %q and not %q; notes = %q", said, unsaid, tracker.notes)
+			if !strings.Contains(tracker.Notes, said) || strings.Contains(tracker.Notes, unsaid) {
+				t.Errorf("the reconciled note says %q and not %q; notes = %q", said, unsaid, tracker.Notes)
 			}
 			said, unsaid = "closed", "put back in the backlog undischarged"
 			if !settled.wantClosed {
@@ -1095,9 +1095,9 @@ func TestReconciliationSettlesAnInterruptedRunByTheLandingItClaimed(t *testing.T
 			}
 			// Whichever way it went, settling it twice settles it once: the second
 			// sweep finds the item already in the state this run's landing calls for.
-			calls := len(tracker.calls)
+			calls := len(tracker.Calls)
 			reconcileSweep(t, repository, worktreeRoot, store, tracker)
-			if extra := tracker.calls[calls:]; countCalls(extra, "complete")+countCalls(extra, "reopen")+countCalls(extra, "blocker") > 0 {
+			if extra := tracker.Calls[calls:]; countCalls(extra, "complete")+countCalls(extra, "reopen")+countCalls(extra, "blocker") > 0 {
 				t.Errorf("a second sweep settled the item again: %v", extra)
 			}
 		})

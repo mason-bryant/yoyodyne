@@ -31,7 +31,7 @@ func TestReconcileFinishesAMergeThatLandedAmongOthers(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the queued merge settled", settled)
 	}
@@ -51,7 +51,7 @@ func TestReconcileFinishesAMergeThatLandedAmongOthers(t *testing.T) {
 	// Another change lands on the remote after it, so the tip carries content this
 	// promotion never had — the state the old check could never get past.
 	tip := landAnotherChange(t, fixture.remote)
-	completes := len(fixture.tracker.calls)
+	completes := len(fixture.tracker.Calls)
 
 	docket := &memoryDocket{}
 	docketer := docketerOverStore(docket, fixture.store, config.Config{
@@ -68,7 +68,7 @@ func TestReconcileFinishesAMergeThatLandedAmongOthers(t *testing.T) {
 	if len(built.Entries) != 1 || built.Entries[0].Class != triage.ClassPublication {
 		t.Fatalf("docket = %#v, want the unconfirmed publication docketed", built.Entries)
 	}
-	if held := heldItemsOf(t, fixture.store, fixture.tracker.item.ID); !held[fixture.tracker.item.ID] {
+	if held := heldItemsOf(t, fixture.store, fixture.tracker.Item.ID); !held[fixture.tracker.Item.ID] {
 		t.Fatalf("holds = %v, want the item held out of the pull by its outstanding publication", held)
 	}
 
@@ -102,14 +102,14 @@ func TestReconcileFinishesAMergeThatLandedAmongOthers(t *testing.T) {
 	}
 	// The hold lifts, so the item is pullable again for whatever it is worth to a
 	// closed item; the point is that no surface reads it as held.
-	if held := heldItemsOf(t, fixture.store, fixture.tracker.item.ID); held[fixture.tracker.item.ID] {
+	if held := heldItemsOf(t, fixture.store, fixture.tracker.Item.ID); held[fixture.tracker.Item.ID] {
 		t.Errorf("holds = %v, want the item released once its publication settled", held)
 	}
 	// The item: told, and not closed a second time — its run closed it.
-	if !strings.Contains(fixture.tracker.notes, "settled this item's publication") || !strings.Contains(fixture.tracker.notes, "Previously outstanding, as the line above it reads: \"Publication outstanding: confirm the queued merge") {
-		t.Errorf("tracker notes do not report the settlement against the line it replaces:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Notes, "settled this item's publication") || !strings.Contains(fixture.tracker.Notes, "Previously outstanding, as the line above it reads: \"Publication outstanding: confirm the queued merge") {
+		t.Errorf("tracker notes do not report the settlement against the line it replaces:\n%s", fixture.tracker.Notes)
 	}
-	for _, call := range fixture.tracker.calls[completes:] {
+	for _, call := range fixture.tracker.Calls[completes:] {
 		if call != "record" {
 			t.Errorf("the settlement made %q on an item its run already closed", call)
 		}
@@ -145,7 +145,7 @@ func TestASettledMergeIsConfirmedWhenOthersLandedAfterIt(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	merge := publishedCommit(t, fixture.remote, "main")
 	tip := landAnotherChange(t, fixture.remote)
 
@@ -160,7 +160,7 @@ func TestASettledMergeIsConfirmedWhenOthersLandedAfterIt(t *testing.T) {
 	if settled.PullRequest.MergeCommit != merge {
 		t.Errorf("recorded merge commit = %q, want this request's merge %q rather than the tip %q", settled.PullRequest.MergeCommit, merge, tip)
 	}
-	if !fixture.tracker.closed {
+	if !fixture.tracker.Closed {
 		t.Error("the confirmed merge did not close the item")
 	}
 	if local := publishedCommit(t, fixture.repository, "main"); local != tip {
@@ -185,7 +185,7 @@ func TestReconcileFinishesADroppedMergeSomebodyMadeByHand(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.dropQueuedMerge()
+	fixture.forge.DropQueuedMerge()
 	docket := &memoryDocket{}
 	docketer := docketerOverStore(docket, fixture.store, config.Config{
 		Execution: config.Execution{IntegrationRetriesBeforeReconciliation: 1},
@@ -198,21 +198,21 @@ func TestReconcileFinishesADroppedMergeSomebodyMadeByHand(t *testing.T) {
 		t.Fatalf("reconciliation = %#v, %v; want the dropped merge handed to a person", results, err)
 	}
 	dropped := loadRun(t, fixture.store, pipelineRunID)
-	if dropped.Blocker == "" || dropped.MergeDrop == nil || !fixture.tracker.blocked || fixture.tracker.closed {
-		t.Fatalf("dropped = blocker %q, drop %#v, item blocked %t closed %t; want the item handed back", dropped.Blocker, dropped.MergeDrop, fixture.tracker.blocked, fixture.tracker.closed)
+	if dropped.Blocker == "" || dropped.MergeDrop == nil || !fixture.tracker.Blocked || fixture.tracker.Closed {
+		t.Fatalf("dropped = blocker %q, drop %#v, item blocked %t closed %t; want the item handed back", dropped.Blocker, dropped.MergeDrop, fixture.tracker.Blocked, fixture.tracker.Closed)
 	}
 	if built, err := docketer.Build(); err != nil || len(built.Entries) != 2 {
 		t.Fatalf("docket = %#v, %v; want the stoppage and the publication both docketed", built, err)
 	}
-	if !dropped.AwaitingForge() || !heldItemsOf(t, fixture.store, fixture.tracker.item.ID)[fixture.tracker.item.ID] {
+	if !dropped.AwaitingForge() || !heldItemsOf(t, fixture.store, fixture.tracker.Item.ID)[fixture.tracker.Item.ID] {
 		t.Fatal("a dropped merge is neither counted as awaiting the forge nor holding its item")
 	}
 
 	// A person merges the request on the forge.
-	if err := fixture.forge.mergeIntoRemote(fixture.forge.opened[0].Base, outcome.PullRequest.HeadCommit); err != nil {
+	if err := fixture.forge.MergeIntoRemote(fixture.forge.Opened[0].Base, outcome.PullRequest.HeadCommit); err != nil {
 		t.Fatalf("merge by hand: %v", err)
 	}
-	fixture.forge.merged = true
+	fixture.forge.Merged = true
 
 	refreshed, err := reconciler.RefreshPublications(context.Background())
 	if err != nil || len(refreshed) != 1 || !refreshed[0].Updated || !refreshed[0].Merged {
@@ -237,10 +237,10 @@ func TestReconcileFinishesADroppedMergeSomebodyMadeByHand(t *testing.T) {
 		t.Errorf("record awaiting the forge = %t, outcome = %s; want neither awaiting nor stopped", after.AwaitingForge(), after.Outcome())
 	}
 	// The item closes on its own landing, in the words the settle path uses.
-	if !fixture.tracker.closed || !strings.Contains(fixture.tracker.closeReason, "merged by the forge") {
-		t.Errorf("item closed = %t with reason %q, want the hand-made merge to settle it", fixture.tracker.closed, fixture.tracker.closeReason)
+	if !fixture.tracker.Closed || !strings.Contains(fixture.tracker.CloseReason, "merged by the forge") {
+		t.Errorf("item closed = %t with reason %q, want the hand-made merge to settle it", fixture.tracker.Closed, fixture.tracker.CloseReason)
 	}
-	if held := heldItemsOf(t, fixture.store, fixture.tracker.item.ID); held[fixture.tracker.item.ID] {
+	if held := heldItemsOf(t, fixture.store, fixture.tracker.Item.ID); held[fixture.tracker.Item.ID] {
 		t.Errorf("holds = %v, want the hold lifted", held)
 	}
 	rebuilt, err := docketer.Build()
@@ -266,11 +266,11 @@ func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	t.Parallel()
 
 	fixture := newQueuedFixture(t)
-	fixture.forge.replayMerge = true
+	fixture.forge.ReplayMerge = true
 	fixture.run(t)
 	// The forge replays the promotion rather than merging it, so the promoted
 	// commit is on no branch of the remote and containment honestly fails.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the merge settled with its publication outstanding", settled)
 	}
@@ -278,7 +278,7 @@ func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	if before.PublishFailure == "" || !before.PullRequest.Merged {
 		t.Fatalf("record = %#v, want a merged publication nothing could confirm", before)
 	}
-	notes := len(fixture.tracker.noteRecords)
+	notes := len(fixture.tracker.NoteRecords)
 
 	reconciler := fixture.reconciler(t)
 	settlements, err := reconciler.FinishPublications(context.Background())
@@ -300,10 +300,10 @@ func TestReconcileLeavesAPublicationTheRemoteStillRefuses(t *testing.T) {
 	if after.PullRequest.MergeCommit != "" {
 		t.Errorf("record = %#v, want nothing confirmed", after.PullRequest)
 	}
-	if len(fixture.tracker.noteRecords) != notes {
-		t.Errorf("the sweep wrote %d note(s) on an item whose publication it could not finish", len(fixture.tracker.noteRecords)-notes)
+	if len(fixture.tracker.NoteRecords) != notes {
+		t.Errorf("the sweep wrote %d note(s) on an item whose publication it could not finish", len(fixture.tracker.NoteRecords)-notes)
 	}
-	if held := heldItemsOf(t, fixture.store, fixture.tracker.item.ID); !held[fixture.tracker.item.ID] {
+	if held := heldItemsOf(t, fixture.store, fixture.tracker.Item.ID); !held[fixture.tracker.Item.ID] {
 		t.Errorf("holds = %v, want the item still held by its outstanding publication", held)
 	}
 
@@ -333,7 +333,7 @@ func TestReconcileFinishesAPublicationOnceItsLeftoverBranchIsGone(t *testing.T) 
 	}
 	fixture.sleep = func(context.Context, time.Duration) error { return nil }
 	fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the merge settled with its branch left behind", settled)
 	}
@@ -341,7 +341,7 @@ func TestReconcileFinishesAPublicationOnceItsLeftoverBranchIsGone(t *testing.T) 
 	if !strings.Contains(leftover.PublishFailure, "delete the merged remote branch") || leftover.PullRequest.MergeCommit == "" {
 		t.Fatalf("record = %#v, want a confirmed merge with a leftover branch", leftover)
 	}
-	notes := len(fixture.tracker.noteRecords)
+	notes := len(fixture.tracker.NoteRecords)
 
 	// The connection still drops: nothing is written, and the publication stands.
 	still := fixture.reconciler(t)
@@ -349,8 +349,8 @@ func TestReconcileFinishesAPublicationOnceItsLeftoverBranchIsGone(t *testing.T) 
 	if err != nil || len(settlements) != 1 || settlements[0].Settled || settlements[0].Failure != "" {
 		t.Fatalf("FinishPublications() over a dropping connection = %#v, %v; want the leftover left standing", settlements, err)
 	}
-	if len(fixture.tracker.noteRecords) != notes {
-		t.Errorf("the sweep wrote %d note(s) about a branch it still could not delete", len(fixture.tracker.noteRecords)-notes)
+	if len(fixture.tracker.NoteRecords) != notes {
+		t.Errorf("the sweep wrote %d note(s) about a branch it still could not delete", len(fixture.tracker.NoteRecords)-notes)
 	}
 
 	// The connection comes back: the branch goes, and the publication settles.
@@ -367,8 +367,8 @@ func TestReconcileFinishesAPublicationOnceItsLeftoverBranchIsGone(t *testing.T) 
 	if published := publishedCommit(t, fixture.remote, leftover.Branch); published != "" {
 		t.Errorf("merged remote branch survived at %q", published)
 	}
-	if len(fixture.tracker.noteRecords) != notes+1 || !strings.Contains(fixture.tracker.noteRecords[notes], "Previously outstanding, as the line above it reads: \"Publication outstanding: delete the merged remote branch") {
-		t.Errorf("tracker notes after the settlement = %q, want one note naming the leftover it replaces", fixture.tracker.noteRecords[notes:])
+	if len(fixture.tracker.NoteRecords) != notes+1 || !strings.Contains(fixture.tracker.NoteRecords[notes], "Previously outstanding, as the line above it reads: \"Publication outstanding: delete the merged remote branch") {
+		t.Errorf("tracker notes after the settlement = %q, want one note naming the leftover it replaces", fixture.tracker.NoteRecords[notes:])
 	}
 }
 
