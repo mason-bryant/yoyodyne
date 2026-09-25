@@ -33,31 +33,31 @@ func TestAChangeNobodyRanIsHandedBackAndNeverReachesAReviewer(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerRecordsNoExecution = true
+	provider.DeveloperRecordsNoExecution = true
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "recorded no execution") {
 		t.Fatalf("Run() error = %v, want the run stopped for want of an execution record", err)
 	}
-	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 0 {
+	if reviews := provider.RequestsForRole(domain.RoleReviewer); len(reviews) != 0 {
 		t.Fatalf("a change nobody ran reached a reviewer %d time(s)", len(reviews))
 	}
 	// It is handed back first, because the record is something the developer can
 	// still produce: the budget is spent on attempts rather than on one refusal.
-	if developed := provider.requestsForRole(domain.RoleDeveloper); len(developed) != 3 {
+	if developed := provider.RequestsForRole(domain.RoleDeveloper); len(developed) != 3 {
 		t.Fatalf("developer invocations = %d, want the attempt and both repairs", len(developed))
 	}
-	attempts := provider.requestsForRole(domain.RoleDeveloper)
+	attempts := provider.RequestsForRole(domain.RoleDeveloper)
 	handed := attempts[1].Prompt
 	if !strings.Contains(handed, "Execution evidence: repair required") || !strings.Contains(handed, "probe you ran") {
 		t.Errorf("the hand-back does not say what is owed: %q", handed)
 	}
-	if !tracker.blocked {
-		t.Fatalf("the item was not blocked for a person; calls = %v", tracker.calls)
+	if !tracker.Blocked {
+		t.Fatalf("the item was not blocked for a person; calls = %v", tracker.Calls)
 	}
-	if !strings.Contains(tracker.blockReason, "without recording that it had executed") {
-		t.Errorf("the blocker does not say what stopped the run: %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "without recording that it had executed") {
+		t.Errorf("the blocker does not say what stopped the run: %q", tracker.BlockReason)
 	}
 	recorded := loadedRun(t, store, outcome.RunID)
 	if recorded.Verification == nil || len(recorded.Verification.Owed) == 0 {
@@ -76,7 +76,7 @@ func TestAChangeNoDeclaredCheckReadsSubmitsOnTheProbeAlone(t *testing.T) {
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "avatar.png"), []byte("not really an image\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "replaced the avatar\n\n" +
+	provider.DeveloperFinalText = "replaced the avatar\n\n" +
 		verificationBlock(`{"probe":{"command":"make build","outcome":"passed"}}`)
 	// The leeway is available only where the composition ledger is an account of
 	// the project being asked about, which means the checks this repository
@@ -85,14 +85,14 @@ func TestAChangeNoDeclaredCheckReadsSubmitsOnTheProbeAlone(t *testing.T) {
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, ledgerChecks)
 	pipeline.Checks = passingChecks{}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
 		t.Fatalf("a change nothing checks was refused for want of a check run: %#v", outcome)
 	}
-	if attempts := provider.requestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
+	if attempts := provider.RequestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
 		t.Fatalf("developer invocations = %d, want the one attempt", len(attempts))
 	}
 }
@@ -108,19 +108,19 @@ func TestAProbeTheEnvironmentRefusedEndsTheRunNamingIt(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
-	provider.developerFinalText = "I cannot run anything in this worktree.\n\n" +
+	provider.DeveloperFinalText = "I cannot run anything in this worktree.\n\n" +
 		verificationBlock(`{"probe":{"command":"make build","outcome":"refused",`+
 			`"detail":"could not start /bin/zsh: the command line plus environment exceed the OS exec argument limit"}}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "argument limit") {
 		t.Fatalf("Run() error = %v, want the run ended naming what refused", err)
 	}
-	if attempts := provider.requestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
+	if attempts := provider.RequestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
 		t.Fatalf("developer invocations = %d, want the run to have stopped on the first reply", len(attempts))
 	}
-	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 0 {
+	if reviews := provider.RequestsForRole(domain.RoleReviewer); len(reviews) != 0 {
 		t.Fatalf("a run whose environment cannot execute bought %d review(s)", len(reviews))
 	}
 	recorded := loadedRun(t, store, outcome.RunID)
@@ -142,13 +142,13 @@ func TestAProbeThatRanAndFailedIsNotAnEnvironmentalRefusal(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the base commit is red; my own change is below\n\n" +
+	provider.DeveloperFinalText = "the base commit is red; my own change is below\n\n" +
 		verificationBlock(`{"probe":{"command":"make test","outcome":"failed",`+
 			`"detail":"TestSomethingElse fails on the base commit: want 2, got 3"},`+
 			`"checks":[{"command":"make test ./internal/orchestrator/...","outcome":"passed"}]}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func TestAProbeThatRanAndFailedIsNotAnEnvironmentalRefusal(t *testing.T) {
 		recorded.Verification.Probe.Outcome != runstate.VerificationFailed {
 		t.Fatalf("verification = %#v, want the failing probe kept as it was recorded", recorded.Verification)
 	}
-	reviews := provider.requestsForRole(domain.RoleReviewer)
+	reviews := provider.RequestsForRole(domain.RoleReviewer)
 	if len(reviews) != 1 || !strings.Contains(reviews[0].Prompt, "ran and failed") {
 		t.Errorf("the reviewer was not shown that the probe ran and failed")
 	}
@@ -184,15 +184,15 @@ func TestWhatTheDeveloperExecutedReachesTheReviewer(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		verificationBlock(`{"probe":{"command":"make build","outcome":"passed"},`+
 			`"checks":[{"command":"make test ./internal/orchestrator/...","outcome":"passed"}]}`)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	reviews := provider.requestsForRole(domain.RoleReviewer)
+	reviews := provider.RequestsForRole(domain.RoleReviewer)
 	if len(reviews) != 1 {
 		t.Fatalf("review invocations = %d, want one", len(reviews))
 	}
@@ -218,20 +218,20 @@ func TestAnUnreadableLandingClaimDoesNotCostTheExecutionRecord(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "worked on it\n\n" +
+	provider.DeveloperFinalText = "worked on it\n\n" +
 		landingBlock(`{"outcome":"partly","why":"some of it"}`) +
 		verificationBlock(`{"probe":{"command":"make build","outcome":"passed"},`+
 			`"checks":[{"command":"make test","outcome":"passed"}]}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Integration == nil {
 		t.Fatalf("the change did not integrate: %#v", outcome)
 	}
-	if attempts := provider.requestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
+	if attempts := provider.RequestsForRole(domain.RoleDeveloper); len(attempts) != 1 {
 		t.Fatalf("developer invocations = %d, want no repair spent on a record it had written", len(attempts))
 	}
 	recorded := loadedRun(t, store, outcome.RunID)
@@ -255,8 +255,8 @@ func TestAnUnreadableVerificationBlockSaysSoRatherThanReadingAsNoRecord(t *testi
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerRecordsNoExecution = true
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperRecordsNoExecution = true
+	provider.DeveloperFinalTextByAttempt = []string{
 		"implemented the work item\n\n" + verificationBlock(`{"probe":{"command":"make build","outcome":"ran"}}`),
 		"implemented the work item\n\n" +
 			verificationBlock(`{"probe":{"command":"make build","outcome":"passed"},`+
@@ -264,14 +264,14 @@ func TestAnUnreadableVerificationBlockSaysSoRatherThanReadingAsNoRecord(t *testi
 	}
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Integration == nil {
 		t.Fatalf("the second attempt's readable record did not carry the change through: %#v", outcome)
 	}
-	attempts := provider.requestsForRole(domain.RoleDeveloper)
+	attempts := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(attempts) != 2 {
 		t.Fatalf("developer invocations = %d, want the attempt and one hand-back", len(attempts))
 	}
@@ -288,8 +288,8 @@ func TestEachAttemptRecordsItsOwnExecutionsRatherThanInheritingThem(t *testing.T
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerRecordsNoExecution = true
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperRecordsNoExecution = true
+	provider.DeveloperFinalTextByAttempt = []string{
 		"implemented the work item\n\n" +
 			verificationBlock(`{"probe":{"command":"make build","outcome":"passed"},`+
 				`"checks":[{"command":"make test","outcome":"passed"}]}`),
@@ -297,11 +297,11 @@ func TestEachAttemptRecordsItsOwnExecutionsRatherThanInheritingThem(t *testing.T
 	}
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	// The first attempt's record carried the run through the gate.
-	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 1 {
+	if reviews := provider.RequestsForRole(domain.RoleReviewer); len(reviews) != 1 {
 		t.Fatalf("review invocations = %d, want the one the first attempt earned", len(reviews))
 	}
 
@@ -309,9 +309,9 @@ func TestEachAttemptRecordsItsOwnExecutionsRatherThanInheritingThem(t *testing.T
 	// anything either, which is the same statement from the other side.
 	second := newOutcomeTracker()
 	bare := roleBackend(writeFeature, approveVerdict)
-	bare.developerRecordsNoExecution = true
+	bare.DeveloperRecordsNoExecution = true
 	barePipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), second, bare, []string{"exit 0"})
-	if _, err := barePipeline.Run(context.Background(), second.item.ID); err == nil {
+	if _, err := barePipeline.Run(context.Background(), second.Item.ID); err == nil {
 		t.Fatal("a run that recorded nothing at all was let through")
 	}
 }

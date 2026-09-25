@@ -32,7 +32,7 @@ func TestConvergeCatchesUpATargetNoRunIsGoingToFinish(t *testing.T) {
 	// sweep is driven on its own, so what it does here is its own work rather
 	// than the settle path's. That is the case it exists for — a target branch
 	// left behind the forge by something no run is going to finish.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
 		t.Fatalf("local main = %q, want the promoted commit %q before the sweep", local, outcome.Integration.TargetCommit)
 	}
@@ -71,7 +71,7 @@ func TestReconcileSettlesAQueuedMergeAndCatchesTheTargetUpItself(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
@@ -93,8 +93,8 @@ func TestReconcileSettlesAQueuedMergeAndCatchesTheTargetUpItself(t *testing.T) {
 	if local := publishedCommit(t, fixture.repository, "main"); local != merge {
 		t.Errorf("local main = %q, want the forge's merge commit %q without a sweep", local, merge)
 	}
-	if !strings.Contains(fixture.tracker.notes, "caught up to "+merge) {
-		t.Errorf("tracker notes do not report the catch-up:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Notes, "caught up to "+merge) {
+		t.Errorf("tracker notes do not report the catch-up:\n%s", fixture.tracker.Notes)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestReconcileDoesNotCatchUpWhenTheForgeDroppedTheQueuedMerge(t *testing.T) 
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.dropQueuedMerge()
+	fixture.forge.DropQueuedMerge()
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 {
@@ -130,7 +130,7 @@ func TestConvergeRemovesTheLeftoverBranchOfASettledRun(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the queued merge settled", settled)
 	}
@@ -164,14 +164,14 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The round produces nothing, which is what leaves a branch the sweep may
 	// delete: every attempt that writes anything is committed onto the run branch
 	// before the checks run, so a branch with work on it is one the sweep keeps.
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -256,13 +256,13 @@ func TestACatchupHeldDuringSettleIsFinishedByALaterSweep(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	// Another machine's work lands on the remote target above the merge,
 	// changing the same file the run shipped — and the primary checkout holds
 	// an unsaved edit to that file, so catching up would overwrite it.
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
-	if _, err := fixture.forge.git("worktree", "add", elsewhere, "main"); err != nil {
+	if _, err := fixture.forge.Git("worktree", "add", elsewhere, "main"); err != nil {
 		t.Fatalf("open a worktree on the remote: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(elsewhere, "feature.txt"), []byte("another machine's change\n"), 0o600); err != nil {
@@ -371,13 +371,13 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -452,10 +452,10 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	// from the moment above it describes a directory that is not there; the person
 	// who picks the item up reads the item rather than the run's state file, and
 	// the ref is the only route from what they read back to the work.
-	if !strings.Contains(tracker.notes, retired.PreservedWork) ||
-		!strings.Contains(tracker.notes, "Retired worktree: "+settled.WorktreePath) ||
-		!strings.Contains(tracker.notes, "git worktree add --detach") {
-		t.Errorf("the item was not told where the retired checkout's work went: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, retired.PreservedWork) ||
+		!strings.Contains(tracker.Notes, "Retired worktree: "+settled.WorktreePath) ||
+		!strings.Contains(tracker.Notes, "git worktree add --detach") {
+		t.Errorf("the item was not told where the retired checkout's work went: %q", tracker.Notes)
 	}
 
 	// Asking again says there was nothing there, so a sweep that runs on every
@@ -474,13 +474,13 @@ func TestSweepingRecordsACheckoutSomethingElseAlreadyRemoved(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -539,7 +539,7 @@ func TestConvergeRetiresSettledCheckoutsPastTheTail(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	worktrees := newSweepManager(t, repository, worktreeRoot)
 
 	// One more settled run than the tail keeps, oldest first, each with a real
@@ -819,12 +819,12 @@ func TestASettleThatCannotFinishThePublicationLeavesTheLocalBranchAlone(t *testi
 	t.Parallel()
 
 	fixture := newQueuedFixture(t)
-	fixture.forge.replayMerge = true
+	fixture.forge.ReplayMerge = true
 	outcome := fixture.run(t)
 	// The forge merges as a replay: the remote's new tip carries the change's
 	// content without carrying the promoted commit, so confirming the
 	// publication honestly fails even though a merge really happened.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 {

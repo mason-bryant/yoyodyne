@@ -34,7 +34,7 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 	runPipelineGit(t, repository, "commit", "-m", "the guide as the branch will be cut from it")
 	base := gitLine(t, repository, "rev-parse", "HEAD")
 
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &fakeTracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Extract the settings section",
 		Description:        "Move the Settings section of docs/guide.md into docs/settings.md.",
@@ -55,8 +55,8 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 		runPipelineGit(t, repository, "commit", "-am", "an unrelated promotion rewrites the guide")
 		return nil
 	}, approveVerdict)
-	develop := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	develop := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			reviewerPrompts = append(reviewerPrompts, request.Prompt)
 		}
@@ -64,7 +64,7 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 	}
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

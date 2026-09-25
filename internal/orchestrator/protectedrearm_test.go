@@ -46,7 +46,7 @@ func newDroppedProtectedRun(t *testing.T) droppedProtectedRun {
 	t.Helper()
 	fixture := newQueuedFixture(t)
 	protectBranch(t, fixture.remote, "main")
-	fixture.forge.protection = publish.BranchProtection{Protected: true, By: "branch protection"}
+	fixture.forge.TargetProtection = publish.BranchProtection{Protected: true, By: "branch protection"}
 	fixture.docket = &memoryDocket{}
 	outcome := fixture.run(t)
 	if outcome.Integration == nil || !outcome.Integration.ThroughPullRequest {
@@ -58,15 +58,15 @@ func newDroppedProtectedRun(t *testing.T) droppedProtectedRun {
 
 	// The forge drops the queued merge, and the sweep hands the unlanded change to
 	// a person.
-	fixture.forge.dropQueuedMerge()
+	fixture.forge.DropQueuedMerge()
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the dropped merge settled onto a blocker", results)
 	}
 	dropped := loadRun(t, fixture.store, pipelineRunID)
-	if dropped.Blocker == "" || dropped.MergeDrop == nil || !fixture.tracker.blocked || fixture.tracker.closed {
+	if dropped.Blocker == "" || dropped.MergeDrop == nil || !fixture.tracker.Blocked || fixture.tracker.Closed {
 		t.Fatalf("dropped = blocker %q, drop %#v, item blocked %t closed %t; want the unlanded change handed to a person",
-			dropped.Blocker, dropped.MergeDrop, fixture.tracker.blocked, fixture.tracker.closed)
+			dropped.Blocker, dropped.MergeDrop, fixture.tracker.Blocked, fixture.tracker.Closed)
 	}
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.BaseCommit {
 		t.Fatalf("local main = %q after the drop, want the base %q the change never left", local, outcome.BaseCommit)
@@ -79,7 +79,7 @@ func newDroppedProtectedRun(t *testing.T) droppedProtectedRun {
 	// The development manager decides a re-arm, which spends the publication's
 	// budget where the conversation records it.
 	key := triage.PublicationKey(pipelineRunID, dropped.PullRequest.Number)
-	if _, err := fixture.store.Triage().RecordMergeRearm(context.Background(), fixture.tracker.item.ID, key,
+	if _, err := fixture.store.Triage().RecordMergeRearm(context.Background(), fixture.tracker.Item.ID, key,
 		triageDecided(runstate.TriageDecisionRearm, pipelineRunID), time.Now().UTC(), rearmCaps); err != nil {
 		t.Fatalf("RecordMergeRearm() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func (r droppedProtectedRun) rearmer(t *testing.T) Rearmer {
 
 func (r droppedProtectedRun) rearm(t *testing.T) RearmResult {
 	t.Helper()
-	merges := len(r.forge.merges)
+	merges := len(r.forge.Merges)
 	result, err := r.rearmer(t).Rearm(context.Background(), RearmRequest{Run: pipelineRunID, Reason: rearmReasoning})
 	if err != nil {
 		t.Fatalf("Rearm() error = %v", err)
@@ -110,15 +110,15 @@ func (r droppedProtectedRun) rearm(t *testing.T) RearmResult {
 	if !result.Rearmed || !result.Queued || result.Rearms != 1 {
 		t.Fatalf("result = %+v, want the request repeated and queued once", result)
 	}
-	if len(r.forge.merges) != merges+1 {
-		t.Fatalf("merge requests = %d, want the one repeat", len(r.forge.merges)-merges)
+	if len(r.forge.Merges) != merges+1 {
+		t.Fatalf("merge requests = %d, want the one repeat", len(r.forge.Merges)-merges)
 	}
 	want := publish.MergeRequest{
 		Number:     r.outcome.PullRequest.Number,
 		HeadCommit: r.outcome.Integration.SourceCommit,
 		Method:     publish.MergeMethod(r.outcome.PullRequest.MergeMethod),
 	}
-	if repeated := r.forge.merges[len(r.forge.merges)-1]; repeated != want {
+	if repeated := r.forge.Merges[len(r.forge.Merges)-1]; repeated != want {
 		t.Fatalf("repeated request = %#v, want the identical authorized one %#v", repeated, want)
 	}
 	return result
@@ -142,7 +142,7 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 				rearmed.Outstanding(), rearmed.PublishFailure, rearmed.Blocker)
 		}
 
-		run.forge.performQueuedMerge(t)
+		run.forge.PerformQueuedMerge(t)
 		merge := publishedCommit(t, run.remote, "main")
 		if merge == run.outcome.Integration.SourceCommit {
 			t.Fatalf("remote main = %q, want the forge's own merge commit above the promoted commit", merge)
@@ -153,8 +153,8 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 		}
 
 		// The item is closed on the forge's merge.
-		if !run.tracker.closed || !strings.Contains(run.tracker.closeReason, "merged by the forge") {
-			t.Errorf("item closed = %t with reason %q, want the re-armed merge to close it", run.tracker.closed, run.tracker.closeReason)
+		if !run.tracker.Closed || !strings.Contains(run.tracker.CloseReason, "merged by the forge") {
+			t.Errorf("item closed = %t with reason %q, want the re-armed merge to close it", run.tracker.Closed, run.tracker.CloseReason)
 		}
 		// The local target is caught up onto the remote merge commit, by the settle
 		// itself rather than a later convergence sweep.
@@ -188,7 +188,7 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 		if published := publishedCommit(t, run.remote, run.outcome.Branch); published != "" {
 			t.Errorf("merged remote branch survived at %q", published)
 		}
-		if held := heldItemsOf(t, run.store, run.tracker.item.ID); held[run.tracker.item.ID] {
+		if held := heldItemsOf(t, run.store, run.tracker.Item.ID); held[run.tracker.Item.ID] {
 			t.Errorf("holds = %v, want the item released once its publication settled", held)
 		}
 
@@ -215,10 +215,10 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 
 		run := newDroppedProtectedRun(t)
 		run.rearm(t)
-		merges := len(run.forge.merges)
+		merges := len(run.forge.Merges)
 
-		run.forge.dropQueuedMerge()
-		notes := len(run.tracker.noteRecords)
+		run.forge.DropQueuedMerge()
+		notes := len(run.tracker.NoteRecords)
 		results := run.reconcile(t)
 		if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
 			t.Fatalf("reconciliation = %#v, want the second drop settled onto a blocker", results)
@@ -226,13 +226,13 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 		// The re-arm left the item blocked from the first drop, so the second one's
 		// blocker reaches it as a note rather than a fresh block, which in the
 		// tracker is the same appended note without the status change.
-		if !run.tracker.blocked || run.tracker.closed {
-			t.Fatalf("item blocked = %t, closed = %t; want the second drop left with a person", run.tracker.blocked, run.tracker.closed)
+		if !run.tracker.Blocked || run.tracker.Closed {
+			t.Fatalf("item blocked = %t, closed = %t; want the second drop left with a person", run.tracker.Blocked, run.tracker.Closed)
 		}
-		if len(run.tracker.noteRecords) == notes {
+		if len(run.tracker.NoteRecords) == notes {
 			t.Fatal("the second drop wrote nothing on the item")
 		}
-		written := strings.Join(run.tracker.noteRecords[notes:], "\n")
+		written := strings.Join(run.tracker.NoteRecords[notes:], "\n")
 		redropped := loadRun(t, run.store, pipelineRunID)
 		// Recorded as an escalation: on the result, on the item, and on the run's
 		// own blocker, which is what the docket and `yoyo status` read.
@@ -261,10 +261,10 @@ func TestARearmOnAProtectedTargetLandsThroughTheForgeAndReconcileClosesTheItem(t
 			!strings.Contains(err.Error(), "escalation rather than another re-arm") {
 			t.Fatalf("a second Rearm() error = %v, want it refused as an escalation", err)
 		}
-		if len(run.forge.merges) != merges {
-			t.Fatalf("merge requests after the second drop = %d, want none", len(run.forge.merges)-merges)
+		if len(run.forge.Merges) != merges {
+			t.Fatalf("merge requests after the second drop = %d, want none", len(run.forge.Merges)-merges)
 		}
-		if _, err := run.store.Triage().RecordMergeRearm(context.Background(), run.tracker.item.ID, run.key,
+		if _, err := run.store.Triage().RecordMergeRearm(context.Background(), run.tracker.Item.ID, run.key,
 			triageDecided(runstate.TriageDecisionRearm, pipelineRunID), time.Now().UTC(), rearmCaps); !errors.Is(err, runstate.ErrTriageCapReached) {
 			t.Fatalf("a second decision error = %v, want the publication's cap refusing it", err)
 		}

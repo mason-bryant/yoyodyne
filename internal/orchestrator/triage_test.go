@@ -1405,7 +1405,7 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, repairVerdict)
@@ -1417,7 +1417,7 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	}
 	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
 
-	outcome, runErr := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, runErr := pipeline.Run(context.Background(), tracker.Item.ID)
 	if runErr == nil || !outcome.Blocked {
 		t.Fatalf("Run() error = %v, blocked = %t, want a run that spent its budget", runErr, outcome.Blocked)
 	}
@@ -1430,13 +1430,13 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 		t.Fatalf("docket = %#v, want the stopped run", entries)
 	}
 	entry := entries[0]
-	if entry.Class != triage.ClassStoppedRun || entry.RunID != outcome.RunID || entry.WorkItemID != tracker.item.ID {
+	if entry.Class != triage.ClassStoppedRun || entry.RunID != outcome.RunID || entry.WorkItemID != tracker.Item.ID {
 		t.Fatalf("entry = %#v", entry)
 	}
 	// The blocker on the entry is the blocker on the item, in the same words:
 	// an entry that paraphrased it would be a second account of one stoppage.
-	if entry.Blocker != strings.TrimRight(tracker.blockReason, "\n") {
-		t.Fatalf("docketed blocker is not the one recorded on the item:\n%s\n---\n%s", entry.Blocker, tracker.blockReason)
+	if entry.Blocker != strings.TrimRight(tracker.BlockReason, "\n") {
+		t.Fatalf("docketed blocker is not the one recorded on the item:\n%s\n---\n%s", entry.Blocker, tracker.BlockReason)
 	}
 	if len(entry.Findings) != 1 || entry.Findings[0].Message != "add the missing file" {
 		t.Fatalf("findings = %#v, want the reviewer's own words", entry.Findings)
@@ -1474,13 +1474,13 @@ func TestASweepDocketsARunItStopsAndNeverDocketsItTwice(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseReviewing}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 
@@ -1535,13 +1535,13 @@ func TestASweepThatCannotDocketStillSettlesTheRun(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseReviewing}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 
@@ -1828,8 +1828,8 @@ func TestADispatchTheTrackerRefusesReachesTheDocket(t *testing.T) {
 	repository, worktreeRoot, store := restartableFixture(t)
 	refusal := errors.New("bd update failed with status failed and exit code 1: Error claiming yoyodyne-task: issue not claimable: status blocked")
 	tracker := &fakeTracker{
-		item:    beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "blocked"},
-		onClaim: func() error { return refusal },
+		Item:    beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "blocked"},
+		OnClaim: func() error { return refusal },
 	}
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
@@ -1839,7 +1839,7 @@ func TestADispatchTheTrackerRefusesReachesTheDocket(t *testing.T) {
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); !errors.Is(err, refusal) {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); !errors.Is(err, refusal) {
 		t.Fatalf("Run() error = %v, want the tracker's refusal", err)
 	}
 
@@ -1864,7 +1864,7 @@ func TestADispatchTheTrackerRefusesReachesTheDocket(t *testing.T) {
 		t.Fatalf("docket = %#v, want the refused dispatch on it", built.Entries)
 	}
 	entry := built.Entries[0]
-	if entry.Class != triage.ClassUnstartedRun || entry.RunID != pipelineRunID || entry.WorkItemID != tracker.item.ID {
+	if entry.Class != triage.ClassUnstartedRun || entry.RunID != pipelineRunID || entry.WorkItemID != tracker.Item.ID {
 		t.Fatalf("entry = %#v, want the unstarted run keyed to the item it tried to claim", entry)
 	}
 	if !strings.Contains(entry.Failure, "not claimable: status blocked") {

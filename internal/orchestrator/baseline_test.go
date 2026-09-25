@@ -530,7 +530,7 @@ func newBaselineFixture(t *testing.T, item beads.WorkItem) *baselineFixture {
 		repository:   pipelineRepository(t),
 		worktreeRoot: filepath.Join(t.TempDir(), "worktrees"),
 		store:        store,
-		tracker:      &fakeTracker{item: item},
+		tracker:      &fakeTracker{Item: item},
 	}
 }
 
@@ -580,7 +580,7 @@ func (f *baselineFixture) automatic(t *testing.T, provider *fakeBackend, command
 // went. A failure is part of the trace rather than a reason to stop building it.
 func (f *baselineFixture) invoke(t *testing.T, name string, pipeline Pipeline) Outcome {
 	t.Helper()
-	outcome, err := pipeline.Run(context.Background(), f.tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), f.tracker.Item.ID)
 	f.steps = append(f.steps, baselineStep{name: name, outcome: outcome, err: err})
 	f.noteObservable(pipeline)
 	return outcome
@@ -796,7 +796,7 @@ func baselineOperatorStop(t *testing.T) *baselineFixture {
 			SchemaVersion: runstate.StopSchemaVersion,
 			ProductID:     "yoyodyne",
 			RunID:         request.RunID,
-			WorkItemID:    fixture.tracker.item.ID,
+			WorkItemID:    fixture.tracker.Item.ID,
 			RequestedAt:   baseTime,
 			Reason:        "it is rewriting the wrong file",
 		}); err != nil {
@@ -1093,12 +1093,12 @@ func (f *baselineFixture) trace(t *testing.T, scenario baselineScenario) baselin
 		Scenario: scenario.name,
 		Freezes:  scenario.freezes,
 		WorkItem: baselineTracedItem{
-			Calls:   f.tracker.calls,
-			Status:  f.tracker.item.Status,
-			Closed:  f.tracker.closed,
-			Blocked: f.tracker.blocked,
-			Notes:   normalizer.records(f.tracker.noteRecords),
-			Blocker: normalizer.lines(f.tracker.blockReason),
+			Calls:   f.tracker.Calls,
+			Status:  f.tracker.Item.Status,
+			Closed:  f.tracker.Closed,
+			Blocked: f.tracker.Blocked,
+			Notes:   normalizer.records(f.tracker.NoteRecords),
+			Blocker: normalizer.lines(f.tracker.BlockReason),
 		},
 	}
 	if trace.WorkItem.Calls == nil {
@@ -1185,7 +1185,7 @@ func baselineRepeatCount(entry, name string) (string, int, bool) {
 func (f *baselineFixture) invocations() []string {
 	invocations := []string{}
 	for _, provider := range f.providers {
-		for _, request := range provider.requests {
+		for _, request := range provider.Requests {
 			continued := "new session"
 			if request.SessionID != "" {
 				continued = "continues session"

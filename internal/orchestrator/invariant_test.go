@@ -49,7 +49,7 @@ func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribe
 
 	// The work item says nothing about invariants and nothing about the package
 	// the scoped one constrains. Nothing here was transcribed by hand.
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &fakeTracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Add a feature",
 		Description:        "Add the feature the acceptance criteria describe.",
@@ -69,7 +69,7 @@ func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribe
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribe
 		t.Fatalf("Run() outcome = %#v", outcome)
 	}
 
-	developerPrompt := provider.requestsForRole(domain.RoleDeveloper)[0].Prompt
+	developerPrompt := provider.RequestsForRole(domain.RoleDeveloper)[0].Prompt
 	if !strings.Contains(developerPrompt, "harness-owns-git") {
 		t.Fatalf("the repository-wide invariant did not reach the developer:\n%s", developerPrompt)
 	}
@@ -93,7 +93,7 @@ func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribe
 
 	// The reviewer's evidence is selected against the change as well, so the
 	// invariant the change actually walked into reaches the gate that judges it.
-	reviewerPrompt := provider.requestsForRole(domain.RoleReviewer)[0].Prompt
+	reviewerPrompt := provider.RequestsForRole(domain.RoleReviewer)[0].Prompt
 	for _, required := range []string{"harness-owns-git", "one-writer-per-item", "Must hold:"} {
 		if !strings.Contains(reviewerPrompt, required) {
 			t.Fatalf("the reviewer's evidence is missing %q:\n%s", required, reviewerPrompt)
@@ -115,11 +115,11 @@ func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribe
 	if len(outcome.InvariantProblems) != 1 || !strings.Contains(outcome.InvariantProblems[0], "half-written.md") {
 		t.Fatalf("recorded invariant problems = %#v", outcome.InvariantProblems)
 	}
-	if !strings.Contains(tracker.notes, "Invariants delivered: harness-owns-git, one-writer-per-item") {
-		t.Fatalf("the tracker does not record what constrained the change:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Invariants delivered: harness-owns-git, one-writer-per-item") {
+		t.Fatalf("the tracker does not record what constrained the change:\n%s", tracker.Notes)
 	}
-	if !strings.Contains(tracker.notes, "Invariant not delivered:") {
-		t.Fatalf("the tracker does not record the gap in the set:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Invariant not delivered:") {
+		t.Fatalf("the tracker does not record the gap in the set:\n%s", tracker.Notes)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestEveryRepairAttemptCarriesTheInvariantsToo(t *testing.T) {
 	})
 	commitRepository(t, repository)
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
 	provider := roleBackend(func(request backend.RunRequest) error {
 		attempts++
@@ -152,10 +152,10 @@ func TestEveryRepairAttemptCarriesTheInvariantsToo(t *testing.T) {
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	requests := provider.requestsForRole(domain.RoleDeveloper)
+	requests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(requests) != 2 {
 		t.Fatalf("developer invocations = %d, want the first attempt and one repair", len(requests))
 	}
@@ -179,16 +179,16 @@ func TestARunRefusesToStartWhenTheInvariantsCannotBeRead(t *testing.T) {
 	writeRepositoryFile(t, repository, filepath.Join("docs", "decisions", "invariants"), "not a directory\n")
 	commitRepository(t, repository)
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "load architectural invariants") {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if tracker.claimed || len(provider.requests) != 0 {
-		t.Fatalf("work started without its constraints: claimed = %t, requests = %d", tracker.claimed, len(provider.requests))
+	if tracker.Claimed || len(provider.Requests) != 0 {
+		t.Fatalf("work started without its constraints: claimed = %t, requests = %d", tracker.Claimed, len(provider.Requests))
 	}
 }
 

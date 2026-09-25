@@ -574,7 +574,7 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 			t.Parallel()
 
 			repository, worktreeRoot, store := restartableFixture(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 			provider := roleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
@@ -586,7 +586,7 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 			// already recorded.
 			pipeline.Instances = store
 
-			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+			if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 				t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 			}
 			interrupted, err := store.Load(pipelineRunID)
@@ -652,7 +652,7 @@ func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -662,7 +662,7 @@ func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"test -f feature.txt"}), provider)
 	pipeline.Instances = store
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 
@@ -723,14 +723,14 @@ func TestABlockedSettlementRecordsTheGapItsInstanceLeaves(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runstate.NewStore() error = %v", err)
 			}
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+			tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
 			now := time.Now()
 			state := runstate.State{
 				SchemaVersion:      runstate.StateSchemaVersion,
 				RunID:              "run-abcdef0123456789abcdef0123456789",
 				ProductID:          "yoyodyne",
 				RepositoryID:       "yoyodyne",
-				WorkItemID:         tracker.item.ID,
+				WorkItemID:         tracker.Item.ID,
 				Backend:            "claude-code",
 				Status:             runstate.StatusRunning,
 				Phase:              runstate.PhaseReviewing,
@@ -758,7 +758,7 @@ func TestABlockedSettlementRecordsTheGapItsInstanceLeaves(t *testing.T) {
 				t.Fatalf("CreateWorkflowInstance() error = %v", err)
 			}
 
-			result, err := Reconciler{Tracker: tracker, Store: store}.blockRun(context.Background(), state, tracker.item.Status, gitworktree.Observation{}, "interrupted while reviewing")
+			result, err := Reconciler{Tracker: tracker, Store: store}.blockRun(context.Background(), state, tracker.Item.Status, gitworktree.Observation{}, "interrupted while reviewing")
 			if err != nil {
 				t.Fatalf("blockRun() error = %v", err)
 			}
@@ -793,7 +793,7 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -804,7 +804,7 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	pipeline.Instances = store
 	pipeline.Config.Execution.DeclarativeDelivery = false
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 {

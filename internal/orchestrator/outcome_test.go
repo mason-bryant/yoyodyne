@@ -124,12 +124,12 @@ func TestEveryEndingTheHarnessHandsToAPersonIsReadBackAsStopped(t *testing.T) {
 			t.Parallel()
 			pipeline, store, tracker := ending.build(t)
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err == nil {
 				t.Fatal("Run() error = nil, want the stoppage reported as what ended the run")
 			}
-			if !tracker.blocked || !outcome.Blocked {
-				t.Fatalf("the ending left no blocker: tracker = %t, outcome = %t", tracker.blocked, outcome.Blocked)
+			if !tracker.Blocked || !outcome.Blocked {
+				t.Fatalf("the ending left no blocker: tracker = %t, outcome = %t", tracker.Blocked, outcome.Blocked)
 			}
 
 			reported := onlyRecordedRun(t, store)
@@ -183,7 +183,7 @@ func TestAnUnrepairedReviewIsReadBackAsStoppedWithItsWorkPreserved(t *testing.T)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 1
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() error = nil, want the spent repair budget reported as what ended the run")
 	}
 
@@ -216,7 +216,7 @@ func TestAnOperatorStopIsReadBackAsCancelledRatherThanStopped(t *testing.T) {
 			SchemaVersion: runstate.StopSchemaVersion,
 			ProductID:     "yoyodyne",
 			RunID:         request.RunID,
-			WorkItemID:    tracker.item.ID,
+			WorkItemID:    tracker.Item.ID,
 			RequestedAt:   baseTime,
 			Reason:        "it is rewriting the wrong file",
 		}); err != nil {
@@ -226,12 +226,12 @@ func TestAnOperatorStopIsReadBackAsCancelledRatherThanStopped(t *testing.T) {
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() error = nil, want the stop reported as what ended the run")
 	}
-	if outcome.Blocked || tracker.blocked {
-		t.Fatalf("an operator stop blocked the item: outcome = %t, tracker = %t", outcome.Blocked, tracker.blocked)
+	if outcome.Blocked || tracker.Blocked {
+		t.Fatalf("an operator stop blocked the item: outcome = %t, tracker = %t", outcome.Blocked, tracker.Blocked)
 	}
 
 	reported := onlyRecordedRun(t, store)
@@ -273,11 +273,11 @@ func TestARunThatBrokeBeforeItsWorktreeRecordsNoPhaseAndNoArtifacts(t *testing.T
 	tracker := newOutcomeTracker()
 	// The claim is the last thing before the worktree is created, so refusing it
 	// ends the run where nothing has been made yet.
-	tracker.onClaim = func() error { return errors.New("the tracker is not answering") }
+	tracker.OnClaim = func() error { return errors.New("the tracker is not answering") }
 	provider := roleBackend(writeFeature, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() error = nil, want the refused claim to end the run")
 	}
 	reported := onlyRecordedRun(t, store)
@@ -309,15 +309,15 @@ func TestARunWhoseStaleBlockClearWasNeverConfirmedRecordsSo(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	tracker := newOutcomeTracker()
-	tracker.item.Status = "blocked"
-	tracker.staleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed, Reads: 5, Status: "blocked"}
-	tracker.onClaim = func() error {
+	tracker.Item.Status = "blocked"
+	tracker.StaleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearUnconfirmed, Reads: 5, Status: "blocked"}
+	tracker.OnClaim = func() error {
 		return errors.New("the clear of the stale blocked status on yoyodyne-task was never confirmed: 5 read(s) over 4s returned status \"blocked\" rather than open, so the item is left for the next pull rather than claimed")
 	}
 	provider := roleBackend(writeFeature, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() error = nil, want the unconfirmed clear to end the run")
 	}
 	recorded, err := store.Load(pipelineRunID)
@@ -351,11 +351,11 @@ func TestARunWhoseStaleBlockClearLandedLateRecordsSo(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	tracker := newOutcomeTracker()
-	tracker.staleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearConfirmedLate, Reads: 3, Status: "open"}
+	tracker.StaleBlockClear = &beads.StaleBlockClear{Outcome: domain.StaleBlockClearConfirmedLate, Reads: 3, Status: "open"}
 	provider := roleBackend(writeFeature, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	recorded, err := store.Load(pipelineRunID)
@@ -376,7 +376,7 @@ func TestARunWhoseStaleBlockClearLandedLateRecordsSo(t *testing.T) {
 
 // newOutcomeTracker is the work item every run here is made for.
 func newOutcomeTracker() *fakeTracker {
-	return &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	return &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 }
 
 // writeFeature is the change a developer attempt makes, so a preserved worktree

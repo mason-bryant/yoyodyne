@@ -70,11 +70,11 @@ func TestADeveloperEscalationEndsTheRunInTheRoundItWasRaised(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "The criteria contradict the entanglement ruling.\n\n" +
+	provider.DeveloperFinalText = "The criteria contradict the entanglement ruling.\n\n" +
 		landingBlock(`{"outcome":"escalate","why":"the acceptance criteria ask for what the entanglement ruling forbids, so no change here meets them"}`)
 	pipeline, store, docket := escalatingPipeline(t, tracker, provider)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -103,31 +103,31 @@ func TestADeveloperEscalationEndsTheRunInTheRoundItWasRaised(t *testing.T) {
 	}
 	// The item neither closes nor goes back bare-pullable. Parked is the holding
 	// state, and the parking reason is what whoever considers releasing it reads.
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("the item closed against an escalation; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("the item closed against an escalation; calls = %v", tracker.Calls)
 	}
-	if !tracker.reopened || tracker.item.Status != "open" {
-		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.calls)
+	if !tracker.Reopened || tracker.Item.Status != "open" {
+		t.Fatalf("the item was left claimed by a run that has ended; calls = %v", tracker.Calls)
 	}
-	if !tracker.item.Parking.Parked() {
-		t.Fatalf("the escalated item went back to the backlog unparked; calls = %v", tracker.calls)
+	if !tracker.Item.Parking.Parked() {
+		t.Fatalf("the escalated item went back to the backlog unparked; calls = %v", tracker.Calls)
 	}
-	if !strings.Contains(tracker.item.Parking.Reason(), "the entanglement ruling forbids") {
-		t.Errorf("the parking reason does not carry the developer's account: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "the entanglement ruling forbids") {
+		t.Errorf("the parking reason does not carry the developer's account: %q", tracker.Item.Parking)
 	}
-	if !strings.Contains(tracker.item.Parking.Reason(), "development manager") {
-		t.Errorf("the parking reason does not say who releases the item: %q", tracker.item.Parking)
+	if !strings.Contains(tracker.Item.Parking.Reason(), "development manager") {
+		t.Errorf("the parking reason does not say who releases the item: %q", tracker.Item.Parking)
 	}
-	if !strings.Contains(tracker.notes, "cannot be met as it stands") {
-		t.Errorf("the recorded outcome does not say what the run raised: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "cannot be met as it stands") {
+		t.Errorf("the recorded outcome does not say what the run raised: %q", tracker.Notes)
 	}
-	if len(tracker.blockers) > 0 {
-		t.Errorf("an escalation made the item wait on other work: %v", tracker.blockers)
+	if len(tracker.Blockers) > 0 {
+		t.Errorf("an escalation made the item wait on other work: %v", tracker.Blockers)
 	}
 
 	// And the development manager hears about it, which is the whole of the verb.
 	entry := onlyDocketed(t, docket)
-	if entry.Class != triage.ClassEscalation || entry.RunID != outcome.RunID || entry.WorkItemID != tracker.item.ID {
+	if entry.Class != triage.ClassEscalation || entry.RunID != outcome.RunID || entry.WorkItemID != tracker.Item.ID {
 		t.Fatalf("entry = %#v, want the escalation this run raised", entry)
 	}
 	if entry.Escalation == nil || entry.Escalation.RaisedBy != domain.RoleDeveloper {
@@ -185,15 +185,15 @@ func TestAReviewerEscalationCostsNoRoundAndNoRepairAttempt(t *testing.T) {
 	// 4 of 4.
 	caps := TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)
 	for round := range 3 {
-		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
+		if _, err := store.Triage().RecordReviewRound(context.Background(), tracker.Item.ID, runstate.RoundKey(priorRunID, round), "pid-1-000000000000000a", time.Now()); err != nil {
 			t.Fatalf("RecordReviewRound() error = %v", err)
 		}
 	}
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 1, time.Now(), caps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, priorRunID), 1, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -214,11 +214,11 @@ func TestAReviewerEscalationCostsNoRoundAndNoRepairAttempt(t *testing.T) {
 	if outcome.EscalatedBy() != domain.RoleReviewer {
 		t.Errorf("raised by %q, want the reviewer that raised it", outcome.EscalatedBy())
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("the item closed against an escalation; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("the item closed against an escalation; calls = %v", tracker.Calls)
 	}
-	if !tracker.item.Parking.Parked() || !strings.Contains(tracker.item.Parking.Reason(), "a design ruling forbade") {
-		t.Fatalf("the item is not parked in the reviewer's own words: %q", tracker.item.Parking)
+	if !tracker.Item.Parking.Parked() || !strings.Contains(tracker.Item.Parking.Reason(), "a design ruling forbade") {
+		t.Fatalf("the item is not parked in the reviewer's own words: %q", tracker.Item.Parking)
 	}
 
 	entry := onlyDocketed(t, docket)
@@ -238,7 +238,7 @@ func TestAReviewerEscalationCostsNoRoundAndNoRepairAttempt(t *testing.T) {
 	if entry.Counters.RepairAttempts != 0 {
 		t.Errorf("repair attempts on the entry = %d, want none", entry.Counters.RepairAttempts)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestAReviewerEscalationCostsNoRoundAndNoRepairAttempt(t *testing.T) {
 	// And the re-run the development manager records once the escalation is
 	// decided — in place of the repair, whose reservation it releases — is
 	// permitted at the cap the escalation used to exhaust.
-	if _, err := store.Triage().RecordRerun(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRerun, priorRunID), time.Now(), caps); err != nil {
+	if _, err := store.Triage().RecordRerun(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRerun, priorRunID), time.Now(), caps); err != nil {
 		t.Errorf("RecordRerun() after the escalation = %v, want it permitted without an override", err)
 	}
 }
@@ -358,11 +358,11 @@ func TestADeveloperEscalationRunsNoChecksAndPublishesNothing(t *testing.T) {
 	tracker := newOutcomeTracker()
 	ran := filepath.Join(t.TempDir(), "check-ran")
 	provider := roleBackend(func(request backend.RunRequest) error { return nil }, approveVerdict)
-	provider.developerFinalText = landingBlock(`{"outcome":"escalate","why":"this item asks for a store a developer run cannot reach"}`)
+	provider.DeveloperFinalText = landingBlock(`{"outcome":"escalate","why":"this item asks for a store a developer run cannot reach"}`)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider,
 		[]string{"touch " + ran})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -388,12 +388,12 @@ func TestAnEscalationThatCannotParkItsItemFailsRatherThanSayingItDid(t *testing.
 	t.Parallel()
 
 	tracker := newOutcomeTracker()
-	tracker.reopenErr = errors.New("the tracker refused to reopen the item")
+	tracker.ReopenErr = errors.New("the tracker refused to reopen the item")
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = landingBlock(`{"outcome":"escalate","why":"the criteria contradict a ruling"}`)
+	provider.DeveloperFinalText = landingBlock(`{"outcome":"escalate","why":"the criteria contradict a ruling"}`)
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatalf("Run() error = nil, want the run to report the item it could not park: %#v", outcome)
 	}
@@ -414,11 +414,11 @@ func TestAnEscalationRefusesToNameAnImpediment(t *testing.T) {
 
 	tracker := newOutcomeTracker()
 	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = landingBlock(
+	provider.DeveloperFinalText = landingBlock(
 		`{"outcome":"escalate","why":"the criteria contradict a ruling","blocked_by":"yoyodyne-impediment"}`)
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -441,7 +441,7 @@ func TestAnEscalationRefusesToNameAnImpediment(t *testing.T) {
 	if state.Discharges() {
 		t.Error("an unreadable claim closed its item")
 	}
-	if len(tracker.blockers) > 0 {
-		t.Errorf("the item was made to wait on the impediment a refused claim named: %v", tracker.blockers)
+	if len(tracker.Blockers) > 0 {
+		t.Errorf("the item was made to wait on the impediment a refused claim named: %v", tracker.Blockers)
 	}
 }

@@ -35,8 +35,8 @@ func TestATimedOutDependencyReadAtTheReviewingBoundaryIsWaitedOutAndTheRunPromot
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	tracker.transientShowErr = killedShow()
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker.TransientShowErr = killedShow()
 
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
@@ -44,11 +44,11 @@ func TestATimedOutDependencyReadAtTheReviewingBoundaryIsWaitedOutAndTheRunPromot
 	// The store goes busy the moment the reviewer has answered, so the two reads
 	// it refuses are the ones the promotion makes — the boundary the approved
 	// change is lost at rather than one earlier in the run.
-	reviewed := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	reviewed := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := reviewed(request)
 		if request.Role == domain.RoleReviewer {
-			tracker.showFailures = 2
+			tracker.ShowFailures = 2
 		}
 		return result, err
 	}
@@ -59,14 +59,14 @@ func TestATimedOutDependencyReadAtTheReviewingBoundaryIsWaitedOutAndTheRunPromot
 		return nil
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Paused || outcome.Integration == nil || outcome.Status != runstate.StatusSucceeded {
 		t.Fatalf("outcome = %#v, want the run to have carried on to its promotion", outcome)
 	}
-	if !tracker.closed {
+	if !tracker.Closed {
 		t.Fatal("the work item was not closed, so the run did not finish")
 	}
 	// Continued on the same session, by the same run, with neither role asked
@@ -74,14 +74,14 @@ func TestATimedOutDependencyReadAtTheReviewingBoundaryIsWaitedOutAndTheRunPromot
 	if outcome.ProviderSessionID != "developer-session" {
 		t.Errorf("session = %q, want the run continued on the developer session it already had", outcome.ProviderSessionID)
 	}
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Errorf("developer invocations = %d, want the waited-out read to have bought no further attempt", developed)
 	}
-	if judged := len(provider.requestsForRole(domain.RoleReviewer)); judged != 1 {
+	if judged := len(provider.RequestsForRole(domain.RoleReviewer)); judged != 1 {
 		t.Errorf("reviewer invocations = %d, want the change judged once", judged)
 	}
-	if tracker.showFailures != 0 {
-		t.Errorf("unused refusals = %d, want both of them met", tracker.showFailures)
+	if tracker.ShowFailures != 0 {
+		t.Errorf("unused refusals = %d, want both of them met", tracker.ShowFailures)
 	}
 
 	// Each wait is recorded on the run before it is taken, which is what lets a
@@ -109,8 +109,8 @@ func TestATimedOutDependencyReadAtTheReviewingBoundaryIsWaitedOutAndTheRunPromot
 	}
 	// And the item says the read was waited out, which is the only sign from the
 	// outside that a store under load nearly cost a finished change.
-	if !strings.Contains(tracker.notes, runstate.RetryDependencyRead) {
-		t.Errorf("item notes = %q, want them to name the boundary that was waited out", tracker.notes)
+	if !strings.Contains(tracker.Notes, runstate.RetryDependencyRead) {
+		t.Errorf("item notes = %q, want them to name the boundary that was waited out", tracker.Notes)
 	}
 }
 
@@ -122,29 +122,29 @@ func TestATrackerReadThatSpendsItsWholeWindowParksTheRunAndTheStoreAnsweringResu
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	tracker.transientShowErr = killedShow()
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker.TransientShowErr = killedShow()
 
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	reviewed := provider.run
+	reviewed := provider.Respond
 	busy := false
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := reviewed(request)
 		if request.Role == domain.RoleReviewer && !busy {
 			// Far more refusals than the window has room for, so what ends the
 			// asking is the window rather than the fake running out of answers. It
 			// is armed once: the store comes back before the run is picked up again.
 			busy = true
-			tracker.showFailures = 1000
+			tracker.ShowFailures = 1000
 		}
 		return result, err
 	}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Sleep = func(context.Context, time.Duration) error { return nil }
 
-	parked, err := pipeline.Run(context.Background(), tracker.item.ID)
+	parked, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -157,10 +157,10 @@ func TestATrackerReadThatSpendsItsWholeWindowParksTheRunAndTheStoreAnsweringResu
 	if parked.PausedByTracker.Attempts < 2 {
 		t.Errorf("recorded attempts = %d, want the window's worth of them", parked.PausedByTracker.Attempts)
 	}
-	if parked.Integration != nil || tracker.closed || tracker.blocked {
-		t.Fatalf("the park promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", parked, tracker.closed, tracker.blocked)
+	if parked.Integration != nil || tracker.Closed || tracker.Blocked {
+		t.Fatalf("the park promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", parked, tracker.Closed, tracker.Blocked)
 	}
-	if !tracker.claimed {
+	if !tracker.Claimed {
 		t.Fatal("the park gave up the claim on the work item")
 	}
 
@@ -192,21 +192,21 @@ func TestATrackerReadThatSpendsItsWholeWindowParksTheRunAndTheStoreAnsweringResu
 	// worktree and on the session it already had, and the developer is not asked
 	// for an attempt it already made. The gate itself is re-earned rather than
 	// skipped, which is what every park short of the promotion costs.
-	tracker.showFailures = 0
-	resumed, err := pipeline.Run(context.Background(), tracker.item.ID)
+	tracker.ShowFailures = 0
+	resumed, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
 	if resumed.RunID != parked.RunID {
 		t.Fatalf("resumed run = %q, want the parked run %q continued rather than a new one", resumed.RunID, parked.RunID)
 	}
-	if resumed.Paused || resumed.Integration == nil || !tracker.closed {
-		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.closed)
+	if resumed.Paused || resumed.Integration == nil || !tracker.Closed {
+		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.Closed)
 	}
 	if resumed.ProviderSessionID != parked.ProviderSessionID {
 		t.Errorf("session = %q, want the parked run's own session %q", resumed.ProviderSessionID, parked.ProviderSessionID)
 	}
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Errorf("developer invocations = %d, want the resumed run to continue with the change it preserved", developed)
 	}
 	finished, err := store.Load(resumed.RunID)
@@ -260,9 +260,9 @@ func TestAPreClaimTrackerWaitIsReadableFromTheSurfacesWhileItStands(t *testing.T
 	// surface used to read the whole wait as.
 	session.enter(runstate.WatchIdle, account{reason: "nothing further pullable this poll", running: 1})
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	tracker.transientShowErr = killedShow()
-	tracker.showFailures = 1
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker.TransientShowErr = killedShow()
+	tracker.ShowFailures = 1
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -280,7 +280,7 @@ func TestAPreClaimTrackerWaitIsReadableFromTheSurfacesWhileItStands(t *testing.T
 	)
 	pipeline.Sleep = func(_ context.Context, delay time.Duration) error {
 		// Read while the dispatch is asleep in its wait, exactly as a surface would.
-		waitedFor, claimedYet = delay, tracker.claimed
+		waitedFor, claimedYet = delay, tracker.Claimed
 		sessions, err := watch.List()
 		if err != nil {
 			t.Errorf("List() error = %v", err)
@@ -302,7 +302,7 @@ func TestAPreClaimTrackerWaitIsReadableFromTheSurfacesWhileItStands(t *testing.T
 		return nil
 	}
 
-	outcome, err := pipeline.Run(session.dispatching(context.Background()), tracker.item.ID)
+	outcome, err := pipeline.Run(session.dispatching(context.Background()), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

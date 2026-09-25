@@ -151,7 +151,7 @@ func newUndecidedHarness(t *testing.T, state runstate.State) *continueHarness {
 		docket:    docket,
 		runs:      runs,
 		intake:    intake,
-		tracker:   &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "blocked"}},
+		tracker:   &fakeTracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "blocked"}},
 		ownership: &fakeOwnership{},
 		capacity:  2,
 		outcome:   Outcome{RunID: state.RunID, WorkItemID: state.WorkItemID, Status: runstate.StatusSucceeded},
@@ -380,8 +380,8 @@ func TestARepairIsRefusedWithoutTheDevelopmentManagersGrant(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision about the stoppage of run "+docketedRunID+" on "+docketedItem+"'s triage record") {
 		t.Fatalf("Continue() error = %v, want a refusal naming the missing record", err)
 	}
-	if len(harness.started) != 0 || harness.tracker.claimed {
-		t.Fatalf("started = %#v, claimed = %t, want nothing continued on nobody's decision", harness.started, harness.tracker.claimed)
+	if len(harness.started) != 0 || harness.tracker.Claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued on nobody's decision", harness.started, harness.tracker.Claimed)
 	}
 	// Decided, the same carry-out runs, and it hands the run the rounds the
 	// decision was worth rather than a number of its own.
@@ -419,8 +419,8 @@ func TestARepairIsRefusedOnceARerunStandsInItsPlace(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `is "rerun" rather than a repair`) {
 		t.Fatalf("Continue() error = %v, want a refusal naming the re-run standing in the repair's place", err)
 	}
-	if len(harness.started) != 0 || harness.tracker.claimed {
-		t.Fatalf("started = %#v, claimed = %t, want nothing continued on a superseded decision", harness.started, harness.tracker.claimed)
+	if len(harness.started) != 0 || harness.tracker.Claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued on a superseded decision", harness.started, harness.tracker.Claimed)
 	}
 	// And the reservation went with the repair: the item stands committed to
 	// nothing beyond what it has spent.
@@ -456,8 +456,8 @@ func TestARepairRecordsTheTriageReasoningOnTheRunAndTheItem(t *testing.T) {
 			t.Fatalf("run reason = %q, is missing %q", recorded.Reason, want)
 		}
 	}
-	if recorded.Reason != result.Reason || !strings.Contains(harness.tracker.notes, result.Reason) {
-		t.Fatalf("the item's notes (%q) and the run (%q) do not carry the same reasoning", harness.tracker.notes, recorded.Reason)
+	if recorded.Reason != result.Reason || !strings.Contains(harness.tracker.Notes, result.Reason) {
+		t.Fatalf("the item's notes (%q) and the run (%q) do not carry the same reasoning", harness.tracker.Notes, recorded.Reason)
 	}
 	// A reason the run state would refuse to hold would be a reason nothing
 	// records.
@@ -494,17 +494,17 @@ func TestARepairSupersedesTheBlockerOnBothTheRunAndTheItem(t *testing.T) {
 	}
 	// And on the item: the re-entry is what puts it back, rather than somebody
 	// remembering to reopen it first.
-	if !harness.tracker.claimed || harness.tracker.item.Status != "in_progress" {
-		t.Fatalf("item status = %q, claimed = %t, want the item put back by the re-entry itself", harness.tracker.item.Status, harness.tracker.claimed)
+	if !harness.tracker.Claimed || harness.tracker.Item.Status != "in_progress" {
+		t.Fatalf("item status = %q, claimed = %t, want the item put back by the re-entry itself", harness.tracker.Item.Status, harness.tracker.Claimed)
 	}
 	// The decision is recorded before the claim, so the item never reads as work
 	// somebody quietly restarted.
-	if got := strings.Join(harness.tracker.calls, ","); got != "record,claim" {
+	if got := strings.Join(harness.tracker.Calls, ","); got != "record,claim" {
 		t.Fatalf("tracker calls = %q, want the decision recorded and then the item claimed", got)
 	}
 	// An item put back from blocked is not told about a claim it never held.
-	if strings.Contains(harness.tracker.notes, "still read in_progress") {
-		t.Fatalf("item notes = %q, want no account of a claim the item did not carry", harness.tracker.notes)
+	if strings.Contains(harness.tracker.Notes, "still read in_progress") {
+		t.Fatalf("item notes = %q, want no account of a claim the item did not carry", harness.tracker.Notes)
 	}
 }
 
@@ -516,8 +516,8 @@ func TestARepairSupersedesAClaimTheStoppedRunLeftAndSaysSo(t *testing.T) {
 	t.Parallel()
 
 	harness := newContinueHarness(t, continuableState())
-	harness.tracker.item.Status = "in_progress"
-	harness.tracker.claimed = true
+	harness.tracker.Item.Status = "in_progress"
+	harness.tracker.Claimed = true
 	result, err := harness.continuer().Continue(context.Background(), continueRequest())
 	if err != nil {
 		t.Fatalf("Continue() error = %v", err)
@@ -525,12 +525,12 @@ func TestARepairSupersedesAClaimTheStoppedRunLeftAndSaysSo(t *testing.T) {
 	if !result.Continued || len(harness.started) != 1 {
 		t.Fatalf("continued = %t, started = %#v, want the decision carried out", result.Continued, harness.started)
 	}
-	if got := strings.Join(harness.tracker.calls, ","); got != "record,claim" {
+	if got := strings.Join(harness.tracker.Calls, ","); got != "record,claim" {
 		t.Fatalf("tracker calls = %q, want the account recorded and then the item claimed", got)
 	}
 	for _, want := range []string{result.Reason, "still read in_progress from run " + result.RunID, "no run of this item in flight"} {
-		if !strings.Contains(harness.tracker.notes, want) {
-			t.Fatalf("item notes = %q, want them to say %q", harness.tracker.notes, want)
+		if !strings.Contains(harness.tracker.Notes, want) {
+			t.Fatalf("item notes = %q, want them to say %q", harness.tracker.Notes, want)
 		}
 	}
 }
@@ -541,7 +541,7 @@ func TestARepairLeavesAClaimALiveRunHolds(t *testing.T) {
 	t.Parallel()
 
 	harness := newContinueHarness(t, continuableState())
-	harness.tracker.item.Status = "in_progress"
+	harness.tracker.Item.Status = "in_progress"
 	live := runningState("run-00001111222233334444555566667777", continuableState().WorkItemID)
 	if err := harness.runs.Create(live); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -550,8 +550,8 @@ func TestARepairLeavesAClaimALiveRunHolds(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), live.RunID) {
 		t.Fatalf("Continue() error = %v, want a refusal naming the live run %s", err, live.RunID)
 	}
-	if len(harness.started) != 0 || harness.tracker.notes != "" || len(harness.tracker.calls) != 0 {
-		t.Fatalf("started = %#v, notes = %q, calls = %v, want nothing continued or written", harness.started, harness.tracker.notes, harness.tracker.calls)
+	if len(harness.started) != 0 || harness.tracker.Notes != "" || len(harness.tracker.Calls) != 0 {
+		t.Fatalf("started = %#v, notes = %q, calls = %v, want nothing continued or written", harness.started, harness.tracker.Notes, harness.tracker.Calls)
 	}
 }
 
@@ -616,8 +616,8 @@ func TestARepairIsRefusedOnceTheRoundCapHasNoRoomLeft(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision") {
 		t.Fatalf("Continue() error = %v, want nothing to carry out past the cap", err)
 	}
-	if len(harness.started) != 0 || harness.tracker.claimed {
-		t.Fatalf("started = %#v, claimed = %t, want nothing continued past the cap", harness.started, harness.tracker.claimed)
+	if len(harness.started) != 0 || harness.tracker.Claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued past the cap", harness.started, harness.tracker.Claimed)
 	}
 	if state := harness.reload(t); state.Blocker == "" || !state.Status.Terminal() {
 		t.Fatalf("a refused repair superseded the blocker anyway: %#v", state)
@@ -728,8 +728,8 @@ func TestARepairRefusesAWorktreeThatIsNotAsTheHarnessLeftIt(t *testing.T) {
 	}
 	// The item is left blocked, which is the durable state an escalation would
 	// have made anyway.
-	if harness.tracker.claimed || harness.tracker.item.Status != "blocked" {
-		t.Fatalf("item status = %q, claimed = %t, want it left waiting on a person", harness.tracker.item.Status, harness.tracker.claimed)
+	if harness.tracker.Claimed || harness.tracker.Item.Status != "blocked" {
+		t.Fatalf("item status = %q, claimed = %t, want it left waiting on a person", harness.tracker.Item.Status, harness.tracker.Claimed)
 	}
 	if state := harness.reload(t); state.Blocker == "" || !state.Status.Terminal() {
 		t.Fatalf("a refused repair superseded the blocker anyway: %#v", state)
@@ -779,8 +779,8 @@ func TestARepairOfAnApprovedChangeTheEnvironmentStoppedNamesTheResumeVerb(t *tes
 	// Nothing was spent and nothing was written: the grant is still the item's,
 	// the item is still where the stop left it, and the run is still stopped with
 	// its stop on the record for the resume to read.
-	if len(harness.started) != 0 || harness.tracker.claimed {
-		t.Fatalf("started = %#v, claimed = %t, want nothing continued", harness.started, harness.tracker.claimed)
+	if len(harness.started) != 0 || harness.tracker.Claimed {
+		t.Fatalf("started = %#v, claimed = %t, want nothing continued", harness.started, harness.tracker.Claimed)
 	}
 	if carried := harness.carried(t); carried != 0 {
 		t.Fatalf("carried out = %d, want the refusal to have spent nothing of the grant", carried)
@@ -866,8 +866,8 @@ func TestARepairRefusesAWorktreeThatHoldsNoneOfThePreservedChange(t *testing.T) 
 	if carried := harness.carried(t); carried != 0 {
 		t.Fatalf("carried out = %d, want a refused re-entry to have spent nothing of the grant", carried)
 	}
-	if harness.tracker.claimed || harness.tracker.item.Status != "blocked" {
-		t.Fatalf("item status = %q, claimed = %t, want it left waiting on a person", harness.tracker.item.Status, harness.tracker.claimed)
+	if harness.tracker.Claimed || harness.tracker.Item.Status != "blocked" {
+		t.Fatalf("item status = %q, claimed = %t, want it left waiting on a person", harness.tracker.Item.Status, harness.tracker.Claimed)
 	}
 	if state := harness.reload(t); state.Blocker == "" || !state.Status.Terminal() {
 		t.Fatalf("a refused repair superseded the blocker anyway: %#v", state)
@@ -953,7 +953,7 @@ func TestEveryRefusalIsAskedBeforeTheGrantIsSpent(t *testing.T) {
 			// An item somebody closed is not one a stopped run may be continued
 			// on, whatever its budget still says.
 			name:    "the item was closed",
-			arrange: func(_ *testing.T, h *continueHarness) { h.tracker.item.Status = "closed" },
+			arrange: func(_ *testing.T, h *continueHarness) { h.tracker.Item.Status = "closed" },
 			want:    `status is "closed"`,
 		},
 		{
@@ -961,7 +961,7 @@ func TestEveryRefusalIsAskedBeforeTheGrantIsSpent(t *testing.T) {
 			// of it would be.
 			name: "the item waits on other work",
 			arrange: func(_ *testing.T, h *continueHarness) {
-				h.tracker.item.Dependencies = []beads.Dependency{{ID: "yoyodyne-ifd.9", Type: "blocks", Status: "open"}}
+				h.tracker.Item.Dependencies = []beads.Dependency{{ID: "yoyodyne-ifd.9", Type: "blocks", Status: "open"}}
 			},
 			want: "is blocked by",
 		},
@@ -1091,7 +1091,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first developer leaves the reviewer something to object to, and the
 	// reviewer keeps objecting until the run's repair budget is spent.
 	stopping := roleBackend(func(request backend.RunRequest) error {
@@ -1099,12 +1099,12 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	}, repairVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stopping, []string{"test -f feature.txt"}), stopping)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "independent review requires repair") {
 		t.Fatalf("Run() error = %v, want the repair budget spent", err)
 	}
-	if !tracker.blocked || outcome.Integration != nil {
-		t.Fatalf("the stopped run did not block its item: blocked = %t, integration = %#v", tracker.blocked, outcome.Integration)
+	if !tracker.Blocked || outcome.Integration != nil {
+		t.Fatalf("the stopped run did not block its item: blocked = %t, integration = %#v", tracker.Blocked, outcome.Integration)
 	}
 	stopped, err := store.Load(outcome.RunID)
 	if err != nil {
@@ -1135,7 +1135,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	// records one — about the docketed run — and it spends the item's repair
 	// grant; the three rounds the stopped run cost leave the cap room for one of
 	// the two it asks for.
-	granted, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, outcome.RunID),
+	granted, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, outcome.RunID),
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage))
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
@@ -1170,8 +1170,8 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	if result.Granted != 1 || !result.Truncated {
 		t.Fatalf("granted = %d, truncated = %t, want the grant carried out at the size the cap left it", result.Granted, result.Truncated)
 	}
-	if result.Outcome.Integration == nil || !tracker.closed {
-		t.Fatalf("the continued run did not land its change: %#v, closed = %t", result.Outcome.Integration, tracker.closed)
+	if result.Outcome.Integration == nil || !tracker.Closed {
+		t.Fatalf("the continued run did not land its change: %#v, closed = %t", result.Outcome.Integration, tracker.Closed)
 	}
 	// It continued the change the stopped run already had: the same branch and
 	// the same worktree, in the developer session that already held the context.
@@ -1179,12 +1179,12 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		t.Fatalf("continued run moved: branch %q worktree %q, want %q and %q",
 			result.Outcome.Branch, result.Outcome.WorktreePath, stopped.Branch, stopped.WorktreePath)
 	}
-	developerRequests := continuing.requestsForRole(domain.RoleDeveloper)
+	developerRequests := continuing.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 1 {
 		t.Fatalf("continued developer invocations = %d, want the one attempt the grant bought", len(developerRequests))
 	}
 	continued := developerRequests[0]
-	if continued.SessionID != stopping.developerSession || continued.WorkingDirectory != stopped.WorktreePath {
+	if continued.SessionID != stopping.DeveloperSession || continued.WorkingDirectory != stopped.WorktreePath {
 		t.Fatalf("continued attempt = session %q in %q, want the stopped run's own session and worktree", continued.SessionID, continued.WorkingDirectory)
 	}
 	// What it was handed back is the reviewer's findings, unedited, numbered
@@ -1202,7 +1202,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 	// rounds it cost, not the four it was committed to. That is the accounting
 	// yoyodyne-ifd.349 was refused its re-run under, read at the end of a real
 	// continuation rather than replayed against the store alone.
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1231,8 +1231,8 @@ func TestARepairOfAnotherRunIsNotCarriedOutOnThisOne(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "recorded no triage decision about the stoppage of run "+docketedRunID) {
 		t.Fatalf("Continue() error = %v, want a refusal naming the missing record for this run", err)
 	}
-	if len(harness.started) != 0 || harness.tracker.claimed || harness.tracker.notes != "" {
-		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.claimed, harness.tracker.notes)
+	if len(harness.started) != 0 || harness.tracker.Claimed || harness.tracker.Notes != "" {
+		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.Claimed, harness.tracker.Notes)
 	}
 }
 
@@ -1255,7 +1255,7 @@ func TestARepairOfARunMadeForAnotherItemIsRefusedNamingIt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `made for "yoyodyne-ifd.68.20" while its docket entry names `+docketedItem) {
 		t.Fatalf("Continue() error = %v, want a refusal naming both items", err)
 	}
-	if len(harness.started) != 0 || harness.tracker.claimed || harness.tracker.notes != "" {
-		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.claimed, harness.tracker.notes)
+	if len(harness.started) != 0 || harness.tracker.Claimed || harness.tracker.Notes != "" {
+		t.Fatalf("started = %#v, claimed = %t, notes = %q, want nothing continued or written", harness.started, harness.tracker.Claimed, harness.tracker.Notes)
 	}
 }

@@ -25,7 +25,7 @@ func TestRunStartsNothingWhileTheOperatorHoldsActivity(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	holds := newOperatorHoldStore(t)
@@ -35,7 +35,7 @@ func TestRunStartsNothingWhileTheOperatorHoldsActivity(t *testing.T) {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
 	}
@@ -52,11 +52,11 @@ func TestRunStartsNothingWhileTheOperatorHoldsActivity(t *testing.T) {
 	if outcome.RunID != "" || outcome.WorktreePath != "" {
 		t.Fatalf("outcome = %#v, want no run and no worktree behind the pause", outcome)
 	}
-	if tracker.claimed || len(tracker.calls) > 1 {
-		t.Fatalf("the tracker was disturbed by a paused harness: claimed=%t calls=%v", tracker.claimed, tracker.calls)
+	if tracker.Claimed || len(tracker.Calls) > 1 {
+		t.Fatalf("the tracker was disturbed by a paused harness: claimed=%t calls=%v", tracker.Claimed, tracker.Calls)
 	}
-	if len(provider.requests) != 0 {
-		t.Fatalf("the provider was invoked while activity was paused: %#v", provider.requests)
+	if len(provider.Requests) != 0 {
+		t.Fatalf("the provider was invoked while activity was paused: %#v", provider.Requests)
 	}
 	incomplete, err := store.Incomplete()
 	if err != nil {
@@ -75,7 +75,7 @@ func TestARunParksAtItsNextProviderCallAndCarriesOnWhenTheHoldLifts(t *testing.T
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	holds := newOperatorHoldStore(t)
 	// The operator pauses while the developer is mid-attempt, which is the case
 	// the boundary exists for: the invocation already streaming is not interrupted.
@@ -108,7 +108,7 @@ func TestARunParksAtItsNextProviderCallAndCarriesOnWhenTheHoldLifts(t *testing.T
 		}
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -120,15 +120,15 @@ func TestARunParksAtItsNextProviderCallAndCarriesOnWhenTheHoldLifts(t *testing.T
 	}
 	// The developer's work is untouched by the park: its session, its branch, and
 	// its worktree are all still there for the review the run goes on to make.
-	if parked.WorktreePath == "" || parked.Branch == "" || parked.ProviderSessionID != provider.developerSession {
+	if parked.WorktreePath == "" || parked.Branch == "" || parked.ProviderSessionID != provider.DeveloperSession {
 		t.Fatalf("the park did not preserve the run's artifacts or session: %#v", parked)
 	}
 	if clock.longestSlice() > operatorHoldProbe {
 		t.Fatalf("longest single sleep = %s, want no longer than the %s hold probe", clock.longestSlice(), operatorHoldProbe)
 	}
 	// Lifting the hold is all it took: nobody restarted anything.
-	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
-		t.Fatalf("the run did not carry on to completion: %#v (blocked=%t)", outcome, tracker.blocked)
+	if outcome.Integration == nil || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("the run did not carry on to completion: %#v (blocked=%t)", outcome, tracker.Blocked)
 	}
 	if outcome.Paused || outcome.PausedByOperator != nil {
 		t.Fatalf("a run that finished still reports itself held: %#v", outcome)
@@ -158,7 +158,7 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	holds := newOperatorHoldStore(t)
 	first := roleBackend(func(request backend.RunRequest) error {
 		if _, err := holds.Hold(baseTime); err != nil {
@@ -173,7 +173,7 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 		firstClock, 6*time.Hour, 0)
 	firstPipeline.Holds = holds
 
-	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("parked Run() error = %v", err)
 	}
@@ -183,8 +183,8 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	if len(firstClock.slept) != 0 {
 		t.Fatalf("waits = %v, want a run that exited rather than holding the process open", firstClock.slept)
 	}
-	if tracker.blocked || tracker.closed || !tracker.claimed {
-		t.Fatalf("the park disturbed the work item: blocked=%t closed=%t claimed=%t", tracker.blocked, tracker.closed, tracker.claimed)
+	if tracker.Blocked || tracker.Closed || !tracker.Claimed {
+		t.Fatalf("the park disturbed the work item: blocked=%t closed=%t claimed=%t", tracker.Blocked, tracker.Closed, tracker.Claimed)
 	}
 	parked, err := store.Load(paused.RunID)
 	if err != nil {
@@ -202,12 +202,12 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	duringHold := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	duringPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, duringHold, []string{"exit 0"}), duringHold)
 	duringPipeline.Holds = holds
-	stillHeld, err := duringPipeline.Run(context.Background(), tracker.item.ID)
+	stillHeld, err := duringPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() during the hold error = %v", err)
 	}
-	if !stillHeld.Paused || stillHeld.PausedByOperator == nil || len(duringHold.requests) != 0 {
-		t.Fatalf("an invocation during the hold did not leave the run alone: %#v %#v", stillHeld, duringHold.requests)
+	if !stillHeld.Paused || stillHeld.PausedByOperator == nil || len(duringHold.Requests) != 0 {
+		t.Fatalf("an invocation during the hold did not leave the run alone: %#v %#v", stillHeld, duringHold.Requests)
 	}
 	// Left alone is not the same fact as never started. The run this item already
 	// has is named, so nothing downstream can report a parked worktree full of
@@ -225,7 +225,7 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	secondPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second),
 		secondClock, 6*time.Hour, time.Minute)
 	secondPipeline.Holds = holds
-	outcome, err := secondPipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := secondPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -235,10 +235,10 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	if len(secondClock.slept) != 0 {
 		t.Fatalf("waits = %v, want no wait once the hold is lifted", secondClock.slept)
 	}
-	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
-		t.Fatalf("the resumed run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	if outcome.Integration == nil || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("the resumed run did not complete normally: %#v (blocked=%t)", outcome, tracker.Blocked)
 	}
-	if claims := countCalls(tracker.calls, "claim"); claims != 1 {
+	if claims := countCalls(tracker.Calls, "claim"); claims != 1 {
 		t.Fatalf("claims = %d, want the item claimed once across the hold", claims)
 	}
 	finished, err := store.Load(outcome.RunID)
@@ -262,7 +262,7 @@ func TestReconcileLeavesARunParkedOnAHoldAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	holds := newOperatorHoldStore(t)
 	provider := roleBackend(func(request backend.RunRequest) error {
 		if _, err := holds.Hold(baseTime); err != nil {
@@ -273,7 +273,7 @@ func TestReconcileLeavesARunParkedOnAHoldAlone(t *testing.T) {
 	pipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider),
 		&pausingClock{now: baseTime}, 6*time.Hour, 0)
 	pipeline.Holds = holds
-	parked, err := pipeline.Run(context.Background(), tracker.item.ID)
+	parked, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || !parked.Paused {
 		t.Fatalf("Run() error = %v, paused = %t", err, parked.Paused)
 	}
@@ -296,8 +296,8 @@ func TestReconcileLeavesARunParkedOnAHoldAlone(t *testing.T) {
 	if after.Status != before.Status || after.Phase != before.Phase || after.OperatorHeldSince == nil {
 		t.Fatalf("reconciliation disturbed a parked run: %#v", after)
 	}
-	if tracker.blocked || tracker.closed {
-		t.Fatalf("reconciliation acted on the item of a parked run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	if tracker.Blocked || tracker.Closed {
+		t.Fatalf("reconciliation acted on the item of a parked run: blocked=%t closed=%t", tracker.Blocked, tracker.Closed)
 	}
 }
 
@@ -309,16 +309,16 @@ func TestAHoldThatCannotBeReadStopsTheRun(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Holds = unreadableHolds{}
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() succeeded over a hold it could not read")
 	}
-	if len(provider.requests) != 0 || tracker.claimed {
-		t.Fatalf("a run spent against a hold it could not read: %#v claimed=%t", provider.requests, tracker.claimed)
+	if len(provider.Requests) != 0 || tracker.Claimed {
+		t.Fatalf("a run spent against a hold it could not read: %#v claimed=%t", provider.Requests, tracker.Claimed)
 	}
 }
 

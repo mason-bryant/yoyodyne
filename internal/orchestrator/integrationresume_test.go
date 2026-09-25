@@ -175,7 +175,7 @@ func newResumeHarness(t *testing.T, state runstate.State) *resumeHarness {
 		docket:  docket,
 		runs:    runs,
 		intake:  intake,
-		tracker: &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "in_progress"}},
+		tracker: &fakeTracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "in_progress"}},
 		// The checkout is clean again, which is the ordinary case: the operator
 		// committed the edit that stopped the run.
 		ownership: &resumeOwnership{},
@@ -228,8 +228,8 @@ func (h *resumeHarness) assertNothingWritten(t *testing.T) {
 	if state.Status != runstate.StatusFailed || len(state.IntegrationResumptions) != len(h.recorded.IntegrationResumptions) || (state.IntegrationStop == nil) != (h.recorded.IntegrationStop == nil) {
 		t.Fatalf("a refused resumption changed the run: %s/%s, resumptions %#v, stop %#v", state.Status, state.Phase, state.IntegrationResumptions, state.IntegrationStop)
 	}
-	if len(h.tracker.calls) != 0 {
-		t.Fatalf("a refused resumption wrote to the item: %v", h.tracker.calls)
+	if len(h.tracker.Calls) != 0 {
+		t.Fatalf("a refused resumption wrote to the item: %v", h.tracker.Calls)
 	}
 	if len(h.started) != 0 {
 		t.Fatalf("a refused resumption dispatched something: %#v", h.started)
@@ -305,8 +305,8 @@ func TestAResumptionMakesTheStoppedRunLiveAtItsPromotionChargingNothing(t *testi
 	}
 	// The item was told and put back, and the docket entry closed in the
 	// harness's name rather than left for the development manager to decide.
-	if !strings.Contains(harness.tracker.notes, "Resumed: the integration of run "+docketedRunID) || !harness.tracker.claimed {
-		t.Fatalf("item notes = %q, claimed = %t; want the resumption recorded and the item put back", harness.tracker.notes, harness.tracker.claimed)
+	if !strings.Contains(harness.tracker.Notes, "Resumed: the integration of run "+docketedRunID) || !harness.tracker.Claimed {
+		t.Fatalf("item notes = %q, claimed = %t; want the resumption recorded and the item put back", harness.tracker.Notes, harness.tracker.Claimed)
 	}
 	closure, closed := harness.closure(t)
 	if !closed || closure.Decision != resumedDocketDecision || !strings.Contains(closure.DecidedBy, "the harness") {
@@ -463,8 +463,8 @@ func TestAResumptionRefusesARetiredWorktreeItCannotRestore(t *testing.T) {
 	if state.Status != runstate.StatusFailed || !state.WorktreeRemoved || len(state.IntegrationResumptions) != 0 {
 		t.Fatalf("a refused restore changed the run: %#v", state)
 	}
-	if len(harness.tracker.calls) != 0 || len(harness.started) != 0 {
-		t.Fatalf("a refused restore wrote to the item or dispatched something: %v %#v", harness.tracker.calls, harness.started)
+	if len(harness.tracker.Calls) != 0 || len(harness.started) != 0 {
+		t.Fatalf("a refused restore wrote to the item or dispatched something: %v %#v", harness.tracker.Calls, harness.started)
 	}
 
 	emptied := newResumeHarness(t, retiredState())
@@ -750,16 +750,16 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{Remote: remote}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The operator's uncommitted edit lands in the primary checkout while the
 	// reviewer is judging the change, which is what the first stop was.
 	dirtying := filepath.Join(repository, "AGENTS.md")
-	serve := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	serve := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -772,7 +772,7 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 		return publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, checks), provider), forge)
 	}
 
-	outcome, err := build(tracker).Run(context.Background(), tracker.item.ID)
+	outcome, err := build(tracker).Run(context.Background(), tracker.Item.ID)
 	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
 		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
 	}
@@ -782,9 +782,9 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	if outcome.IntegrationStop == nil || outcome.IntegrationStop.Cause != runstate.CauseDirtyPrimary || outcome.IntegrationStop.Phase != runstate.PhaseIntegrating {
 		t.Fatalf("integration stop = %#v, want the dirty checkout recorded at the integrating phase", outcome.IntegrationStop)
 	}
-	if !strings.Contains(tracker.notes, "Integration stop: approved, then stopped at the integrating phase by the environment: dirty-primary") ||
-		!strings.Contains(tracker.notes, "`yoyo triage resume "+outcome.RunID+"`") {
-		t.Fatalf("item notes do not name the stop and the verb that resumes it:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Integration stop: approved, then stopped at the integrating phase by the environment: dirty-primary") ||
+		!strings.Contains(tracker.Notes, "`yoyo triage resume "+outcome.RunID+"`") {
+		t.Fatalf("item notes do not name the stop and the verb that resumes it:\n%s", tracker.Notes)
 	}
 	stopped, err := store.Load(outcome.RunID)
 	if err != nil {
@@ -795,7 +795,7 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	}
 	// Where the review left the item's counters, which is where they have to
 	// still be once the change has landed.
-	left, err := store.Triage().Counters(tracker.item.ID)
+	left, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -858,8 +858,8 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	if !result.Resumed || result.Outcome.Integration == nil || result.Outcome.PullRequest == nil || !result.Outcome.PullRequest.Merged {
 		t.Fatalf("result = %#v, want the approved change promoted and its pull request merged", result)
 	}
-	if len(forge.merges) != 1 || !tracker.closed {
-		t.Fatalf("forge merges = %d, item closed = %t; want one merge and the item closed on it", len(forge.merges), tracker.closed)
+	if len(forge.Merges) != 1 || !tracker.Closed {
+		t.Fatalf("forge merges = %d, item closed = %t; want one merge and the item closed on it", len(forge.Merges), tracker.Closed)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", result.Outcome.Integration.TargetCommit)
 	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
@@ -870,11 +870,11 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	}
 	// Nothing was invoked: the developer's attempt and the reviewer's verdict are
 	// the ones the first run made.
-	if developer, reviewer := provider.requestsForRole(domain.RoleDeveloper), provider.requestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
+	if developer, reviewer := provider.RequestsForRole(domain.RoleDeveloper), provider.RequestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
 		t.Fatalf("invocations = %d developer, %d reviewer; want the one attempt and the one review the first run made", len(developer), len(reviewer))
 	}
 	// And every counter is where the review left it.
-	landed, err := store.Triage().Counters(tracker.item.ID)
+	landed, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -888,8 +888,8 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	if final.Status != runstate.StatusSucceeded || final.RepairAttempts != 0 || final.ReviewRounds != 1 || len(final.IntegrationResumptions) != 1 {
 		t.Fatalf("final run = %s, attempts %d, rounds %d, resumptions %d; want it succeeded with no attempt or round added", final.Status, final.RepairAttempts, final.ReviewRounds, len(final.IntegrationResumptions))
 	}
-	if !strings.Contains(tracker.notes, "was approved by an independent reviewer, and was integrated automatically") {
-		t.Fatalf("item notes do not record the integration:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "was approved by an independent reviewer, and was integrated automatically") {
+		t.Fatalf("item notes do not record the integration:\n%s", tracker.Notes)
 	}
 }
 
@@ -901,13 +901,13 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	dirtying := filepath.Join(repository, "AGENTS.md")
-	serve := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	serve := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -918,7 +918,7 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	build := func() Pipeline {
 		return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	}
-	outcome, err := build().Run(context.Background(), tracker.item.ID)
+	outcome, err := build().Run(context.Background(), tracker.Item.ID)
 	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
 		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
 	}
@@ -926,7 +926,7 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	left, err := store.Triage().Counters(tracker.item.ID)
+	left, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -959,8 +959,8 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	if !result.Resumed || !errors.Is(err, gitworktree.ErrRebaseConflict) {
 		t.Fatalf("Resume() = resumed %t, error = %v; want the resumed promotion stopped on the replay conflict", result.Resumed, err)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "cannot be replayed") {
-		t.Fatalf("blocked = %t, reason = %q; want the conflict recorded for a person", tracker.blocked, tracker.blockReason)
+	if !tracker.Blocked || !strings.Contains(tracker.BlockReason, "cannot be replayed") {
+		t.Fatalf("blocked = %t, reason = %q; want the conflict recorded for a person", tracker.Blocked, tracker.BlockReason)
 	}
 	conflicted, err := store.Load(outcome.RunID)
 	if err != nil {
@@ -983,7 +983,7 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	if conflicted.RepairAttempts != 0 || len(conflicted.RepairContinuations) != 0 {
 		t.Fatalf("the conflict charged an attempt: %d attempts, %#v", conflicted.RepairAttempts, conflicted.RepairContinuations)
 	}
-	landed, err := store.Triage().Counters(tracker.item.ID)
+	landed, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1006,14 +1006,14 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{Remote: remote}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	dirtying := filepath.Join(repository, "AGENTS.md")
-	serve := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	serve := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -1024,7 +1024,7 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 	build := func() Pipeline {
 		return publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"test -f feature.txt"}), provider), forge)
 	}
-	outcome, err := build().Run(context.Background(), tracker.item.ID)
+	outcome, err := build().Run(context.Background(), tracker.Item.ID)
 	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
 		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
 	}
@@ -1035,7 +1035,7 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	left, err := store.Triage().Counters(tracker.item.ID)
+	left, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1083,18 +1083,18 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 	if !result.Resumed || !result.WorktreeRestored || result.RecordProblem != "" {
 		t.Fatalf("result = %#v, want the run resumed in a restored worktree with every record written", result)
 	}
-	if result.Outcome.Integration == nil || result.Outcome.PullRequest == nil || !result.Outcome.PullRequest.Merged || !tracker.closed {
-		t.Fatalf("outcome = integration %#v, pull request %#v, closed %t; want the approved change promoted, merged, and the item closed", result.Outcome.Integration, result.Outcome.PullRequest, tracker.closed)
+	if result.Outcome.Integration == nil || result.Outcome.PullRequest == nil || !result.Outcome.PullRequest.Merged || !tracker.Closed {
+		t.Fatalf("outcome = integration %#v, pull request %#v, closed %t; want the approved change promoted, merged, and the item closed", result.Outcome.Integration, result.Outcome.PullRequest, tracker.Closed)
 	}
 	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
 		t.Fatalf("integrated feature.txt = %q, want the approved content", integrated)
 	}
 	// One developer attempt and one review, both the first run's; nothing was
 	// re-derived from the branch by anybody.
-	if developer, reviewer := provider.requestsForRole(domain.RoleDeveloper), provider.requestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
+	if developer, reviewer := provider.RequestsForRole(domain.RoleDeveloper), provider.RequestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
 		t.Fatalf("invocations = %d developer, %d reviewer; want the one attempt and the one review the first run made", len(developer), len(reviewer))
 	}
-	landed, err := store.Triage().Counters(tracker.item.ID)
+	landed, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1141,16 +1141,16 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-ifd.436.4", Title: "The duplicated one", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-ifd.436.4", Title: "The duplicated one", Status: "open"}}
+	forge := &fakeForge{Remote: remote}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The operator's uncommitted edit lands while the reviewer is judging, so the
 	// promotion is refused for the checkout after the approval rather than before.
 	dirtying := filepath.Join(repository, "AGENTS.md")
-	serve := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	serve := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			if err := os.WriteFile(dirtying, []byte("an edit nobody committed\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -1160,7 +1160,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	}
 	pipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"test -f feature.txt"}), provider), forge)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !errors.Is(err, gitworktree.ErrPrimaryNotReady) {
 		t.Fatalf("Run() error = %v, want the promotion refused for the dirty checkout", err)
 	}
@@ -1185,7 +1185,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	queue := newScheduleHarness()
 	queue.now = audited
 	queue.finished = []runstate.State{stopped}
-	queue.items = []beads.WorkItem{claimedItem(tracker.item.ID, tracker.item.Title)}
+	queue.items = []beads.WorkItem{claimedItem(tracker.Item.ID, tracker.Item.Title)}
 	queue.ready = map[string]bool{}
 	queue.stoppages = haltedWork{runs: []runstate.State{stopped}}
 	queue.claims = ClaimAuditor{
@@ -1215,7 +1215,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	// naming the run, the change still on its branch, and the verb that finishes
 	// it. Before this, a run that ended `failed` read to the pull as an item with
 	// nothing holding it at all.
-	if _, err := queue.Release(context.Background(), tracker.item.ID, "put back by hand"); err != nil {
+	if _, err := queue.Release(context.Background(), tracker.Item.ID, "put back by hand"); err != nil {
 		t.Fatalf("Release() error = %v", err)
 	}
 	schedule, err = Scheduler{Open: queue.open, Sleep: queue.sleep, Now: queue.clock}.Schedule(context.Background())
@@ -1225,7 +1225,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	if len(schedule.Started) != 0 {
 		t.Fatalf("started = %d run(s), want the reopened item held rather than run again: %s", len(schedule.Started), schedule.Render())
 	}
-	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != tracker.item.ID {
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != tracker.Item.ID {
 		t.Fatalf("deferred = %#v, want the stoppage passed over with what holds it named", schedule.Deferred)
 	}
 	for _, want := range []string{outcome.RunID, "its change approved", "`yoyo triage resume`"} {
@@ -1237,7 +1237,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	// The resume is what promotes it. Nothing was bought in between: the run is
 	// the one the reviewer approved, made live again at the promotion it stopped
 	// short of, with the developer's one attempt and the reviewer's one verdict.
-	left, err := store.Triage().Counters(tracker.item.ID)
+	left, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -1264,10 +1264,10 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 		t.Fatalf("result = %#v, want the approved change promoted and its pull request merged", resumed)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", resumed.Outcome.Integration.TargetCommit)
-	if developer, reviewer := provider.requestsForRole(domain.RoleDeveloper), provider.requestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
+	if developer, reviewer := provider.RequestsForRole(domain.RoleDeveloper), provider.RequestsForRole(domain.RoleReviewer); len(developer) != 1 || len(reviewer) != 1 {
 		t.Fatalf("invocations = %d developer, %d reviewer; want the one attempt and the one review the stopped run made", len(developer), len(reviewer))
 	}
-	landed, err := store.Triage().Counters(tracker.item.ID)
+	landed, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}

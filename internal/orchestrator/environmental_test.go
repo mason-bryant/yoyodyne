@@ -54,15 +54,15 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 
 	// The development manager's decision, which spends the item's repair-grant
 	// budget as it is recorded.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	before, err := store.Triage().Counters(tracker.item.ID)
+	before, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -81,10 +81,10 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	continuing.Docket = docketerOverStore(docket, store, continuing.Config)
 
-	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+	if _, err := continuing.Run(context.Background(), tracker.Item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
 		t.Fatalf("Run() error = %v, want the round refused for holding none of its change", err)
 	}
-	if invocations := len(provider.requests); invocations != 0 {
+	if invocations := len(provider.Requests); invocations != 0 {
 		t.Fatalf("provider invocations = %d, want the refusal to have spent nothing on a provider", invocations)
 	}
 
@@ -127,7 +127,7 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 	}
 	// And the cap is untouched: every figure the guards refuse against is exactly
 	// what it was before the round.
-	after, err := store.Triage().Counters(tracker.item.ID)
+	after, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -160,12 +160,12 @@ func TestNoSequenceOfEnvironmentalRefusalsWalksAnItemToItsCap(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	before, err := store.Triage().Counters(tracker.item.ID)
+	before, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -184,10 +184,10 @@ func TestNoSequenceOfEnvironmentalRefusalsWalksAnItemToItsCap(t *testing.T) {
 	// a round, the item would be at its cap by the end of this loop.
 	for refusal := 0; refusal < environmentalRefusals; refusal++ {
 		continueOnGrant(t, store, tracker, stopped.RunID)
-		if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+		if _, err := continuing.Run(context.Background(), tracker.Item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
 			t.Fatalf("refusal %d: Run() error = %v, want the round refused", refusal, err)
 		}
-		after, err := store.Triage().Counters(tracker.item.ID)
+		after, err := store.Triage().Counters(tracker.Item.ID)
 		if err != nil {
 			t.Fatalf("Counters() error = %v", err)
 		}
@@ -227,13 +227,13 @@ func TestAnEmptyDeliveryWithNoEnvironmentalCauseIsInNoClassAndSpendsNoRound(t *t
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// A developer that writes nothing at all, judged until the run's own repair
 	// budget is spent. Nothing about the environment refused it.
 	provider := roleBackend(func(backend.RunRequest) error { return nil }, repairVerdict)
 	running := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	outcome, err := running.Run(context.Background(), tracker.item.ID)
+	outcome, err := running.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() ended without stopping, so nothing here spent a budget")
 	}
@@ -255,7 +255,7 @@ func TestAnEmptyDeliveryWithNoEnvironmentalCauseIsInNoClassAndSpendsNoRound(t *t
 	if spent.ReviewRounds < 2 || spent.RepairAttempts < 1 {
 		t.Fatalf("run review rounds = %d, repair attempts = %d; want the run to have spent its own repair budget on the empty delivery", spent.ReviewRounds, spent.RepairAttempts)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -267,7 +267,7 @@ func TestAnEmptyDeliveryWithNoEnvironmentalCauseIsInNoClassAndSpendsNoRound(t *t
 	if want := runstate.RoundKey(outcome.RunID, spent.RepairAttempts); counters.LastJudged != want {
 		t.Fatalf("last judged attempt = %q, want %q: an uncharged verdict is still recorded against the attempt it judged", counters.LastJudged, want)
 	}
-	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations == 0 {
+	if invocations := len(provider.RequestsForRole(domain.RoleDeveloper)); invocations == 0 {
 		t.Fatal("no developer was invoked, so this is not the empty delivery the test is about")
 	}
 }
@@ -281,7 +281,7 @@ func TestARoundTurnedAwayByThePrimaryCheckoutIsRefusedEnvironmentally(t *testing
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a developer was invoked in %s, and no worktree was ever cut for this run", request.WorkingDirectory)
 		return nil
@@ -290,7 +290,7 @@ func TestARoundTurnedAwayByThePrimaryCheckoutIsRefusedEnvironmentally(t *testing
 	starting.NewRunID = runstate.NewRunID
 	starting.Worktrees = dirtyPrimaryWorktrees{starting.Worktrees}
 
-	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	outcome, err := starting.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() started work in a checkout no worktree could be cut from")
 	}
@@ -312,7 +312,7 @@ func TestARoundTurnedAwayByThePrimaryCheckoutIsRefusedEnvironmentally(t *testing
 	if outcome.Environmental.Problem != "" {
 		t.Fatalf("the settle reported a problem it did not have: %s", outcome.Environmental.Problem)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestAProviderInvocationTheMachineNeverStartedIsRefusedEnvironmentally(t *te
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// What the sandbox refusing to spawn an agent looks like from here: the
 	// invocation returns the runner's sentinel and nothing was ever asked.
 	provider := roleBackend(func(backend.RunRequest) error {
@@ -340,7 +340,7 @@ func TestAProviderInvocationTheMachineNeverStartedIsRefusedEnvironmentally(t *te
 	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	starting.NewRunID = runstate.NewRunID
 
-	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	outcome, err := starting.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() finished on an invocation the machine never started")
 	}
@@ -361,7 +361,7 @@ func TestAProviderInvocationTheMachineNeverStartedIsRefusedEnvironmentally(t *te
 	if outcome.WorktreePath == "" {
 		t.Fatal("no worktree was recorded, so the emptiness this classified on was not read from one")
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -380,9 +380,9 @@ func TestAGrantedRoundThatNeverRanIsRefusedThoughItsWorktreeHoldsTheChange(t *te
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, environmentalCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	// The grant carried out onto the change it was granted to repair. Nothing is
@@ -397,7 +397,7 @@ func TestAGrantedRoundThatNeverRanIsRefusedThoughItsWorktreeHoldsTheChange(t *te
 	}, approveVerdict)
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	outcome, err := continuing.Run(context.Background(), tracker.item.ID)
+	outcome, err := continuing.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() finished a granted round whose developer the machine never started")
 	}
@@ -434,7 +434,7 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	// Live again at the review, with its change preserved. This item has already
 	// spent rounds, which is what a stale refusal would contradict.
@@ -446,7 +446,7 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 	}, repairVerdict)
 	refusing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, turnedAway, []string{"exit 0"}), turnedAway)
 	refusing.Worktrees = unreadyPrimaryWorktrees{refusing.Worktrees}
-	if _, err := refusing.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := refusing.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() resumed against a checkout nothing may be resumed against")
 	}
 	turned, err := store.Load(stopped.RunID)
@@ -457,7 +457,7 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 		t.Fatalf("environmental = %#v, want the turned-away dispatch recorded on the run", turned.Environmental)
 	}
 
-	spentBefore, err := store.Triage().Counters(tracker.item.ID)
+	spentBefore, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -467,7 +467,7 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 	// for.
 	judging := roleBackend(func(backend.RunRequest) error { return nil }, repairVerdict)
 	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, judging, []string{"exit 0"}), judging)
-	if _, err := resumed.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := resumed.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() finished a run whose reviewer kept asking for repairs")
 	}
 	ordinary, err := store.Load(stopped.RunID)
@@ -484,7 +484,7 @@ func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T
 	// stale record would have contradicted: an ordinary stop announcing an
 	// environmental refusal tells a reader an item at three rounds stands where it
 	// did before them.
-	spentAfter, err := store.Triage().Counters(tracker.item.ID)
+	spentAfter, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -504,13 +504,13 @@ func TestAReEnteredRunCannotReturnTheRoundItsPredecessorCharged(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	spent, err := store.Load(stopped.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	before, err := store.Triage().Counters(tracker.item.ID)
+	before, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -536,7 +536,7 @@ func TestAReEnteredRunCannotReturnTheRoundItsPredecessorCharged(t *testing.T) {
 		return nil
 	}, approveVerdict)
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
-	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+	if _, err := continuing.Run(context.Background(), tracker.Item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
 		t.Fatalf("Run() error = %v, want the re-entry refused for holding none of its change", err)
 	}
 
@@ -562,7 +562,7 @@ func TestAReEnteredRunCannotReturnTheRoundItsPredecessorCharged(t *testing.T) {
 	}
 	// The counters are exactly as the process before left them: the round it spent
 	// is still spent, and the head still names it.
-	after, err := store.Triage().Counters(tracker.item.ID)
+	after, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -641,7 +641,7 @@ func continueOnGrant(t *testing.T, store *runstate.Store, tracker *fakeTracker, 
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if _, _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
+	if _, _, err := tracker.Claim(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 }
@@ -656,7 +656,7 @@ func TestARoundTurnedAwayByAKilledWorktreeCheckoutIsRefusedEnvironmentally(t *te
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &fakeTracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a developer was invoked in %s, and no worktree was ever cut for this run", request.WorkingDirectory)
 		return nil
@@ -665,7 +665,7 @@ func TestARoundTurnedAwayByAKilledWorktreeCheckoutIsRefusedEnvironmentally(t *te
 	starting.NewRunID = runstate.NewRunID
 	starting.Worktrees = killedCheckoutWorktrees{starting.Worktrees}
 
-	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	outcome, err := starting.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() started work with no worktree to do it in")
 	}
@@ -699,7 +699,7 @@ func TestARoundTurnedAwayByAKilledWorktreeCheckoutIsRefusedEnvironmentally(t *te
 	if !strings.Contains(recorded.Failure, "1099 file(s)") || strings.Contains(recorded.Failure, "Updating files") {
 		t.Fatalf("failure = %q, want the cause rather than the checkout's progress", recorded.Failure)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
