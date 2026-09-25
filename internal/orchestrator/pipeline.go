@@ -2912,8 +2912,7 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // the recovery package applies to every boundary it retries — so a failure this
 // classifies is one the harness would have asked again somewhere else, and a
 // failure it does not is one somebody has to look at. A replay that conflicted
-// and an approval that could not be shown independent are the second kind, and
-// neither reaches here. A replay the harness itself killed is the first kind,
+// and an approval that could not be shown independent are the second kind. A replay the harness itself killed is the first kind,
 // named by its own sentinel: it is never a conflict, and it is returned only
 // once the worktree is back on its branch (yoyodyne-ifd.406).
 //
@@ -2925,8 +2924,19 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // cost a re-run each before they were here (yoyodyne-ifd.429.9). The credential
 // is asked before the transport class, because an SSH refusal is followed by a
 // closed connection and the refusal is what it was.
+//
+// A replay conflict is asked before all of them, because it is settled before
+// anything is written about it and nothing written afterwards unsettles it. The
+// error that ends a conflicted run carries the conflict joined to whatever
+// failed while it was being recorded — a tracker write that timed out, a record
+// the store would not take — and those read as the transport class or a dirty
+// checkout on their own. Run run-c4f75e5b's conflict reached the record as a
+// transport failure that way, and the docket named a resume that could only
+// conflict again (yoyodyne-ifd.429.10).
 func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	switch {
+	case errors.Is(failure, gitworktree.ErrRebaseConflict):
+		return "", false
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
 	case errors.Is(failure, gitworktree.ErrReplayKilled):

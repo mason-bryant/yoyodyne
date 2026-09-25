@@ -22,6 +22,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/selfcheck"
@@ -6492,6 +6493,86 @@ func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
 	}
 	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
 		t.Fatalf("worktree HEAD = %q, want the recorded harness commit %q", head, state.HarnessCommit)
+	}
+}
+
+// Run run-c4f75e5b's shape: an approved change whose replay conflicts, and whose
+// blocker the tracker never took because the `bd update` recording it timed out.
+// The error ending the run carries the timeout beside the conflict, and the
+// timeout on its own reads as the transport class — which is how the conflict
+// reached the record as an integration stop and the docket named a resume that
+// could only conflict again. The conflict is what stopped the run whatever
+// failed while it was being written down, so nothing resumable is recorded and
+// the docket names the development manager (yoyodyne-ifd.429.10).
+func TestAReplayConflictWhoseBlockerCouldNotBeWrittenIsNeverAResumableStop(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{
+		item:     beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
+		blockErr: errors.New("bd update failed with status cancelled and exit code -1: signal: killed"),
+	}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("this run's answer\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+		runPipelineGit(t, repository, "add", "docs/design.md")
+		runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	// With no blocker on the item, the run reaches the docket as a death that
+	// preserved its change, which is written as the run ends rather than found by
+	// a later scan.
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewDocketStore() error = %v", err)
+	}
+	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if !errors.Is(err, gitworktree.ErrRebaseConflict) || !errors.Is(err, tracker.blockErr) {
+		t.Fatalf("Run() error = %v, want the conflict and the failed recording both reported", err)
+	}
+	// The premise: what failed while recording is, read alone, a failure the
+	// harness would resume past. Without it this test proves nothing.
+	if !recovery.Recoverable(tracker.blockErr) {
+		t.Fatalf("the recording failure %q is not the transport class; the test no longer drives the misclassification", tracker.blockErr)
+	}
+	if outcome.IntegrationStop != nil {
+		t.Fatalf("Run() outcome integration stop = %#v, want none for a conflict", outcome.IntegrationStop)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.IntegrationStop != nil {
+		t.Fatalf("recorded integration stop = %#v, want none: a conflict is never resumable", state.IntegrationStop)
+	}
+	if !state.ApprovedAwaitingIntegration() {
+		t.Fatalf("run = decision %q, want the approval standing so the stop would have been recorded had it been classified as one", state.ReviewDecision)
+	}
+	// The conflict is on the record even though the blocker never reached the
+	// item.
+	if !strings.Contains(state.Failure, "cannot be replayed onto the moved integration target") {
+		t.Fatalf("recorded failure = %q, want the conflict", state.Failure)
+	}
+
+	built, err := docketerOverStore(docket, store, pipeline.Config).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 1 {
+		t.Fatalf("docket = %#v, want the conflicted run on it", built.Entries)
+	}
+	entry := built.Entries[0]
+	if entry.IntegrationStop != nil {
+		t.Fatalf("docket entry integration stop = %#v, want none", entry.IntegrationStop)
+	}
+	rendered := entry.Render()
+	if strings.Contains(rendered, "yoyo triage resume") || !strings.Contains(rendered, "Next mover: you") {
+		t.Fatalf("the docket does not name the development manager for a conflict:\n%s", rendered)
 	}
 }
 
