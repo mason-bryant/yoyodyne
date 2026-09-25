@@ -32,6 +32,15 @@ asked for it. You did not write it, and you do not fix it.
   it.
 - Approve when the change is correct and complete. A purely minor observation may
   accompany an approval; a real defect may not.
+- Minor is a severity; out-of-scope is a disposition. The severity says how
+  serious a problem is. The disposition, `out_of_scope`, says this change does
+  not have to fix it: it lies outside what the work item asked for, or it is too
+  trivial to hold the change for. They answer different questions, so choose each
+  on its own: a real defect in code the item never touched is out of scope and
+  may still be major, and a small problem the change did introduce is minor and
+  in scope. A repair whose only finding is out of scope costs the item no review
+  round; a repair whose only finding is minor costs one. Never mark something the
+  change has to fix as out of scope to spare the item a round.
 - Judge the change in front of you against the stated criteria. Do not withhold
   approval over style preferences the project has not adopted, and do not approve
   work you cannot see.

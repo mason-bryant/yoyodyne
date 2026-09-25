@@ -132,6 +132,15 @@ const (
 	SeverityMinor   = "minor"
 )
 
+// A finding's disposition is duplicated here for the reason its severity is, and
+// it decides more than the severity does: whether the repair that carried it
+// cost the work item a review round. A record that could not carry it would be
+// refused at the save of a verdict the harness had already charged or not
+// charged by it.
+const (
+	DispositionOutOfScope = "out_of_scope"
+)
+
 // Landing outcomes are duplicated here for the reason the review vocabularies
 // are: the durable schema stays independent of the package that produces them.
 // What a landing outcome decides is whether the work item closes, so an
@@ -184,7 +193,11 @@ var (
 	reviewDecisions   = []string{ReviewApprove, ReviewRepair, ReviewEscalate}
 	reviewApprovals   = []string{ApprovesImplementation, ApprovesEvidence}
 	findingSeverities = []string{SeverityBlocker, SeverityMajor, SeverityMinor}
-	landingOutcomes   = []string{LandingDischarged, LandingEvidence, LandingEscalate}
+	// findingDispositions does not list the empty disposition, which every
+	// finding may carry and most do: it is the ordinary finding, one this change
+	// has to act on.
+	findingDispositions = []string{DispositionOutOfScope}
+	landingOutcomes     = []string{LandingDischarged, LandingEvidence, LandingEscalate}
 
 	verificationOutcomes = []string{VerificationPassed, VerificationFailed, VerificationRefused}
 )
@@ -195,6 +208,11 @@ var (
 func ReviewDecisions() []string { return slices.Clone(reviewDecisions) }
 
 func FindingSeverities() []string { return slices.Clone(findingSeverities) }
+
+// FindingDispositions is what a finding may say beside its severity, read the
+// same way and closed for the same reason. The empty disposition is always
+// permitted and is not in the list.
+func FindingDispositions() []string { return slices.Clone(findingDispositions) }
 
 // ReviewApprovals is what an approval may say it approves, read the same way and
 // closed for the same reason.
@@ -627,10 +645,11 @@ func (c StaleBlockClear) Validate() error {
 // reviewer asked for, and a run that spends its attempts has to name what is
 // still unresolved.
 type Finding struct {
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-	File     string `json:"file,omitempty"`
-	Line     int    `json:"line,omitempty"`
+	Severity    string `json:"severity"`
+	Disposition string `json:"disposition,omitempty"`
+	Message     string `json:"message"`
+	File        string `json:"file,omitempty"`
+	Line        int    `json:"line,omitempty"`
 }
 
 // Validate reports every contract violation in the finding at once.
@@ -638,6 +657,9 @@ func (f Finding) Validate() error {
 	var problems []error
 	if !slices.Contains(findingSeverities, f.Severity) {
 		problems = append(problems, fmt.Errorf("severity %q must be %s", f.Severity, quotedAlternatives(findingSeverities)))
+	}
+	if f.Disposition != "" && !slices.Contains(findingDispositions, f.Disposition) {
+		problems = append(problems, fmt.Errorf("disposition %q must be %s or omitted", f.Disposition, quotedAlternatives(findingDispositions)))
 	}
 	if strings.TrimSpace(f.Message) == "" {
 		problems = append(problems, errors.New("message is required"))

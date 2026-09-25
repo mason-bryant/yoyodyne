@@ -36,6 +36,18 @@ func TestDecodeAcceptsValidVerdicts(t *testing.T) {
 			},
 		},
 		{
+			// The disposition is part of the closed schema, beside the severity
+			// rather than instead of it, so it decodes rather than being reported as
+			// drift.
+			name:  "repair whose finding is out of scope",
+			input: `{"decision":"repair","summary":"Right; one note elsewhere.","findings":[{"severity":"minor","disposition":"out_of_scope","message":"The neighbouring comment is stale."}]}`,
+			want: Verdict{
+				Decision: DecisionRepair,
+				Summary:  "Right; one note elsewhere.",
+				Findings: []Finding{{Severity: SeverityMinor, Disposition: DispositionOutOfScope, Message: "The neighbouring comment is stale."}},
+			},
+		},
+		{
 			// The field is part of the closed schema, so it decodes rather than being
 			// reported as drift the reviewer invented.
 			name:  "approval that says what it approves",
@@ -230,6 +242,13 @@ func TestDecodeRejectsInvalidVerdicts(t *testing.T) {
 			name:    "not an object",
 			input:   `["approve"]`,
 			wantErr: "decode review verdict",
+		},
+		{
+			// The disposition decides whether a round is charged, so a word nothing
+			// recognizes is refused rather than read as either answer.
+			name:    "unknown disposition",
+			input:   `{"decision":"repair","summary":"One note.","findings":[{"severity":"minor","disposition":"trivial","message":"Rename it."}]}`,
+			wantErr: `disposition "trivial" must be "out_of_scope" or omitted`,
 		},
 		{
 			name:    "trailing json value",
@@ -529,7 +548,12 @@ func assertVerdictEqual(t *testing.T, got, want Verdict) {
 // sentence and every neighbouring case is a judgement somebody will want to
 // check. What it decides is whether the item is charged a review round for the
 // verdict, so a case that drifts across this line moves a budget.
-func TestOnlyOneMinorFindingIsATrivialResidue(t *testing.T) {
+//
+// The disposition decides and the severity does not (yoyodyne-ifd.359): a
+// single minor finding is charged, because a real defect labelled minor would
+// otherwise be a free round, and a single out-of-scope finding is not, whatever
+// severity it carries.
+func TestOnlyOneOutOfScopeFindingIsATrivialResidue(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -538,16 +562,29 @@ func TestOnlyOneMinorFindingIsATrivialResidue(t *testing.T) {
 		want     bool
 	}{
 		{
-			name:     "one minor finding",
-			findings: []Finding{{Severity: SeverityMinor, Message: "rename this variable"}},
+			name:     "one out-of-scope minor finding",
+			findings: []Finding{{Severity: SeverityMinor, Disposition: DispositionOutOfScope, Message: "rename this variable"}},
 			want:     true,
 		},
 		{
+			// A real defect the item never asked about is out of scope and may be
+			// serious; the round is not this change's to spend on it.
+			name:     "one out-of-scope major finding",
+			findings: []Finding{{Severity: SeverityMajor, Disposition: DispositionOutOfScope, Message: "the neighbouring parser drops errors"}},
+			want:     true,
+		},
+		{
+			// The case yoyodyne-ifd.359 exists for: minor is a severity, and a
+			// severity does not decide the budget.
+			name:     "one minor finding with no disposition",
+			findings: []Finding{{Severity: SeverityMinor, Message: "rename this variable"}},
+		},
+		{
 			// Two notes is a list, and a list is the reviewer still arguing.
-			name: "two minor findings",
+			name: "two out-of-scope findings",
 			findings: []Finding{
-				{Severity: SeverityMinor, Message: "rename this variable"},
-				{Severity: SeverityMinor, Message: "and this one"},
+				{Severity: SeverityMinor, Disposition: DispositionOutOfScope, Message: "rename this variable"},
+				{Severity: SeverityMinor, Disposition: DispositionOutOfScope, Message: "and this one"},
 			},
 		},
 		{

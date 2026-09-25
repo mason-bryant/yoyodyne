@@ -1480,3 +1480,25 @@ func TestABranchReviewCannotEscalate(t *testing.T) {
 		t.Fatalf("Review() decision = %q, want %q", raised.Decision, DecisionEscalate)
 	}
 }
+
+// The contract offers the disposition at both scopes, as a field beside the
+// severity rather than a fourth severity, and says which of the two the review
+// budget reads. A reviewer never told the word exists has only "minor" to say
+// "right, but not this change's to fix" with, which is how a severity label came
+// to decide the budget (yoyodyne-ifd.359).
+func TestTheContractOffersTheOutOfScopeDispositionBesideTheSeverity(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []Scope{ScopeWorkItem, ScopeBranch} {
+		contract := reviewSystemPrompt(scope, "")
+		for _, want := range []string{
+			`"severity":"blocker|major|minor","disposition":"out_of_scope"`,
+			`"disposition" is optional and is not a severity`,
+			"a repair whose only finding is out of scope costs none, and a repair whose only finding is minor costs one",
+		} {
+			if !strings.Contains(contract, want) {
+				t.Errorf("the %v contract is missing %q", scope, want)
+			}
+		}
+	}
+}

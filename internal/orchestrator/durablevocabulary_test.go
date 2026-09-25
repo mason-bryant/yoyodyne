@@ -46,6 +46,40 @@ func TestTheDurableSchemaStoresEveryVerdictTheReviewerCanProduce(t *testing.T) {
 		}
 	}
 
+	// A finding's disposition is held the same way, and it is the one of these the
+	// review budget reads: a disposition the record could not carry would be
+	// refused at the save of a verdict whose round was already charged or spared
+	// by it.
+	durableDispositions := runstate.FindingDispositions()
+	for _, disposition := range review.Dispositions() {
+		if !slices.Contains(durableDispositions, string(disposition)) {
+			t.Fatalf("the reviewer can dispose of a finding as %q and the durable schema stores only %v", disposition, durableDispositions)
+		}
+		// Checked through both conversions a run stores and restores findings by,
+		// so the vocabulary is held where it crosses and the budget reads the same
+		// answer from a restored run as from the verdict that produced it.
+		given := []review.Finding{{
+			Severity:    review.SeverityMinor,
+			Disposition: disposition,
+			Message:     "the record has to be able to carry this",
+		}}
+		findings := durableFindings(given)
+		if len(findings) != 1 || findings[0].Disposition != string(disposition) {
+			t.Fatalf("durableFindings() = %#v, want the %q disposition carried", findings, disposition)
+		}
+		if err := findings[0].Validate(); err != nil {
+			t.Fatalf("a stored %q finding is refused: %v", disposition, err)
+		}
+		restored := reportedFindings(findings)
+		if len(restored) != 1 || restored[0].Disposition != disposition {
+			t.Fatalf("reportedFindings() = %#v, want the %q disposition restored", restored, disposition)
+		}
+		if review.TrivialResidue(restored) != review.TrivialResidue(given) {
+			t.Errorf("disposition %q is a trivial residue=%t as a verdict and %t once restored", disposition,
+				review.TrivialResidue(given), review.TrivialResidue(restored))
+		}
+	}
+
 	durableDecisions := runstate.ReviewDecisions()
 	for _, decision := range review.Decisions() {
 		if !slices.Contains(durableDecisions, string(decision)) {

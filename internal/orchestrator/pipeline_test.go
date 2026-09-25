@@ -38,8 +38,12 @@ const (
 	// for.
 	approveEvidenceVerdict = `{"decision":"approve","approves":"evidence","summary":"this is a sound diagnosis rather than the conversion the item asked for; the design it needs has not landed"}`
 	repairVerdict          = `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`
-	// A repair whose whole residue is one minor finding: the work goes back to
-	// the developer, and the item is charged no round for it.
+	// A repair whose whole residue is one finding the reviewer disposed of as out
+	// of scope: the work goes back to the developer, and the item is charged no
+	// round for it.
+	outOfScopeVerdict = `{"decision":"repair","summary":"the change is right; one note beside it","findings":[{"severity":"minor","disposition":"out_of_scope","message":"rename this variable","location":{"file":"feature.txt","line":1}}]}`
+	// The same residue without the disposition. Minor is a severity, and a
+	// severity does not decide the budget, so this is charged like any repair.
 	minorVerdict = `{"decision":"repair","summary":"the change is right; one small note","findings":[{"severity":"minor","message":"rename this variable","location":{"file":"feature.txt","line":1}}]}`
 	// Every configured agent declares a selector, and the run records both it
 	// and the model the provider reported serving.
@@ -6265,15 +6269,60 @@ func TestPipelineChargesNoRoundForAReplayedChangeSentBack(t *testing.T) {
 	}
 }
 
-// A repair verdict whose whole residue is one minor finding costs the item
+// A repair verdict whose whole residue is one out-of-scope finding costs the item
 // nothing either, by the operator's direction of 2026-09-05. The reviewer said
-// the work is right and named one small thing beside it, which is the end of the
-// argument the cap bounds rather than another turn of it — and four items in a
-// week reached their caps on rounds of exactly that shape.
+// the work is right and named one thing beside it that is not this change's to
+// do, which is the end of the argument the cap bounds rather than another turn of
+// it — and four items in a week reached their caps on rounds of that shape.
 //
 // The work still goes back to the developer and the run still spends an attempt
 // on it: what changes is the item's bill, not what happens to the change.
 func TestPipelineChargesNoRoundForARepairWithOneTrivialFinding(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, outOfScopeVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("Run() outcome = %#v, want the repaired change integrated", outcome)
+	}
+	// The note was acted on: the verdict sent the work back exactly as any repair
+	// does, and the run spent one of its own attempts doing it.
+	if outcome.RepairAttempts != 1 {
+		t.Fatalf("repair attempts = %d, want the one the out-of-scope finding asked for", outcome.RepairAttempts)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want none: one out-of-scope finding is a trivial residue, and the approval after it is not a round either", counters.ReviewRounds)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The run's own count is what says the zero above is an exclusion rather than
+	// two reviews that never happened.
+	if state.ReviewRounds != 2 {
+		t.Fatalf("run review rounds = %d, want the two verdicts this run reached", state.ReviewRounds)
+	}
+}
+
+// The other half of yoyodyne-ifd.359: a repair whose whole residue is one minor
+// finding with no disposition is charged a round like any repair. Minor is how
+// serious the reviewer judged the problem, not whether the change has to fix it,
+// and a budget read off the severity made a real defect labelled minor a free
+// round.
+func TestPipelineChargesARoundForARepairWithOneMinorFinding(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
@@ -6290,26 +6339,12 @@ func TestPipelineChargesNoRoundForARepairWithOneTrivialFinding(t *testing.T) {
 	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
 		t.Fatalf("Run() outcome = %#v, want the repaired change integrated", outcome)
 	}
-	// The note was acted on: the verdict sent the work back exactly as any repair
-	// does, and the run spent one of its own attempts doing it.
-	if outcome.RepairAttempts != 1 {
-		t.Fatalf("repair attempts = %d, want the one the minor finding asked for", outcome.RepairAttempts)
-	}
 	counters, err := store.Triage().Counters(tracker.item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	if counters.ReviewRounds != 0 {
-		t.Fatalf("review rounds = %d, want none: one minor finding is a trivial residue, and the approval after it is not a round either", counters.ReviewRounds)
-	}
-	state, err := store.Load(outcome.RunID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	// The run's own count is what says the zero above is an exclusion rather than
-	// two reviews that never happened.
-	if state.ReviewRounds != 2 {
-		t.Fatalf("run review rounds = %d, want the two verdicts this run reached", state.ReviewRounds)
+	if counters.ReviewRounds != 1 {
+		t.Fatalf("review rounds = %d, want the one the minor repair spent and none for the approval after it", counters.ReviewRounds)
 	}
 }
 
