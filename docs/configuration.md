@@ -3820,6 +3820,19 @@ on its branch before anything is recorded, and reported as an environmental
 integration stop of cause `replay-killed` that
 `yoyo triage resume` picks up, rather than as a conflict for a person to settle.
 
+Two more stops of an approved change before its promotion are integration stops
+of the same kind, although a person clears them: a target branch the harness
+will not catch up to the remote's (`diverged-target`), and a remote that refused
+the harness's SSH key or forge login on a push or a fetch
+(`remote-auth-refused` — "Permission denied (publickey)" is the usual one). What
+the person settles is the branches or the credential, never the change, so
+`yoyo triage resume <run-id>` carries the approved change on afterwards at no
+cost to the item. Asked before then it refuses, writes nothing, and says what
+clears the cause: the diverged-target recovery in docs/operations.md, or
+loading the key (`ssh-add`) or renewing the login (`gh auth login`). A refused
+credential is never retried in the meantime, because asking again earns the
+same answer.
+
 A published run's pull request follows the replay: the run branch is replaced on
 the remote from exactly the commit the harness published there, so the request
 carries the change that would actually be promoted. That is the same

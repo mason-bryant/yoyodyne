@@ -145,6 +145,24 @@ const (
 	// load against the local Git budget; yoyodyne-ifd.406). Only the integration
 	// stop records it, because a replay happens only there.
 	CauseReplayKilled EnvironmentalCause = "replay-killed"
+	// CauseDivergedTarget is an approved change whose target branch the harness
+	// would not bring onto the remote's before promoting: the two histories have
+	// gone different ways, or something in the primary checkout held the
+	// fast-forward. Which history is right is a person's to say, but it is a
+	// question about the branches and not about the change, and once it is
+	// answered the approval still stands. Only the integration stop records it.
+	//
+	// Three approved changes — yoyodyne-ifd.428.16, 429.3, and 384 — each cost a
+	// re-run for this or for CauseRemoteAuthRefused before either was in the
+	// class, which is the shape that cost yoyodyne-ifd.309 four overrides.
+	CauseDivergedTarget EnvironmentalCause = "diverged-target"
+	// CauseRemoteAuthRefused is an approved change a remote stopped by refusing
+	// the harness's credential: an SSH key the server would not take ("Permission
+	// denied (publickey)"), or a forge login over HTTPS that was refused or
+	// missing. It is never waited out, because asking again earns the same answer
+	// until somebody loads the key or renews the login. Only the integration stop
+	// records it.
+	CauseRemoteAuthRefused EnvironmentalCause = "remote-auth-refused"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -152,10 +170,28 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow, CauseReplayKilled:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow, CauseReplayKilled, CauseDivergedTarget, CauseRemoteAuthRefused:
 		return true
 	default:
 		return false
+	}
+}
+
+// ClearedBy says what has to happen before a stop of this cause can be resumed,
+// for the causes a person clears rather than ones that pass by themselves. It
+// is empty for the rest. The resumption refuses in these words while the cause
+// still stands, so what a reader is told to do is the same whether they read
+// the refusal or the stop.
+func (c EnvironmentalCause) ClearedBy() string {
+	switch c {
+	case CauseDirtyPrimary:
+		return "commit, stash, or remove what is uncommitted in the primary checkout"
+	case CauseDivergedTarget:
+		return "settle the local target branch and the remote's as \"Unwedging a target branch that diverged from the forge\" in docs/operations.md says, or clear whatever in the primary checkout held the catch-up, so the local branch can be fast-forwarded onto the remote's"
+	case CauseRemoteAuthRefused:
+		return "make the credential the harness pushes with acceptable to the remote again: load the SSH key into the agent the harness runs under (`ssh-add`, then `ssh -T git@github.com` to check), or renew the forge login (`gh auth login`)"
+	default:
+		return ""
 	}
 }
 
@@ -190,6 +226,10 @@ func (c EnvironmentalCause) Title() string {
 		return "the provider's usage window refused it and resets past the maximum pause the harness will wait"
 	case CauseReplayKilled:
 		return "the replay onto the moved target was ended by the harness before it finished"
+	case CauseDivergedTarget:
+		return "the target branch could not be fast-forwarded onto the remote's before promoting, so the harness would not catch it up"
+	case CauseRemoteAuthRefused:
+		return "the remote refused the credential the harness presented"
 	default:
 		return string(c)
 	}

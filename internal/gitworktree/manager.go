@@ -3675,8 +3675,16 @@ func scaledTimeout(base time.Duration, load float64, cores int) time.Duration {
 // Reaching a remote is what needs one; a local ref update, a diff, and a
 // checkout do not, and handing every Git command a token so that the push has
 // one would put it in front of every hook the repository runs.
+//
+// A remote that refused that credential is an error here rather than a result
+// for each caller to word, so every remote command refused for a key ends on
+// ErrRemoteAuthRefused — see authRefusal.
 func (m *Manager) runRemote(ctx context.Context, args ...string) (execution.ProcessResult, error) {
-	return m.runBounded(ctx, execution.ForgeEnvironment(nil), m.remoteTimeout(), args...)
+	result, err := m.runBounded(ctx, execution.ForgeEnvironment(nil), m.remoteTimeout(), args...)
+	if err != nil {
+		return result, err
+	}
+	return result, authRefusal(args, result)
 }
 
 func (m *Manager) remoteTimeout() time.Duration {

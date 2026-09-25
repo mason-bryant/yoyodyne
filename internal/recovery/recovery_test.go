@@ -133,6 +133,40 @@ func TestRecoverableRecognizesTheThreeClassesAndNothingElse(t *testing.T) {
 	}
 }
 
+// A refused credential is never waited out, even where SSH's closing words
+// alone would read as a dropped connection, and it is its own class: the three
+// approved changes that stopped on "Permission denied (publickey)" were waiting
+// on a key, not on a network.
+func TestAnAuthenticationRefusalIsNeverRecoverable(t *testing.T) {
+	t.Parallel()
+
+	for _, refused := range []string{
+		"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+		"git@github.com: Permission denied (publickey).\nConnection closed by 140.82.112.3 port 22\nfatal: Could not read from remote repository.",
+		"Host key verification failed.\nfatal: Could not read from remote repository.",
+		"remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/x/y.git/'",
+		"fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		"remote: Permission to x/y.git denied to somebody.\nfatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 403",
+	} {
+		if !AuthenticationRefusedDetail(refused) {
+			t.Errorf("AuthenticationRefusedDetail(%q) = false, want the refusal recognized", refused)
+		}
+		if RecoverableDetail(refused) || Recoverable(errors.New(refused)) {
+			t.Errorf("Recoverable(%q) = true, want a refused credential never waited out", refused)
+		}
+	}
+	for _, other := range []string{
+		"Connection reset by peer",
+		"error: failed to push some refs to 'origin' (non-fast-forward)",
+		"remote: error: GH006: Protected branch update failed for refs/heads/main.",
+		"HTTP 403: Resource not accessible by integration",
+	} {
+		if AuthenticationRefusedDetail(other) {
+			t.Errorf("AuthenticationRefusedDetail(%q) = true, want only a refused credential read as one", other)
+		}
+	}
+}
+
 func TestRecoverableReadsWrappedErrorsAndTransportErrnos(t *testing.T) {
 	t.Parallel()
 

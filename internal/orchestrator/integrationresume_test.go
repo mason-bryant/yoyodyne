@@ -33,11 +33,28 @@ type resumeOwnership struct {
 	// restoreErr what stopped it where nothing could be.
 	restored   []gitworktree.Worktree
 	restoreErr error
+	// held and divergenceErr are what the target branch's catch-up would still
+	// hold on, and accessErr what the remotes still say of the credential.
+	held          string
+	divergenceErr error
+	accessErr     error
+	targetAsked   int
+	accessAsked   int
 }
 
 func (f *resumeOwnership) ValidateReady(context.Context) error {
 	f.asked++
 	return f.readyErr
+}
+
+func (f *resumeOwnership) TargetDivergence(_ context.Context, targetBranch string) (gitworktree.Catchup, error) {
+	f.targetAsked++
+	return gitworktree.Catchup{TargetBranch: targetBranch, Held: f.held}, f.divergenceErr
+}
+
+func (f *resumeOwnership) VerifyRemoteAccess(context.Context, string) error {
+	f.accessAsked++
+	return f.accessErr
 }
 
 func (f *resumeOwnership) RestoreWorktree(_ context.Context, worktree gitworktree.Worktree) (gitworktree.Worktree, error) {
@@ -577,6 +594,116 @@ func TestAKilledReplayIsAnIntegrationStopAndAConflictIsNot(t *testing.T) {
 	conflicted := fmt.Errorf("%w: replay yoyodyne/task onto main at abc123 failed with exit code 1: CONFLICT (content)", gitworktree.ErrRebaseConflict)
 	if cause, environmental := integrationStopCauseOf(conflicted); environmental {
 		t.Fatalf("integrationStopCauseOf(conflict) = %q; a conflict must never be an environmental stop", cause)
+	}
+}
+
+// The two stops three approved changes each spent a re-run on — a target the
+// harness would not catch up, and a remote that refused the SSH key — are
+// integration stops, each named by its own sentinel. The SSH refusal is named
+// as what it was even though SSH closes the connection after it, which read on
+// its own is the transport class.
+func TestADivergedTargetAndARefusedKeyAreIntegrationStops(t *testing.T) {
+	t.Parallel()
+
+	diverged := fmt.Errorf("%w: main cannot be brought onto origin before promoting: main on origin is at abc, which does not contain the local main at def", ErrDivergedTarget)
+	if cause, environmental := integrationStopCauseOf(diverged); !environmental || cause != runstate.CauseDivergedTarget {
+		t.Fatalf("integrationStopCauseOf(diverged target) = %q, %v; want %q", cause, environmental, runstate.CauseDivergedTarget)
+	}
+	refused := fmt.Errorf("republish the replayed developer branch: %w",
+		fmt.Errorf("%w: git push exited 128: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\nConnection closed by 140.82.112.3 port 22", gitworktree.ErrRemoteAuthRefused))
+	if cause, environmental := integrationStopCauseOf(refused); !environmental || cause != runstate.CauseRemoteAuthRefused {
+		t.Fatalf("integrationStopCauseOf(refused key) = %q, %v; want %q", cause, environmental, runstate.CauseRemoteAuthRefused)
+	}
+	for _, cause := range []runstate.EnvironmentalCause{runstate.CauseDivergedTarget, runstate.CauseRemoteAuthRefused} {
+		if !cause.Valid() || cause.ClearedBy() == "" || cause.Title() == string(cause) {
+			t.Fatalf("%q: valid %t, cleared by %q, title %q; want a recorded cause that says what clears it", cause, cause.Valid(), cause.ClearedBy(), cause.Title())
+		}
+	}
+}
+
+// divergedStoppedState is an approved change stopped because its target would
+// not catch up, which is how yoyodyne-ifd.428.16 stopped.
+func divergedStoppedState() runstate.State {
+	state := approvedStoppedState()
+	state.Failure = "target branch diverged from the remote's: main cannot be brought onto origin before promoting"
+	state.Environmental = nil
+	state.IntegrationStop.Cause = runstate.CauseDivergedTarget
+	state.IntegrationStop.Detail = state.Failure
+	return state
+}
+
+// A resumption asked while the branches are still diverged refuses, writes
+// nothing, and says what clears it; asked once they are settled, it resumes the
+// same run charging nothing.
+func TestAResumptionOfADivergedTargetRefusesUntilTheBranchesAreSettled(t *testing.T) {
+	t.Parallel()
+
+	harness := newResumeHarness(t, divergedStoppedState())
+	harness.ownership.held = "main on origin is at abc, which does not contain the local main at def; only a person can say which history is right"
+	_, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	var stands CauseStandsError
+	if !errors.Is(err, ErrCauseStands) || !errors.As(err, &stands) || stands.Cause != runstate.CauseDivergedTarget {
+		t.Fatalf("Resume() error = %v, want the diverged target refused as still standing", err)
+	}
+	for _, want := range []string{"does not contain the local main", "Unwedging a target branch that diverged from the forge", "nothing was written"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not say %q: %v", want, err)
+		}
+	}
+	harness.assertNothingWritten(t)
+	if harness.ownership.accessAsked != 0 {
+		t.Fatalf("a diverged-target stop asked the remotes about the credential %d time(s)", harness.ownership.accessAsked)
+	}
+
+	harness.ownership.held = ""
+	result, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if err != nil || !result.Resumed || len(harness.started) != 1 {
+		t.Fatalf("Resume() = %#v, %v; want the settled stop resumed", result, err)
+	}
+	state := harness.reload(t)
+	if state.ReviewRounds != 1 || state.RepairAttempts != 1 || len(state.IntegrationResumptions) != 1 || state.IntegrationResumptions[0].Cause != runstate.CauseDivergedTarget {
+		t.Fatalf("resumed run = rounds %d attempts %d resumptions %#v; want nothing charged and the diverged target superseded", state.ReviewRounds, state.RepairAttempts, state.IntegrationResumptions)
+	}
+}
+
+// A resumption asked while the remote still refuses the key refuses and says
+// what clears it, and a question the remote did not answer refuses as well
+// rather than making the run live on an answer nobody got.
+func TestAResumptionOfARefusedKeyRefusesUntilTheRemoteTakesIt(t *testing.T) {
+	t.Parallel()
+
+	state := approvedStoppedState()
+	state.Failure = "republish the replayed developer branch: the remote refused the credential the harness presented: git push exited 128: git@github.com: Permission denied (publickey)."
+	state.Environmental = nil
+	state.IntegrationStop.Cause = runstate.CauseRemoteAuthRefused
+	state.IntegrationStop.Detail = state.Failure
+	harness := newResumeHarness(t, state)
+
+	harness.ownership.accessErr = fmt.Errorf("list main on origin: %w: git ls-remote exited 128: git@github.com: Permission denied (publickey).", gitworktree.ErrRemoteAuthRefused)
+	_, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if !errors.Is(err, ErrCauseStands) {
+		t.Fatalf("Resume() error = %v, want the refused key refused as still standing", err)
+	}
+	for _, want := range []string{"Permission denied (publickey)", "ssh-add", "gh auth login"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not say %q: %v", want, err)
+		}
+	}
+	harness.assertNothingWritten(t)
+
+	harness.ownership.accessErr = errors.New("list main on origin: connection reset by peer")
+	if _, err := harness.resumer().Resume(context.Background(), resumeRequest()); !errors.Is(err, ErrCauseStands) || !strings.Contains(err.Error(), "could not be asked") {
+		t.Fatalf("Resume() error = %v, want an unanswered question refused rather than resumed on", err)
+	}
+	harness.assertNothingWritten(t)
+
+	harness.ownership.accessErr = nil
+	result, err := harness.resumer().Resume(context.Background(), resumeRequest())
+	if err != nil || !result.Resumed {
+		t.Fatalf("Resume() = %#v, %v; want the stop resumed once the key is taken", result, err)
+	}
+	if harness.ownership.targetAsked != 0 {
+		t.Fatalf("a refused-key stop asked whether the target catches up %d time(s)", harness.ownership.targetAsked)
 	}
 }
 
