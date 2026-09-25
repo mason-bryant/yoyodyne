@@ -284,6 +284,10 @@ type unresolvedTrackerRefusal struct {
 	// attempted, by the harness, and it did not take.
 	Previous string `json:"previous"`
 	Woken    bool   `json:"woken"`
+	// HandedBack says the harness handed the refusal back to the role as a further
+	// round of the same message, which is the correction attempted before any
+	// wakeup was owed. A record written before that existed carries none.
+	HandedBack bool `json:"handed_back"`
 	// RefusedAgain says the role sent a block back and that block was refused too,
 	// as against a turn that sent none at all. Both leave the actions exactly as
 	// lost and both end the trying, which is why they are one record; they are told
@@ -384,6 +388,9 @@ func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
 		if recorded.Woken {
 			return "the harness woke this conversation to re-issue them and the turn it took asked for no tracker action at all"
 		}
+		if recorded.HandedBack {
+			return "the harness handed the refusal back within the same message and the round it took asked for no tracker action at all"
+		}
 		return "the turn after the refusal asked for no tracker action at all"
 	}
 	previous := strings.TrimSpace(recorded.Previous)
@@ -393,6 +400,10 @@ func unansweredRefusalCause(recorded unresolvedTrackerRefusal) string {
 		return "the harness woke this conversation to correct the refusal before it and got the same refusal back"
 	case recorded.Woken:
 		return "the harness woke this conversation to correct the refusal before it, and the block it sent back was refused too"
+	case recorded.HandedBack && repeated:
+		return "the harness handed the refusal back within the same message and got the same refusal back"
+	case recorded.HandedBack:
+		return "the harness handed the refusal back within the same message, and the block it sent back was refused too"
 	case repeated:
 		return "the refusal before this one was never answered, and this block earned exactly the same one"
 	default:

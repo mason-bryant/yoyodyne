@@ -15,6 +15,12 @@ package orchestrator
 // refusal is the one the loud-refusal machinery already wrote, the correction is
 // the role's own reply, and the actions happen only if it issues them again.
 //
+// This is the fallback rather than the first answer. A refusal earned with
+// rounds still left in its message is handed straight back as the next of them
+// (chat.Session.Send), so the role corrects it before its reply ends and no
+// wakeup is ever owed. What reaches this pass is a refusal on a message's last
+// round, and one whose hand-back round never came back.
+//
 // # One turn per refusal, and then the operator
 //
 // A refusal is put to the role once. The claim is durable and is taken before the

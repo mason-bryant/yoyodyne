@@ -600,10 +600,18 @@ func (e *TrackerError) Unwrap() error { return e.Err }
 // conversation's own record as a turn the harness owes, and the trigger that
 // wakes roles reads it from there.
 //
+// That wakeup is the fallback now rather than the first answer. Where the message
+// that earned the refusal still has rounds left, handBack says the harness is
+// about to hand the refusal straight back as the next of them, and the session
+// remembers it for the rest of the message; see Send. The words are carried
+// either way, so a round that never comes back — the provider failing it, the
+// process dying first — leaves the refusal exactly where one that reached the
+// last round is: in front of the next turn, and owed its wakeup.
+//
 // It returns what could not be recorded and nothing else. The turn has already
 // failed on the refusal itself, and a report of that failure that also failed is
 // still worth saying — but it is not a second failure of the turn.
-func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
+func (s *Session) recordRefusedTrackerBlock(refused *TrackerError, handBack bool) error {
 	var problems []error
 	if err := s.emit(execution.EventTrackerBlockRefused, map[string]any{
 		"turn": s.state.Turns,
@@ -621,6 +629,7 @@ func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
 	// and waking for it a second time would be the harness asking a role that has
 	// just shown it cannot answer. It goes to the operator instead.
 	unanswered := s.state.RefusedBlock
+	handedBack := s.handedBack
 	recorded := &runstate.TrackerRefusal{
 		Turn:      s.state.Turns,
 		Actions:   refused.Actions,
@@ -628,17 +637,18 @@ func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
 		RefusedAt: s.options.clock().Now().UTC(),
 	}
 	if unanswered != nil {
-		recorded.Escalated = describeUnansweredRefusal(*unanswered)
+		recorded.Escalated = describeUnansweredRefusal(*unanswered, handedBack)
 		if err := s.emit(execution.EventTrackerRefusalUnresolved, map[string]any{
 			"turn": s.state.Turns,
 			"role": string(s.state.Role),
 			// The refusal this turn earned, and the one before it that nothing
 			// answered. Both are carried because what the operator has to see is that
 			// the correction was attempted and did not take.
-			"actions":  refused.Actions,
-			"problem":  refused.Error(),
-			"previous": unanswered.Problem,
-			"woken":    !unanswered.WokenAt.IsZero(),
+			"actions":     refused.Actions,
+			"problem":     refused.Error(),
+			"previous":    unanswered.Problem,
+			"woken":       !unanswered.WokenAt.IsZero(),
+			"handed_back": handedBack,
 			// The role did send a block back; it is the block that was refused. The
 			// other way a refusal goes unanswered is a turn that sent none at all, and
 			// a reader told the two apart is a reader who knows whether the role is
@@ -648,6 +658,9 @@ func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
 			problems = append(problems, fmt.Errorf("record the tracker refusal nothing has answered: %w", err))
 		}
 	}
+	// Only a refusal nothing is outstanding before is handed back: one that is
+	// escalated has nobody left to hand it to but the operator.
+	s.handedBack = handBack && unanswered == nil
 	s.state.RefusedBlock = recorded
 	if err := s.carryResults(renderRefusedTrackerBlock(refused)); err != nil {
 		problems = append(problems, err)
@@ -660,10 +673,14 @@ func (s *Session) recordRefusedTrackerBlock(refused *TrackerError) error {
 // started and one refused again after somebody else's turn are the same ending —
 // nothing answered the first refusal — and they are said apart because only the
 // first says the harness already tried.
-func describeUnansweredRefusal(unanswered runstate.TrackerRefusal) string {
+func describeUnansweredRefusal(unanswered runstate.TrackerRefusal, handedBack bool) string {
 	if !unanswered.WokenAt.IsZero() {
 		return "the harness woke this conversation to correct the refusal of turn " +
 			strconv.Itoa(unanswered.Turn) + " and the block it sent back was refused too"
+	}
+	if handedBack {
+		return "the harness handed the refusal of turn " + strconv.Itoa(unanswered.Turn) +
+			" back within the same message and the block sent back was refused too"
 	}
 	return "the refusal of turn " + strconv.Itoa(unanswered.Turn) + " was still unanswered when this block was refused"
 }
@@ -684,7 +701,9 @@ func describeUnansweredRefusal(unanswered runstate.TrackerRefusal) string {
 // would say so: the wakeup is spent, no second refusal is coming, and what the
 // pass wrote down goes no further than that session's own output. That is the
 // same loss as a block refused a second time, so it reaches the operator by the
-// same event.
+// same event. A round the harness handed the refusal back to within the same
+// message is the same case: the harness put the refusal in front of it, the
+// hand-back took the place of the wakeup, and nothing else is coming.
 //
 // A turn somebody else drove is left alone, and the difference is who was there.
 // The refusal opened that turn in the harness's own words with a person reading
@@ -696,15 +715,20 @@ func (s *Session) settleRefusedTrackerBlock(reissued bool) error {
 		return nil
 	}
 	var problems []error
-	if !reissued && !unanswered.WokenAt.IsZero() {
+	woken := !unanswered.WokenAt.IsZero()
+	handedBack := s.handedBack
+	s.handedBack = false
+	if !reissued && (woken || handedBack) {
 		if err := s.emit(execution.EventTrackerRefusalUnresolved, map[string]any{
 			"turn": s.state.Turns,
 			"role": string(s.state.Role),
 			// The size and the words of what is still lost, which is the refusal this
-			// turn was woken to answer rather than anything this turn earned.
+			// turn was woken or handed back to answer rather than anything this turn
+			// earned.
 			"actions":       unanswered.Actions,
 			"problem":       unanswered.Problem,
-			"woken":         true,
+			"woken":         woken,
+			"handed_back":   handedBack,
 			"refused_again": false,
 		}); err != nil {
 			problems = append(problems, fmt.Errorf("record the woken turn that re-issued nothing: %w", err))
@@ -732,6 +756,27 @@ func renderRefusedTrackerBlock(refused *TrackerError) string {
 	rendered.WriteString("Do not describe any of it as done.\n\nThe refusal, in the harness's own words:\n\n")
 	rendered.WriteString(refused.Error())
 	rendered.WriteString("\n\nIssue the actions you still want again, in a block that answers what the refusal says is wrong with the one before it.\n\n")
+	return rendered.String()
+}
+
+// renderHandedBackTrackerBlock is the round a refused block is handed back in,
+// within the message that earned it. It is the refusal exactly as the next turn
+// would open with it, plus what only this round can say: that it is still the
+// same message, how many rounds of tracker actions it has left, and that a
+// second refusal goes to the operator rather than back to the role.
+//
+// It says nothing else the reply asked for happened either, because it did not:
+// a reply whose tracker block is refused is taken no further apart than its
+// reports, so any proposal, question, read, memory, or lane report it carried is
+// lost with the block and is the role's to ask for again beside the actions.
+func renderHandedBackTrackerBlock(refused *TrackerError, roundsLeft int) string {
+	var rendered strings.Builder
+	rendered.WriteString(renderRefusedTrackerBlock(refused))
+	rendered.WriteString("# Continue\n\n")
+	rendered.WriteString("The harness is handing this back to you as a further round of the same message, so you can put it right before you finish answering. ")
+	fmt.Fprintf(&rendered, "This message has %d round(s) of tracker actions left. ", roundsLeft)
+	rendered.WriteString("Apart from any report it filed, nothing else your last reply asked the harness for was taken up either — proposals, questions, reads, memories, a lane report — so ask again for anything in it you still want. ")
+	rendered.WriteString("A block refused again is handed to the operator rather than back to you.\n")
 	return rendered.String()
 }
 

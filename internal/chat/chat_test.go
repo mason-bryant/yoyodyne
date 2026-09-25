@@ -1201,6 +1201,8 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 		// A block the harness cannot read changes nothing, and the conversation
 		// carries on rather than ending.
 		{SessionID: "session-1", FinalText: "And this one.\n\n" + trackerFence + "\n{\"actions\":[{\"action\":\"close\",\"id\":\"yoyodyne-ifd.22\"}]}\n```\n"},
+		// It is handed back within the same message, and the role leaves it.
+		{SessionID: "session-1", FinalText: "I will leave the close until you confirm it."},
 	}})
 	options.Tracker = tracker
 	session := openTestSession(t, options)

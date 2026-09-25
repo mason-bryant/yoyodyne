@@ -92,6 +92,10 @@ type chatOutput struct {
 	// conversation is next spoken to, which for a one-shot message is a later
 	// invocation.
 	ResultsCarriedOver bool `json:"results_carried_over,omitempty"`
+	// HandedBack is each tracker block the harness refused whole and handed back
+	// to the role within the same message, in the harness's own words. What the
+	// role re-issued after it is among the actions.
+	HandedBack []string `json:"handed_back,omitempty"`
 	// Reports are what the product manager filed for the operator while it
 	// answered, and ReportProblem is one that could not be read or kept. Both
 	// are reported here for the same reason the actions are: they already
@@ -337,6 +341,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Evaluation:         reply.Evaluation,
 			EvaluationProblem:  reply.EvaluationProblem,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
+			HandedBack:         reply.HandedBack,
 			Reports:            reply.Reports,
 			ReportProblem:      reply.ReportProblem,
 		})
@@ -346,6 +351,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	// asked of the stream it is writing to. A redirected one is undressed, which
 	// is the same answer an interactive conversation over the same stream gives.
 	theme := console.ThemeFor(stdout, os.Getenv)
+	printChatHandedBack(stdout, reply.HandedBack)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
 	printChatResearch(stdout, reply.Research)
 	printChatRepositoryReads(stdout, reply.RepositoryReads)
@@ -1183,6 +1189,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		output.Evaluation = reply.Evaluation
 		output.EvaluationProblem = reply.EvaluationProblem
 		output.ResultsCarriedOver = reply.ResultsCarriedOver
+		output.HandedBack = reply.HandedBack
 		output.Reports = reply.Reports
 		output.ReportProblem = reply.ReportProblem
 	}
@@ -1196,6 +1203,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		fmt.Fprintln(stdout, output.Reply)
 	}
 	theme := console.ThemeFor(stdout, os.Getenv)
+	printChatHandedBack(stdout, output.HandedBack)
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
 	printChatResearch(stdout, output.Research)
 	printChatRepositoryReads(stdout, output.RepositoryReads)
@@ -1296,6 +1304,14 @@ func printOtherRoleHeader(writer io.Writer, role domain.AgentRole) {
 // answered. It is printed for a one-shot message as well as a conversation: the
 // changes are already made, and a caller who is not told about them is reading a
 // queue that moved without them.
+// printChatHandedBack says which tracker blocks were refused and handed back
+// within the reply, ahead of the actions, so the actions read as the re-issue.
+func printChatHandedBack(writer io.Writer, refusals []string) {
+	for _, refusal := range refusals {
+		fmt.Fprintf(writer, "\n%s\nNothing in that block was carried out; the harness handed the refusal back within this message so it could re-issue the actions.\n", refusal)
+	}
+}
+
 func printChatActions(writer io.Writer, role domain.AgentRole, actions []chat.TrackerOutcome, resultsCarriedOver bool) {
 	if len(actions) == 0 {
 		return

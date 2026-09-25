@@ -190,9 +190,9 @@ func TestACrossingIsRefusedWithoutAJustificationOrACap(t *testing.T) {
 			budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
 			tracker := crossingTracker()
 			options := triageOptions(t, tracker, budgets, trackerReply("Decided.", testCase.action))
-			_, err := openTestSession(t, options).Send(context.Background(), "Work the docket.")
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("Send() error = %v, want it to contain %q", err, testCase.want)
+			reply, err := openTestSession(t, options).Send(context.Background(), "Work the docket.")
+			if refusal := refusalOf(reply, err); !strings.Contains(refusal, testCase.want) {
+				t.Fatalf("Send() refusal = %q, want it to contain %q", refusal, testCase.want)
 			}
 			if len(tracker.updates) != 0 {
 				t.Fatalf("a refused crossing wrote on the item: %#v", tracker.updates)

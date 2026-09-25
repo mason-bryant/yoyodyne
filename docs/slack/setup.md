@@ -520,11 +520,13 @@ operator holding and lifting all harness activity, and a block of tracker action
 the harness refused whole, said as a `warning` with the role that asked, how many
 actions it asked for, and the refusal itself, because none of them happened and
 the role that asked for them believed they had. That one is a `warning` rather
-than a `critical` because the harness is about to try to repair it: it wakes that
-role's own conversation once, and the role re-issues the actions itself. The
-second line is what you get when that did not work — a second block refused with
-the first still unanswered, or the woken turn answering without asking for any
-tracker action at all — and the message says which of those it was. It is a
+than a `critical` because the harness is about to try to repair it: it hands the
+refusal back within the same message, or wakes that role's own conversation once
+where the message had no round left, and the role re-issues the actions itself.
+The second line is what you get when that did not work — a second block refused
+with the first still unanswered, or the round it was handed back in or the woken
+turn answering without asking for any tracker action at all — and the message
+says which of those it was. It is a
 `critical`, because the actions are still lost, the harness has stopped trying,
 and nothing further is scheduled.
 A line of one of the harness's own logs that the sink cannot read goes here as
