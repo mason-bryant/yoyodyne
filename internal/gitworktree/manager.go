@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -201,6 +202,10 @@ type Manager struct {
 	// the budget to the default, which localTimeout then scales by the load.
 	timeout time.Duration
 	note    func(format string, args ...any)
+	// commonDirectory is the repository's common Git directory once it has been
+	// asked, and empty before; see commonGitDirectory.
+	commonDirectoryMu sync.Mutex
+	commonDirectory   string
 }
 
 type Options struct {
@@ -3302,7 +3307,18 @@ type worktreeEntry struct {
 // answered from the registrations with that entry left out and a note saying
 // so. A refusal nothing in the bookkeeping accounts for is reported with what
 // Git said, exactly as one failing once used to be.
+//
+// Under an exclusive registry lease the listing Git gives is kept on the lease
+// and answered from there until the holder changes the registrations or lets
+// the lease go — see registryState. One answered from the bookkeeping over a
+// refusal is not kept: it carries a note each time it is given, and the entry
+// it stepped over may be cleared by the next thing the holder does.
 func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
+	lease := heldRegistry(ctx)
+	entries, generation, ok := lease.cachedListing()
+	if ok {
+		return entries, nil
+	}
 	result, err := m.readWorktreeListing(ctx)
 	if err != nil {
 		var refused listingRefused
@@ -3311,7 +3327,9 @@ func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 		}
 		return m.readRegistrations(ctx, refused)
 	}
-	return parseWorktreeListing(result.Stdout), nil
+	entries = parseWorktreeListing(result.Stdout)
+	lease.keepListing(generation, entries)
+	return entries, nil
 }
 
 // parseWorktreeListing takes the path and the branch of each checkout Git
@@ -3748,6 +3766,14 @@ func (m *Manager) runBounded(ctx context.Context, environment []string, timeout 
 		}
 		defer func() { _ = lease.release() }()
 	}
+	// A command that can change the registrations drops the listing kept on the
+	// lease it runs under, both before it starts and once it has ended, so no
+	// listing is answered from across it — see registryState. Outside a lease
+	// nothing is kept and this does nothing.
+	if held := heldRegistry(ctx); held != nil && mayChangeRegistrations(args) {
+		held.forgetListing()
+		defer held.forgetListing()
+	}
 	// A Git command runs hooks the repository supplies, so what it is launched
 	// with is what those hooks are launched with. Nothing here inherits the
 	// harness's own environment: a caller that named none gets the allowlist an
@@ -3810,6 +3836,31 @@ var registrationWalkers = map[string]struct{}{
 // subcommand is the first argument that is not a global option, because the
 // manager passes `-C <path>` and `-c <setting>` ahead of it.
 func walksRegistrations(args []string) bool {
+	subcommand, _ := gitSubcommand(args)
+	_, walks := registrationWalkers[subcommand]
+	return walks
+}
+
+// mayChangeRegistrations says whether this Git command can change what a
+// worktree listing describes, and so drops a listing kept on the lease it runs
+// under. It is every command that walks the registrations except the listing
+// itself: an add, a removal, and a prune change the entries, and a checkout, a
+// switch, a rebase, and a branch rename change the branch an entry names. It is
+// deliberately that whole family rather than the three writes the lease was
+// taken for, because a listing kept past a change the list forgot to name is
+// exactly the stale answer the lease must never give.
+func mayChangeRegistrations(args []string) bool {
+	subcommand, rest := gitSubcommand(args)
+	if _, walks := registrationWalkers[subcommand]; !walks {
+		return false
+	}
+	return subcommand != "worktree" || len(rest) == 0 || rest[0] != "list"
+}
+
+// gitSubcommand is the first argument that is not a global option, and the
+// arguments after it. The manager passes `-C <path>` and `-c <setting>` ahead of
+// it.
+func gitSubcommand(args []string) (string, []string) {
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "-C", "-c", "--git-dir", "--work-tree", "--namespace":
@@ -3818,11 +3869,10 @@ func walksRegistrations(args []string) bool {
 			if strings.HasPrefix(args[index], "-") {
 				continue
 			}
-			_, walks := registrationWalkers[args[index]]
-			return walks
+			return args[index], args[index+1:]
 		}
 	}
-	return false
+	return "", nil
 }
 
 func validateCreateRequest(request CreateRequest) error {

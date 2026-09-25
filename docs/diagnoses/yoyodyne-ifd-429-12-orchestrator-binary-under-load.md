@@ -124,8 +124,8 @@ directory of one repository root is asked 5,800 times
 (`internal/gitworktree/registry.go`, `commonGitDirectory`, once per registry
 lease). The worktree list is read 6,292 times. Answering those once per manager
 or per lease would cut the tests' Git work and a real run's by the same amount.
-Whether it is safe is a question about the lease, and nothing here has checked
-it.
+Whether it is safe is a question about the lease. yoyodyne-ifd.429.15 answered
+it and measured the result: see the section after next.
 
 ## What this does not show
 
@@ -139,3 +139,59 @@ internals is a type-checked walk of identifiers. It treats a test type as
 internal if it satisfies an interface with unexported methods, and it may still
 miss an internal reached some way it does not look for. A compile is what
 settles any one move.
+
+## What keeping the two answers bought (yoyodyne-ifd.429.15)
+
+yoyodyne-ifd.429.15 made `internal/gitworktree` stop asking Git again for the
+two answers above when they could not have changed.
+
+- **The common directory is asked once per manager.** It was asked once per
+  lease. That meant once per Git command that walks the registrations, because
+  each of those takes the shared lease, and finding the lease's file meant asking
+  Git where the common directory is. The answer depends only on the repository
+  root. A manager never changes the root, and no creation, removal, or prune
+  touches the root's `.git`. The one case the kept answer does not survive is a
+  repository replaced under the manager, so a kept directory that is no longer
+  there is asked for again (`commonGitDirectory`).
+- **The worktree list is kept for the length of one exclusive lease.** While the
+  harness holds the exclusive lease, no other harness writes the registrations.
+  The only changes the kept list could miss are the holder's own. The list is
+  dropped:
+  - before and after every command the holder runs that walks the registrations,
+    except the listing itself (an add, a removal, a prune, a checkout, a switch,
+    a rebase, a branch);
+  - when the holder clears an unfinished registration itself;
+  - when the lease is released.
+
+  A listing Git gave while a change was running beside it is used once and never
+  kept. Outside an exclusive lease, nothing is kept (`registryState`).
+
+Counted the same way as the table above, with a `PATH` shim, one pass of
+`go test -count=1 ./internal/orchestrator` each. The two runs used the commit
+before the change and the change itself, side by side on 2026-09-25 from about
+08:05, with the one-minute load between 65 and 105.
+
+| run | all `git` | `rev-parse --git-common-dir` | `worktree list --porcelain` | wall |
+| --- | --- | --- | --- | --- |
+| before | 53,992 | 5,815 | 6,310 | 702.9s |
+| after | 48,684 | 545 | 6,310 | 663.2s |
+
+The change removed 5,308 Git processes, 9.8 percent of the package's total.
+Nearly all of that saving is the common directory. The 545 that remain are about
+one per manager, because the tests build a manager per repository.
+
+The worktree list did not move. An exclusive lease is held for one creation,
+removal, restore, or prune, and each of those lists at most once between its
+own changes. Nothing inside a lease lists twice, so keeping the list there
+saves nothing in this suite. It is still the lease-safe place to keep one, and
+it is what keeps a later caller that lists twice under a lease from paying for
+it. The 6,310 listings come from reads outside any exclusive lease: `Inspect`,
+`Observe`, `Survives`, `VerifyOwnedHead`, and the target checkout lookup, each
+holding the shared lease for its one command. Keeping a list across those needs
+a different argument, because any other harness may be writing between them. It
+is not part of this change.
+
+The wall times are one pass each at a load that moved throughout. They are not
+evidence of a time saving by themselves. The saving the counts support is about
+a tenth of the package's Git processes, at the kernel cost per process the first
+table describes.
