@@ -310,9 +310,15 @@ func FromReport(reported report.Report) (Notification, error) {
 	if err != nil {
 		return Notification{}, fmt.Errorf("address report %s: %w", reported.ID, err)
 	}
+	speaker := Persona(reported.Role, reported.Agent)
+	// A report the harness filed itself is said in the harness's voice, which is
+	// the one speaker that is not a persona; see report.HarnessReporter.
+	if reported.Role == report.HarnessReporter {
+		speaker = Speaker{}
+	}
 	return Notification{
 		Topic:   topic,
-		Speaker: Persona(reported.Role, reported.Agent),
+		Speaker: speaker,
 		Event: Event{
 			Kind:     KindReportFiled,
 			At:       reported.RecordedAt,

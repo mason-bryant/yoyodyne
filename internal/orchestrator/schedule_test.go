@@ -28,6 +28,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -2477,6 +2478,10 @@ type scheduleHarness struct {
 	routeErr   error
 	docketed   []string
 	unroutable bool
+	// triage is a real docket to route to in place of this harness's stand-in,
+	// for the tests about what the durable docket and the report pile end up
+	// holding across pulls.
+	triage ScheduleTriage
 	// attempts is every dispatch that never became a run this harness was asked to
 	// record, and attemptErr is a docket that refuses the write. They are separate
 	// from the unready routing above because they describe the opposite thing: one
@@ -2659,6 +2664,9 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	var docket ScheduleTriage
 	if !h.unroutable {
 		docket = h
+	}
+	if h.triage != nil {
+		docket = h.triage
 	}
 	claims := h.claims
 	if h.audit != nil {
@@ -4110,6 +4118,36 @@ func (h *scheduleHarness) RecordUnreadyItem(item beads.WorkItem, unmet []readine
 	return true, nil
 }
 
+// SettleUnreadyItems stands in for taking an unready entry off the docket: a key
+// whose item the pull no longer finds unready for the same kinds is dropped.
+func (h *scheduleHarness) SettleUnreadyItems(reread func(workItemID string) UnreadyReading) (int, error) {
+	h.mu.Lock()
+	docketed := append([]string(nil), h.docketed...)
+	h.mu.Unlock()
+	var kept []string
+	settled := 0
+	for _, key := range docketed {
+		id := strings.Split(key, ":")[1]
+		reading := reread(id)
+		if reading.Unreadable || (reading.Present && triage.UnreadyKey(id, readiness.Kinds(reading.Unmet)) == key) {
+			kept = append(kept, key)
+			continue
+		}
+		settled++
+	}
+	h.mu.Lock()
+	h.docketed = kept
+	h.mu.Unlock()
+	return settled, nil
+}
+
+// harnessDocketClock is the harness's own clock, for a real docketer wired into
+// its pulls: the fake sleep moves it, so an entry recorded at one pull and the
+// closure made at the next are in the order they happened.
+type harnessDocketClock struct{ h *scheduleHarness }
+
+func (c harnessDocketClock) Now() time.Time { return c.h.clock() }
+
 // RecordUnstartedAttempt stands in for docketing a dispatch that failed before
 // any run record existed, and keeps what it was handed so a test can say what the
 // durable record would hold.
@@ -4297,6 +4335,161 @@ func TestAnUnreadyItemReachesTriageOncePerFinding(t *testing.T) {
 	if len(schedule.Deferred) != 1 {
 		t.Fatalf("deferred = %#v, want the item named once rather than once per poll", schedule.Deferred)
 	}
+}
+
+// yoyodyne-ifd.298, replayed. Its description said it did not start before a
+// design landed, weeks after the design had; the pull passed it over at priority
+// 1 and the only surface that said so was the development manager's docket. The
+// product manager removed the sentence, and the docket went on quoting it until
+// the item had long since closed.
+//
+// Here the item is amended between two pulls of one watching session. The next
+// pull takes it; the docket entry is taken off in the same pull, by the harness,
+// saying why; and the product manager was told once, in a report naming the item
+// and the sentence, rather than by whoever read the docket and relayed it.
+func TestAnItemAmendedUnderASentenceRefusalIsTakenAtTheNextPull(t *testing.T) {
+	t.Parallel()
+
+	const sentence = "This item does not start before 282's design lands and should ride its implementation wave"
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.298", Title: "yoyo agent memory: a role's memories read as text", Status: "open", Priority: 1,
+		Description: "The reading surface for the per-role memory store. " + sentence + ".",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{}
+	docket, reports := unreadyDocketFor(t, harness)
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps > 1 {
+			return false
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.items[0].Description = "The reading surface for the per-role memory store. The store exists and this reads it as it stands."
+		h.now = h.now.Add(time.Minute)
+		return true
+	}
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != item.ID {
+		t.Fatalf("started = %#v, want the amended item taken at the pull after the amendment: %s", schedule.Started, schedule.Render())
+	}
+	if harness.sleeps < 1 {
+		t.Fatal("the session never polled twice, so nothing here was read after the amendment")
+	}
+
+	entries, err := docket.List()
+	if err != nil {
+		t.Fatalf("read the docket: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Class != triage.ClassUnreadyItem {
+		t.Fatalf("docket = %+v, want the one unready entry the first pull made", entries)
+	}
+	if !strings.Contains(entries[0].Unready.Prerequisites[0].Missing, "its description says of it") {
+		t.Fatalf("entry = %+v, want the refusal to name the field the sentence was in", entries[0].Unready.Prerequisites[0])
+	}
+	closed := entries[0].Closed
+	if closed == nil || closed.Decision != clearedUnreadyDecision || !strings.Contains(closed.Reason, "asks for nothing the tree does not have") {
+		t.Fatalf("closure = %+v, want the entry taken off by the pull that found the sentence gone", closed)
+	}
+
+	if len(reports.appended) != 1 {
+		t.Fatalf("reports = %+v, want the refusal said to the product manager once", reports.appended)
+	}
+	said := reports.appended[0]
+	if said.Role != report.HarnessReporter || said.WorkItemID != item.ID || said.RunID != entries[0].Key {
+		t.Fatalf("report = %+v, want it filed by the harness, on the item, leading back to the docket entry", said)
+	}
+	if !strings.Contains(said.Message, item.ID) || !strings.Contains(said.Message, sentence) {
+		t.Fatalf("report message = %q, want the item and the sentence named", said.Message)
+	}
+}
+
+// The sentence moved rather than removed: the product manager took it out of the
+// description, and the same words stand in the design guidance, which her update
+// does not rewrite. The next pull still refuses the item — the words are there —
+// but in the words it now carries and naming the field they are in, and the
+// entry quoting the description is taken off rather than left standing under
+// words the item no longer says.
+func TestASentenceThatSurvivesInAnotherFieldIsRefusedNamingThatField(t *testing.T) {
+	t.Parallel()
+
+	item := beads.WorkItem{
+		ID: "yoyodyne-ifd.298", Title: "yoyo agent memory", Status: "open", Priority: 1,
+		Description: "The reading surface. It does not start before 282's design lands.",
+	}
+	harness := newScheduleHarness(item)
+	harness.tree = citingTree{}
+	docket, reports := unreadyDocketFor(t, harness)
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps > 1 {
+			return false
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.items[0].Description = "The reading surface."
+		h.items[0].Design = "Build on the store. It does not start before 282's design lands."
+		h.now = h.now.Add(time.Minute)
+		return true
+	}
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want the item still refused while the sentence stands anywhere it authored", schedule.Started)
+	}
+	if len(schedule.Deferred) != 1 || !strings.Contains(schedule.Deferred[0].Reason, "its design guidance, which the product manager's update does not rewrite,") {
+		t.Fatalf("deferred = %#v, want the last pull's refusal to name the field the sentence survives in", schedule.Deferred)
+	}
+
+	entries, err := docket.List()
+	if err != nil {
+		t.Fatalf("read the docket: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Closed != nil {
+		t.Fatalf("docket = %+v, want one standing entry for the item", entries)
+	}
+	if missing := entries[0].Unready.Prerequisites[0].Missing; !strings.Contains(missing, "its design guidance") {
+		t.Fatalf("standing entry quotes %q, want the words the item carries now", missing)
+	}
+	closures, err := docket.Closures()
+	if err != nil {
+		t.Fatalf("read the docket's closures: %v", err)
+	}
+	if len(closures[entries[0].Key]) != 1 || !strings.Contains(closures[entries[0].Key][0].Reason, "no longer what this entry quotes") {
+		t.Fatalf("closures = %+v, want the entry quoting the description taken off as restated", closures)
+	}
+	if len(reports.appended) != 2 || !strings.Contains(reports.appended[1].Message, "design guidance") {
+		t.Fatalf("reports = %+v, want the product manager told again, of the field the words now stand in", reports.appended)
+	}
+}
+
+// unreadyDocketFor wires a real docket and a report pile into a harness's pulls,
+// so what a test reads back is what the durable records would hold.
+func unreadyDocketFor(t *testing.T, harness *scheduleHarness) (*runstate.DocketStore, *fakeReports) {
+	t.Helper()
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewDocketStore() error = %v", err)
+	}
+	reports := &fakeReports{}
+	harness.triage = &Docketer{
+		Docket:       docket,
+		Runs:         recordedRuns{},
+		Decisions:    &recordedDecisions{},
+		Reruns:       &recordedDecisions{},
+		Caps:         docketedCaps,
+		Triage:       docketedTriage,
+		ProductID:    "yoyodyne",
+		Reports:      reports,
+		RepositoryID: "yoyodyne",
+		Clock:        harnessDocketClock{harness},
+	}
+	return docket, reports
 }
 
 // A tree that cannot be read says nothing about the item. Holding work back for

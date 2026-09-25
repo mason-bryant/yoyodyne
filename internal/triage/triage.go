@@ -799,7 +799,11 @@ func (c Closure) Validate() error {
 	if err := domain.ValidateIdentifier("product id", string(c.ProductID)); err != nil {
 		problems = append(problems, err)
 	}
-	if strings.TrimSpace(c.RunID) == "" {
+	// An entry no run was ever behind is settled without one: an item the tree was
+	// not ready for is taken off by the pull that finds it ready, and there is no
+	// run to name because being refused before one was reserved is what the
+	// entry is.
+	if strings.TrimSpace(c.RunID) == "" && !runlessKey(c.Key) {
 		problems = append(problems, errors.New("run id is required"))
 	}
 	if strings.TrimSpace(c.WorkItemID) == "" {
@@ -1108,6 +1112,13 @@ func UnreadyKey(workItemID string, kinds []string) string {
 	}
 	slices.Sort(sorted)
 	return string(ClassUnreadyItem) + ":" + strings.TrimSpace(workItemID) + ":" + strings.Join(slices.Compact(sorted), "+")
+}
+
+// runlessKey reports a key naming an entry of a class no run record is behind,
+// which is the keys UnreadyKey and AttemptKey derive.
+func runlessKey(key string) bool {
+	class, _, found := strings.Cut(strings.TrimSpace(key), ":")
+	return found && Class(class).Runless()
 }
 
 // AttemptKey names the event an attempt that never became a run is: this item
@@ -1518,6 +1529,7 @@ func (e Entry) renderUnready() string {
 			rendered.WriteString(indented("Who releases it", decides))
 		}
 	}
+	rendered.WriteString("      Every pull reads the item again as the tracker then holds it, and takes this entry off the docket at the first pull that finds the item asking for nothing the tree lacks, or finds it gone from the backlog.\n")
 	return rendered.String()
 }
 

@@ -204,6 +204,18 @@ type Report struct {
 	RecordedAt   time.Time        `json:"recorded_at"`
 }
 
+// HarnessReporter is the role a report is attributed to when no agent wrote it:
+// the harness itself found something a role has to act on, outside any
+// invocation of that role. The pull's refusal of an item whose own sentence
+// holds it back is the case it exists for — the product manager is the one who
+// amends the item, and without a report the refusal reached her only through
+// whoever read the development manager's docket and relayed it.
+//
+// It is a word no configured role can take, so a report carrying it is never
+// mistaken for one a role filed, and every surface that gives a report a voice
+// gives this one the harness's.
+const HarnessReporter domain.AgentRole = "harness"
+
 var (
 	idPattern = regexp.MustCompile(`^report-[a-f0-9]{32}$`)
 	// buildPattern is what a recorded build may look like: a Git object name,
@@ -581,6 +593,9 @@ func (r Report) RenderAgainst(gauge *Gauge) string {
 	reporter := string(r.Role)
 	if r.Agent != "" && r.Agent != string(r.Role) {
 		reporter = r.Agent + " (" + string(r.Role) + ")"
+	}
+	if r.Role == HarnessReporter {
+		reporter = "harness itself"
 	}
 	fmt.Fprintf(&rendered, "  %-*s %s [%s] %s from the %s",
 		MarkerWidth, r.Severity.Marker(), r.ID, r.Severity, r.RecordedAt.UTC().Format(time.RFC3339), reporter)

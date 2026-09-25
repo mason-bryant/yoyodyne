@@ -1165,6 +1165,37 @@ itself, so the item is pulled at the first pull after the code lands, while a
 sentence never clears on its own — the product manager amends the item, or the
 development manager records the dependency the sentence names.
 
+**The reading is remade from the item at every pull, and nothing remembers it.**
+Each pull reads the title, description, design guidance, and acceptance criteria
+as the tracker holds them at that moment — never the notes — so a sentence that
+has been removed stops refusing at the next pull, and the item is taken there
+like any other. The docket entry follows the same reading: every pull reads again
+each item the docket holds as not ready, and takes the entry off, saying why, as
+soon as the item asks for nothing the tree lacks, has left the backlog, or asks
+for something other than what the entry quotes — in which case the same pull
+dockets it again in the words it now carries. Until that existed nothing took an
+entry off: yoyodyne-ifd.298's went on quoting "this item does not start before
+282's design lands" after the product manager had removed the words and after the
+item had been dispatched and closed.
+
+A sentence is quoted with the field it is in — `its description says of it`,
+`its design guidance says of it` — because a copy left in a field nobody looked
+in outlives an amendment to the one they did. The design guidance and the
+acceptance criteria are said to be fields the product manager's update does not
+rewrite, since it takes the title and the description only and her read of an
+item is bounded: a sentence there is one she can be shown the refusal for and
+not be able to remove herself.
+
+**The refusal also reaches the product manager.** When the entry is docketed, the
+same finding is filed as a report — from the harness itself, naming the item and
+what it states — into the pile her conversation is given, so amending the item
+is put in front of the role that can do it rather than relayed to her by whoever
+read the development manager's docket. The docket entry stays, because recording
+the dependency the sentence names is still the development manager's. One entry
+is one report: a pull that finds the entry already standing says nothing more,
+and an entry taken off and then docketed again — the item restated, or the
+sentence put back — is reported again.
+
 Naming the item yourself is unaffected here too. `yoyo run <id>` is you deciding,
 exactly as it is with parking and the executor.
 

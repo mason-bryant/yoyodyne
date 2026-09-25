@@ -1610,9 +1610,13 @@ been sitting there as long again and `rearm` for good; and an escalation closes
 all of them, because an escalated item is waiting on you and none of it is hers
 to decide until you answer. Every decision but `wait` closes its entry for good,
 and what puts one of those back on the docket is the same work stopping again
-rather than anything about the decision. The two entries that name no run — an
-item the tree is not ready for, and an attempt that never became a run — are
-closed by nothing yet, because a decision names a run and neither has one.
+rather than anything about the decision. The two entries that name no run are
+closed by no decision of hers, because a decision names a run and neither has
+one. An item the tree is not ready for is closed by the harness instead: every
+pull reads the item again, and takes the entry off once the item asks for nothing
+the tree lacks, has left the backlog, or has been restated — in which case it is
+docketed again in its new words. An attempt that never became a run is closed by
+nothing yet.
 
 **It also lands as a record the harness reads**: the decision, the stoppage it
 settles, the reasoning verbatim, and where it was recorded, on the item's durable

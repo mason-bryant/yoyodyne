@@ -99,6 +99,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -183,7 +184,16 @@ type Docketer struct {
 	// read. Nil answers from the run's own record, and the entry says nothing
 	// looked rather than passing the record off as a check.
 	Remains readmodel.Remains
-	Clock   execution.Clock
+	// Reports is where an item the tree is not ready for is also said to the
+	// product manager, as a report her conversation is given. Optional: a
+	// docketer with none dockets exactly as before, and the refusal reaches her
+	// only through whoever reads the development manager's docket. RepositoryID
+	// and Harness — the revision this binary was built from — are what that
+	// report is attributed with, as every report is.
+	Reports      ReportCollector
+	RepositoryID string
+	Harness      string
+	Clock        execution.Clock
 }
 
 // DocketBuild is what one build found: the docket as it now stands, and how
@@ -729,7 +739,181 @@ func (d Docketer) RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet
 	if err != nil {
 		return false, err
 	}
-	return d.Docket.RecordOnce(entry)
+	created, err := d.Docket.RecordOnce(entry)
+	if err != nil || !created {
+		return created, err
+	}
+	// Said to the product manager once per entry, which is once per refusal: a
+	// pull that finds the same entry standing records nothing and reports nothing,
+	// and one the pull took off and then found again is a new entry and news.
+	if err := d.reportUnready(entry, unmet); err != nil {
+		return true, fmt.Errorf("docketed %s as unready and could not report it to the product manager: %w", item.ID, err)
+	}
+	return true, nil
+}
+
+// reportUnready files the refusal as a report, which is how it reaches the
+// product manager's conversation: the report pile is delivered to the role that
+// decides what becomes of a report, and she is that role.
+//
+// It exists because the docket alone put the refusal in front of the wrong
+// person. yoyodyne-ifd.298 sat passed over at priority 1 for a sentence in its
+// own description that only the product manager could remove, and the only
+// surface that said so was the development manager's docket; it reached the
+// product manager when the operator's assistant relayed it. The docket entry
+// stays, because recording the dependency the sentence names is the development
+// manager's; this is the other half of who can release it.
+func (d Docketer) reportUnready(entry triage.Entry, unmet []readiness.Unmet) error {
+	if d.Reports == nil {
+		return nil
+	}
+	collected, err := report.Collect([]report.Entry{{
+		Severity: report.SeverityWarning,
+		Message:  unreadyReportMessage(entry.WorkItemID, unmet),
+	}}, report.Attribution{
+		Role: report.HarnessReporter,
+		// The docket entry is the record this leads back to, as an exchange is for
+		// the report an unresolved one files: there is no run, because being
+		// refused before one was reserved is what the finding is.
+		RunID:        entry.Key,
+		WorkItemID:   entry.WorkItemID,
+		Build:        d.Harness,
+		ProductID:    d.ProductID,
+		RepositoryID: d.RepositoryID,
+	}, entry.RecordedAt)
+	if err != nil {
+		return err
+	}
+	for _, reported := range collected {
+		if err := d.Reports.Append(reported); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unreadyReportMessage is the two sentences the product manager is told: which
+// item is passed over and for which words, and what releases it. The words are
+// the readiness package's own description, so the report, the docket entry, and
+// the pass's refusal quote one sentence one way.
+func unreadyReportMessage(workItemID string, unmet []readiness.Unmet) string {
+	return fmt.Sprintf("%s is passed over at every pull, and dispatched to nobody, because of what it states: %s. "+
+		"Amend the item where that no longer holds, or have the development manager record the dependency it names; every pull reads the item again as the tracker holds it, so it is taken at the first pull after the words are gone.",
+		workItemID, singleLine(readiness.Describe(unmet), report.MaxMessageBytes/2))
+}
+
+// UnreadyReading is what one pull found of an item the docket holds as unready.
+type UnreadyReading struct {
+	// Present is the item being in the backlog the pull read. An item that has
+	// left it — closed, most often — is asking nothing of anybody.
+	Present bool
+	// Unmet is what the item states that the tree does not meet, read from the
+	// item as the tracker held it at this pull.
+	Unmet []readiness.Unmet
+	// Unreadable is a reading of the tree that failed. It settles nothing: a tree
+	// that could not be read says nothing about the item, in either direction.
+	Unreadable bool
+}
+
+// SettleUnreadyItems takes off the docket every unready entry the pull's own
+// reading no longer supports, and reports how many it took off.
+//
+// Nothing did this before, and the docket entry outlived the sentence it quoted.
+// yoyodyne-ifd.298's entry went on quoting "this item does not start before
+// 282's design lands" after the product manager had removed the words, after a
+// pull had dispatched the item, and after the item had closed: the pull read the
+// item afresh every time, and the docket, which is what anybody reading about
+// the item was shown, was never told. So each pull asks the question again of
+// every entry standing, and an entry is taken off where the item now asks for
+// nothing the tree lacks, where it has left the backlog, or where what it asks
+// for is no longer what the entry quotes — the last so that an item amended to a
+// different sentence is docketed again in the words it now carries, rather than
+// standing under the words it used to.
+func (d Docketer) SettleUnreadyItems(reread func(workItemID string) UnreadyReading) (int, error) {
+	if d.Docket == nil {
+		return 0, errors.New("a triage docket is required to settle the unready items on it")
+	}
+	entries, err := d.Docket.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to settle its unready items: %w", err)
+	}
+	now := d.now().UTC()
+	settled := 0
+	var problems []error
+	for _, entry := range entries {
+		if entry.Class != triage.ClassUnreadyItem || entry.Unready == nil {
+			continue
+		}
+		if entry.Closed != nil && entry.Closed.Holds(now) {
+			continue
+		}
+		reading := reread(entry.WorkItemID)
+		if reading.Unreadable {
+			continue
+		}
+		reason := ""
+		switch {
+		case !reading.Present:
+			reason = "the item is no longer in the backlog the pull reads, so it is asking nothing of anybody"
+		case len(reading.Unmet) == 0:
+			reason = "the item was read again at a pull, as the tracker then held it, and asks for nothing the tree does not have"
+		case !samePrerequisites(entry.Unready.Prerequisites, reading.Unmet):
+			reason = "the item was read again at a pull and what it asks for is no longer what this entry quotes: " +
+				singleLine(readiness.Describe(reading.Unmet), triage.MaxMessageBytes/2)
+		default:
+			continue
+		}
+		// Closed a moment before the pull's own, because the same pull goes on to
+		// docket the item again where it is restated, and the docket opens a key
+		// again only for an entry recorded after the closure that settled it. It is
+		// never before the entry itself, which the docket would refuse as a decision
+		// about some earlier entry.
+		closedAt := now.Add(-time.Nanosecond)
+		if closedAt.Before(entry.RecordedAt) {
+			closedAt = entry.RecordedAt
+		}
+		took, err := d.Docket.Close(triage.Closure{
+			SchemaVersion: triage.ClosureSchemaVersion,
+			Key:           entry.Key,
+			ProductID:     entry.ProductID,
+			WorkItemID:    entry.WorkItemID,
+			Decision:      clearedUnreadyDecision,
+			Reason:        reason,
+			DecidedBy:     "the harness, reading the item again at a pull",
+			ClosedAt:      closedAt,
+		})
+		if err != nil {
+			problems = append(problems, fmt.Errorf("take %s off the docket as no longer unready: %w", entry.WorkItemID, err))
+			continue
+		}
+		if took {
+			settled++
+		}
+	}
+	return settled, errors.Join(problems...)
+}
+
+// clearedUnreadyDecision is the word a closure made by SettleUnreadyItems
+// carries. It is not one of the development manager's decisions, and is worded
+// so nobody reads it as one.
+const clearedUnreadyDecision = "no-longer-unready"
+
+// samePrerequisites reports an entry quoting exactly what a reading found, in
+// the same order: the same kinds and the same words. The entry's copy is bounded
+// to what a docket entry carries, so the reading is compared up to that bound.
+func samePrerequisites(recorded []triage.Prerequisite, unmet []readiness.Unmet) bool {
+	if len(unmet) > triage.MaxPrerequisites {
+		unmet = unmet[:triage.MaxPrerequisites]
+	}
+	if len(recorded) != len(unmet) {
+		return false
+	}
+	for index, one := range unmet {
+		if recorded[index].Kind != string(one.Kind) || recorded[index].Missing != one.Missing {
+			return false
+		}
+	}
+	return true
 }
 
 // UnstartedAttempt is one dispatch that never became a run: the item that was

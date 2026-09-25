@@ -32,7 +32,9 @@
 //     about dependency links and not about a sentence — so an item that says it
 //     is gated is one the queue reads as ready forever. What clears this is a
 //     person: the product manager amending the item, or the development manager
-//     recording the dependency the sentence names.
+//     recording the dependency the sentence names. The reading is taken from the
+//     item as the tracker holds it at each pull and remembered nowhere, so a
+//     sentence that has been removed stops refusing at the next pull.
 //
 // Nothing here refuses anything, and nothing here is enforcement. It reports
 // what one item's own statement asks of the tree, and the caller decides. That
@@ -130,6 +132,32 @@ type Unmet struct {
 	// Decides is who releases this, because an item held back by nobody in
 	// particular is an item held back forever.
 	Decides string `json:"decides"`
+	// Field is the authored field a sentence was read out of — "title",
+	// "description", "design guidance", or "acceptance criteria" — and is empty
+	// for a pinpoint, which is read from the item's statement as a whole. It is
+	// named because the sentence is what somebody has to remove, and one read out
+	// of a field nobody thought to look in outlives the amendment made to the
+	// field they did: see FieldOutOfReach.
+	Field string `json:"field,omitempty"`
+}
+
+// The authored fields a sentence is read out of, by the name a refusal gives
+// each. They are the four Statement joins, in the same order.
+const (
+	FieldTitle              = "title"
+	FieldDescription        = "description"
+	FieldDesignGuidance     = "design guidance"
+	FieldAcceptanceCriteria = "acceptance criteria"
+)
+
+// FieldOutOfReach reports an authored field the product manager's own update
+// does not rewrite. Her update takes the title and the description and nothing
+// else, and her read of an item is bounded, so a long description can push the
+// design guidance and acceptance criteria out of what she is shown. A sentence
+// in one of those is one she can remove the copy of she was looking at and
+// leave standing, which is why a refusal read out of one says so.
+func FieldOutOfReach(field string) bool {
+	return field == FieldDesignGuidance || field == FieldAcceptanceCriteria
 }
 
 // Describe says what one unmet prerequisite is, in one line: what shape it is,
@@ -206,9 +234,8 @@ func Check(item beads.WorkItem, tree Tree) ([]Unmet, error) {
 	if tree == nil {
 		return nil, errors.New("checking an item's prerequisites requires the tree to check them against")
 	}
-	statement := Statement(item)
-	unmet, problems := stalePinpoints(statement, tree)
-	unmet = append(unmet, statedPreconditions(statement)...)
+	unmet, problems := stalePinpoints(Statement(item), tree)
+	unmet = append(unmet, statedPreconditions(item)...)
 	if len(unmet) > maxUnmet {
 		unmet = unmet[:maxUnmet]
 	}
@@ -225,7 +252,28 @@ func Check(item beads.WorkItem, tree Tree) ([]Unmet, error) {
 // exported so that what counts as the item's own words is a thing this package
 // states rather than a convention three packages happen to share.
 func Statement(item beads.WorkItem) string {
-	return strings.Join([]string{item.Title, item.Description, item.Design, item.AcceptanceCriteria}, "\n")
+	fields := authored(item)
+	texts := make([]string, 0, len(fields))
+	for _, one := range fields {
+		texts = append(texts, one.text)
+	}
+	return strings.Join(texts, "\n")
+}
+
+// authoredField is one of the fields Statement joins, with the name a refusal
+// gives it.
+type authoredField struct {
+	name string
+	text string
+}
+
+func authored(item beads.WorkItem) []authoredField {
+	return []authoredField{
+		{FieldTitle, item.Title},
+		{FieldDescription, item.Description},
+		{FieldDesignGuidance, item.Design},
+		{FieldAcceptanceCriteria, item.AcceptanceCriteria},
+	}
 }
 
 // pathPinpoint is a repository path with a line number on it. The extension list
@@ -331,18 +379,38 @@ var statedPatterns = []stated{
 // one clause are one gate said twice: "blocked until the architect's answer
 // exists" is matched by two of the patterns above, and reporting it twice would
 // make one sentence look like two things to settle.
-func statedPreconditions(statement string) []Unmet {
+//
+// Each field is read on its own, and the refusal names the field the sentence
+// is in. yoyodyne-ifd.298 is why: its product manager removed the sentence from
+// the description, and whoever reads a refusal that says only "it says of
+// itself" has to go looking for which copy is left when one is. A sentence in a
+// field her update cannot rewrite says that as well, because amending the item
+// is then not something she can do from her own conversation.
+func statedPreconditions(item beads.WorkItem) []Unmet {
+	var unmet []Unmet
+	for _, field := range authored(item) {
+		unmet = append(unmet, statedIn(field)...)
+	}
+	return unmet
+}
+
+// statedIn is the sentences one authored field states about the item.
+func statedIn(field authoredField) []Unmet {
 	type found struct {
 		at   int
 		kind Kind
 	}
 	var matched []found
 	for _, pattern := range statedPatterns {
-		for _, at := range pattern.pattern.FindAllStringIndex(statement, -1) {
+		for _, at := range pattern.pattern.FindAllStringIndex(field.text, -1) {
 			matched = append(matched, found{at: at[0], kind: pattern.kind})
 		}
 	}
 	sort.Slice(matched, func(i, j int) bool { return matched[i].at < matched[j].at })
+	where := "its " + field.name
+	if FieldOutOfReach(field.name) {
+		where += ", which the product manager's update does not rewrite,"
+	}
 	var (
 		unmet []Unmet
 		past  int
@@ -351,13 +419,14 @@ func statedPreconditions(statement string) []Unmet {
 		if one.at < past {
 			continue
 		}
-		clause := clauseAt(statement, one.at)
+		clause := clauseAt(field.text, one.at)
 		past = one.at + len(clause)
 		unmet = append(unmet, Unmet{
 			Kind:     one.kind,
-			Missing:  fmt.Sprintf("it says of itself: %q", singleLine(clause, maxClauseBytes)),
-			Evidence: "the sentence is in the item's own statement, and nothing in the tracker records it as a dependency",
+			Missing:  fmt.Sprintf("%s says of it: %q", where, singleLine(clause, maxClauseBytes)),
+			Evidence: fmt.Sprintf("the sentence is in the item's %s as the tracker holds it at this pull, and nothing in the tracker records it as a dependency", field.name),
 			Decides:  sequencer,
+			Field:    field.name,
 		})
 	}
 	return unmet
