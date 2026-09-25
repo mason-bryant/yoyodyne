@@ -595,6 +595,16 @@ func TestAKilledReplayIsAnIntegrationStopAndAConflictIsNot(t *testing.T) {
 	if cause, environmental := integrationStopCauseOf(conflicted); environmental {
 		t.Fatalf("integrationStopCauseOf(conflict) = %q; a conflict must never be an environmental stop", cause)
 	}
+	// Nor whatever failed while the conflict was being recorded, joined to it:
+	// the tracker write timing out, or the checkout refusing a save.
+	for _, recording := range []error{
+		errors.New("record the replay conflict as a blocker: bd update failed with status cancelled and exit code -1: signal: killed"),
+		fmt.Errorf("save the replayed change: %w", gitworktree.ErrPrimaryNotReady),
+	} {
+		if cause, environmental := integrationStopCauseOf(errors.Join(conflicted, recording)); environmental {
+			t.Fatalf("integrationStopCauseOf(conflict joined to %q) = %q; a failure recording a conflict must never reclassify it", recording, cause)
+		}
+	}
 }
 
 // The two stops three approved changes each spent a re-run on — a target the
