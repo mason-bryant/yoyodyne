@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
@@ -829,10 +830,18 @@ func (s *SweepStore) path(task string) string {
 	return filepath.Join(s.root, "claim-"+task+".json")
 }
 
+// boundedSweepText holds prose to what the record accepts, cut on a rune
+// boundary and marked as cut, so a long problem is stored as shorter text rather
+// than as broken text or as a whole account.
 func boundedSweepText(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) > MaxSweepTextBytes {
-		return trimmed[:MaxSweepTextBytes]
+		const marker = " […]"
+		cut := MaxSweepTextBytes - len(marker)
+		for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+			cut--
+		}
+		return strings.TrimSpace(trimmed[:cut]) + marker
 	}
 	return trimmed
 }

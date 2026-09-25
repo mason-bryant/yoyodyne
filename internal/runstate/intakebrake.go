@@ -36,6 +36,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
@@ -414,14 +415,20 @@ func singleLineBrakeText(text string) string {
 
 // BoundBrakeText holds one line of brake prose to what the record accepts,
 // cutting rather than refusing: a trip refused for the length of a provider's
-// error message is a line nobody can read the state of.
+// error message is a line nobody can read the state of. The cut falls on a rune
+// boundary and is marked, because a provider's error is as likely as anything to
+// carry multi-byte text, and half a rune stored is a record that is not text.
 func BoundBrakeText(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) <= MaxBrakeTextBytes {
 		return trimmed
 	}
-	const cut = " […]"
-	return strings.TrimSpace(trimmed[:MaxBrakeTextBytes-len(cut)]) + cut
+	const marker = " […]"
+	cut := MaxBrakeTextBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(trimmed[:cut]) + marker
 }
 
 // ErrNoBrakeHold reports a brake operation on a hold the brake did not place, or

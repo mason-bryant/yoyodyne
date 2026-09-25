@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // EventSchemaVersion is what a event is written at now, and
@@ -211,12 +212,17 @@ const (
 const MaxEventTextBytes = 16 << 10
 
 // TruncateEventText cuts text to MaxEventTextBytes and marks the cut where it
-// made one, so a reader is never shown a truncated record as a complete one.
+// made one, so a reader is never shown a truncated record as a complete one. The
+// cut falls on a rune boundary, so the record it keeps is still text.
 func TruncateEventText(value string) string {
 	if len(value) <= MaxEventTextBytes {
 		return value
 	}
-	return value[:MaxEventTextBytes] + "…[truncated]"
+	cut := MaxEventTextBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + "…[truncated]"
 }
 
 type Event struct {

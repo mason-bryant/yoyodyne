@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -1039,5 +1040,17 @@ func TestASummonsWithNoDevelopmentManagerTaskIsRefused(t *testing.T) {
 	}
 	if len(role.messages) != 0 {
 		t.Fatalf("messages = %v, want nobody woken", role.messages)
+	}
+}
+
+// A firing's problems joined past what the record accepts are cut on a rune
+// boundary and marked, never stored with half a rune at the cut.
+func TestABoundedProblemIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	problem := boundedProblem([]string{"x" + strings.Repeat("é", runstate.MaxSweepTextBytes)})
+	if !utf8.ValidString(problem) || len(problem) > runstate.MaxSweepTextBytes || !strings.HasSuffix(problem, " […]") {
+		t.Fatalf("boundedProblem() is %d bytes, valid UTF-8 %t; want valid text within %d bytes marked as cut",
+			len(problem), utf8.ValidString(problem), runstate.MaxSweepTextBytes)
 	}
 }

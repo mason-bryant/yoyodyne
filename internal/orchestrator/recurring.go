@@ -65,6 +65,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -691,8 +692,12 @@ func boundedProblem(problems []string) string {
 	if len(joined) <= runstate.MaxSweepTextBytes {
 		return joined
 	}
-	const cut = " […]"
-	return strings.TrimSpace(joined[:runstate.MaxSweepTextBytes-len(cut)]) + cut
+	const marker = " […]"
+	cut := runstate.MaxSweepTextBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(joined[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(joined[:cut]) + marker
 }
 
 func appendProblem(existing, addition string) string {
