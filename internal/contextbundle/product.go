@@ -1457,17 +1457,20 @@ settled product fact.
 }
 
 // boundedCommandHelp keeps supplied help inside its bound, cut at a line so what
-// survives is still help rather than a sentence stopped mid-word.
+// survives is still help rather than a sentence stopped mid-word. Help with no
+// line inside the bound is folded and cut on a rune boundary instead, because
+// half a rune is not shorter help but broken text.
 func boundedCommandHelp(help string) string {
+	const omitted = "\n[the rest of the command help is not included here]"
 	trimmed := strings.TrimSpace(help)
 	if len(trimmed) <= maxCommandHelpBytes {
 		return trimmed
 	}
 	cut := strings.LastIndex(trimmed[:maxCommandHelpBytes], "\n")
 	if cut < 0 {
-		cut = maxCommandHelpBytes
+		return oneline.Bound(trimmed, maxCommandHelpBytes) + omitted
 	}
-	return trimmed[:cut] + "\n[the rest of the command help is not included here]"
+	return trimmed[:cut] + omitted
 }
 
 // renderShippedDocumentationNote says what became of the documentation: which

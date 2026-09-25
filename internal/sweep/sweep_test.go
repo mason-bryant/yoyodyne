@@ -3,6 +3,7 @@ package sweep
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const completeBlock = "I looked at the stopped work.\n\n" +
@@ -340,5 +341,30 @@ func TestTheDroppedNoteKeepsTheSummaryInsideItsBound(t *testing.T) {
 	}
 	if err := merged.Validate(); err != nil {
 		t.Fatalf("a merge with a full-length summary does not validate: %v", err)
+	}
+}
+
+// And the summary is cut on a rune boundary to make room for the note. An "é" is
+// two bytes, so of the two summaries below, one puts the cut in the middle of
+// one whatever the note's length.
+func TestTheDroppedNoteCutsTheSummaryOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"", "x"} {
+		full := Result{Status: StatusComplete, Summary: "a thing"}
+		for i := 0; i < MaxPassFindings; i++ {
+			full.Findings = append(full.Findings, Finding{Issue: "a thing", Disposition: DispositionLeft})
+		}
+		merged := full.Merge(Result{
+			Status:   StatusComplete,
+			Summary:  prefix + strings.Repeat("é", MaxSummaryBytes/2),
+			Findings: []Finding{{Issue: "the one over", Disposition: DispositionLeft}},
+		})
+		if !utf8.ValidString(merged.Summary) || len(merged.Summary) > MaxSummaryBytes {
+			t.Errorf("summary after %q is %d bytes, valid = %v, want valid text inside %d", prefix, len(merged.Summary), utf8.ValidString(merged.Summary), MaxSummaryBytes)
+		}
+		if !strings.HasSuffix(merged.Summary, "not listed.)") {
+			t.Errorf("summary after %q does not end with the note kept whole", prefix)
+		}
 	}
 }
