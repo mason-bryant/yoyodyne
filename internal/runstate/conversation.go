@@ -76,6 +76,17 @@ type Conversation struct {
 	// session has served a turn. It is what lets a rebuild tell the role why it
 	// has no session, rather than inferring a reason from the session's absence.
 	SessionSetAside string `json:"session_set_aside,omitempty"`
+	// ProviderSessionBytes is how large that session has grown, as the harness
+	// measures it: every prompt it sent the session and every reply it got back,
+	// the system prompt aside because each request carries that anew. It is what
+	// decides when the session is compacted, and ProviderSessionBudgetBytes is the
+	// size at which it is, recorded beside it so a reader can see how close a
+	// session is without knowing the harness's constant. Both are rewritten by
+	// each completed turn, and a turn that starts a session starts the measure
+	// again. Both are zero on a session recorded before the harness measured one,
+	// which the next turn compacts rather than assumes small.
+	ProviderSessionBytes       int `json:"provider_session_bytes,omitempty"`
+	ProviderSessionBudgetBytes int `json:"provider_session_budget_bytes,omitempty"`
 	// ProviderModel is the selector the conversation requested and
 	// ProviderResolvedModel is what the provider reported serving it, because a
 	// floating family alias makes the resolved identifier the only real record.

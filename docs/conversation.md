@@ -2236,6 +2236,27 @@ and a turn rebuilt for a provider holding no session is given the whole picture
 in front of the changes, since changes mean nothing to a provider that never
 held what they changed.
 
+**A session is compacted before it outgrows the request.** Smaller turns slow a
+session's growth without bounding it, and the provider's own compaction triggers
+on its token count rather than on the request ceiling — and sends the whole
+session to do it, so on 2026-09-24 a product manager session at about 34 MB
+could not even be compacted. So the harness measures each provider session
+itself, as the bytes of every prompt it sent the session and every reply it got
+back, and records the measure on the conversation beside the budget it is held
+to (`provider_session_bytes` and `provider_session_budget_bytes`, and
+`session_bytes` and `session_budget_bytes` in `--json` evidence). The budget is
+8 MiB, a quarter of the 32 MB ceiling, because the provider's request carries
+framing, encoding, and reasoning the harness never sees. A turn that would take
+the session past it is sent without the session: the conversation is rebuilt
+from its record in front of the turn, exactly as for a provider holding no
+session, and the provider's answer starts a new session the measure starts again
+from. That is recorded as a `session.compacted` event naming the old session,
+its size, and the budget. A rebuild that cannot be made is recorded as
+`session.compaction_failed` and the turn is not sent, and the error says so;
+it is not a provider refusal, so nothing waits and asks again. A session recorded
+before the harness measured sessions is compacted on its next turn, since
+nobody knows how large it is.
+
 **The harness refreshes on its own past a threshold.** The line above turned
 out not to be enough: on 2026-09-18 the product manager advised adding a
 section to CLAUDE.md that the file at HEAD had opened with for a month, from a
