@@ -1768,8 +1768,10 @@ are sent to the same command — while the run's branch is there, which the
 resume needs. The refusal asks the repository for it by the look and the rule
 the docket asks, and once the branch is gone it says so, with what was found of
 the worktree, and that a re-run is the way on, which is what the docket entry
-and `yoyo status` then say too. The channel line is said once, as the run
-stops, when the branch is still the run's own. It has to have recorded a failure that was actually
+and `yoyo status` then say too. The channel line asks the same way as it says
+the stop, so a sink catching the stop up after the branch was deleted ends it
+on the branch being gone and the re-run rather than on a resume that would
+refuse. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — or be
 the stall above, which returned none because the harness stopped it; a run whose
 provider kept refusing, or whose replay conflicted, is neither, and has no
@@ -1908,9 +1910,13 @@ resume` is what it needs. The channel line for the stop ends on that same
 sentence, and so does the refusal `yoyo triage repair` gives if it is asked for
 such a run instead. The entry says so while the run's branch is there, which
 it asks the repository each time the docket is built, by the look and the rule
-the pull's hold and `yoyo status` ask too. A stop whose branch is gone is one
-the resume would refuse, so its entry names no resume: it says the branch is
-gone, what was found of the worktree, and that a re-run is the way on, and it
+the pull's hold and `yoyo status` ask too — and the channel line and the
+repair's refusal ask it the same way, the line as it is said and the refusal as
+it is given. A stop whose branch is gone is one the resume would refuse, so
+none of them names the resume: the channel line and the refusal each say the
+branch is gone, what was found of the worktree, and that a re-run is the way
+on because the approved change has nothing left for a resume to promote. The
+entry says the same, and it
 names the development manager as the next mover — or the harness, where a
 decision of hers about the stoppage is recorded and not yet carried out. Where
 the worktree is gone as well and nothing is decided, the pull's hold lets the

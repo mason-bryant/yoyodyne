@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // refusedRun is a run that stopped on an environmental refusal, with whatever
@@ -177,6 +178,68 @@ func TestTheThreadNamesTheResumeVerbForAnApprovedChangeTheEnvironmentStopped(t *
 		}
 		if !strings.Contains(message.Body, after.Failure) {
 			t.Fatalf("blocked=%t: the thread lost the reason the run stopped:\n%s", blocked, message.Body)
+		}
+	}
+}
+
+// The same stop once its branch is gone. The resume would refuse, so the line
+// names no resume: it says the branch is gone and that a re-run is the way on,
+// which is what the docket entry, the pull's hold, `yoyo status`, and the repair
+// verb's refusal say of the same stoppage, by the same look and the same rule.
+// Where the look finds the branch there, the line still names the resume.
+func TestTheThreadNamesNoResumeForAnApprovedChangeWhoseBranchIsGone(t *testing.T) {
+	lookedAt := moment.Add(time.Hour)
+	for _, blocked := range []bool{false, true} {
+		after := approvedStoppedRun(t, blocked)
+		kind := KindRunEnded
+		if blocked {
+			kind = KindBlockerRecorded
+		}
+		body := func(look func(runstate.State) triage.Found) string {
+			t.Helper()
+			notifications, err := FromRun(running(), after, look)
+			if err != nil {
+				t.Fatalf("select from run state: %v", err)
+			}
+			said := only(t, notifications, kind)
+			message, err := Render(said.Topic, said.Speaker, said.Event)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			return message.Body
+		}
+		gone := body(func(run runstate.State) triage.Found {
+			return triage.Found{At: lookedAt, Branch: run.Branch, WorktreePath: run.WorktreePath, WorktreeThere: true}
+		})
+		if strings.Contains(gone, "triage resume") {
+			t.Fatalf("blocked=%t: the thread names the resume for a stop whose branch is gone:\n%s", blocked, gone)
+		}
+		for _, want := range []string{"run " + after.RunID + "'s branch is gone", "checked and NOT there", "a re-run is the way on"} {
+			if !strings.Contains(gone, want) {
+				t.Fatalf("blocked=%t: the thread does not say %q:\n%s", blocked, want, gone)
+			}
+		}
+		there := body(func(run runstate.State) triage.Found {
+			return triage.Found{At: lookedAt, Branch: run.Branch, WorktreePath: run.WorktreePath, BranchThere: true, WorktreeThere: true}
+		})
+		if want := after.IntegrationStop.ResumeSays(after.RunID); !strings.Contains(there, nextMoveLead+"the harness's — "+want) {
+			t.Fatalf("blocked=%t: the thread does not end on the resume sentence while the branch is there:\n%s", blocked, there)
+		}
+		// A sink wired without a repository answers from the run's record, and a
+		// record that says the branch was removed names no resume either.
+		removed := after
+		removed.BranchRemoved = true
+		notifications, err := FromRun(running(), removed, nil)
+		if err != nil {
+			t.Fatalf("select from run state: %v", err)
+		}
+		said := only(t, notifications, kind)
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if strings.Contains(message.Body, "triage resume") || !strings.Contains(message.Body, "a re-run is the way on") {
+			t.Fatalf("blocked=%t: a record saying the branch was removed still sends the reader to the resume:\n%s", blocked, message.Body)
 		}
 	}
 }

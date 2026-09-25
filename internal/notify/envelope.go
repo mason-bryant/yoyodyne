@@ -813,7 +813,8 @@ type Detail struct {
 	// resume by `yoyo triage resume` once the cause has cleared, which is neither
 	// the decision one table clause names nor the nothing the other does. The
 	// sentence is the run record's own, the one the docket entry carries and the
-	// repair verb refuses in.
+	// repair verb refuses in — while the run's branch is there. Once it is gone
+	// the sentence is the one those surfaces then say, naming the re-run.
 	//
 	// KindCapacityHold reads Mover alone: whose move ends a hold early is worded by
 	// the read model beside the hold itself, so the sentence a terminal prints on

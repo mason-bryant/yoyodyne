@@ -453,7 +453,9 @@ and names her as the next mover, or the harness where a decision of hers about
 the stoppage is already recorded and not yet carried out — or, where the
 worktree is gone too and nothing is decided, the next pull, since nothing then
 holds the item. `yoyo status` says the same on the run's integration-stop line,
-and `yoyo triage repair` refuses such a run in the same words.
+`yoyo triage repair` refuses such a run in the same words, and the channel line
+the stop is said in ends on them, asking the repository the same way as it is
+said.
 
 ## What an item may ask of a run
 

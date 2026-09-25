@@ -38,7 +38,7 @@ func running() runstate.State {
 // fails the test if anything it produced could not be said.
 func crossed(t *testing.T, before, after runstate.State) ([]Kind, []Notification) {
 	t.Helper()
-	notifications, err := FromRun(before, after)
+	notifications, err := FromRun(before, after, nil)
 	if err != nil {
 		t.Fatalf("select from run state: %v", err)
 	}
@@ -1235,12 +1235,12 @@ func endedRun(before runstate.State, status runstate.Status) runstate.State {
 func TestARunWithNoUsableWorkItemIsRefusedRatherThanMisaddressed(t *testing.T) {
 	state := running()
 	state.WorkItemID = ""
-	if _, err := FromRun(runstate.State{}, state); err == nil {
+	if _, err := FromRun(runstate.State{}, state, nil); err == nil {
 		t.Fatal("selected from a run naming no work item")
 	}
 	// A reading with no run at all is nothing to say rather than a failure: it is
 	// what the first moments of every run look like.
-	notifications, err := FromRun(runstate.State{}, runstate.State{})
+	notifications, err := FromRun(runstate.State{}, runstate.State{}, nil)
 	if err != nil || len(notifications) != 0 {
 		t.Fatalf("an empty reading gave %v, %v", notifications, err)
 	}
