@@ -63,17 +63,31 @@ const ExitNotStopped = 1
 func Answering(parent context.Context, stderr io.Writer) (context.Context, func()) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	return answering(parent, signals, Grace, func() { signal.Stop(signals) }, func() {
+	return answering(parent, signals, measured(Grace), func() { signal.Stop(signals) }, func() {
 		fmt.Fprintf(stderr, "this process was asked to stop and had not stopped %s later, so it is exiting where it stands; whatever started it starts the next one\n", Grace)
 		os.Exit(ExitNotStopped)
 	})
+}
+
+// graceStarter starts the grace once a stop signal has arrived, returning what
+// says it ran out and what disarms it.
+type graceStarter func() (expired <-chan time.Time, disarm func())
+
+// measured is the grace a process actually gets: a timer of the given length.
+func measured(grace time.Duration) graceStarter {
+	return func() (<-chan time.Time, func()) {
+		timer := time.NewTimer(grace)
+		return timer.C, func() { timer.Stop() }
+	}
 }
 
 // answering is the wiring itself, over a signal channel and the two effects a
 // signal has behind the cancellation. It is separate so those two can be
 // observed from a test: the real ones put the operating system's disposition
 // back and end the process, and neither is something a test can watch happen.
-func answering(parent context.Context, signals <-chan os.Signal, grace time.Duration, restore, exit func()) (context.Context, func()) {
+// The grace is started through a seam for the same reason, so a test decides
+// when it runs out rather than hoping the work returns inside a length of time.
+func answering(parent context.Context, signals <-chan os.Signal, startGrace graceStarter, restore, exit func()) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	returned := make(chan struct{})
 	// Both the signal and the work returning put the disposition back, and either
@@ -100,10 +114,10 @@ func answering(parent context.Context, signals <-chan os.Signal, grace time.Dura
 		// does.
 		cancel()
 		restoring()
-		grace := time.NewTimer(grace)
-		defer grace.Stop()
+		expired, disarm := startGrace()
+		defer disarm()
 		select {
-		case <-grace.C:
+		case <-expired:
 			exit()
 		case <-returned:
 		}
