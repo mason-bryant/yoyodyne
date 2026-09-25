@@ -406,6 +406,58 @@ func TestStreamStoreSpendsOnExchangesBesideTheStreams(t *testing.T) {
 	}
 }
 
+// The rolling window takes an exchange round by the moment it was answered
+// rather than by its day: a thread with a round either side of the boundary
+// puts only the later one in the rolling rows, while both still land on their
+// own days. An exchange nobody could read is missing from the rolling window as
+// much as from any other, so that window is a floor too.
+func TestStreamStoreRollsAnExchangeByTheMomentEachRoundWasAnswered(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	exchanges := newTestExchangeStore(t, root)
+	store := newStreamStore(t, root)
+
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.Local)
+	since := now.Add(-24 * time.Hour)
+	outside, inside := since.Add(-time.Hour), since.Add(time.Hour)
+	asked := testExchange("a")
+	asked.Rounds = []exchange.Round{
+		{Number: 1, Question: "first?", Answer: "yes", CostUSD: 0.6, AskedAt: outside.Add(-time.Minute), AnsweredAt: &outside},
+		{Number: 2, Question: "second?", Answer: "also", CostUSD: 0.4, AskedAt: inside.Add(-time.Minute), AnsweredAt: &inside},
+	}
+	asked.Outcome, asked.ClosedAt, asked.UpdatedAt = exchange.OutcomeResolved, &inside, inside
+	if err := exchanges.Save(asked); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unreadable := "exchange-" + strings32('b')
+	if err := os.WriteFile(filepath.Join(exchanges.Root(), unreadable+".json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	report, err := store.Spend(SpendQuery{Days: 7, Since: since, Now: now})
+	if err != nil {
+		t.Fatalf("Spend() error = %v", err)
+	}
+	var daily float64
+	for _, row := range report.Rows {
+		daily += row.CostUSD
+	}
+	if daily != 1.0 {
+		t.Fatalf("daily rows = %+v, want both rounds on their own days", report.Rows)
+	}
+	if len(report.Rolling) != 1 || report.Rolling[0].CostUSD != 0.4 || report.Rolling[0].Calls != 1 || report.Rolling[0].Kind != StreamExchange {
+		t.Fatalf("rolling rows = %+v, want only the round answered inside the window", report.Rolling)
+	}
+	rolling := report.RollingWindow()
+	if totals := rolling.Totals(); totals.CostUSD != 0.4 || totals.Calls != 1 {
+		t.Fatalf("rolling totals = %+v, want the one round inside the window", totals)
+	}
+	if !rolling.Floor() || len(rolling.UnreadableExchanges) != 1 || rolling.UnreadableExchanges[0] != unreadable {
+		t.Fatalf("rolling window = %+v, want the unreadable exchange carried and the total a floor", rolling)
+	}
+}
+
 // Something whose moment cannot be read still cost money, so it is reported
 // rather than dropped: it has no day to be outside of, so no window excludes it.
 func TestStreamStoreReportsUndatedSpendUnderEveryWindow(t *testing.T) {

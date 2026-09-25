@@ -36,6 +36,16 @@
             <p id="band-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
           </div>
         </section>
+        <section id="spend" class="panel spend" data-state="error" aria-labelledby="spend-heading">
+          <div class="panel-head">
+            <h2 id="spend-heading">What the harness is spending</h2>
+            <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="spend-problem" class="problem">Could not be read: the spend could not be read: open streams: input/output error</p>
+            <p id="spend-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 30 prices the same records at the terminal and names what could not be read.</p>
+          </div>
+        </section>
         <section id="live" class="panel live" data-state="error" aria-labelledby="live-heading">
           <div class="panel-head">
             <h2 id="live-heading">Running now</h2>
@@ -58,16 +68,16 @@
         </section>
         <section id="throughput" class="panel throughput" data-state="error" aria-labelledby="throughput-heading">
           <div class="panel-head">
-            <h2 id="throughput-heading">Throughput and cost</h2>
+            <h2 id="throughput-heading">Throughput</h2>
             <p class="panel-note">
-              local calendar days, today counting as the first; the figures
-              <code>yoyo status --spend</code>
-              prints
+              local calendar days, today counting as the first; the endings
+              <code>yoyo status</code>
+              prints, and what each cost is in the spend box above
             </p>
           </div>
           <div class="section-error" role="alert">
-            <p id="throughput-problem" class="problem">Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read: open streams: input/output error</p>
-            <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.</p>
+            <p id="throughput-problem" class="problem">Could not be read: the recorded runs could not be read: open runs: input/output error</p>
+            <p id="throughput-remedy" class="remedy">The dashboard asks again every minute. yoyo status reads the same run records at the terminal and names what could not be read.</p>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="error" aria-labelledby="capacity-heading">

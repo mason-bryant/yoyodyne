@@ -65,74 +65,36 @@
                   <span class="detail">of 8 things waiting in all; the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1</span>
                 </dd>
               </div>
-              <div class="tile tile-waiting">
+              <div class="tile">
                 <dt>Landed</dt>
                 <dd>
-                  <span class="figure">…</span>
-                  <span class="unit">reading the week</span>
+                  <span class="figure">3</span>
+                  <span class="unit">today</span>
+                  <span class="detail">22 runs in the last 7 days</span>
                 </dd>
               </div>
-              <div class="tile">
+              <div class="tile tile-waiting">
                 <dt>
                   <button class="grouping-open tile-label" type="button" data-grouping="spend:days">Cost</button>
                 </dt>
                 <dd>
-                  <span class="figure">≥ $191.53</span>
-                  <span class="unit">in the last 24 hours</span>
-                  <span class="detail">at least $1,232.58 in the last 7 days</span>
+                  <span class="figure">…</span>
+                  <span class="unit">pricing the month</span>
                 </dd>
               </div>
             </dl>
             <ul id="band-problems" class="degraded" hidden></ul>
           </div>
         </section>
-        <section id="spend" class="panel spend" data-state="ready" aria-labelledby="spend-heading">
+        <section id="spend" class="panel spend" data-state="loading" aria-labelledby="spend-heading">
           <div class="panel-head">
             <h2 id="spend-heading">What the harness is spending</h2>
             <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
           </div>
-          <div class="section-ready">
-            <p id="spend-stale" class="stale" role="status" hidden></p>
-            <div id="spend-windows" class="windows">
-              <div class="window">
-                <h3 class="window-label">last 24 hours</h3>
-                <p class="window-span">rolling, from 2026-09-18 14:05:09</p>
-                <dl class="figures">
-                  <div class="figure-row figure-cost">
-                    <dt>Cost</dt>
-                    <dd>at least $191.53 from 84 invocations</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Of which</dt>
-                    <dd>$118.75 on 52 runs, $57.46 on 25 conversations, $9.58 on 4 branch reviews, $5.74 on 3 exchanges</dd>
-                  </div>
-                  <div class="figure-row figure-unreadable">
-                    <dt>Not priced</dt>
-                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
-                  </div>
-                </dl>
-              </div>
-              <div class="window">
-                <h3 class="window-label">last 7 days</h3>
-                <p class="window-span">from 2026-09-13, local days</p>
-                <dl class="figures">
-                  <div class="figure-row figure-cost">
-                    <dt>Cost</dt>
-                    <dd>at least $1,232.58 from 452 invocations</dd>
-                  </div>
-                  <div class="figure-row">
-                    <dt>Of which</dt>
-                    <dd>$764.20 on 280 runs, $369.77 on 136 conversations, $61.63 on 23 branch reviews, $36.98 on 13 exchanges</dd>
-                  </div>
-                  <div class="figure-row figure-unreadable">
-                    <dt>Not priced</dt>
-                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-            <p id="spend-open" class="spend-open">
-              <button class="grouping-open spend-label" type="button" data-grouping="spend:days">Every day for the past 30 days</button>
+          <div class="section-loading">
+            <p class="waiting">
+              <span class="pulse" aria-hidden="true"></span>
+              Pricing the last thirty days…
             </p>
           </div>
         </section>
@@ -301,17 +263,18 @@
                   </li>
                 </ul>
               </li>
-              <li class="stage stage-waiting">
+              <li class="stage stage-landed">
                 <button class="grouping-open stage-label" type="button" data-grouping="landed:today">Landed</button>
-                <span class="stage-figure">…</span>
-                <span class="stage-unit">reading the week</span>
+                <span class="stage-figure">3</span>
+                <span class="stage-unit">today</span>
+                <button class="grouping-open stage-detail" type="button" data-grouping="landed:week">22 runs in the last 7 days</button>
               </li>
             </ol>
             <ul id="pipeline-problems" class="degraded" hidden></ul>
             <p id="pipeline-note" class="footnote">Needs a human: 8 things waiting on a person — the operator's: 2, the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1.</p>
           </div>
         </section>
-        <section id="throughput" class="panel throughput" data-state="loading" aria-labelledby="throughput-heading">
+        <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
           <div class="panel-head">
             <h2 id="throughput-heading">Throughput</h2>
             <p class="panel-note">
@@ -320,11 +283,47 @@
               prints, and what each cost is in the spend box above
             </p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading what the runs came to…
-            </p>
+          <div class="section-ready">
+            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <ul id="throughput-problems" class="degraded" hidden></ul>
+            <div id="windows" class="windows">
+              <div class="window">
+                <h3 class="window-label">today</h3>
+                <p class="window-span">since midnight, local time</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>3 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>1 stopped for a person</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>6 runs</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="window">
+                <h3 class="window-label">last 7 days</h3>
+                <p class="window-span">from 2026-09-13, local days</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>22 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>2 succeeded without promoting, 9 stopped for a person, 3 cancelled, 1 timed out, 2 failed</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>41 runs</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">

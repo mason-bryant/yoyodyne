@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="ready">
+      <div id="grouping-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="grouping-heading" class="popup-title">Spend by day (32 lines)</h2>
+            <p id="grouping-note" class="popup-note">one line per local day for the past 30 days, newest first, priced from the spend log</p>
+          </div>
+          <button type="button" id="grouping-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-ready">
+          <ol id="grouping-items" class="grouping-items">
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-19</span>
+              <span class="grouping-detail">$92.00 from 31 invocations — $57.04 on 19 runs, $27.60 on 9 conversations, $4.60 on 2 branch reviews, $2.76 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-18</span>
+              <span class="grouping-detail">$210.55 from 78 invocations — $130.54 on 48 runs, $63.16 on 23 conversations, $10.53 on 4 branch reviews, $6.32 on 3 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-17</span>
+              <span class="grouping-detail">$188.40 from 69 invocations — $116.81 on 43 runs, $56.52 on 21 conversations, $9.42 on 3 branch reviews, $5.65 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-16</span>
+              <span class="grouping-detail">$175.20 from 63 invocations — $108.62 on 39 runs, $52.56 on 19 conversations, $8.76 on 3 branch reviews, $5.26 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-15</span>
+              <span class="grouping-detail">$201.33 from 74 invocations — $124.82 on 46 runs, $60.40 on 22 conversations, $10.07 on 4 branch reviews, $6.04 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-14</span>
+              <span class="grouping-detail">$199.10 from 71 invocations — $123.44 on 44 runs, $59.73 on 21 conversations, $9.96 on 4 branch reviews, $5.97 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-13</span>
+              <span class="grouping-detail">$161.75 from 64 invocations — $100.28 on 40 runs, $48.52 on 19 conversations, $8.09 on 3 branch reviews, $4.86 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-12</span>
+              <span class="grouping-detail">$143.08 from 55 invocations — $88.71 on 34 runs, $42.92 on 16 conversations, $7.15 on 3 branch reviews, $4.30 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-11</span>
+              <span class="grouping-detail">$96.40 from 38 invocations — $59.77 on 24 runs, $28.92 on 11 conversations, $4.82 on 2 branch reviews, $2.89 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-10</span>
+              <span class="grouping-detail">$121.77 from 47 invocations — $75.50 on 29 runs, $36.53 on 14 conversations, $6.09 on 2 branch reviews, $3.65 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-09</span>
+              <span class="grouping-detail">$88.15 from 34 invocations — $54.65 on 21 runs, $26.45 on 10 conversations, $4.41 on 2 branch reviews, $2.64 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-08</span>
+              <span class="grouping-detail">nothing spent</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-07</span>
+              <span class="grouping-detail">nothing spent</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-06</span>
+              <span class="grouping-detail">$52.90 from 21 invocations — $32.80 on 13 runs, $15.87 on 6 conversations, $2.65 on 1 branch review, $1.58 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-05</span>
+              <span class="grouping-detail">$134.62 from 52 invocations — $83.46 on 32 runs, $40.39 on 16 conversations, $6.73 on 3 branch reviews, $4.04 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-04</span>
+              <span class="grouping-detail">$177.05 from 66 invocations — $109.77 on 41 runs, $53.12 on 20 conversations, $8.85 on 3 branch reviews, $5.31 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-03</span>
+              <span class="grouping-detail">$149.30 from 58 invocations — $92.57 on 36 runs, $44.79 on 17 conversations, $7.46 on 3 branch reviews, $4.48 on 2 exchanges</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-02</span>
+              <span class="grouping-detail">$118.44 from 45 invocations — $73.43 on 28 runs, $35.53 on 14 conversations, $5.92 on 2 branch reviews, $3.56 on 1 exchange</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">2026-09-01</span>
+              <span class="grouping-detail">$73.60 from 29 invocations — $45.63 on 18 runs, $22.08 on 9 conversations, $3.68 on 1 branch review, $2.21 on 1 exchange</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-31</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-30</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-29</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-28</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-27</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-26</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-25</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-24</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-23</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-22</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">2026-08-21</span>
+              <span class="grouping-detail">no priced record reaches this far back</span>
+            </li>
+            <li class="grouping-item">
+              <span class="grouping-title grouping-day">undated</span>
+              <span class="grouping-detail">$4.25 from 2 invocations whose moment could not be read, counted in every window above and on no day here</span>
+            </li>
+            <li class="grouping-item grouping-day-unreached">
+              <span class="grouping-title grouping-day">not priced</span>
+              <span class="grouping-detail">1 exchange record could not be read, so every figure here and above is a floor</span>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

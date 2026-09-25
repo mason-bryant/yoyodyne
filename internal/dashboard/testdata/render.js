@@ -2,7 +2,7 @@
 // Renders the dashboard page from the fixtures, without a browser, and writes
 // what each scenario leaves in the DOM.
 //
-// The page's script is the one thing that turns the read model into the five
+// The page's script is the one thing that turns the read model into the six
 // sections, and a Go test cannot run it. This runs it under Node against a small
 // document model — enough of the DOM for the script's own needs and nothing
 // more — with fetch answered from the fixtures under ./fixtures, and serializes
@@ -307,22 +307,26 @@ function over(name, beneath, steps) {
 }
 
 const pages = [
-  { name: "signin", token: "", standing: pending, throughput: pending },
-  { name: "loading", token: "t", standing: pending, throughput: pending },
-  { name: "quiet", token: "t", standing: ok(fixture("standing-quiet")), throughput: ok(fixture("throughput-quiet")) },
-  { name: "busy", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")) },
-  { name: "held", token: "t", standing: ok(fixture("standing-held")), throughput: ok(fixture("throughput-busy")) },
-  { name: "degraded", token: "t", standing: ok(fixture("standing-degraded")), throughput: ok(fixture("throughput-degraded")) },
-  { name: "unreadable", token: "t", standing: ok(fixture("standing-unreadable")), throughput: ok(fixture("throughput-unreadable")) },
-  { name: "throughput-pending", token: "t", standing: ok(fixture("standing-busy")), throughput: pending },
-  { name: "throughput-refused", token: "t", standing: ok(fixture("standing-busy")), throughput: refused(503, "the state root could not be resolved") },
-  { name: "refused", token: "t", standing: refused(503, "the state root could not be resolved: open /Users/somebody/Library/Application Support/Yoyodyne/state: permission denied"), throughput: pending },
-  { name: "unreachable", token: "t", standing: unreachable, throughput: unreachable },
-  { name: "wrong-token", token: "t", standing: refused(401, "this dashboard requires the token it printed when it started, as a bearer token"), throughput: pending },
+  { name: "signin", token: "", standing: pending, throughput: pending, spend: pending },
+  { name: "loading", token: "t", standing: pending, throughput: pending, spend: pending },
+  { name: "quiet", token: "t", standing: ok(fixture("standing-quiet")), throughput: ok(fixture("throughput-quiet")), spend: ok(fixture("spend-quiet")) },
+  { name: "busy", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), spend: ok(fixture("spend-busy")) },
+  { name: "held", token: "t", standing: ok(fixture("standing-held")), throughput: ok(fixture("throughput-busy")), spend: ok(fixture("spend-busy")) },
+  { name: "degraded", token: "t", standing: ok(fixture("standing-degraded")), throughput: ok(fixture("throughput-degraded")), spend: ok(fixture("spend-busy")) },
+  { name: "unreadable", token: "t", standing: ok(fixture("standing-unreadable")), throughput: ok(fixture("throughput-unreadable")), spend: ok(fixture("spend-unreadable")) },
+  { name: "throughput-pending", token: "t", standing: ok(fixture("standing-busy")), throughput: pending, spend: ok(fixture("spend-busy")) },
+  { name: "throughput-refused", token: "t", standing: ok(fixture("standing-busy")), throughput: refused(503, "the state root could not be resolved"), spend: ok(fixture("spend-busy")) },
+  // The spend box while the month is still being priced, which is the one
+  // reading slow enough to be seen loading over a page that is otherwise drawn.
+  { name: "spend-pending", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), spend: pending },
+  { name: "refused", token: "t", standing: refused(503, "the state root could not be resolved: open /Users/somebody/Library/Application Support/Yoyodyne/state: permission denied"), throughput: pending, spend: pending },
+  { name: "unreachable", token: "t", standing: unreachable, throughput: unreachable, spend: unreachable },
+  { name: "wrong-token", token: "t", standing: refused(401, "this dashboard requires the token it printed when it started, as a bearer token"), throughput: pending, spend: pending },
   // The second poll fails after a first that succeeded: the page keeps what it
   // had and says it is stale.
-  { name: "stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/standing": unreachable } },
-  { name: "throughput-stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), then: { "/api/throughput": refused(503, "the state root could not be resolved") } }
+  { name: "stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), spend: ok(fixture("spend-busy")), then: { "/api/standing": unreachable } },
+  { name: "throughput-stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), spend: ok(fixture("spend-busy")), then: { "/api/throughput": refused(503, "the state root could not be resolved") } },
+  { name: "spend-stale", token: "t", standing: ok(fixture("standing-busy")), throughput: ok(fixture("throughput-busy")), spend: ok(fixture("spend-busy")), then: { "/api/spend": refused(503, "the state root could not be resolved") } }
 ];
 
 const scenarios = pages.concat([
@@ -345,6 +349,17 @@ const scenarios = pages.concat([
   over("grouping-empty", "held", { open: [{ grouping: "startable" }] }),
   over("grouping-error", "degraded", { open: [{ grouping: "admitted" }] }),
   over("grouping-loading", "throughput-pending", { open: [{ grouping: "landed:today" }] }),
+  // The month behind the spend box: one line per local day, the days no
+  // priced record reaches saying so, and the two lines that follow them — the spend
+  // whose moment could not be read, and the records that could not be priced.
+  over("spend-days", "busy", { open: [{ grouping: "spend:days" }] }),
+  // And the same listing in its other three states: a month nothing was spent
+  // in and a spend that could not be read — each brought to an open listing
+  // by a poll, since a box in either state offers no label to open — and one
+  // still being priced, opened from the band's Cost tile.
+  over("spend-days-empty", "busy", { open: [{ grouping: "spend:days" }, { poll: { "/api/spend": ok(fixture("spend-quiet")) } }] }),
+  over("spend-days-error", "busy", { open: [{ grouping: "spend:days" }, { poll: { "/api/spend": ok(fixture("spend-unreadable")) } }] }),
+  over("spend-days-loading", "spend-pending", { open: [{ grouping: "spend:days" }] }),
   over("grouping-card", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }] }),
   over("closed", "busy", { items: items("yoyodyne-ifd.153"), open: [{ grouping: "pile:held" }, { item: "yoyodyne-ifd.153" }], escape: 2 }),
   // A poll redraws the page under an open grouping, so the button that opened
@@ -388,7 +403,7 @@ async function run(scenario) {
     storage.set("yoyo-dashboard-token", scenario.token);
   }
   const intervals = [];
-  let answers = Object.assign({ "/api/standing": scenario.standing, "/api/throughput": scenario.throughput }, scenario.items || {});
+  let answers = Object.assign({ "/api/standing": scenario.standing, "/api/throughput": scenario.throughput, "/api/spend": scenario.spend }, scenario.items || {});
   const requests = [];
 
   const fetch = (url, options) => {
@@ -476,7 +491,7 @@ async function run(scenario) {
   }
 
   const page = document.getElementById("page");
-  const sections = ["band", "live", "pipeline", "throughput", "capacity"];
+  const sections = ["band", "spend", "live", "pipeline", "throughput", "capacity"];
   const popups = ["grouping", "card"];
   const matrix = { page: page.getAttribute("data-state"), sections: {}, popups: {} };
   sections.forEach((id) => {

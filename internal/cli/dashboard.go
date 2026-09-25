@@ -115,7 +115,7 @@ func dashboardTokenStores(stateRoot string) dashboard.TokenStores {
 
 // dashboardHeaderLine is said whichever way the token came, because it is
 // about how the token is presented rather than where it came from.
-const dashboardHeaderLine = "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>"
+const dashboardHeaderLine = "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>"
 
 // dashboardServer makes the server under the token the entry names, and says
 // what the command prints about it. Under `generated` the server makes its own
@@ -256,34 +256,60 @@ func workItemSources(configPath string) (readmodel.WorkItemSources, error) {
 	return sources, nil
 }
 
-// Throughput is what landed and what it cost over the model's two windows.
-// readmodel.ReadThroughput derives nothing of its own about money or endings:
-// it calls (*runstate.StreamStore).Spend once, over the widest window, and
-// splits the report's rows by the local day each carries — the derivation
-// `yoyo status --spend 7` prints — and it classifies each run by
-// runstate.State.Outcome, the word `yoyo status` prints for it. So a figure on
-// the page is a figure the terminal prints, and the two cannot disagree about
-// what today cost.
+// Throughput is what landed over the model's two windows.
+// readmodel.ReadThroughput derives nothing of its own about endings: it
+// classifies each run by runstate.State.Outcome, the word `yoyo status` prints
+// for it. So a figure on the page is a figure the terminal prints.
 func (r dashboardReader) Throughput(ctx context.Context) (readmodel.Throughput, error) {
 	if err := r.ready(); err != nil {
 		return readmodel.Throughput{}, err
 	}
-	resolved, err := loadConfiguration(r.configPath)
+	stateRoot, productID, err := r.stateRoot()
 	if err != nil {
 		return readmodel.Throughput{}, err
+	}
+	return readmodel.ReadThroughput(ctx, throughputSources(stateRoot, productID)), nil
+}
+
+// Spend is what the harness spent over the last twenty-four hours and the last
+// seven local days, and what each of the last thirty days cost.
+// readmodel.ReadSpend derives nothing of its own about money: it calls
+// (*runstate.StreamStore).Spend once — the one call
+// internal/cli/statusstream.go's reportSpend makes to price
+// `yoyo status --spend` — and adds the rows up by runstate.SpendTotals, the
+// summation the terminal prints its own total and split from. So a figure on
+// the page is a figure the terminal prints, and the two cannot disagree about
+// what the last week cost.
+func (r dashboardReader) Spend(ctx context.Context) (readmodel.Spend, error) {
+	if err := r.ready(); err != nil {
+		return readmodel.Spend{}, err
+	}
+	stateRoot, productID, err := r.stateRoot()
+	if err != nil {
+		return readmodel.Spend{}, err
+	}
+	return readmodel.ReadSpend(ctx, spendSources(stateRoot, productID)), nil
+}
+
+// stateRoot is the state root and the product the readings are taken over.
+// Neither resolving refuses the whole reading, because there is nothing to
+// project without them.
+func (r dashboardReader) stateRoot() (string, domain.ProductID, error) {
+	resolved, err := loadConfiguration(r.configPath)
+	if err != nil {
+		return "", "", err
 	}
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
-		return readmodel.Throughput{}, err
+		return "", "", err
 	}
-	return readmodel.ReadThroughput(ctx, throughputSources(stateRoot, resolved.Config.Product.ID)), nil
+	return stateRoot, resolved.Config.Product.ID, nil
 }
 
-// throughputSources opens the two stores the throughput is read from. Either
-// failing to open costs its half of the reading and not the other, and the
-// reason travels with the gap: the reading says "could not be opened: <why>"
-// under runs_problem or spend_problem, which is what the page's error state
-// shows, rather than that nothing was wired.
+// throughputSources opens the run store the throughput is read from. It failing
+// to open costs the reading its endings, and the reason travels with the gap:
+// the reading says "could not be opened: <why>" under runs_problem, which is
+// what the page's error state shows, rather than that nothing was wired.
 func throughputSources(stateRoot string, productID domain.ProductID) readmodel.ThroughputSources {
 	sources := readmodel.ThroughputSources{}
 	if store, err := runstate.NewStore(stateRoot, productID); err != nil {
@@ -291,6 +317,13 @@ func throughputSources(stateRoot string, productID domain.ProductID) readmodel.T
 	} else {
 		sources.Runs = store
 	}
+	return sources
+}
+
+// spendSources opens the stream store the spend is priced from, and carries the
+// reason it could not be opened the same way.
+func spendSources(stateRoot string, productID domain.ProductID) readmodel.SpendSources {
+	sources := readmodel.SpendSources{}
 	if store, err := runstate.NewStreamStore(stateRoot, productID); err != nil {
 		sources.LedgerProblem = err.Error()
 	} else {
@@ -303,10 +336,11 @@ func printDashboardUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo dashboard [options]
 
 Serves the read model -- the same four lines and capacity state `+"`yoyo status`"+`
-reads, and what landed and what it cost -- to a browser on this machine, at a
-loopback port, until stopped, as a page of five sections: the status band, the
-runs and conversations in flight, where admitted work stands in the pipeline,
-throughput and cost, and provider capacity. It prints the URL and, beside it,
+reads, what the harness is spending, and what landed -- to a browser on this
+machine, at a loopback port, until stopped, as a page of six sections: the
+status band, what the harness is spending, the runs and conversations in
+flight, where admitted work stands in the pipeline, throughput, and provider
+capacity. It prints the URL and, beside it,
 where the token every request for the read model has to carry as
 `+"`Authorization: Bearer <token>`"+` comes from: with services.dashboard.token at its
 `+"`generated`"+` default, the token itself, once, and a restart makes a new one; with
@@ -318,10 +352,11 @@ start with the command that stores it, the one `+"`yoyo doctor`"+` prints. The p
 asks for the token and keeps it in the tab's session storage, scoped to this
 port, and never in a URL or a cookie. It serves
 the read model as JSON behind the token -- the four lines and the capacity state
-at /api/standing, what landed and what it cost over today and the last seven
-days at /api/throughput, and one work item whole -- its tracker fields and the
-run last made for it -- at /api/items/<work-item-id>, which is what the page's
-card on an item reads; the page shell at / and its own script and style are
+at /api/standing, what landed over today and the last seven days at
+/api/throughput, what was spent over the last 24 hours and the last seven local
+days with a line for each of the last thirty at /api/spend, and one work item
+whole -- its tracker fields and the run last made for it -- at
+/api/items/<work-item-id>, which is what the page's card on an item reads; the page shell at / and its own script and style are
 static text with nothing of the read model in them, served to the browser before
 it has a token. Everything else is refused: a request for the read model with no
 token or the wrong one, a Host or Origin that is not the address it bound, and

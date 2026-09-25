@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -611,6 +612,14 @@ type SpendQuery struct {
 	// Days is how many local days the report covers, today counting as the first
 	// of them. Zero covers every day there is evidence for.
 	Days int
+	// Since, where it is set, has the report reckon a second time from one
+	// moment rather than from a day boundary: every invocation and every
+	// exchange round at or after it is counted into SpendReport.Rolling as well
+	// as into its own day's row. It is how a surface that wants both — the
+	// dashboard's spend box, which shows the last 24 hours beside the last
+	// thirty local days — pays for one read of the logs rather than two, since
+	// pricing a stream reads the whole of its log whatever window is asked for.
+	Since time.Time
 	// Now is the moment the window is measured back from, so a report is a
 	// function of its inputs rather than of when it happened to be asked for.
 	Now time.Time
@@ -715,6 +724,20 @@ type SpendReport struct {
 	// UnreadableReason is why the first of them could not be read, which says
 	// what kind of broken this is without enumerating every instance.
 	UnreadableReason string `json:"unreadable_reason,omitempty"`
+	// Rolling is the same spend reckoned from SpendQuery.Since rather than from
+	// a day boundary — the window whole local days cannot express — and is nil
+	// where the query named no moment. RollingWindow() is what adds it up, by
+	// the one summation every total here is made by.
+	Rolling []SpendRow `json:"rolling,omitempty"`
+	// RollingSince is the moment Rolling is reckoned from.
+	RollingSince time.Time `json:"rolling_since,omitzero"`
+	// Reaches is the earliest local day any priced row of this pass falls on,
+	// whatever window was asked for. It is what tells a day nothing was spent on
+	// from a day no priced record goes back to: the first is nothing spent, and
+	// the second is a day this store can say nothing about, and a surface that
+	// showed the second as zero would be reporting a figure nobody measured. It
+	// is empty where nothing dated was priced.
+	Reaches string `json:"reaches,omitempty"`
 }
 
 // Empty reports a query that selected nothing at all — no stream and no
@@ -743,9 +766,23 @@ func (r SpendReport) Since(day string) SpendReport {
 	return narrowed
 }
 
+// RollingWindow is the rolling rows as a report of their own, so that the one
+// summation below adds them up as it adds up any other window: the same
+// streams and the same unreadable exchanges, reckoned from the moment the
+// query named rather than from a day boundary. A report whose query named no
+// moment comes back with no rows at all, which sums to nothing spent.
+func (r SpendReport) RollingWindow() SpendReport {
+	narrowed := r
+	narrowed.Rows = r.Rolling
+	narrowed.Rolling = nil
+	narrowed.Oldest = ""
+	narrowed.Days = 0
+	return narrowed
+}
+
 // SpendTotals is what a report's rows add up to: in all, and by kind in the
 // order the kinds are priced. It is the one summation every surface that
-// prints a total reads — `yoyo status --spend` and the dashboard's throughput
+// prints a total reads — `yoyo status --spend` and the dashboard's spend box
 // alike — so two of them cannot add the same rows to different figures.
 type SpendTotals struct {
 	Calls   int
@@ -868,7 +905,7 @@ func (s *StreamStore) Spend(query SpendQuery) (SpendReport, error) {
 	if err != nil {
 		return SpendReport{}, err
 	}
-	report := SpendReport{Streams: len(found)}
+	report := SpendReport{Streams: len(found), RollingSince: query.Since}
 	if query.Days > 0 {
 		report.Days = query.Days
 		report.Oldest = oldestLocalDay(query.Now, query.Days)
@@ -884,20 +921,67 @@ func (s *StreamStore) Spend(query SpendQuery) (SpendReport, error) {
 		if err != nil {
 			return SpendReport{}, err
 		}
-		report.take(spendByDay(stream, scanned.invocations))
+		rows := spendByDay(stream, scanned.invocations)
+		report.reaching(rows)
+		report.take(rows)
+		report.roll(query.Since, func() []SpendRow {
+			return spendByDay(stream, invocationsFrom(scanned.invocations, query.Since))
+		})
 	}
 	if query.covers(StreamExchange) {
-		if err := s.spendOnExchanges(query.Match, &report); err != nil {
+		if err := s.spendOnExchanges(query.Match, query.Since, &report); err != nil {
 			return SpendReport{}, err
 		}
 	}
-	sort.Slice(report.Rows, func(i, j int) bool {
-		if !report.Rows[i].At.Equal(report.Rows[j].At) {
-			return report.Rows[i].At.Before(report.Rows[j].At)
+	byMoment := func(rows []SpendRow) func(int, int) bool {
+		return func(i, j int) bool {
+			if !rows[i].At.Equal(rows[j].At) {
+				return rows[i].At.Before(rows[j].At)
+			}
+			return rows[i].StreamID < rows[j].StreamID
 		}
-		return report.Rows[i].StreamID < report.Rows[j].StreamID
-	})
+	}
+	sort.Slice(report.Rows, byMoment(report.Rows))
+	sort.Slice(report.Rolling, byMoment(report.Rolling))
 	return report, nil
+}
+
+// roll keeps the rows a rolling window holds, where the query named a moment to
+// reckon one from. The rows are built only then, so a report nobody asked a
+// rolling window of pays nothing for the one it does not get.
+func (r *SpendReport) roll(since time.Time, rows func() []SpendRow) {
+	if since.IsZero() {
+		return
+	}
+	r.Rolling = append(r.Rolling, rows()...)
+}
+
+// reaching records how far back the evidence goes, from every row the pass
+// produced rather than from the rows one window kept. A row with no day says
+// nothing about reach, having none.
+func (r *SpendReport) reaching(rows []SpendRow) {
+	for _, row := range rows {
+		if row.Day == UndatedDay {
+			continue
+		}
+		if r.Reaches == "" || row.Day < r.Reaches {
+			r.Reaches = row.Day
+		}
+	}
+}
+
+// invocationsFrom is the invocations a rolling window holds: the ones made at
+// or after the moment it is reckoned from, and the ones whose moment could not
+// be read, which have no moment to be outside a window by — the rule the day
+// windows already apply to an undated row.
+func invocationsFrom(invocations []Invocation, since time.Time) []Invocation {
+	inside := make([]Invocation, 0, len(invocations))
+	for _, invocation := range invocations {
+		if invocation.At.IsZero() || !invocation.At.Before(since) {
+			inside = append(inside, invocation)
+		}
+	}
+	return inside
 }
 
 // take keeps the rows inside the window. An undated row has no day to be
@@ -917,7 +1001,7 @@ func (r *SpendReport) take(rows []SpendRow) {
 // dropped. A round counts on the day it was answered exactly as an invocation
 // counts on the day it was made, so a thread that ran over two days contributes
 // a row to each of them as a conversation does.
-func (s *StreamStore) spendOnExchanges(match string, report *SpendReport) error {
+func (s *StreamStore) spendOnExchanges(match string, since time.Time, report *SpendReport) error {
 	ids, err := s.exchanges.Records()
 	if err != nil {
 		return err
@@ -939,33 +1023,46 @@ func (s *StreamStore) spendOnExchanges(match string, report *SpendReport) error 
 		if !recorded.Open() {
 			status = string(recorded.Outcome)
 		}
-		var order []string
-		rows := make(map[string]*SpendRow, len(recorded.Rounds))
-		for _, round := range recorded.Rounds {
-			moment := round.AskedAt
-			if round.AnsweredAt != nil {
-				moment = *round.AnsweredAt
-			}
-			day := UndatedDay
-			if !moment.IsZero() {
-				day = LocalDay(moment)
-			}
-			row, seen := rows[day]
-			if !seen {
-				row = &SpendRow{Day: day, StreamID: id, Kind: StreamExchange, Status: status, At: moment}
-				rows[day] = row
-				order = append(order, day)
-			}
-			row.Calls++
-			row.CostUSD += round.CostUSD
-		}
-		grouped := make([]SpendRow, 0, len(order))
-		for _, day := range order {
-			grouped = append(grouped, *rows[day])
-		}
+		grouped := roundsByDay(id, status, recorded.Rounds, time.Time{})
+		report.reaching(grouped)
 		report.take(grouped)
+		report.roll(since, func() []SpendRow { return roundsByDay(id, status, recorded.Rounds, since) })
 	}
 	return nil
+}
+
+// roundsByDay groups an exchange's rounds into one row per local day it spent
+// on, keeping only the rounds at or after `since` where a moment is given — an
+// undated round being inside every window, as an undated invocation is.
+func roundsByDay(id, status string, rounds []exchange.Round, since time.Time) []SpendRow {
+	var order []string
+	rows := make(map[string]*SpendRow, len(rounds))
+	for _, round := range rounds {
+		moment := round.AskedAt
+		if round.AnsweredAt != nil {
+			moment = *round.AnsweredAt
+		}
+		if !since.IsZero() && !moment.IsZero() && moment.Before(since) {
+			continue
+		}
+		day := UndatedDay
+		if !moment.IsZero() {
+			day = LocalDay(moment)
+		}
+		row, seen := rows[day]
+		if !seen {
+			row = &SpendRow{Day: day, StreamID: id, Kind: StreamExchange, Status: status, At: moment}
+			rows[day] = row
+			order = append(order, day)
+		}
+		row.Calls++
+		row.CostUSD += round.CostUSD
+	}
+	grouped := make([]SpendRow, 0, len(order))
+	for _, day := range order {
+		grouped = append(grouped, *rows[day])
+	}
+	return grouped
 }
 
 func spendByDay(stream Stream, invocations []Invocation) []SpendRow {
