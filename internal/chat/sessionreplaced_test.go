@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,128 @@ func TestAFreshSessionRefusedToEndsTheTurnAndTheNextTurnRebuildsAgain(t *testing
 	if next.SessionID != "" || !strings.Contains(next.Prompt, sessionSetAside) || !strings.Contains(next.Prompt, "Two goals, then.") {
 		t.Fatalf("next turn resumed %q with prompt %q, want it rebuilt from the record for a fresh session", next.SessionID, next.Prompt)
 	}
+}
+
+// A conversation whose recent messages are more than a fresh session will take:
+// the rebuild at its full bound is refused too, and the turn is served on a
+// rebuild half that size, which drops the oldest of what it carried and says so.
+// Without the halving every later turn would rebuild the same refused context.
+func TestARebuildRefusedAsTooLongIsHalvedOnceAndTheTurnIsServed(t *testing.T) {
+	t.Parallel()
+
+	// Between half the bound and the whole of it, so the full rebuild is refused
+	// and the halved one is not.
+	provider := &lengthLimitedBackend{limit: maxRebuiltContextBytes * 3 / 4}
+	options := testOptions(t, provider)
+	session := openTestSession(t, options)
+
+	// Each side of each turn is recorded at the bound a message is cut to, so ten
+	// turns are more than the rebuild's bound by some way.
+	pad := func(label string) string {
+		return label + " " + strings.Repeat("x", execution.MaxEventTextBytes)
+	}
+	const turns = 10
+	for turn := 0; turn < turns; turn++ {
+		provider.reply = pad(fmt.Sprintf("answer-%d", turn))
+		if _, err := session.Send(context.Background(), pad(fmt.Sprintf("question-%d", turn))); err != nil {
+			t.Fatalf("Send() error = %v on turn %d", err, turn+1)
+		}
+	}
+	before := len(provider.requests)
+
+	provider.reply, provider.refuses = "Served after all.", "session-1"
+	reply, err := session.Send(context.Background(), "and now?")
+	if err != nil {
+		t.Fatalf("Send() error = %v, want the turn served on a smaller rebuild", err)
+	}
+	if !strings.Contains(reply.Text, "Served after all.") {
+		t.Fatalf("reply = %q, want the answer the halved rebuild was given", reply.Text)
+	}
+	asked := provider.requests[before:]
+	if len(asked) != 3 {
+		t.Fatalf("provider asked %d times for the turn, want the refused session, the refused rebuild, and the halved one", len(asked))
+	}
+	full, halved := asked[1], asked[2]
+	if full.SessionID != "" || halved.SessionID != "" {
+		t.Fatalf("rebuilt attempts resumed %q and %q, want neither to resume a session", full.SessionID, halved.SessionID)
+	}
+	if len(full.Prompt) <= provider.limit || len(halved.Prompt) > provider.limit {
+		t.Fatalf("rebuilds were %d then %d bytes, want the first over %d and the second within it", len(full.Prompt), len(halved.Prompt), provider.limit)
+	}
+	for _, want := range []string{rebuiltContextHeader, sessionSetAside, "earlier message(s) are not carried here.", fmt.Sprintf("answer-%d", turns-1), "and now?"} {
+		if !strings.Contains(halved.Prompt, want) {
+			t.Fatalf("halved prompt is missing %q", want)
+		}
+	}
+	// The oldest go first: what the full rebuild carried that the halved one does
+	// not is the start of the conversation, never its end.
+	if strings.Contains(halved.Prompt, "question-0 ") || strings.Count(halved.Prompt, rebuiltContextHeader) != 1 {
+		t.Fatalf("halved prompt carries the oldest message or the reconstruction twice")
+	}
+	if !strings.Contains(full.Prompt, "answer-4 ") || strings.Contains(halved.Prompt, "answer-4 ") {
+		t.Fatalf("want answer-4 carried by the full rebuild and dropped from the halved one")
+	}
+
+	// The turn after resumes the fresh session rather than rebuilding again.
+	if _, err := session.Send(context.Background(), "still there?"); err != nil {
+		t.Fatalf("Send() error = %v on the turn after", err)
+	}
+	if next := provider.requests[len(provider.requests)-1]; next.SessionID == "" || strings.Contains(next.Prompt, rebuiltContextHeader) {
+		t.Fatalf("next turn resumed %q, want the fresh session resumed and nothing rebuilt", next.SessionID)
+	}
+}
+
+// A message that alone is more than the rebuild may spend is dropped with
+// everything before it, and the account still says so rather than going quiet.
+func TestARebuildThatCarriesNoMessageStillSaysWhatWasLeftOut(t *testing.T) {
+	t.Parallel()
+
+	event, err := execution.NewEvent("chat-test", 1, fixedClock{}.Now(), execution.EventAgentMessage, "test",
+		map[string]any{"text": strings.Repeat("z", 64)})
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	if rendered := recordedMessages([]execution.Event{event}, 32); !strings.HasPrefix(rendered, "- 1 earlier message(s) are not carried here.") {
+		t.Fatalf("rendered = %q, want the dropped message accounted for", rendered)
+	}
+}
+
+// lengthLimitedBackend serves every turn, except that it refuses the session
+// named refuses as too long once a test names one, and any sessionless prompt
+// longer than limit, the way a provider refuses a request past its window.
+type lengthLimitedBackend struct {
+	limit    int
+	refuses  string
+	reply    string
+	requests []backendapi.RunRequest
+	sessions int
+}
+
+func (f *lengthLimitedBackend) Run(_ context.Context, request backendapi.RunRequest) (backendapi.RunResult, error) {
+	f.requests = append(f.requests, request)
+	result := backendapi.RunResult{FinalText: f.reply, SessionID: request.SessionID}
+	switch {
+	case f.refuses != "" && request.SessionID == f.refuses:
+		result = backendapi.RunResult{IsError: true, FinalText: "Prompt is too long"}
+	case request.SessionID == "" && len(request.Prompt) > f.limit:
+		result = backendapi.RunResult{IsError: true, FinalText: "Prompt is too long"}
+	case request.SessionID == "":
+		f.sessions++
+		result.SessionID = fmt.Sprintf("session-%d", f.sessions)
+	}
+	sequence := request.LastSequence + 1
+	if request.EventSink != nil {
+		event, err := execution.NewEvent(request.RunID, sequence, fixedClock{}.Now(),
+			execution.EventAgentMessage, "provider.test", map[string]any{"text": result.FinalText})
+		if err != nil {
+			return backendapi.RunResult{}, err
+		}
+		if err := request.EventSink(event); err != nil {
+			return backendapi.RunResult{}, err
+		}
+	}
+	result.LastEvent = sequence
+	return result, nil
 }
 
 // Other refusals are not read as length, and neither is a reply that talks about

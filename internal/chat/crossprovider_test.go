@@ -689,7 +689,7 @@ func TestTheRebuildBudgetCountsBothSidesOfTheExchange(t *testing.T) {
 		say(execution.EventAgentMessage, fmt.Sprintf("answer %d", turn))
 	}
 
-	rendered := recordedMessages(events)
+	rendered := recordedMessages(events, maxRebuiltContextBytes)
 	if !strings.HasPrefix(rendered, "- 2 earlier message(s) are not carried here.") {
 		t.Fatalf("rendered = %q, want the dropped pair accounted for as messages", rendered[:min(len(rendered), 80)])
 	}
@@ -705,7 +705,7 @@ func TestTheRebuildBudgetCountsBothSidesOfTheExchange(t *testing.T) {
 	say(execution.EventAgentMessage, "an early reply")
 	say(execution.EventOperatorMessage, strings.Repeat("y", maxRebuiltContextBytes))
 	say(execution.EventAgentMessage, "the latest reply")
-	rendered = recordedMessages(events)
+	rendered = recordedMessages(events, maxRebuiltContextBytes)
 	if !strings.HasPrefix(rendered, "- 2 earlier message(s) are not carried here.") || strings.Contains(rendered, "an early reply") {
 		t.Fatalf("rendered = %q, want the oversized message and everything before it dropped", rendered[:min(len(rendered), 200)])
 	}

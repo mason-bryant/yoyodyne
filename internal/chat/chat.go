@@ -611,6 +611,14 @@ type Session struct {
 	// would have resumed, because that session had grown past its budget. It is
 	// per-turn and cleared as each one starts; see compact.go.
 	compacting bool
+	// rebuiltMessageBytes is what the turn in flight's rebuild may spend on what
+	// has been said, and zero where it may spend the whole of
+	// maxRebuiltContextBytes. rebuiltFrom is the turn's own prompt and the reason
+	// the last rebuild was put in front of, so a rebuild the provider refused as too
+	// long can be made again smaller. Both are per-turn and cleared as each one
+	// starts; see rebuild.go.
+	rebuiltMessageBytes int
+	rebuiltFrom         *rebuildInput
 	// lastInvocationCostUSD is what the provider charged for the invocation just
 	// taken, kept apart from both totals because an exchange is charged per
 	// invocation rather than per message: the round that carried an answer back
@@ -1462,6 +1470,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	// after the operator's side is on the record and before the invocation's
 	// events are numbered, because the compaction is recorded too.
 	s.compacting = false
+	s.rebuiltMessageBytes, s.rebuiltFrom = 0, nil
 	defer func() { s.compacting = false }()
 	if due := s.compactionDue(systemPrompt, prompt); due != nil {
 		compacted, err := s.compact(systemPrompt, prompt, *due)
@@ -1592,6 +1601,9 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		// refused as too long, so a fresh session refused the same way ends the
 		// turn rather than setting aside the one it just opened.
 		replaced bool
+		// shrunk says this turn has already halved a rebuild the provider refused
+		// as too long, so a smaller one refused the same way ends the turn.
+		shrunk bool
 	)
 	// What this invocation costs is counted across the attempts it took. An
 	// exchange is charged per invocation rather than per message, and an attempt
@@ -1635,6 +1647,18 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 			policy = s.failoverPolicy()
 			s.stream.interrupted()
 			continue
+		}
+		// A fresh session refused as too long is refused on the rebuild itself,
+		// which is what every later turn would send again. So the rebuild is made
+		// once more on half the bound, and the turn asked again; a rebuild the
+		// halving would not shrink, or a second refusal, ends the turn as before.
+		if why := refusedAsTooLong(result, err); why != "" && resumed == "" && !shrunk {
+			shrunk = true
+			if smaller, ok := s.shrinkRebuild(request); ok {
+				request = smaller
+				s.stream.interrupted()
+				continue
+			}
 		}
 		limit := refusedForUsageLimit(result, err)
 		if limit == nil {
