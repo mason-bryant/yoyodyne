@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/forgehygiene"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
@@ -39,7 +40,8 @@ import (
 // actually test — a typed nil pointer in an interface field is not nil, and the
 // pass would call through it.
 func recurringTrigger(parts components, configPath string, stderr io.Writer) orchestrator.ScheduleRecurring {
-	if len(parts.config.RecurringTasks) == 0 {
+	instances := programManagerPasses(parts)
+	if len(parts.config.RecurringTasks) == 0 && len(instances) == 0 {
 		return nil
 	}
 	trigger := &orchestrator.Trigger{
@@ -60,6 +62,20 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		// interval has passed, fires into it to find out whether it still does.
 		Outages:     parts.outages,
 		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
+	}
+	// The program manager instances their triggers wake, with the cursor each
+	// keeps over the streams it watches and the streams themselves, and whether a
+	// turn is already in flight on an instance's conversation, which skips its
+	// pass rather than queueing it.
+	if len(instances) > 0 {
+		trigger.Instances = instances
+		trigger.Cursors = parts.store.PassCursors()
+		trigger.Events = passEvents{runs: parts.store, repository: parts.repository}
+		if conversations, err := runstate.NewConversationStore(parts.stateRoot, parts.config.Product.ID); err == nil {
+			trigger.Conversations = instanceConversations{store: conversations}
+		} else if stderr != nil {
+			fmt.Fprintf(stderr, "the program manager instances' conversations could not be opened to ask whether a turn is in flight on one, so a pass is opened and recorded as unreachable where one is: %v\n", err)
+		}
 	}
 	// The harness's own reading of the forge on the development manager's pass,
 	// through the same client the publication path opens and merges requests
@@ -106,7 +122,7 @@ type roleConversation struct {
 	// open is how the conversation is opened for a turn, and nil for every
 	// trigger but a test's: it is openChatOnModel then, which is the operator's own
 	// way into the conversation with the task's model for the turn.
-	open func(ctx context.Context, role domain.AgentRole, model string) (*chat.Session, *runstate.ConversationHold, error)
+	open func(ctx context.Context, role domain.AgentRole, agent, model string) (*chat.Session, *runstate.ConversationHold, error)
 }
 
 // Wake puts one message into a role's conversation and reads the account it gave
@@ -130,8 +146,8 @@ type roleConversation struct {
 // program manager's lane report — is stamped with the pass as well as the turn,
 // and a report it carried that was refused is on the pass's record beside
 // whatever else the pass has to say about itself.
-func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, pass, model, message string) (orchestrator.Turn, error) {
-	session, lease, err := r.opener()(ctx, role, model)
+func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, agent, pass, model, message string) (orchestrator.Turn, error) {
+	session, lease, err := r.opener()(ctx, role, agent, model)
 	if err != nil {
 		return orchestrator.Turn{}, fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
@@ -212,12 +228,12 @@ func notWoken(err error) error {
 	return err
 }
 
-func (r roleConversation) opener() func(context.Context, domain.AgentRole, string) (*chat.Session, *runstate.ConversationHold, error) {
+func (r roleConversation) opener() func(context.Context, domain.AgentRole, string, string) (*chat.Session, *runstate.ConversationHold, error) {
 	if r.open != nil {
 		return r.open
 	}
-	return func(ctx context.Context, role domain.AgentRole, model string) (*chat.Session, *runstate.ConversationHold, error) {
-		return openChatOnModel(ctx, role, "", r.configPath, model, false, false, r.errors())
+	return func(ctx context.Context, role domain.AgentRole, agent, model string) (*chat.Session, *runstate.ConversationHold, error) {
+		return openChatOnModel(ctx, role, agent, r.configPath, model, false, false, r.errors())
 	}
 }
 
@@ -405,6 +421,11 @@ func renderSweep(recorded runstate.Sweep) string {
 	if recorded.Summoned != "" {
 		fmt.Fprintf(&rendered, "  summoned ahead of its schedule by %s\n", recorded.Summoned)
 	}
+	// A program manager's pass says what it was handed, so a burst that woke the
+	// instance once reads as one pass carrying the burst.
+	if carried := describeCarried(recorded.Events); carried != "" {
+		fmt.Fprintf(&rendered, "  carried %s since its last pass\n", carried)
+	}
 	if recorded.Result == nil {
 		fmt.Fprintf(&rendered, "  no account of this pass was recorded: %s\n", nonEmptySweepProblem(recorded.Problem))
 		return rendered.String()
@@ -431,6 +452,22 @@ func renderSweep(recorded runstate.Sweep) string {
 		fmt.Fprintf(&rendered, "  %s\n", recorded.Problem)
 	}
 	return rendered.String()
+}
+
+// describeCarried says how many events of each class a pass was handed, in the
+// order the classes are defined, and nothing for a pass handed none.
+func describeCarried(events map[string]int) string {
+	var parts []string
+	for _, class := range config.TriggerEvents {
+		count := events[string(class)]
+		switch {
+		case count == 1:
+			parts = append(parts, "1 "+strings.TrimSuffix(string(class), "s"))
+		case count > 1:
+			parts = append(parts, fmt.Sprintf("%d %s", count, class))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func nonEmptySweepProblem(problem string) string {
@@ -469,6 +506,10 @@ Three outcomes look alike and are not: a pass that found nothing shows its own
 summary and no findings, which on a healthy harness is most of them; a pass that
 produced no account says so and names what stopped it; and a pass stopped by its
 turn bound is recorded as partial, so it is never mistaken for a finished one.
+
+A program manager instance's passes are listed under the instance's name, and
+a pass its events woke -- landings, admissions, stoppages since its last pass
+-- says how many of each it carried under its header.
 
 A pass the intake brake summoned ahead of its schedule says so under its header,
 naming what tripped the brake. It is the development manager's sweep fired the

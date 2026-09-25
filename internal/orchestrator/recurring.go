@@ -87,6 +87,9 @@ type RecurringClaims interface {
 	// for: the development manager's sweep now, rather than at its next pass.
 	Summon(ctx context.Context, task string, now time.Time) (runstate.SweepClaim, error)
 	Settle(ctx context.Context, task, problem string) (runstate.SweepClaim, error)
+	// Find reads a cadence without claiming it, which a program manager's event
+	// wake asks before it summons a pass: when the instance last fired.
+	Find(task string) (runstate.SweepClaim, bool, error)
 }
 
 // RecurringReports is where a firing's account is kept. It is required for the
@@ -130,8 +133,13 @@ type RecurringForge interface {
 // The pass names the firing the turn belongs to — the task and which of its
 // firings this is — so what the turn records on the pass's behalf, a program
 // manager's lane report first among it, says which pass wrote it.
+//
+// The agent names which of the role's agents is woken, and is empty for a
+// recurring task, which wakes the role's agent as a conversation opened for the
+// role does. A program manager's pass names its instance, because the role has
+// as many agents as it has lanes and each pass is one instance's.
 type RecurringRole interface {
-	Wake(ctx context.Context, role domain.AgentRole, pass, model, message string) (Turn, error)
+	Wake(ctx context.Context, role domain.AgentRole, agent, pass, model, message string) (Turn, error)
 }
 
 // Turn is what one turn of a firing came to.
@@ -192,6 +200,9 @@ type Fired struct {
 	Truncated bool `json:"truncated,omitempty"`
 	// Summoned is what fired this pass out of its cadence, where something did.
 	Summoned string `json:"summoned,omitempty"`
+	// Events is how many events of each class a program manager instance's pass
+	// was handed, and empty on every other firing.
+	Events map[string]int `json:"events,omitempty"`
 	// Problem is what stopped or spoiled the firing.
 	Problem string `json:"problem,omitempty"`
 }
@@ -246,7 +257,23 @@ type Trigger struct {
 	// wired without one records what the role said and reads the forge for
 	// nothing, which is what every pass did until the requests were counted.
 	Forge RecurringForge
-	Clock execution.Clock
+	// Instances are the program manager instances their triggers wake, keyed by
+	// the agent's name, as this pull read the configuration. Optional: a trigger
+	// wired without them fires the recurring tasks and nothing else, which is
+	// what every trigger did before an instance could be woken.
+	Instances map[string]config.AgentConfig
+	// Cursors is where each instance has read its event streams up to, and
+	// Events is how the streams are read past it. Both are needed for an
+	// instance's `on` to wake it; an instance with only a schedule needs
+	// neither. See programmanagerpass.go.
+	Cursors PassCursors
+	Events  PassEvents
+	// Conversations says whether a turn is in flight on an instance's
+	// conversation, so a pass is skipped rather than queued behind it. Optional,
+	// and a trigger wired without it opens the conversation and records a pass
+	// that could not reach the role, as a recurring task does.
+	Conversations InstanceConversations
+	Clock         execution.Clock
 }
 
 // RecurringOutages is the outage record as a firing reads it. It is satisfied
@@ -306,8 +333,20 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 			fired := t.refuse(ctx, name, task, outage)
 			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 		}
-		fired := t.run(ctx, name, passName(claimed), task, wakeMessage(name, task), "")
+		fired := t.run(ctx, firing{name: name, pass: passName(claimed), task: task, message: wakeMessage(name, task)})
 		return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
+	}
+	// The program manager instances come after the tasks and share their bound:
+	// at most one firing per pull, whichever of the two it is.
+	for _, agent := range t.instanceNames() {
+		fired, took, err := t.pass(ctx, agent, t.Instances[agent], outage, away)
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		if took {
+			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
+		}
 	}
 	return RecurringSweep{}, errors.Join(problems...)
 }
@@ -376,7 +415,7 @@ func (t Trigger) Summon(ctx context.Context, summons BrakeSummons) (Fired, error
 		return Fired{}, fmt.Errorf("claim the summoned firing of the recurring task %s: %w", name, err)
 	}
 	summoned := summonedBy(summons.Hold)
-	fired := t.run(ctx, name, passName(claimed), task, summonsMessage(name, task, summons.Hold), summoned)
+	fired := t.run(ctx, firing{name: name, pass: passName(claimed), task: task, message: summonsMessage(name, task, summons.Hold), summoned: summoned})
 	return fired, nil
 }
 
@@ -452,21 +491,45 @@ func (t Trigger) refuse(ctx context.Context, name string, task config.RecurringT
 	return fired
 }
 
+// firing is one firing as run takes it: what it is recorded under, what the
+// role is told, and — for a program manager's pass — the instance it wakes, the
+// events it carries, and what is done once its turns are over.
+type firing struct {
+	name     string
+	pass     string
+	task     config.RecurringTask
+	message  string
+	summoned string
+	// agent is the instance a program manager's pass wakes, and empty for a
+	// recurring task.
+	agent string
+	// events counts what the pass was handed, by class.
+	events map[string]int
+	// finish is called once the turns are over and before anything is recorded,
+	// with whether every turn the pass asked for was answered. What it returns is
+	// a problem for the record. A program manager's pass moves its cursor there,
+	// so a pass that failed leaves it where it was and says so on the record.
+	finish func(answered bool) string
+}
+
 // run takes one firing's turns and records what they came to. It never returns
 // an error: a firing that failed is a fact about the schedule that belongs in the
 // record and beside the pass, rather than something that stops the pull.
-func (t Trigger) run(ctx context.Context, name, pass string, task config.RecurringTask, message, summoned string) Fired {
-	fired := Fired{Task: name, Role: task.Role, Summoned: summoned}
+func (t Trigger) run(ctx context.Context, f firing) Fired {
+	name, pass, task, message := f.name, f.pass, f.task, f.message
+	fired := Fired{Task: name, Role: task.Role, Summoned: f.summoned, Events: f.events}
 	recorded := runstate.Sweep{
 		Task:      name,
 		Role:      task.Role,
 		StartedAt: t.now(),
-		Summoned:  summoned,
+		Summoned:  f.summoned,
+		Events:    f.events,
 	}
 	var merged *sweep.Result
 	var problems []string
+	failed := false
 	for turn := 0; turn < task.Turns(); turn++ {
-		answered, err := t.Roles.Wake(ctx, task.Role, pass, task.ModelSelector(), message)
+		answered, err := t.Roles.Wake(ctx, task.Role, f.agent, pass, task.ModelSelector(), message)
 		// What the turn cost is carried whichever way it went, because the provider
 		// charges for a turn that failed exactly as for one that answered — and so
 		// is the model it cost that on, which is what the spend is attributed to.
@@ -481,6 +544,7 @@ func (t Trigger) run(ctx context.Context, name, pass string, task config.Recurri
 		}
 		if err != nil {
 			problems = append(problems, describeFailedTurn(name, task.Role, turn+1, err))
+			failed = true
 			break
 		}
 		fired.Turns++
@@ -524,6 +588,9 @@ func (t Trigger) run(ctx context.Context, name, pass string, task config.Recurri
 		problems = append(problems, fmt.Sprintf(
 			"the pass of the recurring task %s produced no account of itself, so what it found is only in the %s's conversation",
 			name, task.Role))
+	}
+	if f.finish != nil {
+		problems = append(problems, f.finish(!failed && fired.Turns > 0))
 	}
 	recorded.EndedAt = t.now()
 	recorded.Result = merged
@@ -910,6 +977,9 @@ func (s RecurringSweep) Render() string {
 		}
 		if fired.Summoned != "" {
 			fmt.Fprintf(&rendered, "  summoned ahead of its schedule by %s\n", fired.Summoned)
+		}
+		if len(fired.Events) > 0 {
+			fmt.Fprintf(&rendered, "  carried %s since its last pass\n", describeEventCounts(fired.Events))
 		}
 		if fired.SilentRepairs > 0 {
 			fmt.Fprintf(&rendered, "  %d of its fixes filed nothing for their root cause\n", fired.SilentRepairs)

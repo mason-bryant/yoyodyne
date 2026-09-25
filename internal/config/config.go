@@ -1107,6 +1107,7 @@ func (c Config) Validate() error {
 	problems = append(problems, c.Slack.problems()...)
 	problems = append(problems, c.Services.problems(c.Slack)...)
 	problems = append(problems, validateRecurringTasks(c)...)
+	problems = append(problems, passNameProblems(c)...)
 
 	if len(problems) > 0 {
 		return ValidationError{Problems: problems}

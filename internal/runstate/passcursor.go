@@ -1,0 +1,259 @@
+package runstate
+
+// Where a program manager instance has read its event streams up to.
+//
+// An instance is woken by what happened in the product as well as by its
+// schedule: a run landing, a run stopping, work being admitted. What makes that
+// a wake rather than a flood is a position per stream. Everything recorded past
+// the position is what the next pass is handed, and the position moves only
+// once a pass has been handed it and completed — so a burst is one pass, and a
+// pass that failed leaves the same events for the next one rather than losing
+// them. See "Triggers and passes" in docs/designs/program-manager.md.
+//
+// The position is a moment rather than an offset into either stream. Both
+// streams are read by when their entries say they happened, the run records by
+// when each run ended and the tracker's export by when each item was created,
+// and neither is an append-only file an offset would stay valid in: a run
+// record is rewritten in place, and the export is regenerated whole.
+//
+// It lives beside the instance's lane report, under the state root, and never
+// in the repository: it is the harness's bookkeeping about one instance, not
+// anything a person edits.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
+)
+
+// PassCursorSchemaVersion is the shape of a stored cursor.
+const PassCursorSchemaVersion = 1
+
+// The event streams a program manager instance reads. The set is closed for
+// the reason the trigger classes are: a stream the harness does not read is a
+// position nothing ever moves.
+const (
+	// PassStreamRuns is the run records: a run that landed its change, and a
+	// run that stopped with its work item back in somebody's hands.
+	PassStreamRuns = "runs"
+	// PassStreamTracker is the tracker: work admitted to the backlog.
+	PassStreamTracker = "tracker"
+)
+
+// PassStreams is the closed set, in the order a pass's message lists them.
+var PassStreams = []string{PassStreamRuns, PassStreamTracker}
+
+func validPassStream(stream string) bool {
+	for _, known := range PassStreams {
+		if stream == known {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	passCursorFile     = "cursor.json"
+	passCursorLockFile = ".cursor.lock"
+)
+
+// PassCursor is one instance's position in each stream it reads.
+type PassCursor struct {
+	SchemaVersion int              `json:"schema_version"`
+	ProductID     domain.ProductID `json:"product_id"`
+	Agent         string           `json:"agent"`
+	// Streams is where each stream has been read up to: every entry at or before
+	// the moment named has been handed to a pass that completed, or predates the
+	// instance being watched at all.
+	Streams   map[string]time.Time `json:"streams"`
+	UpdatedAt time.Time            `json:"updated_at"`
+}
+
+// Validate reports every contract violation in the cursor at once.
+func (c PassCursor) Validate() error {
+	var problems []error
+	if c.SchemaVersion != PassCursorSchemaVersion {
+		problems = append(problems, fmt.Errorf("pass cursor schema version %d is not supported", c.SchemaVersion))
+	}
+	if err := domain.ValidateIdentifier("product id", string(c.ProductID)); err != nil {
+		problems = append(problems, err)
+	}
+	if err := domain.ValidateIdentifier("agent", c.Agent); err != nil {
+		problems = append(problems, err)
+	}
+	streams := make([]string, 0, len(c.Streams))
+	for stream := range c.Streams {
+		streams = append(streams, stream)
+	}
+	sort.Strings(streams)
+	for _, stream := range streams {
+		if !validPassStream(stream) {
+			problems = append(problems, fmt.Errorf("stream %q is not one a pass reads; the streams are %v", stream, PassStreams))
+		}
+		if c.Streams[stream].IsZero() {
+			problems = append(problems, fmt.Errorf("stream %q has no position", stream))
+		}
+	}
+	if c.UpdatedAt.IsZero() {
+		problems = append(problems, errors.New("updated_at is required"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid pass cursor: %w", err)
+	}
+	return nil
+}
+
+// PassCursorStore keeps every instance's cursor for one product.
+type PassCursorStore struct {
+	root      string
+	productID domain.ProductID
+}
+
+// NewPassCursorStore opens the cursors kept under a state root.
+func NewPassCursorStore(root string, productID domain.ProductID) (*PassCursorStore, error) {
+	if !filepath.IsAbs(root) {
+		return nil, errors.New("state root must be an absolute path")
+	}
+	if err := domain.ValidateIdentifier("product id", string(productID)); err != nil {
+		return nil, err
+	}
+	return &PassCursorStore{
+		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "program-managers"),
+		productID: productID,
+	}, nil
+}
+
+// PassCursors is the cursor store for this run store's product, reached from
+// here for the reason the sweeps are.
+func (s *Store) PassCursors() *PassCursorStore {
+	return &PassCursorStore{
+		root:      filepath.Join(filepath.Dir(s.root), "program-managers"),
+		productID: s.productID,
+	}
+}
+
+// Path names one instance's cursor, so a failure can say where it is.
+func (s *PassCursorStore) Path(agent string) string {
+	return filepath.Join(s.root, agent, passCursorFile)
+}
+
+// Load reads one instance's cursor. An instance that has never been watched is
+// the ordinary answer rather than a failure; a cursor that cannot be read is
+// neither, because reading past it as absent would hand the next pass either
+// nothing or everything the streams have ever held.
+func (s *PassCursorStore) Load(agent string) (PassCursor, bool, error) {
+	if err := domain.ValidateIdentifier("agent", agent); err != nil {
+		return PassCursor{}, false, err
+	}
+	stored, err := os.ReadFile(s.Path(agent))
+	if errors.Is(err, os.ErrNotExist) {
+		return PassCursor{}, false, nil
+	}
+	if err != nil {
+		return PassCursor{}, false, fmt.Errorf("read the %s pass cursor: %w", agent, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(stored)))
+	decoder.DisallowUnknownFields()
+	var cursor PassCursor
+	if err := decoder.Decode(&cursor); err != nil {
+		return PassCursor{}, false, fmt.Errorf("decode the %s pass cursor at %s: %w", agent, s.Path(agent), err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return PassCursor{}, false, fmt.Errorf("decode the %s pass cursor at %s: %w", agent, s.Path(agent), err)
+	}
+	if err := cursor.Validate(); err != nil {
+		return PassCursor{}, false, err
+	}
+	if cursor.ProductID != s.productID {
+		return PassCursor{}, false, fmt.Errorf("the pass cursor at %s belongs to product %q, not %q", s.Path(agent), cursor.ProductID, s.productID)
+	}
+	if cursor.Agent != agent {
+		return PassCursor{}, false, fmt.Errorf("the pass cursor at %s belongs to agent %q, not %q", s.Path(agent), cursor.Agent, agent)
+	}
+	return cursor, true, nil
+}
+
+// Advance moves the named streams of one instance's cursor to the positions
+// given and leaves every other stream where it was. A position is never moved
+// backwards: two sessions settling passes over one instance must not hand the
+// later of them events the earlier already carried.
+func (s *PassCursorStore) Advance(ctx context.Context, agent string, positions map[string]time.Time, now time.Time) (PassCursor, error) {
+	if err := domain.ValidateIdentifier("agent", agent); err != nil {
+		return PassCursor{}, err
+	}
+	release, err := s.lock(ctx, agent)
+	if err != nil {
+		return PassCursor{}, err
+	}
+	defer release()
+
+	cursor, found, err := s.Load(agent)
+	if err != nil {
+		return PassCursor{}, err
+	}
+	if !found {
+		cursor = PassCursor{Agent: agent, Streams: map[string]time.Time{}}
+	}
+	if cursor.Streams == nil {
+		cursor.Streams = map[string]time.Time{}
+	}
+	for stream, at := range positions {
+		if !validPassStream(stream) {
+			return PassCursor{}, fmt.Errorf("stream %q is not one a pass reads; the streams are %v", stream, PassStreams)
+		}
+		at = at.UTC()
+		if current, kept := cursor.Streams[stream]; kept && !at.After(current) {
+			continue
+		}
+		cursor.Streams[stream] = at
+	}
+	at := now
+	if at.IsZero() {
+		at = time.Now()
+	}
+	cursor.SchemaVersion = PassCursorSchemaVersion
+	cursor.ProductID = s.productID
+	cursor.UpdatedAt = at.UTC()
+	if err := cursor.Validate(); err != nil {
+		return PassCursor{}, err
+	}
+	encoded, err := json.MarshalIndent(cursor, "", "  ")
+	if err != nil {
+		return PassCursor{}, fmt.Errorf("encode the %s pass cursor: %w", agent, err)
+	}
+	confined, err := repowrite.NewRoot(filepath.Dir(s.root))
+	if err != nil {
+		return PassCursor{}, fmt.Errorf("resolve the product's state directory: %w", err)
+	}
+	if _, err := confined.WriteFile(filepath.Join(filepath.Base(s.root), agent, passCursorFile), append(encoded, '\n')); err != nil {
+		return PassCursor{}, fmt.Errorf("record the %s pass cursor: %w", agent, err)
+	}
+	return cursor, nil
+}
+
+// lock serializes the read-modify-write of one instance's cursor across every
+// Yoyodyne process.
+func (s *PassCursorStore) lock(ctx context.Context, agent string) (func(), error) {
+	directory := filepath.Join(s.root, agent)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, fmt.Errorf("create the %s pass cursor directory: %w", agent, err)
+	}
+	file, err := os.OpenFile(filepath.Join(directory, passCursorLockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open the %s pass cursor lock: %w", agent, err)
+	}
+	if err := lockStateFile(ctx, file); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("lock the %s pass cursor: %w", agent, err)
+	}
+	return func() { _ = releaseStateFile(file) }, nil
+}

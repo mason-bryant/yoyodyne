@@ -42,7 +42,7 @@ func firePassOfProgramManager(t *testing.T, reply string) (runstate.Sweep, *runs
 	if err != nil {
 		t.Fatalf("NewLaneReportStore() error = %v", err)
 	}
-	open := func(_ context.Context, role domain.AgentRole, _ string) (*chat.Session, *runstate.ConversationHold, error) {
+	open := func(_ context.Context, role domain.AgentRole, _, _ string) (*chat.Session, *runstate.ConversationHold, error) {
 		session, err := chat.Open(chat.Options{
 			Role:         role,
 			Agent:        "factory",

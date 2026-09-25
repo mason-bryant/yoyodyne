@@ -3516,6 +3516,46 @@ func TestAHeldPassStillPutsStoppedWorkToTheDevelopmentManager(t *testing.T) {
 	}
 }
 
+// Held intake does not stop a program manager instance's pass any more than it
+// stops a recurring task: a pass chooses no work, and a held queue is often
+// waiting on exactly the look a pass takes. The pause is what stops one.
+func TestAHeldPassStillFiresAProgramManagersPass(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.held = &runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
+		Reason:        "three runs blocked in a row",
+	}
+	harness.fire = func(_ *scheduleHarness, passes int) (RecurringSweep, error) {
+		if passes > 1 {
+			return RecurringSweep{}, nil
+		}
+		return RecurringSweep{Fired: []Fired{{
+			Task:   "reliability-pm",
+			Role:   domain.RoleProgramManager,
+			Turns:  1,
+			Events: map[string]int{"stoppages": 3},
+		}}}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleIntakeHeld || len(schedule.Started) != 0 {
+		t.Fatalf("schedule = %#v, want a held pass that chose nothing", schedule)
+	}
+	if len(schedule.Fired) != 1 || schedule.Fired[0].Task != "reliability-pm" {
+		t.Fatalf("fired = %#v, want the instance's pass fired while intake was held", schedule.Fired)
+	}
+	if !strings.Contains(schedule.Render(), "carried 3 stoppages") {
+		t.Errorf("rendered = %q, want what the pass carried on the pass's account", schedule.Render())
+	}
+}
+
 // A delivery that keeps failing is one problem rather than a thousand. A
 // watching session polls all night, so a pass that accumulated every failed
 // attempt would report the same sentence once a minute and bury what it did.

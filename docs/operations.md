@@ -3385,6 +3385,15 @@ these reports is read for: a repair that leaves its cause in place is a repair
 the next pass makes again, and a listing that could not tell the two apart could
 not show it either way.
 
+**A program manager instance's passes are here too**, under the instance's
+name — `yoyo sweeps --task reliability-pm` — because each is a recurring-task
+firing. A pass its events woke says what it was handed under its header,
+`carried 1 landing, 30 admissions since its last pass`, and `--json` carries the
+counts by class as `events`. A pass that failed says its cursor was not moved,
+and the next pass of the instance carries the same events.
+[A program manager instance's passes](configuration.md#a-program-manager-instances-passes)
+says what wakes one.
+
 **Some findings on a development manager's pass are the harness's own.** Beside
 what the role reported, the harness lists the forge's open pull requests on every
 firing of that role's task and states each one held open for nothing: a request
