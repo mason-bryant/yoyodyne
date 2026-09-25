@@ -191,6 +191,34 @@ recurring_tasks:
       End with a durable report. Put any questions for the operator at the
       top; when nothing needs him, say so and stop.
 
+  # The architect acts only when spoken to, so work carried in her conversation
+  # and proposals to her documents sat for days: on 2026-09-25 eleven items
+  # waited on her and her last turn was five days old. The operator added this
+  # pass that day. What she rules still needs transcribing into the repository
+  # until yoyodyne-ifd.100 gives her a write action, so she says what needs landing.
+  architect-pass:
+    role: architect
+    every: 24h
+    enabled: true
+    max_turns: 4
+    prompt: |
+      Your daily pass over what is waiting on you.
+
+      Survey the work items carried in your conversation (executor
+      conversation:architect) and the undecided proposals to your documents.
+      Take the oldest first, and rule on as many as this pass can do properly
+      rather than touching all of them: read each item or proposal in full
+      and the documents it rests on before deciding. For each, say plainly
+      what you decided, and write any design text so that landing it is
+      copying.
+
+      Name anything that needs the operator rather than deciding around it.
+
+      End with a durable report: what you ruled this pass, what needs landing
+      in the repository and where, what is still waiting on you and how old
+      the oldest is, and any question for the operator at the top. When
+      nothing is waiting, say NOTHING WAITING and stop.
+
 approvals:
   brief: human
   goals: human
