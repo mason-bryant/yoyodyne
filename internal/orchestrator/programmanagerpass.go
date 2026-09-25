@@ -1,0 +1,475 @@
+package orchestrator
+
+// A program manager instance's pass: a recurring-task firing over one lane,
+// woken by the instance's schedule or by what happened in the product.
+//
+// "Triggers and passes" in docs/designs/program-manager.md is what this builds,
+// and it is built on the recurring-task machinery rather than beside it, so
+// every rule that file states holds here unchanged: the operator's pause stops
+// a pass and the intake hold does not, the claim is taken before the first turn
+// is asked, at most one firing is made per pull, a provider answering nobody is
+// recorded as the wait rather than as a turn that failed, and every pass ends in
+// the same durable record `yoyo sweeps` reads. What is added is three things.
+//
+// # A pass is one instance's
+//
+// The role has as many agents as it has lanes, so a pass wakes the instance by
+// name rather than the role, and is recorded and paced under the instance's
+// name. A turn already in flight on that instance's conversation skips the pass
+// rather than queueing it: an operator talking to the instance is already doing
+// what the pass would, and the events wait past the cursor for the pass after.
+//
+// # A burst wakes an instance once
+//
+// Each instance keeps a position in each event stream it reads — the run
+// records, for landings and stoppages, and the tracker, for admissions. An event
+// past the position arms one wake. The wake is taken at the next pull once the
+// stream has been quiet for the settle window, or at once where the schedule is
+// due, whichever comes first; the pass is handed everything between the
+// position and the moment it was taken; and the position moves to that moment
+// only once the pass has completed. So thirty items admitted in one turn are
+// one pass carrying thirty admissions, and a pass that failed leaves the same
+// events for the next one rather than losing them.
+//
+// Two bounds keep an armed wake from becoming a turn every pull. It is not
+// taken sooner than the recurring-task minimum after the instance's last pass,
+// for the reason that minimum exists — every pass is a conversation turn — and
+// which also paces the retry of a pass that failed. And a provider answering
+// nobody leaves it armed and untaken, since a wake made into the outage asks
+// nothing and would be recorded once a pull; the schedule, which the claim
+// paces, is what records the wait.
+//
+// # The model
+//
+// A pass asks for the agent's own model: an instance's triggers name none, and
+// the mechanism a recurring task uses to name one adds no key here.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/sweep"
+)
+
+// PassSettleWindow is how long an instance's streams must have been quiet
+// before an armed wake is taken without the schedule being due. It is what
+// turns a burst into one pass: a product manager admitting thirty items takes a
+// turn, and the thirty are written inside it.
+const PassSettleWindow = 2 * time.Minute
+
+// maxPassEventsListed bounds how many events of one stream a pass's message
+// lists. The counts beside them are whole; what the bound keeps is the message
+// a message rather than a dump of a busy day.
+const maxPassEventsListed = 100
+
+// maxPassEventLineBytes bounds one listed event, cut on a rune boundary.
+const maxPassEventLineBytes = 240
+
+// PassEvent is one thing that happened in the product that an instance's
+// triggers watch for.
+type PassEvent struct {
+	// Stream is where it was read from: runstate.PassStreamRuns or
+	// runstate.PassStreamTracker.
+	Stream string
+	// Class is which trigger it is: a landing, an admission, or a stoppage.
+	Class config.TriggerEvent
+	// At is when it happened, as the stream records it, and is what the cursor
+	// is compared against.
+	At time.Time
+	// Subject is the work item it is about, and Detail one line saying what
+	// happened to it.
+	Subject string
+	Detail  string
+}
+
+// PassEvents reads one stream's events recorded after one moment and at or
+// before another. It is satisfied in the CLI over the run store and the
+// tracker's export; it never fails over one unreadable entry, and fails over a
+// stream that could not be read at all.
+type PassEvents interface {
+	Events(ctx context.Context, stream string, after, until time.Time) ([]PassEvent, error)
+}
+
+// PassCursors is where each instance has read its streams up to. It is
+// satisfied by *runstate.PassCursorStore.
+type PassCursors interface {
+	Load(agent string) (runstate.PassCursor, bool, error)
+	Advance(ctx context.Context, agent string, positions map[string]time.Time, now time.Time) (runstate.PassCursor, error)
+}
+
+// InstanceConversations says whether a turn is in flight on an instance's
+// conversation, without taking it.
+type InstanceConversations interface {
+	InFlight(agent string) (bool, error)
+}
+
+// passStreamOf is the stream a trigger class is read from.
+func passStreamOf(class config.TriggerEvent) string {
+	if class == config.TriggerAdmissions {
+		return runstate.PassStreamTracker
+	}
+	return runstate.PassStreamRuns
+}
+
+// passWake is what an instance's streams hold past its cursor at one pull.
+type passWake struct {
+	// cursor is where each stream read stood before this pull, so the message
+	// can say what the events are after.
+	cursor map[string]time.Time
+	// events are the events past the cursor, of the classes the instance
+	// watches, in the order they happened.
+	events []PassEvent
+	// positions are where each stream that was read moves to once a pass taken
+	// now completes: the moment it was read up to. A stream that could not be
+	// read is absent, so its cursor stays where it was.
+	positions map[string]time.Time
+	// problems are the streams that could not be read.
+	problems []string
+}
+
+func (w passWake) armed() bool { return len(w.events) > 0 }
+
+// settled reports streams that have been quiet for the settle window: nothing
+// past the cursor happened inside it.
+func (w passWake) settled(now time.Time) bool {
+	for _, event := range w.events {
+		if now.Sub(event.At) < PassSettleWindow {
+			return false
+		}
+	}
+	return true
+}
+
+// counts is the events by class, which is what the record keeps.
+func (w passWake) counts() map[string]int {
+	if len(w.events) == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, event := range w.events {
+		counts[string(event.Class)]++
+	}
+	return counts
+}
+
+// instanceNames lists the instances in a stable order, so which one a pull
+// considers first is decided by the name rather than by map iteration.
+func (t Trigger) instanceNames() []string {
+	names := make([]string, 0, len(t.Instances))
+	for name := range t.Instances {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// pass considers one instance for a pass at this pull, and takes it where the
+// schedule is due or an armed wake has settled. It reports whether a pass was
+// taken; an error is something that stopped the instance being considered at
+// all, said beside the pull rather than recorded as a pass.
+func (t Trigger) pass(ctx context.Context, agent string, instance config.AgentConfig, outage runstate.ProviderOutage, away bool) (Fired, bool, error) {
+	triggers := instance.Triggers
+	if !triggers.Defined() {
+		return Fired{}, false, nil
+	}
+	if t.Conversations != nil {
+		busy, err := t.Conversations.InFlight(agent)
+		if err != nil {
+			return Fired{}, false, fmt.Errorf("read whether a turn is in flight on the program manager instance %s's conversation: %w", agent, err)
+		}
+		if busy {
+			return Fired{}, false, nil
+		}
+	}
+	now := t.now()
+	wake, err := t.readWake(ctx, agent, triggers, now)
+	if err != nil {
+		return Fired{}, false, err
+	}
+	var readProblem error
+	if len(wake.problems) > 0 {
+		readProblem = errors.New(strings.Join(wake.problems, "; "))
+	}
+
+	var claimed runstate.SweepClaim
+	due := false
+	if every := triggers.Every.Duration(); every > 0 {
+		claimed, err = t.Claims.Claim(ctx, agent, every, now)
+		switch {
+		case err == nil:
+			due = true
+		case errors.Is(err, runstate.ErrSweepNotDue):
+		default:
+			return Fired{}, false, errors.Join(readProblem, fmt.Errorf("claim the scheduled pass of the program manager instance %s: %w", agent, err))
+		}
+	}
+	if !due {
+		if !wake.armed() || !wake.settled(now) || away {
+			return Fired{}, false, readProblem
+		}
+		last, fired, err := t.Claims.Find(agent)
+		if err != nil {
+			return Fired{}, false, errors.Join(readProblem, fmt.Errorf("read when the program manager instance %s last passed: %w", agent, err))
+		}
+		if fired && now.Before(last.FiredAt.Add(config.MinRecurringInterval)) {
+			return Fired{}, false, readProblem
+		}
+		claimed, err = t.Claims.Summon(ctx, agent, now)
+		if err != nil {
+			return Fired{}, false, errors.Join(readProblem, fmt.Errorf("claim the pass of the program manager instance %s: %w", agent, err))
+		}
+	}
+
+	task := config.RecurringTask{
+		Role:    domain.RoleProgramManager,
+		Every:   triggers.Every,
+		Enabled: true,
+	}
+	if away {
+		return t.refuse(ctx, agent, task, outage), true, nil
+	}
+	fired := t.run(ctx, firing{
+		name:    agent,
+		pass:    passName(claimed),
+		task:    task,
+		message: instanceMessage(agent, instance, due, wake),
+		agent:   agent,
+		events:  wake.counts(),
+		finish: func(answered bool) string {
+			problems := append([]string(nil), wake.problems...)
+			problems = append(problems, t.advance(ctx, agent, wake, answered, now))
+			return boundedProblem(problems)
+		},
+	})
+	return fired, true, nil
+}
+
+// readWake reads what each stream the instance watches holds past its cursor.
+// An instance seen for the first time, or a stream it has only now begun to
+// watch, is positioned at this moment rather than at the start of the stream:
+// the first pass is handed what happened since the instance was watched, not
+// every run and item the product has ever recorded.
+func (t Trigger) readWake(ctx context.Context, agent string, triggers config.Triggers, now time.Time) (passWake, error) {
+	wake := passWake{cursor: map[string]time.Time{}, positions: map[string]time.Time{}}
+	watched := map[string]map[config.TriggerEvent]bool{}
+	for _, class := range triggers.On {
+		stream := passStreamOf(class)
+		if watched[stream] == nil {
+			watched[stream] = map[config.TriggerEvent]bool{}
+		}
+		watched[stream][class] = true
+	}
+	if len(watched) == 0 {
+		return wake, nil
+	}
+	if t.Cursors == nil || t.Events == nil {
+		wake.problems = append(wake.problems, fmt.Sprintf("the program manager instance %s watches %s, and nothing is wired to read its streams, so only its schedule wakes it", agent, describeClasses(triggers.On)))
+		return wake, nil
+	}
+	cursor, _, err := t.Cursors.Load(agent)
+	if err != nil {
+		return passWake{}, fmt.Errorf("read where the program manager instance %s has read its streams up to, so no pass over it is taken until it can be: %w", agent, err)
+	}
+	unpositioned := map[string]time.Time{}
+	for _, stream := range runstate.PassStreams {
+		if watched[stream] == nil {
+			continue
+		}
+		after, positioned := cursor.Streams[stream]
+		if !positioned {
+			unpositioned[stream] = now
+			continue
+		}
+		wake.cursor[stream] = after
+		events, err := t.Events.Events(ctx, stream, after, now)
+		if err != nil {
+			wake.problems = append(wake.problems, fmt.Sprintf("the %s stream could not be read for the program manager instance %s, so what it holds waits past the cursor: %v", stream, agent, err))
+			continue
+		}
+		for _, event := range events {
+			if watched[stream][event.Class] {
+				wake.events = append(wake.events, event)
+			}
+		}
+		wake.positions[stream] = now
+	}
+	if len(unpositioned) > 0 {
+		if _, err := t.Cursors.Advance(ctx, agent, unpositioned, now); err != nil {
+			return passWake{}, fmt.Errorf("begin watching the streams of the program manager instance %s: %w", agent, err)
+		}
+	}
+	sort.SliceStable(wake.events, func(first, second int) bool {
+		return wake.events[first].At.Before(wake.events[second].At)
+	})
+	return wake, nil
+}
+
+// advance moves the instance's cursor once its pass is over: to the moment the
+// pass was taken, for every stream that was read, and only where every turn the
+// pass asked for was answered. A pass that failed leaves it where it was, so
+// the next pass is handed the same events, and the record says so.
+func (t Trigger) advance(ctx context.Context, agent string, wake passWake, answered bool, taken time.Time) string {
+	if len(wake.positions) == 0 {
+		return ""
+	}
+	if !answered {
+		if !wake.armed() {
+			return ""
+		}
+		return fmt.Sprintf("the pass did not complete, so its cursor was not moved and the next pass of %s carries the same %d event(s)", agent, len(wake.events))
+	}
+	write, stopWriting := recordContext(ctx)
+	defer stopWriting()
+	if _, err := t.Cursors.Advance(write, agent, wake.positions, taken); err != nil {
+		return fmt.Sprintf("the cursor of %s could not be moved past this pass, so the next pass carries its events again: %v", agent, err)
+	}
+	return ""
+}
+
+// instanceMessage is what the harness says when it wakes an instance for a
+// pass: who woke it and why, the standing constraints every recurring turn
+// carries, the events since its cursor grouped by stream, and the account
+// contract.
+func instanceMessage(agent string, instance config.AgentConfig, due bool, wake passWake) string {
+	lane := strings.TrimSpace(instance.Lane)
+	who := fmt.Sprintf("The harness woke you, the program manager instance %q", agent)
+	if lane != "" {
+		who += fmt.Sprintf(", for a pass over your lane %q", lane)
+	} else {
+		who += " for a pass"
+	}
+	why := "."
+	switch {
+	case due:
+		why = fmt.Sprintf(": your schedule is due, and you pass every %s.", instance.Triggers.Every)
+	case wake.armed():
+		why = fmt.Sprintf(": events you watch arrived, and the streams have been quiet for %s since.", PassSettleWindow)
+	}
+	lines := []string{
+		who + why + " Nobody is waiting at a terminal for this: what you produce is recorded and read later.",
+		"Your authority here is exactly the authority your role already holds — this turn grants you nothing extra, and nothing about being woken on a schedule or by an event widens what you may decide or change.",
+		"Before you file anything, check it against the work already admitted. A duplicate admission costs a whole run and the reviews after it, and a pass that runs on a cadence files the same duplicate on every cadence.",
+		"",
+	}
+	lines = append(lines, describeWake(instance.Triggers, wake)...)
+	lines = append(lines, "", sweep.Contract())
+	return strings.Join(lines, "\n")
+}
+
+// describeWake lists the events since the cursor, grouped by stream in the
+// order the streams are read.
+func describeWake(triggers config.Triggers, wake passWake) []string {
+	if len(triggers.On) == 0 {
+		return []string{"You are woken on your schedule alone; your triggers watch no events."}
+	}
+	if !wake.armed() {
+		lines := []string{fmt.Sprintf("Nothing you watch (%s) has happened since your last pass.", describeClasses(triggers.On))}
+		return append(lines, wake.problems...)
+	}
+	lines := []string{"What happened since your last pass, by stream:"}
+	for _, stream := range runstate.PassStreams {
+		var events []PassEvent
+		for _, event := range wake.events {
+			if event.Stream == stream {
+				events = append(events, event)
+			}
+		}
+		if len(events) == 0 {
+			continue
+		}
+		lines = append(lines, "", fmt.Sprintf("%s — %s after %s:", describeStream(stream), describeCounts(events), wake.cursor[stream].UTC().Format(time.RFC3339)))
+		for index, event := range events {
+			if index == maxPassEventsListed {
+				lines = append(lines, fmt.Sprintf("- and %d more not listed here; the counts above are whole", len(events)-maxPassEventsListed))
+				break
+			}
+			lines = append(lines, "- "+describeEvent(event))
+		}
+	}
+	if len(wake.problems) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, wake.problems...)
+	}
+	return lines
+}
+
+func describeStream(stream string) string {
+	switch stream {
+	case runstate.PassStreamRuns:
+		return "Run records"
+	case runstate.PassStreamTracker:
+		return "Tracker"
+	default:
+		return stream
+	}
+}
+
+// describeCounts says how many events of each class a stream holds, in the
+// order the classes are defined.
+func describeCounts(events []PassEvent) string {
+	counts := map[config.TriggerEvent]int{}
+	for _, event := range events {
+		counts[event.Class]++
+	}
+	var parts []string
+	for _, class := range config.TriggerEvents {
+		if counts[class] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[class], describeClass(class, counts[class])))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// describeClass names a class in the singular or the plural.
+func describeClass(class config.TriggerEvent, count int) string {
+	word := strings.TrimSuffix(string(class), "s")
+	if count == 1 {
+		return word
+	}
+	return string(class)
+}
+
+func describeClasses(classes []config.TriggerEvent) string {
+	names := make([]string, 0, len(classes))
+	for _, class := range classes {
+		names = append(names, string(class))
+	}
+	return strings.Join(names, ", ")
+}
+
+func describeEvent(event PassEvent) string {
+	line := fmt.Sprintf("%s %s: %s", event.At.UTC().Format(time.RFC3339), describeClass(event.Class, 1), event.Subject)
+	if detail := strings.TrimSpace(event.Detail); detail != "" {
+		line += " — " + detail
+	}
+	line = strings.Join(strings.Fields(line), " ")
+	if len(line) <= maxPassEventLineBytes {
+		return line
+	}
+	const marker = " […]"
+	cut := maxPassEventLineBytes - len(marker)
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return line[:cut] + marker
+}
+
+// describeEventCounts renders what a pass carried, for the line a session
+// prints and the record `yoyo sweeps` shows.
+func describeEventCounts(counts map[string]int) string {
+	var parts []string
+	for _, class := range config.TriggerEvents {
+		if count := counts[string(class)]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", count, describeClass(class, count)))
+		}
+	}
+	return strings.Join(parts, ", ")
+}

@@ -174,6 +174,38 @@ func laneProblems(agents map[string]AgentConfig) []string {
 	return problems
 }
 
+// ProgramManagerPasses is every program manager instance its triggers wake,
+// keyed by the agent's name: the instances a pull considers for a pass. An
+// instance whose block says nothing is left out, because nothing wakes it — it
+// reads, asks, and reports when somebody opens its conversation, and not
+// otherwise.
+func (c Config) ProgramManagerPasses() map[string]AgentConfig {
+	passes := make(map[string]AgentConfig)
+	for name, agent := range c.Agents {
+		if agent.Role == domain.RoleProgramManager && agent.Triggers.Defined() {
+			passes[name] = agent
+		}
+	}
+	return passes
+}
+
+// passNameProblems refuses a recurring task named for a program manager
+// instance its triggers wake. An instance's passes are recorded and paced under
+// the agent's own name — it is what `yoyo sweeps --task` finds them by — so a
+// task written under the same name would share one cadence and one record with
+// it, and each would fire the other's schedule.
+func passNameProblems(c Config) []string {
+	var problems []string
+	for _, name := range c.RecurringTaskNames() {
+		agent, isAgent := c.Agents[name]
+		if isAgent && agent.Role == domain.RoleProgramManager && agent.Triggers.Defined() {
+			problems = append(problems, fmt.Sprintf("recurring task %q has the name of the program manager instance whose triggers wake it, and an instance's passes are recorded and paced under that name; name the task something else",
+				name))
+		}
+	}
+	return problems
+}
+
 func describeTriggerEvents() string {
 	names := make([]string, 0, len(TriggerEvents))
 	for _, event := range TriggerEvents {

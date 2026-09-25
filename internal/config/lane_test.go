@@ -223,3 +223,41 @@ func TestEditingARemitMovesTheConfigurationRevision(t *testing.T) {
 		t.Fatalf("revision %s did not move when the remit text changed", before)
 	}
 }
+
+// The instances a pull considers for a pass are the program manager agents
+// whose triggers say something; an instance with no triggers is woken by
+// nobody.
+func TestProgramManagerPassesAreTheInstancesTheirTriggersWake(t *testing.T) {
+	t.Parallel()
+
+	quiet := `  quiet-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    lane: quiet
+`
+	resolved := loadProject(t, minimalProjectConfig+"agents:\n"+programManagerAgent("reliability-pm", "reliability", "remits/reliability.md")+quiet,
+		map[string]string{"remits/reliability.md": laneRemit})
+	passes := resolved.Config.ProgramManagerPasses()
+	if len(passes) != 1 || passes["reliability-pm"].Lane != "reliability" {
+		t.Fatalf("passes = %+v, want the triggered instance alone", passes)
+	}
+}
+
+// An instance's passes are recorded and paced under its own name, so a
+// recurring task written under that name is refused rather than sharing one
+// cadence with it.
+func TestARecurringTaskNamedForATriggeredInstanceIsRefused(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadProjectError(t, minimalProjectConfig+"agents:\n"+programManagerAgent("reliability-pm", "reliability", "remits/reliability.md")+`recurring_tasks:
+  reliability-pm:
+    role: program-manager
+    every: 1h
+    enabled: true
+    prompt: watch the lane
+`, map[string]string{"remits/reliability.md": laneRemit})
+	if err == nil || !strings.Contains(err.Error(), `recurring task "reliability-pm" has the name of the program manager instance`) {
+		t.Fatalf("LoadResolved() error = %v, want the shared name refused", err)
+	}
+}

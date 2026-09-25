@@ -39,6 +39,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -213,6 +214,14 @@ type Sweep struct {
 	// cadence fired, which is nearly every pass, and it is on the record so a
 	// reader of the log can tell a summoned pass from the hourly one beside it.
 	Summoned string `json:"summoned,omitempty"`
+	// Events is how many events of each class a program manager instance's pass
+	// was handed — landings, admissions, stoppages — counted from past its
+	// cursor to the moment the pass was taken. It is absent on every pass that
+	// was handed none, which is every recurring task's and a scheduled pass over
+	// a quiet lane, and it is on the record so a burst that woke an instance once
+	// reads as one pass carrying the burst rather than as a pass nobody can
+	// account for.
+	Events map[string]int `json:"events,omitempty"`
 }
 
 // ForgeNotice is one open pull request the harness noticed a reason to report:
@@ -338,6 +347,20 @@ func (s Sweep) Validate() error {
 	}
 	if len(s.Summoned) > MaxSweepTextBytes {
 		problems = append(problems, fmt.Errorf("summoned is %d bytes, limit is %d", len(s.Summoned), MaxSweepTextBytes))
+	}
+	classes := make([]string, 0, len(s.Events))
+	for class := range s.Events {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	for _, class := range classes {
+		count := s.Events[class]
+		if err := domain.ValidateIdentifier("event class", class); err != nil {
+			problems = append(problems, err)
+		}
+		if count < 1 {
+			problems = append(problems, fmt.Errorf("events of class %q is %d, and a class is recorded only when the pass carried one", class, count))
+		}
 	}
 	if len(s.Model) > MaxSweepModelBytes {
 		problems = append(problems, fmt.Errorf("model is %d bytes, limit is %d", len(s.Model), MaxSweepModelBytes))

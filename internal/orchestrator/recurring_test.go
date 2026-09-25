@@ -24,7 +24,9 @@ type wokenRole struct {
 	// passes is the firing each turn was told it belonged to.
 	passes []string
 	// models is the model each turn was asked on, empty where the task named none.
-	models  []string
+	models []string
+	// agents is the agent each turn woke, empty where the firing named the role.
+	agents  []string
 	answers []scriptedTurn
 	failure error
 }
@@ -42,8 +44,9 @@ type scriptedTurn struct {
 	model string
 }
 
-func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, pass, model, message string) (Turn, error) {
+func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, agent, pass, model, message string) (Turn, error) {
 	r.messages = append(r.messages, message)
+	r.agents = append(r.agents, agent)
 	r.passes = append(r.passes, pass)
 	r.models = append(r.models, model)
 	if r.failure != nil {

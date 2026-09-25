@@ -186,7 +186,7 @@ func countEndings(window *Window, recorded []runstate.State, now time.Time) {
 		if !state.Status.Terminal() {
 			continue
 		}
-		ended := endedAt(state)
+		ended := EndedAt(state)
 		if ended.Before(since) || ended.After(now) {
 			continue
 		}
@@ -218,10 +218,10 @@ func countEndings(window *Window, recorded []runstate.State, now time.Time) {
 	})
 }
 
-// endedAt is when a terminal run ended: its completion where the record has
+// EndedAt is when a terminal run ended: its completion where the record has
 // one, and the last time the record moved otherwise, which is what a run that
 // died without writing a completion leaves.
-func endedAt(state runstate.State) time.Time {
+func EndedAt(state runstate.State) time.Time {
 	if state.CompletedAt != nil && !state.CompletedAt.IsZero() {
 		return *state.CompletedAt
 	}
