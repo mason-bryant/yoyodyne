@@ -7,21 +7,21 @@
     <link rel="stylesheet" href="../../assets/dashboard.css">
   </head>
   <body>
-    <p class="render-note">Opened over the throughput-pending render, which is not repeated here.</p>
+    <p class="render-note">Opened over the spend-pending render, which is not repeated here.</p>
     <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="loading">
       <div id="grouping-backdrop" class="popup-backdrop"></div>
       <div class="popup-card">
         <div class="popup-head">
           <div>
-            <h2 id="grouping-heading" class="popup-title">Landed today</h2>
-            <p id="grouping-note" class="popup-note"></p>
+            <h2 id="grouping-heading" class="popup-title">Spend by day</h2>
+            <p id="grouping-note" class="popup-note">one line per local day for the past 30 days, newest first, priced from the spend log</p>
           </div>
           <button type="button" id="grouping-close" class="popup-close">Close</button>
         </div>
         <div class="section-loading">
           <p class="waiting">
             <span class="pulse" aria-hidden="true"></span>
-            <span id="grouping-waiting">Reading what the runs came to…</span>
+            <span id="grouping-waiting">Pricing the last thirty days…</span>
           </p>
         </div>
       </div>

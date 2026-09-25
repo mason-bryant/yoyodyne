@@ -15,12 +15,12 @@
       <p class="observed">
         observed
         <time id="observed-at" datetime="2026-09-19T14:05:09Z">14:05:09</time>
-        <span id="freshness" class="freshness">asks again every 10 s</span>
+        <span id="freshness" class="freshness freshness-stale">stale</span>
       </p>
     </header>
     <main id="page" data-state="ready">
       <div class="state state-ready">
-        <p id="stale" class="stale" role="status" hidden></p>
+        <p id="stale" class="stale" role="status">The last reading failed for the spend — the state root could not be resolved — so its figures are from 14:05:09, asked again every minute.</p>
         <p id="banner" class="banner" role="status" hidden></p>
         <section id="band" class="panel band" data-state="ready" aria-labelledby="band-heading">
           <div class="panel-head">
@@ -65,11 +65,12 @@
                   <span class="detail">of 8 things waiting in all; the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1</span>
                 </dd>
               </div>
-              <div class="tile tile-waiting">
+              <div class="tile">
                 <dt>Landed</dt>
                 <dd>
-                  <span class="figure">…</span>
-                  <span class="unit">reading the week</span>
+                  <span class="figure">3</span>
+                  <span class="unit">today</span>
+                  <span class="detail">22 runs in the last 7 days</span>
                 </dd>
               </div>
               <div class="tile">
@@ -92,7 +93,7 @@
             <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
           </div>
           <div class="section-ready">
-            <p id="spend-stale" class="stale" role="status" hidden></p>
+            <p id="spend-stale" class="stale" role="status">The last reading failed — the state root could not be resolved — so these are the figures from 14:05:09. The dashboard asks again every minute.</p>
             <div id="spend-windows" class="windows">
               <div class="window">
                 <h3 class="window-label">last 24 hours</h3>
@@ -301,17 +302,18 @@
                   </li>
                 </ul>
               </li>
-              <li class="stage stage-waiting">
+              <li class="stage stage-landed">
                 <button class="grouping-open stage-label" type="button" data-grouping="landed:today">Landed</button>
-                <span class="stage-figure">…</span>
-                <span class="stage-unit">reading the week</span>
+                <span class="stage-figure">3</span>
+                <span class="stage-unit">today</span>
+                <button class="grouping-open stage-detail" type="button" data-grouping="landed:week">22 runs in the last 7 days</button>
               </li>
             </ol>
             <ul id="pipeline-problems" class="degraded" hidden></ul>
             <p id="pipeline-note" class="footnote">Needs a human: 8 things waiting on a person — the operator's: 2, the product manager's: 2, the architect's: 2, the development manager's: 1, the harness's: 1.</p>
           </div>
         </section>
-        <section id="throughput" class="panel throughput" data-state="loading" aria-labelledby="throughput-heading">
+        <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
           <div class="panel-head">
             <h2 id="throughput-heading">Throughput</h2>
             <p class="panel-note">
@@ -320,11 +322,47 @@
               prints, and what each cost is in the spend box above
             </p>
           </div>
-          <div class="section-loading">
-            <p class="waiting">
-              <span class="pulse" aria-hidden="true"></span>
-              Reading what the runs came to…
-            </p>
+          <div class="section-ready">
+            <p id="throughput-stale" class="stale" role="status" hidden></p>
+            <ul id="throughput-problems" class="degraded" hidden></ul>
+            <div id="windows" class="windows">
+              <div class="window">
+                <h3 class="window-label">today</h3>
+                <p class="window-span">since midnight, local time</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>3 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>1 stopped for a person</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>6 runs</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="window">
+                <h3 class="window-label">last 7 days</h3>
+                <p class="window-span">from 2026-09-13, local days</p>
+                <dl class="figures">
+                  <div class="figure-row figure-landed">
+                    <dt>Landed</dt>
+                    <dd>22 runs reached the target branch</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Other endings</dt>
+                    <dd>2 succeeded without promoting, 9 stopped for a person, 3 cancelled, 1 timed out, 2 failed</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Started</dt>
+                    <dd>41 runs</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="ready" aria-labelledby="capacity-heading">

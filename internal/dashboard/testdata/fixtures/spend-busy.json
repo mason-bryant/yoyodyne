@@ -1,0 +1,654 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "last 24 hours",
+      "rolling": true,
+      "since": "2026-09-18T14:05:09Z",
+      "cost_usd": 191.53,
+      "invocations": 84,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 52,
+          "cost_usd": 118.75
+        },
+        {
+          "kind": "conversation",
+          "invocations": 25,
+          "cost_usd": 57.46
+        },
+        {
+          "kind": "review",
+          "invocations": 4,
+          "cost_usd": 9.58
+        },
+        {
+          "kind": "exchange",
+          "invocations": 3,
+          "cost_usd": 5.74
+        }
+      ],
+      "unpriced": 1,
+      "floor": true
+    },
+    {
+      "label": "last 7 days",
+      "rolling": false,
+      "since": "2026-09-13T00:00:00Z",
+      "since_day": "2026-09-13",
+      "days": 7,
+      "cost_usd": 1232.58,
+      "invocations": 452,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 280,
+          "cost_usd": 764.2
+        },
+        {
+          "kind": "conversation",
+          "invocations": 136,
+          "cost_usd": 369.77
+        },
+        {
+          "kind": "review",
+          "invocations": 23,
+          "cost_usd": 61.63
+        },
+        {
+          "kind": "exchange",
+          "invocations": 13,
+          "cost_usd": 36.98
+        }
+      ],
+      "unpriced": 1,
+      "floor": true
+    }
+  ],
+  "days": [
+    {
+      "day": "2026-09-19",
+      "reached": true,
+      "cost_usd": 92.0,
+      "invocations": 31,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 19,
+          "cost_usd": 57.04
+        },
+        {
+          "kind": "conversation",
+          "invocations": 9,
+          "cost_usd": 27.6
+        },
+        {
+          "kind": "review",
+          "invocations": 2,
+          "cost_usd": 4.6
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 2.76
+        }
+      ]
+    },
+    {
+      "day": "2026-09-18",
+      "reached": true,
+      "cost_usd": 210.55,
+      "invocations": 78,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 48,
+          "cost_usd": 130.54
+        },
+        {
+          "kind": "conversation",
+          "invocations": 23,
+          "cost_usd": 63.16
+        },
+        {
+          "kind": "review",
+          "invocations": 4,
+          "cost_usd": 10.53
+        },
+        {
+          "kind": "exchange",
+          "invocations": 3,
+          "cost_usd": 6.32
+        }
+      ]
+    },
+    {
+      "day": "2026-09-17",
+      "reached": true,
+      "cost_usd": 188.4,
+      "invocations": 69,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 43,
+          "cost_usd": 116.81
+        },
+        {
+          "kind": "conversation",
+          "invocations": 21,
+          "cost_usd": 56.52
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 9.42
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 5.65
+        }
+      ]
+    },
+    {
+      "day": "2026-09-16",
+      "reached": true,
+      "cost_usd": 175.2,
+      "invocations": 63,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 39,
+          "cost_usd": 108.62
+        },
+        {
+          "kind": "conversation",
+          "invocations": 19,
+          "cost_usd": 52.56
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 8.76
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 5.26
+        }
+      ]
+    },
+    {
+      "day": "2026-09-15",
+      "reached": true,
+      "cost_usd": 201.33,
+      "invocations": 74,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 46,
+          "cost_usd": 124.82
+        },
+        {
+          "kind": "conversation",
+          "invocations": 22,
+          "cost_usd": 60.4
+        },
+        {
+          "kind": "review",
+          "invocations": 4,
+          "cost_usd": 10.07
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 6.04
+        }
+      ]
+    },
+    {
+      "day": "2026-09-14",
+      "reached": true,
+      "cost_usd": 199.1,
+      "invocations": 71,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 44,
+          "cost_usd": 123.44
+        },
+        {
+          "kind": "conversation",
+          "invocations": 21,
+          "cost_usd": 59.73
+        },
+        {
+          "kind": "review",
+          "invocations": 4,
+          "cost_usd": 9.96
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 5.97
+        }
+      ]
+    },
+    {
+      "day": "2026-09-13",
+      "reached": true,
+      "cost_usd": 161.75,
+      "invocations": 64,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 40,
+          "cost_usd": 100.28
+        },
+        {
+          "kind": "conversation",
+          "invocations": 19,
+          "cost_usd": 48.52
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 8.09
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 4.86
+        }
+      ]
+    },
+    {
+      "day": "2026-09-12",
+      "reached": true,
+      "cost_usd": 143.08,
+      "invocations": 55,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 34,
+          "cost_usd": 88.71
+        },
+        {
+          "kind": "conversation",
+          "invocations": 16,
+          "cost_usd": 42.92
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 7.15
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 4.3
+        }
+      ]
+    },
+    {
+      "day": "2026-09-11",
+      "reached": true,
+      "cost_usd": 96.4,
+      "invocations": 38,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 24,
+          "cost_usd": 59.77
+        },
+        {
+          "kind": "conversation",
+          "invocations": 11,
+          "cost_usd": 28.92
+        },
+        {
+          "kind": "review",
+          "invocations": 2,
+          "cost_usd": 4.82
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 2.89
+        }
+      ]
+    },
+    {
+      "day": "2026-09-10",
+      "reached": true,
+      "cost_usd": 121.77,
+      "invocations": 47,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 29,
+          "cost_usd": 75.5
+        },
+        {
+          "kind": "conversation",
+          "invocations": 14,
+          "cost_usd": 36.53
+        },
+        {
+          "kind": "review",
+          "invocations": 2,
+          "cost_usd": 6.09
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 3.65
+        }
+      ]
+    },
+    {
+      "day": "2026-09-09",
+      "reached": true,
+      "cost_usd": 88.15,
+      "invocations": 34,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 21,
+          "cost_usd": 54.65
+        },
+        {
+          "kind": "conversation",
+          "invocations": 10,
+          "cost_usd": 26.45
+        },
+        {
+          "kind": "review",
+          "invocations": 2,
+          "cost_usd": 4.41
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 2.64
+        }
+      ]
+    },
+    {
+      "day": "2026-09-08",
+      "reached": true,
+      "cost_usd": 0.0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-07",
+      "reached": true,
+      "cost_usd": 0.0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-06",
+      "reached": true,
+      "cost_usd": 52.9,
+      "invocations": 21,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 13,
+          "cost_usd": 32.8
+        },
+        {
+          "kind": "conversation",
+          "invocations": 6,
+          "cost_usd": 15.87
+        },
+        {
+          "kind": "review",
+          "invocations": 1,
+          "cost_usd": 2.65
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 1.58
+        }
+      ]
+    },
+    {
+      "day": "2026-09-05",
+      "reached": true,
+      "cost_usd": 134.62,
+      "invocations": 52,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 32,
+          "cost_usd": 83.46
+        },
+        {
+          "kind": "conversation",
+          "invocations": 16,
+          "cost_usd": 40.39
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 6.73
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 4.04
+        }
+      ]
+    },
+    {
+      "day": "2026-09-04",
+      "reached": true,
+      "cost_usd": 177.05,
+      "invocations": 66,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 41,
+          "cost_usd": 109.77
+        },
+        {
+          "kind": "conversation",
+          "invocations": 20,
+          "cost_usd": 53.12
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 8.85
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 5.31
+        }
+      ]
+    },
+    {
+      "day": "2026-09-03",
+      "reached": true,
+      "cost_usd": 149.3,
+      "invocations": 58,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 36,
+          "cost_usd": 92.57
+        },
+        {
+          "kind": "conversation",
+          "invocations": 17,
+          "cost_usd": 44.79
+        },
+        {
+          "kind": "review",
+          "invocations": 3,
+          "cost_usd": 7.46
+        },
+        {
+          "kind": "exchange",
+          "invocations": 2,
+          "cost_usd": 4.48
+        }
+      ]
+    },
+    {
+      "day": "2026-09-02",
+      "reached": true,
+      "cost_usd": 118.44,
+      "invocations": 45,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 28,
+          "cost_usd": 73.43
+        },
+        {
+          "kind": "conversation",
+          "invocations": 14,
+          "cost_usd": 35.53
+        },
+        {
+          "kind": "review",
+          "invocations": 2,
+          "cost_usd": 5.92
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 3.56
+        }
+      ]
+    },
+    {
+      "day": "2026-09-01",
+      "reached": true,
+      "cost_usd": 73.6,
+      "invocations": 29,
+      "kinds": [
+        {
+          "kind": "run",
+          "invocations": 18,
+          "cost_usd": 45.63
+        },
+        {
+          "kind": "conversation",
+          "invocations": 9,
+          "cost_usd": 22.08
+        },
+        {
+          "kind": "review",
+          "invocations": 1,
+          "cost_usd": 3.68
+        },
+        {
+          "kind": "exchange",
+          "invocations": 1,
+          "cost_usd": 2.21
+        }
+      ]
+    },
+    {
+      "day": "2026-08-31",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-30",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-29",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-28",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-27",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-26",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-25",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-24",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-23",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-22",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-21",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    }
+  ],
+  "reaches": "2026-09-01",
+  "undated": {
+    "day": "undated",
+    "reached": true,
+    "cost_usd": 4.25,
+    "invocations": 2,
+    "kinds": [
+      {
+        "kind": "exchange",
+        "invocations": 2,
+        "cost_usd": 4.25
+      }
+    ]
+  },
+  "unpriced": 1,
+  "floor": true
+}

@@ -35,9 +35,9 @@
 // style: static text compiled into the binary, with nothing of the read model
 // in it, which is what a browser needs before it can present a token at all.
 // Everything that reads state is behind the token: the standing, the
-// throughput, and one work item at a time at /api/items/<id>, which is what
-// the page opens a card from. The page never reads the tracker; the card is
-// the read model's projection of the item, served here like the rest.
+// throughput, the spend, and one work item at a time at /api/items/<id>, which
+// is what the page opens a card from. The page never reads the tracker; the
+// card is the read model's projection of the item, served here like the rest.
 //
 // It is a projection, never an engine: it owns no workflow, conversation,
 // provider, or configuration state, and offers no write of any kind. The one
@@ -98,12 +98,17 @@ type Reader interface {
 	// never a partial one: what the read model could answer with a source missing
 	// it says inside the Standing, line by line.
 	Standing(ctx context.Context) (readmodel.Standing, error)
-	// Throughput reads what landed and what it cost over the model's two windows.
-	// It is a second reading rather than part of the first because it prices
-	// every event log a week holds, which is seconds of work the page asks for
-	// once a minute rather than once every ten seconds. The same rule holds: an
-	// error refuses the whole answer, and a source missing is said inside it.
+	// Throughput reads what landed over the model's two windows. It is a second
+	// reading rather than part of the first because it reads every recorded run
+	// rather than the ones in flight. The same rule holds: an error refuses the
+	// whole answer, and a source missing is said inside it.
 	Throughput(ctx context.Context) (readmodel.Throughput, error)
+	// Spend reads what the harness spent over the last twenty-four hours and
+	// the last seven local days, and what each of the last thirty days cost. It
+	// is a reading of its own because it prices every event log the month
+	// holds, which is seconds of work the page asks for once a minute rather
+	// than once every ten seconds. The same rule holds.
+	Spend(ctx context.Context) (readmodel.Spend, error)
 	// WorkItem reads one work item whole — the tracker's fields and the run the
 	// harness last made for it — for the card the page opens on an item. It is
 	// asked for one item at a time, when a card is opened, because it costs a
@@ -276,7 +281,7 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		s.servePage(writer)
 	case strings.HasPrefix(request.URL.Path, "/assets/"):
 		s.serveAsset(writer, request)
-	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput", strings.HasPrefix(request.URL.Path, "/api/items/"):
+	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput", request.URL.Path == "/api/spend", strings.HasPrefix(request.URL.Path, "/api/items/"):
 		// The routes that read state, and so the ones the token guards.
 		if !s.presented(request) {
 			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
@@ -285,6 +290,8 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.URL.Path == "/api/throughput":
 			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Throughput(ctx) })
+		case request.URL.Path == "/api/spend":
+			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Spend(ctx) })
 		case request.URL.Path == "/api/standing":
 			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Standing(ctx) })
 		default:
@@ -308,7 +315,7 @@ func (s *Server) presented(request *http.Request) bool {
 }
 
 // servePage is the shell: the page with its states — asking for the token,
-// loading, error, ready — and its five sections, each with an empty, a loading,
+// loading, error, ready — and its six sections, each with an empty, a loading,
 // and an error state of its own, and nothing of the read model in any of them.
 // It is static text the page's own script then fills from the JSON, so it is
 // served to a browser that has no token yet, which is every browser before it

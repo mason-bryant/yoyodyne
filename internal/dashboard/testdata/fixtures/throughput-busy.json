@@ -16,28 +16,7 @@
         {"run_id": "run-3b1e7c92d4f04a1b8e6c0d5f2a9b7e13", "work_item_id": "yoyodyne-ifd.439", "title": "A one-shot chat message answers a pending concern and never approves a proposal", "landed_at": "2026-09-19T13:41:00Z"},
         {"run_id": "run-9d4a2f7be0c14b3d9f8a1c6e5b2d0a77", "work_item_id": "yoyodyne-ifd.440", "title": "The heartbeat says which part of the product is degraded", "landed_at": "2026-09-19T11:58:00Z"},
         {"run_id": "run-6f0c8e3a1b7d4e2f9a5c3b1d8e7f0a24", "work_item_id": "yoyodyne-ifd.436", "title": "Release notes carry every item's description", "landed_at": "2026-09-19T09:12:00Z"}
-      ],
-      "cost_usd": 92.0,
-      "invocations": 31,
-      "kinds": [
-        {
-          "kind": "run",
-          "invocations": 12,
-          "cost_usd": 61.2
-        },
-        {
-          "kind": "conversation",
-          "invocations": 17,
-          "cost_usd": 29.55
-        },
-        {
-          "kind": "exchange",
-          "invocations": 2,
-          "cost_usd": 1.25
-        }
-      ],
-      "unpriced": 0,
-      "floor": false
+      ]
     },
     {
       "label": "last 7 days",
@@ -73,23 +52,7 @@
         {"run_id": "run-5c5581d4000000000000000000026aac", "work_item_id": "yoyodyne-ifd.409", "title": "The sweep retires leftover checkouts past the tail", "landed_at": "2026-09-14T14:50:00Z"},
         {"run_id": "run-fa8cfb8500000000000000000002899b", "work_item_id": "yoyodyne-ifd.407", "title": "A dead claim is given back on the same pass", "landed_at": "2026-09-13T19:27:00Z"},
         {"run_id": "run-98c4753600000000000000000002a88a", "work_item_id": "yoyodyne-ifd.406", "title": "The spend report groups rows by local day", "landed_at": "2026-09-13T09:41:00Z"}
-      ],
-      "cost_usd": 1232.58,
-      "invocations": 452,
-      "kinds": [
-        {
-          "kind": "run",
-          "invocations": 184,
-          "cost_usd": 894.63
-        },
-        {
-          "kind": "conversation",
-          "invocations": 268,
-          "cost_usd": 337.95
-        }
-      ],
-      "unpriced": 1,
-      "floor": true
+      ]
     }
   ]
 }

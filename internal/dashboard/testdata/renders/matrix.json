@@ -3,6 +3,7 @@
     "page": "signin",
     "sections": {
       "band": "loading",
+      "spend": "loading",
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
@@ -17,6 +18,7 @@
     "page": "loading",
     "sections": {
       "band": "loading",
+      "spend": "loading",
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
@@ -31,6 +33,7 @@
     "page": "ready",
     "sections": {
       "band": "empty",
+      "spend": "empty",
       "live": "empty",
       "pipeline": "empty",
       "throughput": "empty",
@@ -45,6 +48,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -59,6 +63,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -73,6 +78,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -87,6 +93,7 @@
     "page": "ready",
     "sections": {
       "band": "error",
+      "spend": "error",
       "live": "error",
       "pipeline": "error",
       "throughput": "error",
@@ -101,6 +108,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "loading",
@@ -115,9 +123,25 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "error",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
+    }
+  },
+  "spend-pending": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "loading",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
       "capacity": "ready"
     },
     "popups": {
@@ -129,6 +153,7 @@
     "page": "error",
     "sections": {
       "band": "loading",
+      "spend": "loading",
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
@@ -143,6 +168,7 @@
     "page": "error",
     "sections": {
       "band": "loading",
+      "spend": "loading",
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
@@ -157,6 +183,7 @@
     "page": "signin",
     "sections": {
       "band": "loading",
+      "spend": "loading",
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
@@ -171,6 +198,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -185,6 +213,22 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed"
+    }
+  },
+  "spend-stale": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -199,6 +243,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -213,6 +258,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -227,6 +273,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -241,6 +288,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -255,6 +303,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -269,6 +318,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -283,6 +333,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -297,6 +348,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -311,9 +363,70 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "loading",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "loading",
+      "card": "closed"
+    }
+  },
+  "spend-days": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "ready",
+      "card": "closed"
+    }
+  },
+  "spend-days-empty": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "empty",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "empty",
+      "card": "closed"
+    }
+  },
+  "spend-days-error": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "error",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready"
+    },
+    "popups": {
+      "grouping": "error",
+      "card": "closed"
+    }
+  },
+  "spend-days-loading": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "loading",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
       "capacity": "ready"
     },
     "popups": {
@@ -325,6 +438,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -339,6 +453,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -353,6 +468,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -367,6 +483,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -381,6 +498,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -395,6 +513,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -409,6 +528,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -423,6 +543,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -437,6 +558,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -451,6 +573,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -465,6 +588,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -479,6 +603,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
@@ -493,6 +618,7 @@
     "page": "ready",
     "sections": {
       "band": "ready",
+      "spend": "ready",
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",

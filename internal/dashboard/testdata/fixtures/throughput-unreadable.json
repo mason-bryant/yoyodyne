@@ -11,12 +11,7 @@
       "stopped": 0,
       "cancelled": 0,
       "timed_out": 0,
-      "failed": 0,
-      "cost_usd": 0,
-      "invocations": 0,
-      "kinds": [],
-      "unpriced": 0,
-      "floor": false
+      "failed": 0
     },
     {
       "label": "last 7 days",
@@ -28,14 +23,8 @@
       "stopped": 0,
       "cancelled": 0,
       "timed_out": 0,
-      "failed": 0,
-      "cost_usd": 0,
-      "invocations": 0,
-      "kinds": [],
-      "unpriced": 0,
-      "floor": false
+      "failed": 0
     }
   ],
-  "runs_problem": "the recorded runs could not be read: open runs: input/output error",
-  "spend_problem": "the spend could not be read: open streams: input/output error"
+  "runs_problem": "the recorded runs could not be read: open runs: input/output error"
 }

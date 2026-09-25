@@ -35,6 +35,15 @@
             <p id="band-empty" class="empty">The harness is idle: nothing is running, no conversation has a turn in flight, nothing is admitted, and nothing waits on a person.</p>
           </div>
         </section>
+        <section id="spend" class="panel spend" data-state="empty" aria-labelledby="spend-heading">
+          <div class="panel-head">
+            <h2 id="spend-heading">What the harness is spending</h2>
+            <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
+          </div>
+          <div class="section-empty">
+            <p id="spend-empty" class="empty">Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.</p>
+          </div>
+        </section>
         <section id="live" class="panel live" data-state="empty" aria-labelledby="live-heading">
           <div class="panel-head">
             <h2 id="live-heading">Running now</h2>
@@ -55,15 +64,15 @@
         </section>
         <section id="throughput" class="panel throughput" data-state="empty" aria-labelledby="throughput-heading">
           <div class="panel-head">
-            <h2 id="throughput-heading">Throughput and cost</h2>
+            <h2 id="throughput-heading">Throughput</h2>
             <p class="panel-note">
-              local calendar days, today counting as the first; the figures
-              <code>yoyo status --spend</code>
-              prints
+              local calendar days, today counting as the first; the endings
+              <code>yoyo status</code>
+              prints, and what each cost is in the spend box above
             </p>
           </div>
           <div class="section-empty">
-            <p id="throughput-empty" class="empty">Nothing ran and nothing was spent in the last 7 days, from 2026-09-13.</p>
+            <p id="throughput-empty" class="empty">Nothing ran in the last 7 days, from 2026-09-13.</p>
           </div>
         </section>
         <section id="capacity" class="panel capacity" data-state="empty" aria-labelledby="capacity-heading">
