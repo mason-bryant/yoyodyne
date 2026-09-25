@@ -130,7 +130,18 @@ const (
 // TestOnlyAnEmptyCommondirMakesGitRefuseARegistrationWalk, which fails if a
 // future Git starts refusing over some other file and this pattern therefore
 // stops covering it.
-var crossedRegistration = regexp.MustCompile(`failed to read (?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\]commondir`)
+//
+// That test holds each shape still, and one refusal only exists while a file
+// is moving: Git asks whether an entry's locked file exists and then reads it,
+// and an add that finishes between the two removes the lock it is about to
+// read, which Git dies over as "failed to read '<entry>/locked': No such file
+// or directory". It is the same passing instant from the other end — the add
+// completing rather than starting — and is gone on the next walk, so it is run
+// again on the same terms. It is matched on the missing file alone, because a
+// lock Git could not read for any other reason is not an instant that passes.
+// TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand met it on
+// 2026-09-25 against its own creation loop.
+var crossedRegistration = regexp.MustCompile(`failed to read '?(?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\](?:commondir|locked'?: No such file or directory)`)
 
 // maintenanceOptions stop a Git command from handing this repository to Git's
 // automatic maintenance, and every command the harness runs carries them.

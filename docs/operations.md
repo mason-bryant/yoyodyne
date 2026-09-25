@@ -1708,8 +1708,11 @@ What the lease cannot cover, the harness runs *any* Git command again over: a
 second harness on an older binary, a Git command somebody ran by hand, and a
 platform with no advisory lock to take at all. The instant passes in the time
 Git takes to write a handful of small files, so running the command again is
-usually enough. Only that one refusal is run again: every other answer Git gives
-is believed the first time.
+usually enough. The same instant has a second face at the other end, when the
+add finishes: Git sees the entry's `locked` file, the add removes it, and Git
+dies reading it — `failed to read '.git/worktrees/<entry>/locked': No such file
+or directory` — so that is run again too. Only those two refusals are run again:
+every other answer Git gives is believed the first time.
 
 What neither can cover is the entry that stays that way. An add whose
 process was killed leaves the entry exactly as it stood, and nothing Git has

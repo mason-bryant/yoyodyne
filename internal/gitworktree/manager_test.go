@@ -2896,6 +2896,30 @@ func TestManagerBoundsGitCommandsByAFlatDeadlineOnly(t *testing.T) {
 	}
 }
 
+// The one refusal a shape held still cannot produce is a lock that vanishes
+// between Git seeing it and reading it, so its wording is pinned here instead:
+// it is run again, and a lock Git failed to read for any other reason, or any
+// other file's absence, is not.
+func TestAVanishedLockIsRunAgainAndNothingElseAboutTheLockIs(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		stderr string
+		want   bool
+	}{
+		{"fatal: failed to read '.git/worktrees/creation-loop-5/locked': No such file or directory", true},
+		{"fatal: failed to read /repo/.git/worktrees/run-1/locked: No such file or directory", true},
+		{"fatal: failed to read .git/worktrees/run-1/commondir: Result too large", true},
+		{"fatal: failed to read '.git/worktrees/run-1/locked': Permission denied", false},
+		{"fatal: failed to read '.git/worktrees/run-1/gitdir': No such file or directory", false},
+		{"fatal: failed to read '/repo/locked': No such file or directory", false},
+	} {
+		if got := crossedRegistration.MatchString(tc.stderr); got != tc.want {
+			t.Errorf("crossedRegistration.MatchString(%q) = %t, want %t", tc.stderr, got, tc.want)
+		}
+	}
+}
+
 // What the re-run covers is decided by one regular expression over Git's own
 // wording, and narrowing it to a single file would be a quiet regression if Git
 // refused a walk over any of the others. So which shapes Git actually refuses is
