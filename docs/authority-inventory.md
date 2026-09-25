@@ -233,6 +233,8 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/notify/select.go` | `FromRun` | Selects what a finished run reports to the operator. |
 | `internal/orchestrator/amendments.go` | `(*activeRun).collectAmendments` | Records the changes a run's role proposed, addressed to the owner. Deciding one is `amendment.decide-under-owner`. |
 | `internal/orchestrator/branchreview.go` | `(BranchReviewer).collectReports` | Collects what a branch reviewer reported, which decides nothing. |
+| `internal/orchestrator/orchestratortest/backend.go` | `RoleBackend` | A test double of the provider, which answers each invocation by the role it was made for. Nothing outside tests imports the package, and the role only chooses which scripted reply comes back. |
+| `internal/orchestrator/orchestratortest/forge.go` | `(*Forge).Protection` | A test double of the forge, which reports the branch protection a test told it to. Nothing outside tests imports the package, and it refuses nothing. |
 | `internal/orchestrator/pipeline.go` | `(*activeRun).attemptReview` | One provider invocation inside the review step. What makes it independent is `review.independent-invocation`. |
 | `internal/orchestrator/pipeline.go` | `(*activeRun).recordDevelopment` | Records what a developer invocation produced and cost. |
 | `internal/orchestrator/reports.go` | `(*activeRun).collectReports` | Collects what a run's role reported, which decides nothing. |
