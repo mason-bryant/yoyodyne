@@ -845,6 +845,10 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 		// asked for.
 		attempt int
 		ended   bool
+		// invoked is the phase the last terminal was placed in and session the
+		// session it named, which is where a duplicate terminal after it belongs.
+		invoked *PhaseCost
+		session string
 	)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
@@ -864,6 +868,18 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 			reviewing = true
 			continue
 		}
+		// A second terminal of one invocation is more of that invocation's cost and
+		// not another invocation, so it moves nothing the phase split counts: it is
+		// added to the phase its first terminal was placed in, priced against the
+		// session that terminal named.
+		if priced.duplicateTerminal() {
+			cost := costs.Own(priced.session(session), priced.Payload.TotalCostUSD)
+			if invoked == nil {
+				invoked = &spend.Unattributed
+			}
+			invoked.CostUSD += cost
+			continue
+		}
 		if !priced.priced() {
 			continue
 		}
@@ -874,23 +890,25 @@ func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 		// made the one invocation it makes.
 		announced := reviewing
 		reviewing = false
-		cost := costs.Own(priced.Payload.SessionID, priced.Payload.TotalCostUSD)
+		session = priced.Payload.SessionID
+		cost := costs.Own(session, priced.Payload.TotalCostUSD)
 		switch priced.phase(announced) {
 		case phaseReview:
-			spend.Review.add(cost, usage)
+			invoked = &spend.Review
 		case phaseDevelopment:
 			if ended {
 				attempt++
 			}
 			if attempt == 0 {
-				spend.Development.add(cost, usage)
+				invoked = &spend.Development
 			} else {
-				spend.Repair.add(cost, usage)
+				invoked = &spend.Repair
 			}
 			ended = priced.Type == execution.EventRunCompleted
 		default:
-			spend.Unattributed.add(cost, usage)
+			invoked = &spend.Unattributed
 		}
+		invoked.add(cost, usage)
 	}
 	if err := scanner.Err(); err != nil {
 		return PhaseSpend{}, TokenUsage{}, fmt.Errorf("read event log to price the run: %w", err)
@@ -923,7 +941,29 @@ type pricedEvent struct {
 		// nobody has a measurement for, the second is a measurement of nothing, and
 		// a share that treated them alike would be wrong by the first.
 		Usage *usageTokens `json:"usage"`
+		// Anomaly marks the process output a backend records for a terminal that
+		// arrived after the invocation's first, which carries a cost of its own.
+		Anomaly string `json:"anomaly"`
 	} `json:"payload"`
+}
+
+// duplicateTerminal reports the record of a second terminal to one invocation.
+// It is not a priced event, because it is not an invocation, but the provider
+// charged for the turn behind it and the readers add that to the invocation it
+// followed.
+func (p pricedEvent) duplicateTerminal() bool {
+	return p.Type == execution.EventProcessOutput && p.Payload.Anomaly == execution.DuplicateTerminalAnomaly
+}
+
+// session is the session a duplicate terminal's figure is a running total of.
+// It names its own from the time the backend recorded one on it; before that
+// it is the session of the terminal it followed, since both ended the same
+// invocation.
+func (p pricedEvent) session(previous string) string {
+	if session := strings.TrimSpace(p.Payload.SessionID); session != "" {
+		return session
+	}
+	return previous
 }
 
 // usageTokens is the part of the provider's usage object a share is computed
@@ -1038,12 +1078,13 @@ func (p pricedEvent) priced() bool {
 // carriesSpendEvidence is the cheap test that decides whether a line is worth
 // decoding. It over-matches deliberately: what it must never do is skip a line
 // that carries a cost or opens a review, and the decoded type rejects everything
-// else.
+// else. A duplicate terminal carries a cost under an event type that everything
+// else is recorded under too, so it is matched by its anomaly instead.
 func carriesSpendEvidence(line []byte) bool {
 	for _, candidate := range spendEvidenceEvents {
 		if bytes.Contains(line, []byte(`"`+string(candidate)+`"`)) {
 			return true
 		}
 	}
-	return false
+	return bytes.Contains(line, []byte(`"`+execution.DuplicateTerminalAnomaly+`"`))
 }

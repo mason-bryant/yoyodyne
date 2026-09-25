@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2314,4 +2315,88 @@ func hasEnvironmentName(environment []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// run-f3755e3f's developer was ended twice: a terminal at $44.4602215, and after
+// a watcher woke the session for one more turn, a second at $44.8557805. The
+// invocation's cost is every ending's increment -- the first terminal's figure
+// plus the $0.40 the second moved the session's total by -- so the meter prices
+// the whole of it against the session's last figure rather than losing the turn
+// to the anomaly event. A total that fell is one that restarted, and the figure
+// after a restart counts whole, as it does for any terminal.
+func TestRunCostsEveryTerminalAnInvocationEndedWith(t *testing.T) {
+	t.Parallel()
+
+	terminal := func(cost float64) string {
+		encoded, err := json.Marshal(map[string]any{
+			"type":            "result",
+			"subtype":         "success",
+			"session_id":      "session-1",
+			"is_error":        false,
+			"result":          "done",
+			"terminal_reason": "completed",
+			"total_cost_usd":  cost,
+			"usage":           map[string]any{"input_tokens": 1},
+		})
+		if err != nil {
+			t.Fatalf("Marshal() terminal error = %v", err)
+		}
+		return string(encoded)
+	}
+	for _, testCase := range []struct {
+		name    string
+		endings []float64
+		want    float64
+	}{
+		{name: "one ending", endings: []float64{44.4602215}, want: 44.4602215},
+		{name: "run-f3755e3f's two endings", endings: []float64{44.4602215, 44.8557805}, want: 44.4602215 + (44.8557805 - 44.4602215)},
+		{name: "three endings", endings: []float64{1, 1.5, 2.25}, want: 2.25},
+		{name: "a total that restarted", endings: []float64{3, 0.5}, want: 3.5},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := []string{`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-opus-5"}`}
+			for _, cost := range testCase.endings {
+				lines = append(lines, terminal(cost))
+			}
+			var events []execution.Event
+			result, err := (Backend{
+				Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: strings.Join(lines, "\n") + "\n"}}},
+				Clock:  fixedClock{},
+			}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             domain.RoleDeveloper,
+				WorkingDirectory: "/worktree",
+				Prompt:           "finish the work",
+				EventSink: func(event execution.Event) error {
+					events = append(events, event)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if !result.CostReported || math.Abs(result.CostUSD-testCase.want) > 1e-9 {
+				t.Fatalf("CostUSD = %v (reported %v), want %v", result.CostUSD, result.CostReported, testCase.want)
+			}
+			// The anomaly still names the duplicate, and now says whose invocation
+			// and which session its figure belongs to.
+			anomalies := 0
+			for _, event := range events {
+				if !strings.Contains(string(event.Payload), `"anomaly":"duplicate_terminal_result"`) {
+					continue
+				}
+				anomalies++
+				for _, want := range []string{`"session_id":"session-1"`, `"role":"developer"`} {
+					if !strings.Contains(string(event.Payload), want) {
+						t.Fatalf("duplicate terminal payload is missing %s: %s", want, event.Payload)
+					}
+				}
+			}
+			if anomalies != len(testCase.endings)-1 {
+				t.Fatalf("recorded %d duplicate terminal(s), want %d", anomalies, len(testCase.endings)-1)
+			}
+		})
+	}
 }
