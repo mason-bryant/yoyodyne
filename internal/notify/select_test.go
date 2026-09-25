@@ -1305,6 +1305,34 @@ func TestSomethingConcerningNoItemIsAddressedToTheProduct(t *testing.T) {
 	}
 }
 
+// A report nobody's agent wrote — the pull's refusal of an item whose own
+// sentence holds it back — is said in the harness's voice, which is the one
+// speaker that is not a persona. A role nobody configured would be refused.
+func TestAReportTheHarnessFiledIsSaidInTheHarnessVoice(t *testing.T) {
+	filed := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		ID:            "report-" + strings.Repeat("b", 32),
+		Role:          report.HarnessReporter,
+		RunID:         "unready_item:yoyodyne-ifd.298:subject-not-in-repository",
+		WorkItemID:    "yoyodyne-ifd.298",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Severity:      report.SeverityWarning,
+		Message:       "yoyodyne-ifd.298 is passed over at every pull because of what it states.",
+		RecordedAt:    moment,
+	}
+	notification, err := FromReport(filed)
+	if err != nil {
+		t.Fatalf("select a report the harness filed: %v", err)
+	}
+	if !notification.Speaker.IsHarness() {
+		t.Fatalf("speaker = %+v, want the harness", notification.Speaker)
+	}
+	if err := notification.Speaker.Validate(); err != nil {
+		t.Fatalf("the harness's voice was refused: %v", err)
+	}
+}
+
 func TestAProposalCarriesBothHalvesOfWhatWasWritten(t *testing.T) {
 	proposal := amendment.Proposal{
 		SchemaVersion: amendment.SchemaVersion,

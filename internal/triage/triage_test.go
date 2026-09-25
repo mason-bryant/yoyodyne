@@ -1197,6 +1197,26 @@ func stoppageClosure() Closure {
 	}
 }
 
+// An entry no run was ever behind is settled without naming one: the pull that
+// finds an unready item ready takes its entry off, and there is no run to name.
+// Every other entry still needs the run its stoppage was.
+func TestARunlessEntryIsClosedWithoutARun(t *testing.T) {
+	t.Parallel()
+
+	unready := stoppageClosure()
+	unready.Key = UnreadyKey("yoyodyne-ifd.298", []string{"subject-not-in-repository"})
+	unready.RunID = ""
+	unready.Decision = "no-longer-unready"
+	if err := unready.Validate(); err != nil {
+		t.Fatalf("closing an unready entry with no run was refused: %v", err)
+	}
+	stopped := stoppageClosure()
+	stopped.RunID = ""
+	if err := stopped.Validate(); err == nil || !strings.Contains(err.Error(), "run id is required") {
+		t.Fatalf("Validate() = %v, want a stoppage's closure to still need its run", err)
+	}
+}
+
 // A closure takes a stoppage off the docket, so what it must never be is a
 // record that cannot say which stoppage, what was decided, or by whom: each of
 // those missing is an entry nobody is looking at any more with nothing saying

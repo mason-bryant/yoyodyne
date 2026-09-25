@@ -222,6 +222,50 @@ func TestAnItemThatSaysItIsGatedOnADecisionIsUnmet(t *testing.T) {
 	}
 }
 
+// yoyodyne-ifd.298's product manager removed the sentence from the description;
+// a copy in a field she does not rewrite would have gone on refusing the item.
+// So every sentence is read out of its own field and the refusal names it, and a
+// field her update cannot reach says that too.
+func TestASentenceIsNamedWithTheFieldItIsIn(t *testing.T) {
+	repository := tree(t, nil)
+	for _, test := range []struct {
+		item       beads.WorkItem
+		field      string
+		outOfReach bool
+	}{
+		{beads.WorkItem{ID: "a", Description: "It does not start before 282's design lands."}, FieldDescription, false},
+		{beads.WorkItem{ID: "b", Title: "Blocked until the answer exists"}, FieldTitle, false},
+		{beads.WorkItem{ID: "c", Design: "It does not start before 282's design lands."}, FieldDesignGuidance, true},
+		{beads.WorkItem{ID: "d", AcceptanceCriteria: "Gated on the architect's ruling."}, FieldAcceptanceCriteria, true},
+	} {
+		unmet := check(t, test.item, repository)
+		if len(unmet) != 1 {
+			t.Fatalf("%s: want one sentence found, got %v", test.item.ID, kindsOf(unmet))
+		}
+		if unmet[0].Field != test.field || !strings.HasPrefix(unmet[0].Missing, "its "+test.field) {
+			t.Fatalf("%s: unmet = %+v, want the refusal to name the %s", test.item.ID, unmet[0], test.field)
+		}
+		if said := strings.Contains(unmet[0].Missing, "the product manager's update does not rewrite"); said != test.outOfReach {
+			t.Fatalf("%s: missing = %q, want out of reach said only of a field her update cannot rewrite", test.item.ID, unmet[0].Missing)
+		}
+	}
+}
+
+// The reading is the item as handed in and nothing remembered: the same item
+// with the sentence removed meets everything, which is what lets the next pull
+// take it.
+func TestARemovedSentenceNoLongerRefuses(t *testing.T) {
+	repository := tree(t, nil)
+	item := beads.WorkItem{ID: "yoyodyne-ifd.298", Description: "The reading surface. This item does not start before 282's design lands."}
+	if unmet := check(t, item, repository); len(unmet) != 1 {
+		t.Fatalf("want the sentence refused, got %v", kindsOf(unmet))
+	}
+	item.Description = "The reading surface."
+	if unmet := check(t, item, repository); len(unmet) != 0 {
+		t.Fatalf("want nothing unmet once the sentence is gone, got %v", kindsOf(unmet))
+	}
+}
+
 // The ordinary item, which is nearly all of them: it cites what the tree has and
 // states no gate, and the check says nothing about it at all.
 func TestAnItemThatStatesNothingUnmetIsReady(t *testing.T) {

@@ -568,6 +568,12 @@ func docketerFrom(parts components) *orchestrator.Docketer {
 		// and as the docket is built for the development manager to read, so an
 		// entry never states preservation off the run's removal flags.
 		Remains: remainsOf(parts),
+		// Where an item the tree is not ready for is also said to the product
+		// manager, in the pile her conversation is given, attributed the way
+		// every report is.
+		Reports:      parts.reports,
+		RepositoryID: string(parts.config.Product.RepositoryID),
+		Harness:      buildinfo.Commit(),
 	}
 }
 

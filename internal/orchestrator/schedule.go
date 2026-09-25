@@ -452,8 +452,14 @@ type ScheduleTree interface {
 // reserved leaves a record for a sweep to find; one that dies before that leaves
 // nothing anywhere, so the only process that can say it happened is the one that
 // tried it.
+//
+// And it takes the unready entries off again. An entry is a reading of the item
+// at one pull, and the pull is the only thing that reads the item again, so it
+// is the only thing that can say the reading no longer holds; see
+// Docketer.SettleUnreadyItems.
 type ScheduleTriage interface {
 	RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet) (bool, error)
+	SettleUnreadyItems(reread func(workItemID string) UnreadyReading) (int, error)
 	RecordUnstartedAttempt(attempt UnstartedAttempt) (bool, error)
 }
 
@@ -1841,6 +1847,12 @@ pulling:
 		schedule.Admitted = len(queue.Entries)
 		schedule.Pullable = queue.Ready()
 		schedule.BacklogRead = true
+		// Every item the docket holds as unready is read again off the backlog this
+		// pull just read, before anything is chosen, so an item amended since the
+		// last pull stands on the docket in the words it now carries or not at all.
+		if problem := pull.settleUnready(read); problem != "" && schedule.ReadinessProblem == "" {
+			schedule.ReadinessProblem = problem
+		}
 		stale, stalenessProblem := pull.stale(ctx)
 		if stalenessProblem != "" {
 			schedule.StalenessProblem = stalenessProblem
@@ -4080,6 +4092,29 @@ func (p Pull) route(item beads.WorkItem, unmet []readiness.Unmet) error {
 		return fmt.Errorf("route %s to triage for an unmet prerequisite: %w", item.ID, err)
 	}
 	return nil
+}
+
+// settleUnready reads again every item the docket holds as unready, from the
+// items this pull read, and takes off the entries the reading no longer
+// supports. A pull with no tree or no docket wired settles nothing, because it
+// read nothing and docketed nothing; a reading that failed is reported beside
+// the pass, like the readiness reading it repeats.
+func (p Pull) settleUnready(read pulled) string {
+	if p.Tree == nil || p.Triage == nil {
+		return ""
+	}
+	_, err := p.Triage.SettleUnreadyItems(func(workItemID string) UnreadyReading {
+		item, present := read.items[workItemID]
+		if !present {
+			return UnreadyReading{}
+		}
+		unmet, problem := p.unready(item)
+		return UnreadyReading{Present: true, Unmet: unmet, Unreadable: problem != ""}
+	})
+	if err != nil {
+		return fmt.Sprintf("the items the docket holds as unready could not all be read again, so some may still stand there under words their item no longer carries: %v", err)
+	}
+	return ""
 }
 
 // stale reads what changed upstream of the admitted work after it was admitted,
