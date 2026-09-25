@@ -130,28 +130,6 @@ func (a Authority) LaneScoped(action string) bool {
 	return slices.Contains(a.LaneActions, action)
 }
 
-// laneUnenforcedReason is why a lane-scoped action is refused whole today. The
-// program manager's writes are bounded by its lane, and the lane — the label an
-// instance is configured with, and the at-act reading of it on each item — is its
-// own work under yoyodyne-ifd.430.13 and not built yet. Until it is, no item is
-// inside any lane, so the design's exclusion of every tracker action on an item
-// outside the lane is every write: the refusal is that exclusion, made where the
-// scope will be checked, rather than a door left open until the check exists.
-const laneUnenforcedReason = "this role's tracker writes are scoped to its own lane, and no lane is enforced yet, so no item is inside one; it may read and survey, and says in prose or in its report what it would change"
-
-// refuseOutsideLane is the lane scope as it stands: it refuses every
-// lane-scoped action, because no item is yet inside any lane.
-func refuseOutsideLane(authority Authority, action TrackerAction) error {
-	if !authority.LaneScoped(action.Action) {
-		return nil
-	}
-	return &AuthorityError{
-		Role:    authority.Role,
-		Refused: fmt.Sprintf("the %q tracker action outside its lane", action.Action),
-		Reason:  laneUnenforcedReason,
-	}
-}
-
 // contracts is the immutable policy each role's conversation carries. It is the
 // one part of the table below that is written here rather than read off the
 // role's capabilities, and deliberately so: a contract is what a role is sent,
@@ -396,7 +374,9 @@ func (s *Session) authorize(parsed parsedReply) error {
 				Reason:  "this role may ask for " + renderActions(authority.TrackerActions),
 			}
 		}
-		if err := refuseOutsideLane(authority, action); err != nil {
+		// What the block alone shows is outside the lane is refused here, whole;
+		// what depends on the item is refused as the action runs. See lane.go.
+		if err := s.refuseOutsideLane(authority, action); err != nil {
 			return err
 		}
 		if !authority.ParentRequired {
@@ -509,9 +489,12 @@ above.
 // put to a person describes what it is doing wrongly to the operator, which is
 // the one failure a contract this long exists to prevent.
 func admissionClause(authority Authority, admission Admission) string {
-	// A lane-scoped creation is refused whole until the lane exists, so a role
-	// holding only that is told nothing about admission it cannot make.
-	if !authority.MayAct(actionCreate) || authority.ParentRequired || authority.LaneScoped(actionCreate) {
+	// A role admitting only inside its lane goes through the same gate, and is
+	// told what that gate does with a lane admission.
+	if authority.LaneScoped(actionCreate) {
+		return laneAdmissionClause(admission)
+	}
+	if !authority.MayAct(actionCreate) || authority.ParentRequired {
 		return ""
 	}
 	if admission.PerItemApproval() {
@@ -706,22 +689,23 @@ A cap that refuses you is one you may cross yourself, ` + maxDelegatedCapCrossin
 ` + reportClause
 
 // programManagerContract is the harness policy every program-manager
-// conversation carries. The role is registered before its lane, its read-model
-// block, its lane report, and its passes are built, and the contract says what is
-// true now rather than what the design will make true: the role reads, asks,
-// remembers, reports, and rewrites its lane report, and every tracker write it
-// holds is scoped to a lane nothing enforces yet, so each is refused.
+// conversation carries. The contract says what is true now rather than what the
+// design will make true: the role reads, asks, remembers, reports, rewrites its
+// lane report, and writes to the tracker inside its lane, which the harness
+// enforces at the act (lane.go).
 var programManagerContract = `You are a program manager for this product, in a direct conversation with the operator who owns it.
 
-You own one outcome that cuts across the other roles — the line not stalling, spend not being wasted, the writing staying clear, whichever this instance was configured for — and you watch it. What you may change is bounded by a lane: one tracker label this instance owns, under which you may admit and shape work, and outside which you change nothing and ask instead. The lane is written into the harness's authority table rather than into anything you are sent, and it does not exist yet: until it does, no item is inside it.
+You own one outcome that cuts across the other roles — the line not stalling, spend not being wasted, the writing staying clear, whichever this instance was configured for — and you watch it. What you may change is bounded by a lane: one tracker label this instance owns, under which you may admit and shape work, and outside which you change nothing and ask instead. The lane is written into the harness's authority table rather than into anything you are sent, and the harness enforces it on every action you ask for.
 
 You own nothing upstream. The brief, the goals, and what is admitted to the backlog outside your lane are the product manager's; the designs, the decision records, and the invariants are the architect's; decomposition and every decision about work that has stopped moving are the development manager's; whether a change is correct is the reviewer's. You write no code, you close and retire nothing, you record no triage decision and cross no cap, you issue and resolve no directive, and you write no document. Work you think belongs outside your lane is the product manager's to admit: say it plainly, with the goal it would serve and why, rather than acting on it.
 
 ` + conversationGround + `
 
-` + readOnlyTrackerClause + `
+` + laneTrackerClause + `
 
-Your tracker writes — admitting, attributing, updating, labelling, reparenting, reprioritizing, parking, unparking, linking, and unlinking — are scoped to your own lane, and with no lane enforced yet every one of them is refused whole. Do not ask for them; say what you would change and why, and it reaches whoever can.
+` + providerPathClause + `
+
+` + documentConditionClause + `
 
 ` + repositoryread.Contract + `
 

@@ -105,6 +105,13 @@ type PendingProposal struct {
 	// prompt: the answer depends on the goals as they stood when the proposal was
 	// made, and the goals move.
 	Asking string `json:"asking,omitempty"`
+	// Lane is the lane label a program manager's creation named this proposal in,
+	// and is empty for every proposal the product manager makes. It is the
+	// harness's rather than the proposal's own field, so no proposal block can name
+	// a label to be applied: it is set only where a lane creation the admission
+	// gate refused is put to the operator instead, and an approval creates the item
+	// in that lane.
+	Lane string `json:"lane,omitempty"`
 }
 
 // recorded is the proposal as the durable conversation keeps it, so a later
@@ -123,6 +130,7 @@ func (p PendingProposal) recorded() runstate.PendingProposal {
 		Dependencies: p.Proposal.Dependencies,
 		Class:        string(p.Proposal.Class),
 		Asking:       p.Asking,
+		Lane:         p.Lane,
 	}
 }
 
@@ -145,6 +153,7 @@ func restoredProposal(conversationID string, recorded runstate.PendingProposal) 
 			Class:        domain.WorkItemClass(recorded.Class),
 		},
 		Asking: recorded.Asking,
+		Lane:   recorded.Lane,
 	}
 }
 
@@ -508,6 +517,11 @@ func (p PendingProposal) body() []string {
 	if dependencies := p.Proposal.dependencies(); len(dependencies) > 0 {
 		lines = append(lines, "depends on: "+strings.Join(dependencies, ", "))
 	}
+	// A proposal made in a program manager's lane names the lane, because the
+	// item it creates is admitted into it and the operator is deciding that too.
+	if lane := strings.TrimSpace(p.Lane); lane != "" {
+		lines = append(lines, "lane: "+lane)
+	}
 	// Why this one is being decided rather than admitted, in a project that
 	// admits work that traces to an approved goal. The operator is being asked
 	// about it precisely because something did not hold, and being asked without
@@ -537,11 +551,20 @@ func (p PendingProposal) body() []string {
 // the repository records say what that identity is. A proposal names the goal in
 // the words the product manager used, and those words are what the operator
 // approved; what the item records is the goal they picked out.
-func (p PendingProposal) provenanceNotes(authority string, goals goal.Set) string {
-	return fmt.Sprintf(
-		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and %s.\n\n%s\n\nRationale: %s",
-		p.ConversationID, p.Turn, p.ID, authority, goals.NoteFor(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
+//
+// proposer is who proposed it, because a program manager's lane creation reaches
+// the operator as a proposal too, and agent is the instance whose lane it is in.
+// A lane proposal's item records the lane and the instance as a lane admission's
+// does.
+func (p PendingProposal) provenanceNotes(authority string, goals goal.Set, proposer domain.AgentRole, agent string) string {
+	notes := fmt.Sprintf(
+		"Proposed by the %s in conversation %s, turn %d, proposal %s, and %s.\n\n%s\n\nRationale: %s",
+		RoleTitle(proposer), p.ConversationID, p.Turn, p.ID, authority, goals.NoteFor(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
 	)
+	if lane := strings.TrimSpace(p.Lane); lane != "" {
+		notes += fmt.Sprintf("\n\nLane: %s, admitted by the program manager instance %s.", lane, strings.TrimSpace(agent))
+	}
+	return notes
 }
 
 func indent(text string) string {

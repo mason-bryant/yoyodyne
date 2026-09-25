@@ -153,7 +153,17 @@ var expresses = map[string]expression{
 			capability.WorkItemUnpark, capability.WorkItemLink, capability.WorkItemUnlink,
 			capability.WorkItemReparent,
 		},
-		gap: "which items are inside a lane is state — the label an instance is configured with, read off the item as the action runs — and no bundle carries state; until the lane is built nothing is inside one",
+		gap: "which lane an instance owns is configuration, the label it is configured with, and no bundle carries it; the block-level refusals — no lane configured, the lane label removed, a directive carried out — are shapes of what was asked rather than capabilities",
+	},
+	"conversation.lane-at-act": {
+		question: "does the role hold this action only through its lane-scoped name?",
+		asks: []capability.Capability{
+			capability.WorkItemAdmit, capability.WorkItemAttribute, capability.WorkItemUpdate,
+			capability.WorkItemLabel, capability.WorkItemReprioritize, capability.WorkItemPark,
+			capability.WorkItemUnpark, capability.WorkItemLink, capability.WorkItemUnlink,
+			capability.WorkItemReparent,
+		},
+		gap: "which items are inside a lane is state — the label read off the item, and off a named parent, as the action runs — and no bundle carries state",
 	},
 	"conversation.admission-gate": {
 		question: "does the role hold admission?",

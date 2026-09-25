@@ -1095,7 +1095,7 @@ project rewrites any persona it likes and the boundaries do not move:
 | architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
 | developer, reviewer | yes | nothing | no | none |
-| [program manager](designs/program-manager.md) | yes | nothing yet: admits, attributes, updates, labels, reparents, orders, parks, and links **only inside its own lane**, and no lane is enforced yet, so every one of those is refused; never closes, retires, or records triage | yes | none; it rewrites [its lane report](#a-program-managers-lane-report), which is kept under the state root rather than in the repository |
+| [program manager](designs/program-manager.md) | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), attributes, updates, labels, reparents, orders, parks and releases, and links **only inside its own lane** — [the lane label, read off the item as each action runs](#a-program-managers-lane); never closes, retires, or records triage | yes | none; it rewrites [its lane report](#a-program-managers-lane-report), which is kept under the state root rather than in the repository |
 
 The product manager's admitting is the one row a setting moves, and it moves in
 one direction only. `approvals.work_items` decides what may reach the queue
@@ -1294,6 +1294,41 @@ unreadable rather than shown as empty.
 turns carry no memory briefing, their contracts do not describe the block, and a
 reply from either that carries one is refused whole, with nothing recorded. Asked
 what either remembers, `yoyo agent memory` says it keeps none.
+
+### A program manager's lane
+
+A [program manager](designs/program-manager.md) instance owns one tracker label,
+its `lane`, and every tracker write it holds is confined to it. The confinement
+is in the harness's authority table rather than in anything the role is sent,
+and it is read from the tracker as each action runs.
+
+- **A creation carries the lane label in the write that admits it**, whether or
+  not the reply named it, with any other labels beside it. Its notes record the
+  lane and the instance. A parent it names has to carry the lane label too.
+- **Every other action is refused unless the item carries the lane label at the
+  moment of the act.** A survey that showed the label earlier is not the item as
+  it stands, so a listing that has moved does not widen the lane. An item the
+  tracker will not describe counts as outside it.
+- **The lane label is never removed by its owner.** A `label` removing it is
+  refused. Taking an item out of a lane is the product manager's or the
+  development manager's act.
+- **A lane item may be linked to wait on any item.** Linking an item outside the
+  lane to wait on a lane item is refused.
+- **A reparent needs the item and its new parent both in the lane.**
+- **Priority inside the lane is the instance's to set freely.**
+
+A lane admission is an admission, so it goes through
+[`approvals.work_items`](configuration.md#what-reaches-the-queue) exactly as the
+product manager's does. At `human` the creation is not admitted. It is put to
+you as a proposal with the lane named on the card, and approving it creates the
+item in the lane. A proposal carries the title, description, goal, parent, and
+class. Anything else the creation named, such as its priority, is listed in the
+result for the instance to set once the item is admitted. At `automatic` it is
+admitted against a goal you approved, through the same duplicate-admission guard
+and the same done-condition check. A goal whose document nobody approved puts it
+to you as a proposal instead. Close and retire are refused everywhere. An
+instance configured with no lane has nothing inside one, so every one of its
+tracker writes is refused.
 
 ### A program manager's lane report
 

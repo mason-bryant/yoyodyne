@@ -1353,6 +1353,18 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 	// product manager reaches both, and work would simply arrive through whichever
 	// asked less.
 	if refusal := s.admissionRefusal(outcome.Action); refusal != "" {
+		// A lane admission the gate would refuse is put to the operator instead,
+		// which is what the product manager's own proposal of the same work would
+		// have come to. Its parent is judged against the lane first, because a
+		// proposal the operator approves is created in the lane under that parent.
+		if s.laneScoped(outcome.Action.Action) {
+			if refusal := s.laneRefusal(ctx, outcome); refusal != "" {
+				outcome.Failure = refusal
+				return
+			}
+			s.proposeLaneCreation(ctx, outcome, s.admissionGap(outcome.Action.Goal, outcome.Action.Class))
+			return
+		}
 		outcome.Failure = refusal
 		return
 	}
@@ -1361,6 +1373,15 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 	waitsBefore := s.trackerRetryAttempts()
 	if outcome.Action.readsTargetFirst() {
 		s.readActionTarget(ctx, outcome)
+	}
+	// The lane is judged from what the tracker says the item carries now, which is
+	// the reading just taken: a survey that showed the label an hour ago is not
+	// the item as it stands.
+	if refusal := s.laneRefusal(ctx, outcome); refusal != "" {
+		outcome.Failure = refusal
+		return
+	}
+	if outcome.Action.readsTargetFirst() {
 		if refusal := refuseWhenClosed(outcome.Action.Action, strings.TrimSpace(outcome.Action.ID), outcome.TargetStatus); refusal != "" {
 			outcome.Failure = refusal
 			return
@@ -1611,6 +1632,15 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.Failure = refusal
 			return
 		}
+		// A lane admission carries the lane label in this same write whether or not
+		// the reply named it, so it never exists outside the lane it was admitted
+		// into, and its notes say whose lane that is.
+		labels := trimmedLabels(action.Labels)
+		lane := ""
+		if s.laneScoped(action.Action) {
+			labels = laneLabels(s.lane(), action.Labels)
+			lane = "\n\n" + s.laneNote()
+		}
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
@@ -1631,7 +1661,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// that wording leaves the attribution alone — which is the whole of what
 			// identity is for, and it has to be true of the moment the item is made
 			// or it is true of nothing.
-			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + s.options.Goals.NoteFor(action.Goal) + s.classNote(action.Class) + directiveNote(prompting) + reportNote(cited),
+			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + s.options.Goals.NoteFor(action.Goal) + s.classNote(action.Class) + directiveNote(prompting) + reportNote(cited) + lane,
 			Parent: action.parent(),
 			// The executor is set as the item is admitted rather than after it,
 			// because the harness may choose an item the moment it is in the queue: a
@@ -1649,7 +1679,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// parking do: an item is in the queue the moment this returns, and a seat
 			// that watches for a label sees an item labelled on the next turn only
 			// from the next turn.
-			Labels: trimmedLabels(action.Labels),
+			Labels: labels,
 		})
 		if err != nil {
 			outcome.fail(err)
@@ -1971,6 +2001,16 @@ type creation struct {
 // there is one, because "created under what" is the whole of what makes a
 // decomposition auditable.
 func (s *Session) creationVerb(parent string) creation {
+	if s.laneScoped(actionCreate) {
+		// An admission into a lane is an admission, named with the lane it went
+		// into, because that is the whole of what bounds it.
+		lane := s.lane()
+		return creation{
+			note:    "Admitted to the backlog in lane " + lane,
+			subject: "the work this would admit into lane " + lane,
+			applied: func(id string) string { return "admitted " + id + " to the backlog in lane " + lane },
+		}
+	}
 	if !s.authority().ParentRequired {
 		return creation{
 			note:    "Admitted to the backlog",
