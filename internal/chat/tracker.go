@@ -227,7 +227,7 @@ var trackerActionArguments = map[string][]string{
 	actionClose:        {},
 	actionRetire:       {},
 	actionTriage:       {"run", "decision", "budget"},
-	actionHandle:       {"report"},
+	actionHandle:       {"report", "requests"},
 	actionBrake:        {"decision"},
 }
 
@@ -415,6 +415,16 @@ type TrackerAction struct {
 	// item, and it is what the next admission citing the same report is checked
 	// against — which is how one report stops producing the same work twice.
 	Report string `json:"report,omitempty"`
+	// Requests maps a handled report's requests to what answers each, and is taken
+	// by a handling and by nothing else. It is required where the handling says the
+	// report is covered by an item, because a report can ask for two things and one
+	// covering item named in the reason answers for both whether it covers both or
+	// not — which is how the closed-status half of a report handled as covered by
+	// yoyodyne-ifd.269 lapsed for three weeks. Every request names exactly one
+	// answer: the item that covers it, the title of a creation earlier in this same
+	// block that admits it, or why it is declined. On the record the harness writes,
+	// an admission's title is replaced by the identifier the creation was assigned.
+	Requests []report.Request `json:"requests,omitempty"`
 	// State is which kind of stale backlog state a repair corrects, from the
 	// vocabulary internal/backlogrepair declares. It is required there and taken
 	// by nothing else: the three are found in different records and corrected by
@@ -533,6 +543,12 @@ type TrackerOutcome struct {
 	// fields already carry. It is not part of the record: the tracker holds the
 	// item, and what is recorded above is what this action saw of it.
 	target *beads.WorkItem
+	// admittedInBlock is what the creations carried out earlier in the same block
+	// were assigned, by the title each was asked for. It is given to a handling,
+	// which is the one action that refers to another action in its block: a request
+	// it says is admitted names the creation that admitted it, and what is recorded
+	// is the identifier that creation actually got — or nothing, where it got none.
+	admittedInBlock map[string]string
 }
 
 // PartlyLanded reports an action that failed with something durable behind it.
@@ -843,6 +859,9 @@ func decodeTrackerActions(payload string) ([]TrackerAction, int, error) {
 			problems = append(problems, fmt.Errorf("actions[%d]: %w", i, err))
 		}
 	}
+	// A handling that says a request is admitted says so of a creation in this
+	// same block, which only the block as a whole can check.
+	problems = append(problems, admissionsInBlockProblems(document.Actions)...)
 	if len(problems) > 0 {
 		return nil, requested, fmt.Errorf("invalid tracker actions: %w", errors.Join(problems...))
 	}
@@ -900,7 +919,7 @@ func (a TrackerAction) validateSubject() error {
 		// The one action whose subject is not a work item at all. It names a
 		// report, so an id would be an item nothing was going to be done to.
 		if id != "" {
-			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item")
+			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item's state — it only notes on each item a mapped request names which requests that item answers")
 		}
 		return nil
 	case a.Action == actionBrake:
@@ -1030,6 +1049,7 @@ func (a TrackerAction) validateArguments() []error {
 		case !report.ValidID(reported):
 			problems = append(problems, fmt.Errorf("handle report %q is not a report identifier; a report is named exactly as it was listed to you", reported))
 		}
+		problems = append(problems, a.requestProblems()...)
 	case actionBrake:
 		switch decision := runstate.IntakeBrakeDecision(strings.TrimSpace(a.Decision)); {
 		case decision == "":
@@ -1199,6 +1219,9 @@ func (a TrackerAction) arguments() []string {
 	if strings.TrimSpace(a.Report) != "" {
 		carried = append(carried, "report")
 	}
+	if len(a.Requests) > 0 {
+		carried = append(carried, "requests")
+	}
 	return carried
 }
 
@@ -1253,11 +1276,13 @@ func boundTrackerText(field, value string, limit int, required bool) error {
 func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAction) ([]TrackerOutcome, error) {
 	outcomes := make([]TrackerOutcome, 0, len(actions))
 	var problems []error
+	admitted := map[string]string{}
 	for i, action := range actions {
 		outcome := TrackerOutcome{
-			ID:     fmt.Sprintf("t%d.%d", s.state.Turns, i+1),
-			Turn:   s.state.Turns,
-			Action: action,
+			ID:              fmt.Sprintf("t%d.%d", s.state.Turns, i+1),
+			Turn:            s.state.Turns,
+			Action:          action,
+			admittedInBlock: admitted,
 		}
 		if err := s.emit(execution.EventTrackerActionRequested, map[string]any{
 			"action_id": outcome.ID,
@@ -1272,6 +1297,9 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 			continue
 		}
 		s.applyTrackerAction(ctx, &outcome)
+		if action.Action == actionCreate && outcome.Applied && outcome.WorkItemID != "" {
+			admitted[strings.TrimSpace(action.Title)] = outcome.WorkItemID
+		}
 		eventType := execution.EventTrackerActionFailed
 		if outcome.Applied {
 			eventType = execution.EventTrackerActionApplied
@@ -1871,7 +1899,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 	case actionTriage:
 		s.carryOutTriage(ctx, outcome)
 	case actionHandle:
-		s.recordReportHandling(outcome)
+		s.recordReportHandling(ctx, outcome)
 	case actionBrake:
 		s.decideBrake(outcome)
 	default:

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -424,6 +425,11 @@ func TestTheContractTellsTheProductManagerWhatToDoWithReports(t *testing.T) {
 			t.Fatalf("the product-manager contract is missing %q", required)
 		}
 	}
+	// A handling that maps requests notes on each item that answers one, so the
+	// contract must not tell the role that handling changes nothing in the backlog.
+	if strings.Contains(prompt, "nothing in the backlog changes") {
+		t.Fatalf("the product-manager contract still says handling a report changes nothing in the backlog")
+	}
 }
 
 // collectedReport is one report in the pile, distinguished only by what a test
@@ -469,5 +475,197 @@ func handleReport(t *testing.T, pile *fakeReports, id, reason string) {
 		RecordedAt:    time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("Handle() error = %v", err)
+	}
+}
+
+// The hole this closes. A report asking for two things was handled as covered by
+// the one item that did the first, and the second lapsed with nothing anybody
+// could audit. So a handling that maps a request to nothing is refused, quoting
+// the request, and one that answers every request — one covered by an existing
+// item, one admitted in the same block — is recorded with the mapping on the
+// handling and on the covering item.
+func TestAReportHandledAsCoveredMapsEveryRequestToWhatAnswersIt(t *testing.T) {
+	t.Parallel()
+
+	const (
+		reportID  = "report-00000000000000000000000000000002"
+		decisions = "the docket consumes recorded decisions"
+		closed    = "the docket consumes closed status"
+		admitted  = "The docket retires entries whose item has closed"
+	)
+	reports := &fakeReports{}
+	seedReports(t, reports,
+		collectedReport(reportID, report.SeverityWarning, "The docket should consume recorded decisions and closed status rather than re-presenting them.", 2),
+	)
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.269": {ID: "yoyodyne-ifd.269", Title: "The docket consumes recorded decisions", Status: "closed"},
+	}}
+
+	// Covered by one item, with the second request answered by nothing.
+	refusedProvider := &fakeBackend{results: []backendapi.RunResult{
+		{
+			SessionID: "session-1",
+			FinalText: trackerReply("Covered by ifd.269.",
+				`{"action":"handle","report":"`+reportID+`","requests":[{"request":"`+decisions+`","covered_by":"yoyodyne-ifd.269"},{"request":"`+closed+`"}],"reason":"covered by yoyodyne-ifd.269"}`),
+		},
+		// The round the refusal is handed back in.
+		{SessionID: "session-1", FinalText: "I will map the second request."},
+	}}
+	refusedOptions := testOptions(t, refusedProvider)
+	refusedOptions.Reports = reports
+	refusedOptions.Tracker = tracker
+	_, _ = openTestSession(t, refusedOptions).Send(context.Background(), "handle the docket report")
+	if len(refusedProvider.requests) < 2 {
+		t.Fatalf("the refused block was not handed back: %d provider call(s)", len(refusedProvider.requests))
+	}
+	if handedBack := refusedProvider.requests[1].Prompt; !strings.Contains(handedBack, "was refused") ||
+		!strings.Contains(handedBack, `request \"`+closed+`\" is covered by no item`) &&
+			!strings.Contains(handedBack, `request "`+closed+`" is covered by no item`) {
+		t.Fatalf("the refusal does not quote the request nothing covers:\n%s", handedBack)
+	}
+	if len(reports.handled) != 0 || len(tracker.updates) != 0 {
+		t.Fatalf("a refused handling wrote something: handlings %#v, updates %#v", reports.handled, tracker.updates)
+	}
+
+	// The same item for the first request, and the second admitted in the block.
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{
+			SessionID: "session-1",
+			FinalText: trackerReply("Covered in part; admitting the rest.",
+				`{"action":"create","title":"`+admitted+`","description":"Closed items leave the docket.","goal":"Run development nearly autonomously.","report":"`+reportID+`","reason":"the closed-status half of the report is covered by nothing"}`,
+				`{"action":"handle","report":"`+reportID+`","requests":[{"request":"`+decisions+`","covered_by":"yoyodyne-ifd.269"},{"request":"`+closed+`","admitted":"`+admitted+`"}],"reason":"covered in part by yoyodyne-ifd.269; the rest admitted"}`),
+		},
+		{SessionID: "session-1", FinalText: "Recorded."},
+	}}
+	options := testOptions(t, provider)
+	options.Reports = reports
+	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
+	reply, err := openTestSession(t, options).Send(context.Background(), "handle the docket report")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 2 || !reply.Actions[0].Applied || !reply.Actions[1].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	created := reply.Actions[0].WorkItemID
+
+	// The handling record carries the mapping, the admission by the identifier it
+	// was assigned rather than by its title.
+	if len(reports.handled) != 1 {
+		t.Fatalf("handlings = %#v", reports.handled)
+	}
+	want := []report.Request{
+		{Request: decisions, CoveredBy: "yoyodyne-ifd.269"},
+		{Request: closed, Admitted: created},
+	}
+	if got := reports.handled[0].Requests; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("recorded mapping = %#v, want %#v", got, want)
+	}
+	rendered := reports.handled[0].Render()
+	for _, line := range []string{
+		`request "` + decisions + `": covered by yoyodyne-ifd.269`,
+		`request "` + closed + `": admitted as ` + created,
+	} {
+		if !strings.Contains(rendered, line) {
+			t.Fatalf("the listing does not print %q under the handled report:\n%s", line, rendered)
+		}
+	}
+
+	// And the covering item's notes say which of the report's requests it covers,
+	// and only those.
+	var covering string
+	for _, update := range tracker.updates {
+		if update.id == "yoyodyne-ifd.269" {
+			covering += update.change.AppendNotes
+		}
+	}
+	if !strings.Contains(covering, reportID) || !strings.Contains(covering, `"`+decisions+`"`) {
+		t.Fatalf("the covering item's notes do not carry the mapping:\n%s", covering)
+	}
+	if strings.Contains(covering, closed) {
+		t.Fatalf("the covering item was noted as covering a request it does not:\n%s", covering)
+	}
+}
+
+// A request said to be admitted names a creation the block carries before the
+// handling, and a creation that did not happen leaves the report in the pile.
+func TestARequestSaidToBeAdmittedNeedsTheAdmissionInTheSameBlock(t *testing.T) {
+	t.Parallel()
+
+	handle := TrackerAction{
+		Action: actionHandle,
+		Report: "report-00000000000000000000000000000002",
+		Requests: []report.Request{
+			{Request: "the docket consumes closed status", Admitted: "The docket retires closed entries"},
+		},
+		Reason: "admitted",
+	}
+	if problems := admissionsInBlockProblems([]TrackerAction{handle}); len(problems) != 1 ||
+		!strings.Contains(problems[0].Error(), `no "create" before this handle`) {
+		t.Fatalf("problems = %v, want the missing admission refused", problems)
+	}
+	create := TrackerAction{Action: actionCreate, Title: "The docket retires closed entries"}
+	if problems := admissionsInBlockProblems([]TrackerAction{handle, create}); len(problems) != 1 {
+		t.Fatalf("problems = %v, want an admission after the handling refused", problems)
+	}
+	if problems := admissionsInBlockProblems([]TrackerAction{create, handle}); len(problems) != 0 {
+		t.Fatalf("problems = %v, want an admission before the handling accepted", problems)
+	}
+}
+
+// The one-sentence handling is what lost the request, so a reason that says the
+// report is covered by an item, with no mapping beside it, is refused.
+func TestAHandlingThatSaysCoveredByInProseAloneIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		action TrackerAction
+		want   string
+	}{
+		{
+			name:   "covered by in prose only",
+			action: TrackerAction{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "Covered by yoyodyne-ifd.269."},
+			want:   "maps none of the report's requests",
+		},
+		{
+			name: "two answers to one request",
+			action: TrackerAction{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "mapped",
+				Requests: []report.Request{{Request: "one thing", CoveredBy: "yoyodyne-ifd.269", Declined: "and also not"}}},
+			want: `takes exactly one of`,
+		},
+		{
+			name: "a covering item that is not an item",
+			action: TrackerAction{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "mapped",
+				Requests: []report.Request{{Request: "one thing", CoveredBy: "the docket work"}}},
+			want: "covered_by",
+		},
+		{
+			name: "a request mapped twice",
+			action: TrackerAction{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "mapped",
+				Requests: []report.Request{{Request: "one thing", CoveredBy: "yoyodyne-ifd.269"}, {Request: "one thing", Declined: "no"}}},
+			want: "mapped twice",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.action.Validate()
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("Validate() error = %v, want it to mention %q", err, testCase.want)
+			}
+		})
+	}
+	// A handling that is not about coverage needs no mapping, and one that
+	// declines every request it names is complete.
+	for _, valid := range []TrackerAction{
+		{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "already fixed by ifd.314"},
+		{Action: actionHandle, Report: "report-00000000000000000000000000000002", Reason: "declined",
+			Requests: []report.Request{{Request: "one thing", Declined: "not worth a run"}}},
+	} {
+		if err := valid.Validate(); err != nil {
+			t.Fatalf("Validate() on %#v error = %v", valid, err)
+		}
 	}
 }

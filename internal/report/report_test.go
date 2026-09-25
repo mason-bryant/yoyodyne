@@ -391,3 +391,45 @@ func testHandling(reportID, reason string) Handling {
 		RecordedAt:    time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC),
 	}
 }
+
+// A handling's mapping gives every request exactly one answer, and a listing
+// prints the mapping under the report so whoever checks the handling later can
+// hold each covering item to what it was said to cover.
+func TestAHandlingMapsEachRequestToExactlyOneAnswer(t *testing.T) {
+	t.Parallel()
+
+	handling := testHandling("report-00000000000000000000000000000001", "covered in part, the rest admitted")
+	handling.Requests = []Request{
+		{Request: "consume recorded decisions", CoveredBy: "yoyodyne-ifd.269"},
+		{Request: "consume closed status", Admitted: "yoyodyne-ifd.428.27"},
+		{Request: "re-present nothing", Declined: "already true"},
+	}
+	if err := handling.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	rendered := handling.Render()
+	for _, line := range []string{
+		`request "consume recorded decisions": covered by yoyodyne-ifd.269`,
+		`request "consume closed status": admitted as yoyodyne-ifd.428.27`,
+		`request "re-present nothing": declined: already true`,
+	} {
+		if !strings.Contains(rendered, line) {
+			t.Fatalf("Render() is missing %q:\n%s", line, rendered)
+		}
+	}
+	items, covers := Covering(handling.Requests)
+	if len(items) != 2 || items[0] != "yoyodyne-ifd.269" || len(covers["yoyodyne-ifd.269"]) != 1 {
+		t.Fatalf("Covering() = %v, %v", items, covers)
+	}
+
+	for _, unanswered := range []Request{
+		{Request: "consume closed status"},
+		{Request: "consume closed status", CoveredBy: "yoyodyne-ifd.269", Declined: "no"},
+	} {
+		invalid := handling
+		invalid.Requests = []Request{unanswered}
+		if err := invalid.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one of") {
+			t.Fatalf("Validate() error = %v, want a request with no single answer refused", err)
+		}
+	}
+}
