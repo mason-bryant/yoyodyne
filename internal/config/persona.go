@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,9 +13,14 @@ import (
 // personas come from the read-only bundle inside the executable and project
 // personas from the project's .yoyodyne directory, so each layer resolves its
 // own paths and neither can reach into the other.
+//
+// The same loader reads a program manager's remit, which is held to every rule a
+// persona is held to. kind is the word its refusals name — "persona" or
+// "remit" — so a remit is refused in the persona rules' own wording rather than
+// in a second set of messages that could drift from the first.
 type personaLoader interface {
-	// load returns the persona text and a human-readable source for it.
-	load(personaPath string) (text string, source string, err error)
+	// load returns the document's text and a human-readable source for it.
+	load(kind, personaPath string) (text string, source string, err error)
 }
 
 type builtinPersonaLoader struct {
@@ -24,21 +28,21 @@ type builtinPersonaLoader struct {
 	bundle string
 }
 
-func (l builtinPersonaLoader) load(personaPath string) (string, string, error) {
-	clean, err := validatePersonaPath(personaPath)
+func (l builtinPersonaLoader) load(kind, personaPath string) (string, string, error) {
+	clean, err := validatePersonaPath(kind, personaPath)
 	if err != nil {
 		return "", "", err
 	}
 	slashed := filepath.ToSlash(clean)
 	if !fs.ValidPath(slashed) {
-		return "", "", fmt.Errorf("persona path %q is not valid inside bundle %s", personaPath, l.bundle)
+		return "", "", fmt.Errorf("%s path %q is not valid inside bundle %s", kind, personaPath, l.bundle)
 	}
 	data, err := fs.ReadFile(l.files, slashed)
 	if err != nil {
-		return "", "", fmt.Errorf("read %s persona %q: %w", l.bundle, personaPath, err)
+		return "", "", fmt.Errorf("read %s %s %q: %w", l.bundle, kind, personaPath, err)
 	}
 	if len(data) > MaxPersonaBytes {
-		return "", "", fmt.Errorf("%s persona %q is %d bytes, limit is %d", l.bundle, personaPath, len(data), MaxPersonaBytes)
+		return "", "", fmt.Errorf("%s %s %q is %d bytes, limit is %d", l.bundle, kind, personaPath, len(data), MaxPersonaBytes)
 	}
 	return string(data), l.bundle + "/" + slashed, nil
 }
@@ -51,42 +55,42 @@ type directoryPersonaLoader struct {
 	root string
 }
 
-func (l directoryPersonaLoader) load(personaPath string) (string, string, error) {
-	clean, err := validatePersonaPath(personaPath)
+func (l directoryPersonaLoader) load(kind, personaPath string) (string, string, error) {
+	clean, err := validatePersonaPath(kind, personaPath)
 	if err != nil {
 		return "", "", err
 	}
 	root, err := filepath.EvalSymlinks(l.root)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve persona directory %q: %w", l.root, err)
+		return "", "", fmt.Errorf("resolve %s directory %q: %w", kind, l.root, err)
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Join(root, clean))
 	if err != nil {
-		return "", "", fmt.Errorf("resolve persona %q: %w", personaPath, err)
+		return "", "", fmt.Errorf("resolve %s %q: %w", kind, personaPath, err)
 	}
 	relative, err := filepath.Rel(root, resolved)
 	if err != nil {
-		return "", "", fmt.Errorf("verify persona %q: %w", personaPath, err)
+		return "", "", fmt.Errorf("verify %s %q: %w", kind, personaPath, err)
 	}
 	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("persona %q resolves outside %s", personaPath, l.root)
+		return "", "", fmt.Errorf("%s %q resolves outside %s", kind, personaPath, l.root)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", "", fmt.Errorf("stat persona %q: %w", personaPath, err)
+		return "", "", fmt.Errorf("stat %s %q: %w", kind, personaPath, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", "", fmt.Errorf("persona %q is not a regular file", personaPath)
+		return "", "", fmt.Errorf("%s %q is not a regular file", kind, personaPath)
 	}
 	if info.Size() > MaxPersonaBytes {
-		return "", "", fmt.Errorf("persona %q is %d bytes, limit is %d", personaPath, info.Size(), MaxPersonaBytes)
+		return "", "", fmt.Errorf("%s %q is %d bytes, limit is %d", kind, personaPath, info.Size(), MaxPersonaBytes)
 	}
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return "", "", fmt.Errorf("read persona %q: %w", personaPath, err)
+		return "", "", fmt.Errorf("read %s %q: %w", kind, personaPath, err)
 	}
 	if len(data) > MaxPersonaBytes {
-		return "", "", fmt.Errorf("persona %q is %d bytes, limit is %d", personaPath, len(data), MaxPersonaBytes)
+		return "", "", fmt.Errorf("%s %q is %d bytes, limit is %d", kind, personaPath, len(data), MaxPersonaBytes)
 	}
 	return string(data), resolved, nil
 }
@@ -106,10 +110,10 @@ type firstPersonaLoader struct {
 	loaders []personaLoader
 }
 
-func (l firstPersonaLoader) load(personaPath string) (string, string, error) {
+func (l firstPersonaLoader) load(kind, personaPath string) (string, string, error) {
 	var first error
 	for _, loader := range l.loaders {
-		text, source, err := loader.load(personaPath)
+		text, source, err := loader.load(kind, personaPath)
 		if err == nil {
 			return text, source, nil
 		}
@@ -118,7 +122,7 @@ func (l firstPersonaLoader) load(personaPath string) (string, string, error) {
 		}
 	}
 	if first == nil {
-		return "", "", fmt.Errorf("persona %q cannot be resolved: no persona directory was available", personaPath)
+		return "", "", fmt.Errorf("%s %q cannot be resolved: no persona directory was available", kind, personaPath)
 	}
 	return "", "", first
 }
@@ -130,24 +134,24 @@ type unavailablePersonaLoader struct {
 	reason string
 }
 
-func (l unavailablePersonaLoader) load(personaPath string) (string, string, error) {
-	return "", "", fmt.Errorf("persona %q cannot be resolved: %s", personaPath, l.reason)
+func (l unavailablePersonaLoader) load(kind, personaPath string) (string, string, error) {
+	return "", "", fmt.Errorf("%s %q cannot be resolved: %s", kind, personaPath, l.reason)
 }
 
-func validatePersonaPath(personaPath string) (string, error) {
+func validatePersonaPath(kind, personaPath string) (string, error) {
 	trimmed := strings.TrimSpace(personaPath)
 	if trimmed == "" {
-		return "", errors.New("persona path is required")
+		return "", fmt.Errorf("%s path is required", kind)
 	}
 	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
-		return "", fmt.Errorf("persona path %q must be relative to the project %s directory", personaPath, DirectoryName)
+		return "", fmt.Errorf("%s path %q must be relative to the project %s directory", kind, personaPath, DirectoryName)
 	}
 	clean := filepath.Clean(trimmed)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("persona path %q must not traverse outside the project %s directory", personaPath, DirectoryName)
+		return "", fmt.Errorf("%s path %q must not traverse outside the project %s directory", kind, personaPath, DirectoryName)
 	}
 	if strings.ToLower(path.Ext(filepath.ToSlash(clean))) != ".md" {
-		return "", fmt.Errorf("persona path %q must be a Markdown file", personaPath)
+		return "", fmt.Errorf("%s path %q must be a Markdown file", kind, personaPath)
 	}
 	return clean, nil
 }

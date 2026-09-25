@@ -1,12 +1,14 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
@@ -233,5 +235,59 @@ func TestTheProgramManagerNeitherDirectsNorCausesRuns(t *testing.T) {
 	carryOut := TrackerAction{Action: actionCreate, Title: "t", Description: "d", Goal: "g", Directive: "directive-1", Reason: "why"}
 	if err := session.authorize(parsedReply{Actions: []TrackerAction{carryOut}}); err == nil {
 		t.Error("authorize() let the program manager carry out a directive by creating work")
+	}
+}
+
+// An instance's remit says what its lane is for, and it reaches the provider on
+// every turn of the instance's conversation — the first and every resumed one —
+// placed after the persona, which is itself after the contract. The order is the
+// point: the remit is read under both, and grants nothing either can refuse.
+func TestAProgramManagersRemitFollowsThePersonaOnEveryTurn(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-pm-lane", FinalText: "Nothing in the lane has stopped."},
+		{SessionID: "session-pm-lane", FinalText: "Two landings since."},
+	}}
+	const persona = "PERSONA: work plainly and ask before assuming."
+	const remit = "REMIT: the reliability lane is for everything that keeps the line from stalling."
+	options := testOptions(t, provider)
+	options.Role = domain.RoleProgramManager
+	options.Agent = "reliability-pm"
+	options.Persona = persona
+	options.Remit = remit
+	session := openTestSession(t, options)
+	for _, message := range []string{"What is stuck in the lane?", "And since then?"} {
+		if _, err := session.Send(context.Background(), message); err != nil {
+			t.Fatalf("Send(%q) error = %v", message, err)
+		}
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider was asked %d time(s), want one per turn", len(provider.requests))
+	}
+	authority, _ := AuthorityFor(domain.RoleProgramManager)
+	for turn, request := range provider.requests {
+		prompt := request.SystemPrompt
+		contract := strings.Index(prompt, authority.Contract)
+		personaAt := strings.Index(prompt, persona)
+		remitAt := strings.Index(prompt, remit)
+		if contract != 0 || personaAt < 0 || remitAt < 0 {
+			t.Fatalf("turn %d prompt carries contract at %d, persona at %d, remit at %d; want all three with the contract first", turn+1, contract, personaAt, remitAt)
+		}
+		if remitAt < personaAt {
+			t.Fatalf("turn %d prompt places the remit at %d, ahead of the persona at %d", turn+1, remitAt, personaAt)
+		}
+		if !strings.Contains(prompt, "# Configured program manager remit") {
+			t.Errorf("turn %d prompt does not label the remit as configuration", turn+1)
+		}
+	}
+	if provider.requests[1].SessionID == "" {
+		t.Fatal("the second turn did not resume the session, so it is not the resumed turn this test is about")
+	}
+
+	// An agent with no remit is sent exactly what it was sent before remits existed.
+	if got := WithRemit("contract", domain.RoleProgramManager, "  "); got != "contract" {
+		t.Errorf("WithRemit() with no remit = %q, want the prompt unchanged", got)
 	}
 }

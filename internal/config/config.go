@@ -741,6 +741,19 @@ type AgentConfig struct {
 	// this agent works rather than about what it may do — see sidethreads.go for
 	// why no value of it reaches a side thread's authority.
 	Conversations ConversationMode `yaml:"conversations,omitempty" json:"conversations,omitempty"`
+	// Lane is the tracker label a program manager instance owns, and empty for
+	// every agent of any other role, which is refused a lane when the file loads.
+	// Two instances naming one lane are refused too: a lane has one owner. See
+	// lane.go for why none of the three instance keys grants anything.
+	Lane string `yaml:"lane,omitempty" json:"lane,omitempty"`
+	// Remit says what a program manager instance's lane is for. It is read by
+	// the persona's loader and held to every rule a persona is, and it follows
+	// the persona in the prompt on every turn of the instance's conversation.
+	Remit Persona `yaml:"remit,omitempty" json:"remit,omitempty"`
+	// Triggers is what wakes a program manager instance for a pass over its lane:
+	// a cadence and the events from a closed set. Reading them is the pass
+	// machinery's; the configuration loads, validates, and reports them.
+	Triggers Triggers `yaml:"triggers,omitempty" json:"triggers,omitempty"`
 	// Capabilities is everything the harness may do on this agent's behalf,
 	// stated in the closed vocabulary rather than implied by the role's name. It
 	// is read from `internal/rolecapability` as the configuration resolves, so
@@ -1049,6 +1062,7 @@ func (c Config) Validate() error {
 		problems = append(problems, agent.Failover.problems(name, agent)...)
 		problems = append(problems, c.failoverEndpointProblems(providers, name, agent)...)
 		problems = append(problems, conversationModeProblems(name, agent.Conversations)...)
+		problems = append(problems, instanceProblems(name, agent)...)
 		if agent.Role == domain.RoleDeveloper {
 			developers += agent.Instances
 		}
@@ -1056,6 +1070,7 @@ func (c Config) Validate() error {
 			reviewers += agent.Instances
 		}
 	}
+	problems = append(problems, laneProblems(c.Agents)...)
 	if developers == 0 {
 		problems = append(problems, "at least one developer agent is required")
 	}
@@ -1267,21 +1282,28 @@ func slackImageURL(avatar string) bool {
 // an agent whose configured guidance vanished is not the agent that was
 // configured.
 func (p Persona) problems(agentName string) []string {
+	return p.problemsAs(agentName, "persona", MaxPersonaBytes)
+}
+
+// problemsAs is the persona rules stated for any document held to them, naming
+// the document by kind — which is how a program manager's remit is refused in
+// the persona's own words.
+func (p Persona) problemsAs(agentName, kind string, limit int) []string {
 	if !p.Defined() {
 		return nil
 	}
 	var problems []string
 	if strings.TrimSpace(p.Version) == "" {
-		problems = append(problems, fmt.Sprintf("agent %q persona version is required", agentName))
+		problems = append(problems, fmt.Sprintf("agent %q %s version is required", agentName, kind))
 	}
 	if strings.TrimSpace(p.Path) == "" {
-		problems = append(problems, fmt.Sprintf("agent %q persona path is required", agentName))
+		problems = append(problems, fmt.Sprintf("agent %q %s path is required", agentName, kind))
 	}
 	if strings.TrimSpace(p.Text) == "" {
-		problems = append(problems, fmt.Sprintf("agent %q persona %q is empty", agentName, p.Path))
+		problems = append(problems, fmt.Sprintf("agent %q %s %q is empty", agentName, kind, p.Path))
 	}
-	if len(p.Text) > MaxPersonaBytes {
-		problems = append(problems, fmt.Sprintf("agent %q persona %q is %d bytes, limit is %d", agentName, p.Path, len(p.Text), MaxPersonaBytes))
+	if len(p.Text) > limit {
+		problems = append(problems, fmt.Sprintf("agent %q %s %q is %d bytes, limit is %d", agentName, kind, p.Path, len(p.Text), limit))
 	}
 	return problems
 }

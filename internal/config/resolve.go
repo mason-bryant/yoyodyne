@@ -172,6 +172,7 @@ type agentResolution struct {
 	config  AgentConfig
 	origins map[string]string
 	persona *personaReference
+	remit   *personaReference
 }
 
 type personaReference struct {
@@ -564,6 +565,34 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		}
 		agent.origins["persona"] = applied.origin
 	}
+	if document.Lane != nil {
+		agent.config.Lane = strings.TrimSpace(*document.Lane)
+		agent.origins["lane"] = applied.origin
+	}
+	if document.Remit != nil {
+		// A remit is held to the persona's rules, this one among them: an override
+		// replaces the inherited remit completely, so both halves come from it.
+		if document.Remit.Version == nil || document.Remit.Path == nil {
+			return fmt.Errorf("agent %q remit override must declare both version and path", name)
+		}
+		agent.remit = &personaReference{
+			version: strings.TrimSpace(*document.Remit.Version),
+			path:    strings.TrimSpace(*document.Remit.Path),
+			loader:  applied.personas,
+		}
+		agent.origins["remit"] = applied.origin
+	}
+	if document.Triggers != nil {
+		triggers := Triggers{Every: document.Triggers.Every}
+		if len(document.Triggers.On) > 0 {
+			triggers.On = make([]TriggerEvent, 0, len(document.Triggers.On))
+			for _, event := range document.Triggers.On {
+				triggers.On = append(triggers.On, TriggerEvent(strings.TrimSpace(string(event))))
+			}
+		}
+		agent.config.Triggers = triggers
+		agent.origins["triggers"] = applied.origin
+	}
 	if document.Failover != nil {
 		// The block replaces whatever was inherited, so an override that names only
 		// half of it leaves the other half at its zero value rather than at some
@@ -648,13 +677,26 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 			agent.origins["capabilities"] = OriginRoleCapabilities
 		}
 		if agent.persona != nil {
-			text, source, err := agent.persona.loader.load(agent.persona.path)
+			text, source, err := agent.persona.loader.load("persona", agent.persona.path)
 			if err != nil {
 				return Resolved{}, fmt.Errorf("agent %q: %w", name, err)
 			}
 			effectiveAgent.Persona = Persona{
 				Version: agent.persona.version,
 				Path:    agent.persona.path,
+				Source:  source,
+				Bytes:   len(text),
+				Text:    text,
+			}
+		}
+		if agent.remit != nil {
+			text, source, err := agent.remit.loader.load("remit", agent.remit.path)
+			if err != nil {
+				return Resolved{}, fmt.Errorf("agent %q: %w", name, err)
+			}
+			effectiveAgent.Remit = Persona{
+				Version: agent.remit.version,
+				Path:    agent.remit.path,
 				Source:  source,
 				Bytes:   len(text),
 				Text:    text,

@@ -256,9 +256,10 @@ from the name — so `role` must be one of the six: `product-manager`,
 The sixth is the [program manager](designs/program-manager.md): an agent filling
 it watches one outcome across the others and may change work only inside its own
 lane. `yoyo init` configures none — an instance is a lane and a remit somebody
-chose — and until the lane is built every tracker write the role holds is
-refused, so an instance configured today reads, asks, remembers, and reports,
-and nothing more.
+chose, written in three keys only that role's agents carry
+([a program manager instance](#a-program-manager-instance)) — and until the lane
+is enforced every tracker write the role holds is refused, so an instance
+configured today reads, asks, remembers, and reports, and nothing more.
 [Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 
@@ -274,6 +275,65 @@ harness's, because those are what the `execution.usage_limit_*` settings below
 mean. [Provider plugins](provider-plugins.md) is the format and its limits — in
 particular that a provider speaking a protocol no compiled adapter speaks needs
 an adapter rather than a declaration.
+
+### A program manager instance
+
+An agent on the `program-manager` role carries three keys beside the backend,
+model, account, and persona every agent carries. They are what tells one
+instance of the role from another, and they are refused on an agent of any other
+role, naming the key and the role:
+
+```yaml
+agents:
+  reliability-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    persona:
+      version: v1
+      path: personas/program-manager.md
+    lane: reliability
+    remit:
+      version: r1
+      path: remits/reliability.md
+    triggers:
+      every: 2h
+      on: [landings, stoppages]
+```
+
+- **`lane`** is the tracker label the instance owns: one identifier-shaped word,
+  held to the rule a [slot's preferred label](#a-developer-slot-that-prefers-a-label)
+  is — letters, digits, dots, underscores, and hyphens, up to 64 bytes, compared
+  exactly. **Two instances naming one lane are refused when the file loads**, and
+  the refusal names both agents and the lane: a lane has one owner or it is not a
+  lane. `yoyo agent list` prints the lane beside the agent's name —
+  `reliability-pm (program-manager, lane reliability)` — and carries it as `lane`
+  in `--json`.
+- **`remit`** says what the lane is for, as `version` and `path`: a Markdown file
+  under the configuration directory, held to every rule a [persona](#personas) is
+  held to — relative, no `..`, Markdown, present, not empty, not a symlink out of
+  the directory — and to the same 32 KiB bound, and refused in the persona rules'
+  own words with `remit` in place of `persona`. An override replaces an inherited
+  remit whole and must name both halves. It is delivered on every turn of the
+  instance's conversation **after the persona**, which is after the contract: the
+  contract says what the role may do, the persona how it works, and the remit what
+  its lane is for, and the remit grants nothing either of the others refuses.
+  Editing the file moves the [configuration revision](#inspection) as editing a
+  persona does.
+- **`triggers`** is what wakes the instance for a pass over its lane: `every`, a
+  duration floored at the [recurring-task](#recurring-tasks) minimum of `5m` for
+  the same reason — every pass is a conversation turn — and `on`, a list drawn
+  from the closed set `landings`, `admissions`, and `stoppages`. An `every` under
+  the floor, an `on` entry outside the set, and an entry named twice are refused
+  when the file loads; leaving `every` out is no scheduled pass. A later layer's
+  block replaces an inherited one whole, as the failover block does.
+
+**What this builds is the configuration, not the behaviour behind it.** The keys
+load, are validated, are reported by `yoyo agent list` and `yoyo config show`,
+and the remit is delivered; nothing yet reads the triggers to take a pass, and the
+lane is not yet what admits the role's tracker writes, which stay refused as
+above. Configuration selects which lane and what wakes it, and never widens what
+the role may do.
 
 ## Discovery
 
@@ -4997,6 +5057,11 @@ These are all errors, reported before any work is claimed:
 - a `product.shipped_documentation` entry that is empty, absolute, climbs out of
   the repository, or is not a Markdown file, since every entry is read into the
   product manager's context as a description of what the product ships;
+- a program manager's `remit` path that fails any of the persona rules below, in
+  the same words; a `lane`, `remit`, or `triggers` on an agent of any other role;
+  a `lane` the tracker would not carry, or one two agents name; a
+  `triggers.every` under `5m`; and a `triggers.on` entry outside `landings`,
+  `admissions`, and `stoppages`, or named twice;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's six, which is how a typo in an

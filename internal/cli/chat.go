@@ -942,6 +942,7 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// is the fail-fast those callers pace themselves on.
 		UsageLimitPause: usageLimitPause(cfg, attended),
 		Persona:         agent.Persona.Text,
+		Remit:           agent.Remit.Text,
 		Agent:           name,
 		Provider:        agent.Backend,
 		Providers:       providerRegistry(cfg),

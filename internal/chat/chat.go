@@ -420,6 +420,11 @@ type Options struct {
 	// may specialize how the product manager works; it is placed after the
 	// immutable contract and can never replace or weaken it.
 	Persona string
+	// Remit is a program manager instance's remit from configuration: what its
+	// lane is for. It follows the persona on every turn and, like the persona,
+	// can never replace or weaken the contract ahead of it. It is empty for every
+	// other agent.
+	Remit string
 	// Agent is the configured agent filling the role. It is required, because it
 	// is the conversation's identity: the durable record, the provider session,
 	// and the lease are all keyed on it, so two agents configured for one role
@@ -1446,7 +1451,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		}
 		return "", &OperatorHoldError{Hold: hold}
 	}
-	systemPrompt := SystemPrompt(s.state.Role, s.options.Admission, s.options.Persona)
+	systemPrompt := WithRemit(SystemPrompt(s.state.Role, s.options.Admission, s.options.Persona), s.state.Role, s.options.Remit)
 	// The repository documents, the tracker's own text, and the operator's words
 	// all go to the provider, so anything recognizably sensitive is redacted on
 	// the way out rather than only in what comes back.

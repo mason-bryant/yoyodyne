@@ -77,6 +77,15 @@ type agentReport struct {
 	Instances      int                     `json:"instances"`
 	PersonaPath    string                  `json:"persona_path,omitempty"`
 	PersonaVersion string                  `json:"persona_version,omitempty"`
+	// Lane is the tracker label a program manager instance owns, and absent for
+	// every other agent. It is printed beside the agent's name because it is what
+	// tells one instance of the role from another.
+	Lane         string `json:"lane,omitempty"`
+	RemitPath    string `json:"remit_path,omitempty"`
+	RemitVersion string `json:"remit_version,omitempty"`
+	// Triggers is what wakes the instance for a pass, as configured; absent where
+	// nothing is configured.
+	Triggers *config.Triggers `json:"triggers,omitempty"`
 	// Owns is what this role decides, from the authority table rather than from
 	// the persona: a project can rewrite the persona and cannot rewrite this.
 	Owns string `json:"owns,omitempty"`
@@ -361,6 +370,13 @@ func readAgents(parts components) ([]agentReport, error) {
 			Instances:      agent.Instances,
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
+			Lane:           parts.config.AgentLane(name),
+			RemitPath:      agent.Remit.Path,
+			RemitVersion:   agent.Remit.Version,
+		}
+		if agent.Triggers.Defined() {
+			triggers := agent.Triggers
+			report.Triggers = &triggers
 		}
 		// Named only where the alternate actually leaves the provider, so an agent
 		// that fails over within its own reads exactly as it always has.
@@ -464,8 +480,14 @@ func resolveAgent(cfg config.Config, requested string) (string, domain.AgentRole
 
 func renderAgent(report agentReport) string {
 	var rendered strings.Builder
+	// A lane is named inside the parentheses beside the role, because it is what
+	// the instance is: two program managers are told apart by their lanes.
+	identity := string(report.Role)
+	if report.Lane != "" {
+		identity += ", lane " + report.Lane
+	}
 	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, account %s, %d instance(s)\n",
-		report.Name, report.Role, report.Backend, report.Model,
+		report.Name, identity, report.Backend, report.Model,
 		recorded(report.Account, "none the configuration names"), report.Instances)
 	if report.ModelVersion != "" {
 		// The scope is named for the reason the alternate's below is: a pin covers
@@ -512,6 +534,12 @@ func renderAgent(report agentReport) string {
 	}
 	if report.PersonaPath != "" {
 		fmt.Fprintf(&rendered, "  persona %s (%s)\n", report.PersonaPath, report.PersonaVersion)
+	}
+	if report.RemitPath != "" {
+		fmt.Fprintf(&rendered, "  remit %s (%s)\n", report.RemitPath, report.RemitVersion)
+	}
+	if report.Triggers != nil {
+		fmt.Fprintf(&rendered, "  %s\n", describeTriggers(*report.Triggers))
 	}
 	if !report.Addressable {
 		fmt.Fprintln(&rendered, "  the harness holds no conversation with this role")
@@ -598,4 +626,22 @@ product manager owns the backlog, the development manager decomposes admitted
 work underneath it and cannot admit or reorder any, the architect owns the
 designs and invariants and edits nothing from a conversation, and the developer
 and reviewer do their real work inside runs.`)
+}
+
+// describeTriggers says what wakes an instance in one line, as configured. It
+// does not say a pass has been taken: reading the triggers is the pass
+// machinery's.
+func describeTriggers(triggers config.Triggers) string {
+	var parts []string
+	if triggers.Every != 0 {
+		parts = append(parts, "every "+triggers.Every.String())
+	}
+	if len(triggers.On) > 0 {
+		events := make([]string, 0, len(triggers.On))
+		for _, event := range triggers.On {
+			events = append(events, string(event))
+		}
+		parts = append(parts, "on "+strings.Join(events, ", "))
+	}
+	return "passes over its lane " + strings.Join(parts, " and ")
 }
