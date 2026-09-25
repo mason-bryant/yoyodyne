@@ -62,25 +62,13 @@ const maxLaneReportLineBytes = 200
 // always one that can be read back.
 const maxEncodedLaneReportVersionBytes = 64 << 10
 
-// laneReportMovers are the movers a blocker may be waiting on, as the tokens the
-// read model's own vocabulary spells them. The durable schema keeps its own copy
-// because the read model reads this record and not the other way round; a test
-// in the read model holds every one of them to its vocabulary, so the copy is
-// checked rather than trusted.
-var laneReportMovers = []string{
-	"operator",
-	"product-manager",
-	"development-manager",
-	"architect",
-	"harness",
-	"forge",
-	"provider",
-}
-
-// LaneReportMovers is what a blocker's waiting_on may name.
-func LaneReportMovers() []string {
-	return append([]string(nil), laneReportMovers...)
-}
+// LaneReportMoverCheck refuses a token that is not a mover a blocker may wait
+// on. The vocabulary is the read model's, and it stays there: this package holds
+// no copy of it, because the read model reads this record and not the other way
+// round. The store is handed the read model's own check when it is built, which
+// is readmodel.CheckLaneReportMover, so what a report may name is decided in one
+// place.
+type LaneReportMoverCheck func(token string) error
 
 // LaneReportBlocker is one thing holding the lane back: what it is, who has to
 // move for it to clear, and the record the instance already raised about it.
@@ -145,23 +133,15 @@ func (b LaneReportBlocker) validate() error {
 	if strings.TrimSpace(b.What) == "" {
 		problems = append(problems, errors.New("what is required"))
 	}
-	if !isLaneReportMover(b.WaitingOn) {
-		problems = append(problems, fmt.Errorf("waiting_on %q is not a mover a blocker may wait on; the movers are %s",
-			b.WaitingOn, strings.Join(laneReportMovers, ", ")))
+	// Which movers are admitted is the read model's to say, and the store asks it
+	// as it writes; here the field is held to being a token at all.
+	if err := validateLaneReportLine("waiting_on", b.WaitingOn); err != nil {
+		problems = append(problems, err)
 	}
 	if err := validateLaneReportLine("cites", b.Cites); err != nil {
 		problems = append(problems, err)
 	}
 	return errors.Join(problems...)
-}
-
-func isLaneReportMover(token string) bool {
-	for _, mover := range laneReportMovers {
-		if token == mover {
-			return true
-		}
-	}
-	return false
 }
 
 // validateLaneReportLine holds an identifier-shaped field to one short line.
@@ -278,14 +258,23 @@ type LaneReportStore struct {
 	// redactor is applied to everything the role wrote before it is measured or
 	// stored. It is a field of the store so there is no write that skips it.
 	redactor execution.Redactor
+	// movers is the read model's check on what a blocker waits on, asked of
+	// every blocker before anything is written.
+	movers LaneReportMoverCheck
 }
 
 // NewLaneReportStore builds the store for one product. The values are the ones
 // every durable record in this harness is redacted against; a store built with
 // none redacts nothing, which is what a reader wants.
-func NewLaneReportStore(root string, productID domain.ProductID, redactValues ...string) (*LaneReportStore, error) {
+//
+// The mover check is required: a store that could not say which movers a
+// blocker may wait on would write whatever it was handed.
+func NewLaneReportStore(root string, productID domain.ProductID, movers LaneReportMoverCheck, redactValues ...string) (*LaneReportStore, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("state root must be an absolute path")
+	}
+	if movers == nil {
+		return nil, errors.New("a lane report store is built with the read model's check on what a blocker may wait on")
 	}
 	if err := domain.ValidateIdentifier("product id", string(productID)); err != nil {
 		return nil, err
@@ -294,6 +283,7 @@ func NewLaneReportStore(root string, productID domain.ProductID, redactValues ..
 		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "program-managers"),
 		productID: productID,
 		redactor:  execution.NewRedactor(redactValues...),
+		movers:    movers,
 	}, nil
 }
 
@@ -343,6 +333,15 @@ func (s *LaneReportStore) Write(ctx context.Context, version LaneReport) (LaneRe
 	numbered.Version = 1
 	if err := numbered.Validate(); err != nil {
 		return LaneReport{}, err
+	}
+	var refused []error
+	for index, blocker := range version.Report.Blockers {
+		if err := s.movers(blocker.WaitingOn); err != nil {
+			refused = append(refused, fmt.Errorf("blockers[%d]: %w", index, err))
+		}
+	}
+	if err := errors.Join(refused...); err != nil {
+		return LaneReport{}, fmt.Errorf("invalid lane report: %w", err)
 	}
 
 	release, err := s.lock(ctx, version.Agent)

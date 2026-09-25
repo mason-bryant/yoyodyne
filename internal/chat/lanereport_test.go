@@ -11,6 +11,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -42,7 +43,7 @@ func programManagerSession(t *testing.T, laneReports *runstate.LaneReportStore, 
 
 func newChatLaneReportStore(t *testing.T, redact ...string) *runstate.LaneReportStore {
 	t.Helper()
-	store, err := runstate.NewLaneReportStore(t.TempDir(), "yoyodyne", redact...)
+	store, err := runstate.NewLaneReportStore(t.TempDir(), "yoyodyne", readmodel.CheckLaneReportMover, redact...)
 	if err != nil {
 		t.Fatalf("NewLaneReportStore() error = %v", err)
 	}
@@ -112,6 +113,11 @@ func TestAProgramManagersLaneReportIsRewrittenEachTurnAndKept(t *testing.T) {
 	}
 	if !strings.Contains(provider.requests[0].SystemPrompt, "yoyodyne-lane-report") {
 		t.Error("the program manager's contract does not say how to write a lane report")
+	}
+	for _, mover := range readmodel.LaneReportMovers() {
+		if !strings.Contains(provider.requests[0].SystemPrompt, fmt.Sprintf("%q", string(mover))) {
+			t.Errorf("the contract does not offer the mover %q the read model admits", mover)
+		}
 	}
 }
 

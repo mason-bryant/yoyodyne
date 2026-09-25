@@ -20,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/evaluation"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/repositoryread"
 	"github.com/mason-bryant/yoyodyne/internal/research"
@@ -682,7 +683,7 @@ func prepareChat(ctx context.Context, role domain.AgentRole, agentName, configPa
 	}
 	// Where a program manager rewrites its lane report, redacted against the same
 	// values, so a report reaches the disk only as a durable record may.
-	laneReports, err := runstate.NewLaneReportStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
+	laneReports, err := runstate.NewLaneReportStore(parts.stateRoot, cfg.Product.ID, readmodel.CheckLaneReportMover, parts.redactValues...)
 	if err != nil {
 		return preparedChat{}, err
 	}

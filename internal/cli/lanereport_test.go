@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -37,7 +38,7 @@ func firePassOfProgramManager(t *testing.T, reply string) (runstate.Sweep, *runs
 	if err != nil {
 		t.Fatalf("NewConversationStore() error = %v", err)
 	}
-	laneReports, err := runstate.NewLaneReportStore(root, "example")
+	laneReports, err := runstate.NewLaneReportStore(root, "example", readmodel.CheckLaneReportMover)
 	if err != nil {
 		t.Fatalf("NewLaneReportStore() error = %v", err)
 	}

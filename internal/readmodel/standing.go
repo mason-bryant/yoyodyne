@@ -48,7 +48,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
@@ -56,6 +55,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/developerslot"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -1390,16 +1390,13 @@ func joinProblems(first, second string) string {
 }
 
 // singleLine folds prose somebody wrote into the one line a status can carry,
-// and says where it was cut. It is cut on a rune boundary: a line truncated
-// mid-rune is not text.
+// and says where it was cut. The fold and the cut are oneline's, on a rune
+// boundary, because a line truncated mid-rune is not text; the mark is this
+// package's own ellipsis, which every status line already ends a cut with.
 func singleLine(text string, limit int) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= limit {
-		return folded
+	bounded := oneline.Bound(text, limit)
+	if len(bounded) == len(strings.Join(strings.Fields(text), " ")) {
+		return bounded
 	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimRight(folded[:cut], " ") + "…"
+	return bounded + "…"
 }

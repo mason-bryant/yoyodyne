@@ -33,9 +33,19 @@ func laneReportVersion(summary string, turn int) LaneReport {
 	}
 }
 
+// admitProductManager stands in for the read model's mover check, which this
+// package cannot import: it admits the one mover these tests name and refuses
+// everything else, so the store is shown to ask the check it was given.
+func admitProductManager(token string) error {
+	if token == "product-manager" {
+		return nil
+	}
+	return fmt.Errorf("waiting_on %q is not a mover a blocker may wait on", token)
+}
+
 func newLaneReportTestStore(t *testing.T, redact ...string) *LaneReportStore {
 	t.Helper()
-	store, err := NewLaneReportStore(t.TempDir(), "yoyodyne", redact...)
+	store, err := NewLaneReportStore(t.TempDir(), "yoyodyne", admitProductManager, redact...)
 	if err != nil {
 		t.Fatalf("NewLaneReportStore() error = %v", err)
 	}
@@ -195,5 +205,15 @@ func TestAnInstanceWithNoLaneReportHasNone(t *testing.T) {
 	}
 	if history, err := store.History("factory"); len(history) != 0 || err != nil {
 		t.Fatalf("History() = %v, %v; want none", history, err)
+	}
+}
+
+// A store is never built without the read model's check on movers, because one
+// that could not say which movers a blocker may wait on would write any token.
+func TestALaneReportStoreRequiresAMoverCheck(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewLaneReportStore(t.TempDir(), "yoyodyne", nil); err == nil {
+		t.Fatal("NewLaneReportStore() built a store with no mover check")
 	}
 }

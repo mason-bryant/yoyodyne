@@ -368,15 +368,22 @@ func TestEveryMoverHasAPossessive(t *testing.T) {
 	}
 }
 
-// A lane report's blocker names what it waits on in this vocabulary. The durable
-// schema keeps its own copy of the tokens a blocker may name, because this
-// package reads that record rather than the other way round, so every one of
-// them is held here to being a mover this vocabulary has.
+// A lane report's blocker names what it waits on in this vocabulary, narrowed:
+// every mover it may name is one the vocabulary has, the check admits exactly
+// those, and it refuses the movers a lane cannot wait on.
 func TestEveryMoverALaneReportMayNameIsAMover(t *testing.T) {
 	t.Parallel()
-	for _, token := range runstate.LaneReportMovers() {
-		if !Mover(token).Valid() {
-			t.Errorf("a lane report may wait on %q, which is not a mover the read model has", token)
+	for _, mover := range LaneReportMovers() {
+		if !mover.Valid() {
+			t.Errorf("a lane report may wait on %q, which is not a mover the read model has", mover)
+		}
+		if err := CheckLaneReportMover(string(mover)); err != nil {
+			t.Errorf("CheckLaneReportMover(%q) = %v, want it admitted", mover, err)
+		}
+	}
+	for _, refused := range []string{string(MoverNobody), string(MoverUnnamed), "developer", "reviewer", "the-weather", ""} {
+		if err := CheckLaneReportMover(refused); err == nil {
+			t.Errorf("CheckLaneReportMover(%q) admitted it", refused)
 		}
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -133,7 +134,15 @@ func decodeLaneReport(payload string) (*runstate.LaneReportContent, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("decode lane report: a report carries summary, remaining, and blockers, and this one has no %s", strings.Join(missing, " or "))
 	}
-	if err := content.Validate(); err != nil {
+	// The shape is the record's and the movers are the read model's, so both are
+	// asked and every problem either finds is named at once.
+	problems := []error{content.Validate()}
+	for index, blocker := range content.Blockers {
+		if err := readmodel.CheckLaneReportMover(blocker.WaitingOn); err != nil {
+			problems = append(problems, fmt.Errorf("blockers[%d]: %w", index, err))
+		}
+	}
+	if err := errors.Join(problems...); err != nil {
 		return nil, err
 	}
 	return &content, nil
@@ -222,8 +231,9 @@ func (s *Session) reportLaneReport(out io.Writer, reply Reply) {
 
 // laneReportContract is what the program manager is told about its report. It
 // is part of the contract rather than the persona because what the role may
-// write is authority.
-const laneReportContract = `# Your lane report
+// write is authority. The movers it names are read from the read model rather
+// than written out here, so the contract cannot offer one the check refuses.
+var laneReportContract = `# Your lane report
 
 You keep one report on your lane: an executive summary of its progress, what remains, and what is blocking it. It is pulled rather than pushed — the operator and the other roles read it when they choose — and it is yours alone to write. Rewrite it whole whenever where the lane stands has changed, and on every pass, by ending your reply with exactly one block, after the prose:
 
@@ -231,4 +241,18 @@ You keep one report on your lane: an executive summary of its progress, what rem
 {"summary":"where the lane stands, in a few sentences","remaining":["what is still to do"],"blockers":[{"what":"what is blocked","waiting_on":"product-manager","cites":"the id of the request, report, amendment, or exchange you raised about it"}]}
 ` + "```" + `
 
-All three fields are required; an empty list says nothing remains or nothing is blocking. "waiting_on" is who has to move: "operator", "product-manager", "development-manager", "architect", "harness", "forge", or "provider". "cites" is the identifier of a record you already raised about the blocker — a blocker you have asked nobody about is not yet a blocker, so raise it first. The whole report is held to 16 KiB and redacted before it is written, and a block that is malformed, too large, missing a field, or naming anybody else as a mover is refused whole: nothing is written, the report before it stands, and you are told why on your next turn. Never put a secret in it.`
+All three fields are required; an empty list says nothing remains or nothing is blocking. "waiting_on" is who has to move: ` + quotedLaneReportMovers() + `. "cites" is the identifier of a record you already raised about the blocker — a blocker you have asked nobody about is not yet a blocker, so raise it first. The whole report is held to 16 KiB and redacted before it is written, and a block that is malformed, too large, missing a field, or naming anybody else as a mover is refused whole: nothing is written, the report before it stands, and you are told why on your next turn. Never put a secret in it.`
+
+// quotedLaneReportMovers names the movers a blocker may wait on, as the contract
+// says them.
+func quotedLaneReportMovers() string {
+	movers := readmodel.LaneReportMovers()
+	quoted := make([]string, 0, len(movers))
+	for _, mover := range movers {
+		quoted = append(quoted, fmt.Sprintf("%q", string(mover)))
+	}
+	if len(quoted) < 2 {
+		return strings.Join(quoted, "")
+	}
+	return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
+}
