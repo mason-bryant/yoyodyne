@@ -488,8 +488,8 @@ type baselineFixture struct {
 	repository   string
 	worktreeRoot string
 	store        *runstate.Store
-	tracker      *fakeTracker
-	providers    []*fakeBackend
+	tracker      recordingTracker
+	providers    []recordingBackend
 	steps        []baselineStep
 	reconciled   []Reconciliation
 	// reserved says a run record exists, and observable says the invocation that
@@ -549,7 +549,7 @@ func baselineImplements(request backend.RunRequest) error {
 // pipeline builds a pipeline over this fixture's own repository and stores. Every
 // provider it is handed is remembered, so the trace can report the invocations of
 // a scenario that used more than one.
-func (f *baselineFixture) pipeline(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) pipeline(t *testing.T, provider recordingBackend, commands []string) Pipeline {
 	t.Helper()
 	return f.pipelineOver(t, f.store, provider, commands)
 }
@@ -557,7 +557,7 @@ func (f *baselineFixture) pipeline(t *testing.T, provider *fakeBackend, commands
 // pipelineOver is the same over a store the scenario wraps, which is how an
 // interrupted process is driven: the run writes through the wrapper and what
 // survives is read back from the real store underneath it.
-func (f *baselineFixture) pipelineOver(t *testing.T, store StateStore, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) pipelineOver(t *testing.T, store StateStore, provider recordingBackend, commands []string) Pipeline {
 	t.Helper()
 	f.providers = append(f.providers, provider)
 	pipeline := newSharedPipeline(t, f.repository, f.worktreeRoot, store, f.tracker, provider, commands)
@@ -571,7 +571,7 @@ func (f *baselineFixture) pipelineOver(t *testing.T, store StateStore, provider 
 
 // automatic is the same pipeline with the reviewer wired and integration taken
 // by the harness, which is what all but the human-approval scenario runs under.
-func (f *baselineFixture) automatic(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) automatic(t *testing.T, provider recordingBackend, commands []string) Pipeline {
 	t.Helper()
 	return automatic(f.pipeline(t, provider, commands), provider)
 }
@@ -580,7 +580,7 @@ func (f *baselineFixture) automatic(t *testing.T, provider *fakeBackend, command
 // went. A failure is part of the trace rather than a reason to stop building it.
 func (f *baselineFixture) invoke(t *testing.T, name string, pipeline Pipeline) Outcome {
 	t.Helper()
-	outcome, err := pipeline.Run(context.Background(), f.tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), f.tracker.Record().Item.ID)
 	f.steps = append(f.steps, baselineStep{name: name, outcome: outcome, err: err})
 	f.noteObservable(pipeline)
 	return outcome
@@ -796,7 +796,7 @@ func baselineOperatorStop(t *testing.T) *baselineFixture {
 			SchemaVersion: runstate.StopSchemaVersion,
 			ProductID:     "yoyodyne",
 			RunID:         request.RunID,
-			WorkItemID:    fixture.tracker.item.ID,
+			WorkItemID:    fixture.tracker.Record().Item.ID,
 			RequestedAt:   baseTime,
 			Reason:        "it is rewriting the wrong file",
 		}); err != nil {
@@ -1089,16 +1089,17 @@ type baselineTracedItem struct {
 func (f *baselineFixture) trace(t *testing.T, scenario baselineScenario) baselineTrace {
 	t.Helper()
 	normalizer := f.normalizer(t)
+	record := f.tracker.Record()
 	trace := baselineTrace{
 		Scenario: scenario.name,
 		Freezes:  scenario.freezes,
 		WorkItem: baselineTracedItem{
-			Calls:   f.tracker.calls,
-			Status:  f.tracker.item.Status,
-			Closed:  f.tracker.closed,
-			Blocked: f.tracker.blocked,
-			Notes:   normalizer.records(f.tracker.noteRecords),
-			Blocker: normalizer.lines(f.tracker.blockReason),
+			Calls:   record.Calls,
+			Status:  record.Item.Status,
+			Closed:  record.Closed,
+			Blocked: record.Blocked,
+			Notes:   normalizer.records(record.NoteRecords),
+			Blocker: normalizer.lines(record.BlockReason),
 		},
 	}
 	if trace.WorkItem.Calls == nil {
@@ -1185,7 +1186,7 @@ func baselineRepeatCount(entry, name string) (string, int, bool) {
 func (f *baselineFixture) invocations() []string {
 	invocations := []string{}
 	for _, provider := range f.providers {
-		for _, request := range provider.requests {
+		for _, request := range provider.RequestsMade() {
 			continued := "new session"
 			if request.SessionID != "" {
 				continued = "continues session"

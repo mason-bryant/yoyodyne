@@ -44,7 +44,7 @@ func accumulatedRepository(t *testing.T) string {
 	return repository
 }
 
-func newBranchReviewer(t *testing.T, repository string, provider *fakeBackend) (BranchReviewer, *runstate.BranchReviewStore, *runstate.ReportStore) {
+func newBranchReviewer(t *testing.T, repository string, provider backend.Backend) (BranchReviewer, *runstate.BranchReviewStore, *runstate.ReportStore) {
 	t.Helper()
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:         execution.OSProcessRunner{},

@@ -1362,7 +1362,7 @@ func TestTheRepairVerbClearsTheFindingTheCarryOutLeft(t *testing.T) {
 
 	harness := newUndecidedHarness(t, continuableState())
 	grantedAgainstTheStoppage(t, harness)
-	harness.tracker.item.Status = "closed"
+	harness.tracker.SetItemStatus("closed")
 	refusing := harness.carryOut()
 	if _, _, err := refusing.Carry(context.Background(), theOneOutstanding(t, refusing)); err != nil {
 		t.Fatalf("Carry() error = %v", err)
@@ -1372,7 +1372,7 @@ func TestTheRepairVerbClearsTheFindingTheCarryOutLeft(t *testing.T) {
 	} else if _, found := counters.CarryOutOf(docketedRunID); !found {
 		t.Fatalf("counters = %#v, want the refusal recorded before the verb is typed", counters)
 	}
-	harness.tracker.item.Status = "blocked"
+	harness.tracker.SetItemStatus("blocked")
 	result, err := harness.continuer().Continue(context.Background(), continueRequest())
 	if err != nil || !result.Continued {
 		t.Fatalf("Continue() = %#v, %v, want the verb to fire the decision", result, err)

@@ -1264,7 +1264,7 @@ func sweepRemoteTarget(t *testing.T, repository, remote, branch string) {
 }
 
 // newPublishingPipeline is the automatic pipeline with publishing turned on.
-func newPublishingPipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend, forge *fakeForge, commands []string) (Pipeline, *runstate.Store) {
+func newPublishingPipeline(t *testing.T, repository string, tracker WorkTracker, provider backend.Backend, forge PullRequests, commands []string) (Pipeline, *runstate.Store) {
 	t.Helper()
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, commands)
 	return publishing(pipeline, forge), store
@@ -1272,7 +1272,7 @@ func newPublishingPipeline(t *testing.T, repository string, tracker *fakeTracker
 
 // publishing turns a pipeline into one that publishes, the way automatic turns
 // one into a pipeline that reviews and integrates.
-func publishing(pipeline Pipeline, forge *fakeForge) Pipeline {
+func publishing(pipeline Pipeline, forge PullRequests) Pipeline {
 	pipeline.Config.Approvals.Publishing = domain.ApprovalAutomatic
 	pipeline.Publisher = forge
 	return pipeline
@@ -1440,10 +1440,10 @@ func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publ
 	return publish.MergeResult{}, nil
 }
 
-// performQueuedMerge is the forge merging a request it queued, which is what
+// PerformQueuedMerge is the forge merging a request it queued, which is what
 // happens once the base branch's required checks pass — minutes after the run
 // that asked for it ended.
-func (f *fakeForge) performQueuedMerge(t *testing.T) {
+func (f *fakeForge) PerformQueuedMerge(t *testing.T) {
 	t.Helper()
 	if !f.queued {
 		t.Fatal("no merge is queued with the forge")
@@ -1455,10 +1455,10 @@ func (f *fakeForge) performQueuedMerge(t *testing.T) {
 	f.merged = true
 }
 
-// dropQueuedMerge is the forge giving up on a merge it queued, which is what a
+// DropQueuedMerge is the forge giving up on a merge it queued, which is what a
 // required check that failed leaves behind: an open request with nothing
 // waiting to merge it.
-func (f *fakeForge) dropQueuedMerge() {
+func (f *fakeForge) DropQueuedMerge() {
 	f.queued = false
 }
 
@@ -1467,11 +1467,11 @@ func (f *fakeForge) dropQueuedMerge() {
 // by leaving the published head out of the new commit's parents, so the commit
 // that was reviewed never reaches the base at all.
 func (f *fakeForge) mergeIntoRemote(base, head string) error {
-	tip, err := f.git("rev-parse", "refs/heads/"+base)
+	tip, err := f.Git("rev-parse", "refs/heads/"+base)
 	if err != nil {
 		return err
 	}
-	tree, err := f.git("rev-parse", head+"^{tree}")
+	tree, err := f.Git("rev-parse", head+"^{tree}")
 	if err != nil {
 		return err
 	}
@@ -1483,15 +1483,15 @@ func (f *fakeForge) mergeIntoRemote(base, head string) error {
 	if !f.replayMerge {
 		arguments = append(arguments, "-p", head)
 	}
-	merged, err := f.git(append(arguments, "-m", fmt.Sprintf("Merge pull request #%d", f.number))...)
+	merged, err := f.Git(append(arguments, "-m", fmt.Sprintf("Merge pull request #%d", f.number))...)
 	if err != nil {
 		return err
 	}
-	_, err = f.git("update-ref", "refs/heads/"+base, merged, tip)
+	_, err = f.Git("update-ref", "refs/heads/"+base, merged, tip)
 	return err
 }
 
-func (f *fakeForge) git(arguments ...string) (string, error) {
+func (f *fakeForge) Git(arguments ...string) (string, error) {
 	command := exec.Command("git", append([]string{"-C", f.remote}, arguments...)...)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -1759,7 +1759,7 @@ func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
@@ -1789,18 +1789,18 @@ func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
 	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != "" {
 		t.Errorf("merged remote branch survived at %q", published)
 	}
-	if !strings.Contains(fixture.tracker.notes, "settled the merge this run left queued") {
-		t.Errorf("tracker notes do not report the settled merge:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Record().Notes, "settled the merge this run left queued") {
+		t.Errorf("tracker notes do not report the settled merge:\n%s", fixture.tracker.Record().Notes)
 	}
 	// The run left the closure to this answer, so this is where the item closes —
 	// and the reason says what actually happened rather than describing a run
 	// somebody interrupted.
-	if !fixture.tracker.closed {
+	if !fixture.tracker.Record().Closed {
 		t.Fatal("the confirmed merge did not close the item, so nothing ever will")
 	}
 	for _, want := range []string{"merged by the forge", "Reviewed and integrated"} {
-		if !strings.Contains(fixture.tracker.closeReason, want) {
-			t.Errorf("close reason %q does not name %q", fixture.tracker.closeReason, want)
+		if !strings.Contains(fixture.tracker.Record().CloseReason, want) {
+			t.Errorf("close reason %q does not name %q", fixture.tracker.Record().CloseReason, want)
 		}
 	}
 	// Nothing is left owed, so a second sweep finds nothing at all.
@@ -1839,7 +1839,7 @@ func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
 	}
 
 	// The forge merges it, and the very next sweep settles the run.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
 	}
@@ -1873,7 +1873,7 @@ func TestReconcileRecordsASecondDropAsAnEscalationRatherThanAReArm(t *testing.T)
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	fixture.forge.dropQueuedMerge()
+	fixture.forge.DropQueuedMerge()
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the run settled on a blocker", results)
@@ -1891,18 +1891,18 @@ func TestReconcileRecordsASecondDropAsAnEscalationRatherThanAReArm(t *testing.T)
 	}
 	// The blocker on the item is the surface the guides describe, and it is where
 	// the development manager reads this rather than in a sweep's output.
-	if !fixture.tracker.blocked {
+	if !fixture.tracker.Record().Blocked {
 		t.Fatal("a second drop left the item unblocked")
 	}
 	for _, want := range []string{"second drop of this publication", "escalation rather than something to re-arm again"} {
-		if !strings.Contains(fixture.tracker.blockReason, want) {
-			t.Fatalf("the blocker %q does not say %q", fixture.tracker.blockReason, want)
+		if !strings.Contains(fixture.tracker.Record().BlockReason, want) {
+			t.Fatalf("the blocker %q does not say %q", fixture.tracker.Record().BlockReason, want)
 		}
 	}
 	// Nothing about the second drop closes the item or repeats the merge: the
 	// sweep can only ask the forge, and a second re-arm is not its to make.
-	if fixture.tracker.closed {
-		t.Fatalf("a second drop closed the item as integrated: reason = %q", fixture.tracker.closeReason)
+	if fixture.tracker.Record().Closed {
+		t.Fatalf("a second drop closed the item as integrated: reason = %q", fixture.tracker.Record().CloseReason)
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -1925,8 +1925,8 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.dropQueuedMerge()
-	merges := len(fixture.forge.merges)
+	fixture.forge.DropQueuedMerge()
+	merges := len(fixture.forge.MergeRequests())
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
@@ -1938,21 +1938,21 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 		}
 	}
 	// The forge never merged it, so nothing may record the item as integrated.
-	if fixture.tracker.closed {
-		t.Fatalf("a dropped merge closed the item as integrated: reason = %q", fixture.tracker.closeReason)
+	if fixture.tracker.Record().Closed {
+		t.Fatalf("a dropped merge closed the item as integrated: reason = %q", fixture.tracker.Record().CloseReason)
 	}
-	if !fixture.tracker.blocked || !strings.Contains(fixture.tracker.blockReason, "dropped the queued merge") {
+	if !fixture.tracker.Record().Blocked || !strings.Contains(fixture.tracker.Record().BlockReason, "dropped the queued merge") {
 		t.Fatalf("blocked = %t, reason = %q; want the dropped merge handed to a person",
-			fixture.tracker.blocked, fixture.tracker.blockReason)
+			fixture.tracker.Record().Blocked, fixture.tracker.Record().BlockReason)
 	}
 	// A first drop is work for a person and is also the one drop triage may
 	// re-arm, so it must not read as the escalation a second one is.
-	if strings.Contains(fixture.tracker.blockReason, "escalation rather than something to re-arm again") {
-		t.Fatalf("a first drop was handed over as an escalation: %q", fixture.tracker.blockReason)
+	if strings.Contains(fixture.tracker.Record().BlockReason, "escalation rather than something to re-arm again") {
+		t.Fatalf("a first drop was handed over as an escalation: %q", fixture.tracker.Record().BlockReason)
 	}
 	// Reconciliation can only ask the forge, so nothing was merged a second time.
-	if len(fixture.forge.merges) != merges {
-		t.Fatalf("reconciliation asked for %d further merge(s)", len(fixture.forge.merges)-merges)
+	if len(fixture.forge.MergeRequests()) != merges {
+		t.Fatalf("reconciliation asked for %d further merge(s)", len(fixture.forge.MergeRequests())-merges)
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -1973,8 +1973,8 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	if settled.MergeDrop.At.IsZero() || !strings.Contains(settled.MergeDrop.Reason, "dropped the queued merge") {
 		t.Errorf("merge drop = %#v, want the moment and the reason it was dropped", settled.MergeDrop)
 	}
-	if !strings.Contains(fixture.tracker.notes, "Publication outstanding") {
-		t.Errorf("tracker notes do not report the outstanding publication:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Record().Notes, "Publication outstanding") {
+		t.Errorf("tracker notes do not report the outstanding publication:\n%s", fixture.tracker.Record().Notes)
 	}
 	// The work is where it belongs, and the evidence a person needs survives.
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
@@ -2010,8 +2010,8 @@ func TestReconcileAsksTheForgeAboutAQueuedMergeWhateverTheLocalTargetShows(t *te
 	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the forge asked and the run reported as queued", results)
 	}
-	if fixture.tracker.blocked {
-		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.blockReason)
+	if fixture.tracker.Record().Blocked {
+		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.Record().BlockReason)
 	}
 	held, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -2023,7 +2023,7 @@ func TestReconcileAsksTheForgeAboutAQueuedMergeWhateverTheLocalTargetShows(t *te
 
 	// The forge merges it, and the next sweep settles the run on that answer
 	// rather than on what the local target happens to show.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	settled := fixture.reconcile(t)
 	if len(settled) != 1 || settled[0].Action != ActionCompleted || settled[0].Failure != "" {
 		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
@@ -2061,8 +2061,8 @@ func TestReconcileAsksTheForgeAboutAQueuedMergeBeforeObservingTheRepository(t *t
 	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the forge asked rather than the repository believed", results)
 	}
-	if fixture.tracker.blocked {
-		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.blockReason)
+	if fixture.tracker.Record().Blocked {
+		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.Record().BlockReason)
 	}
 	held, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -2098,18 +2098,18 @@ func TestASettledMergeClosesTheItemWhenTheMergedBranchCannotBeDeleted(t *testing
 		return nil
 	}
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the merge settled as completed", results)
 	}
 	// The whole of the change: the merge is confirmed, so the item closes.
-	if !fixture.tracker.closed {
+	if !fixture.tracker.Record().Closed {
 		t.Fatal("the confirmed merge did not close the item because a branch deletion failed, which is the loop this exists to end")
 	}
-	if !strings.Contains(fixture.tracker.closeReason, "merged by the forge") {
-		t.Errorf("close reason = %q, want the forge's merge named", fixture.tracker.closeReason)
+	if !strings.Contains(fixture.tracker.Record().CloseReason, "merged by the forge") {
+		t.Errorf("close reason = %q, want the forge's merge named", fixture.tracker.Record().CloseReason)
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -2149,8 +2149,8 @@ func TestASettledMergeClosesTheItemWhenTheMergedBranchCannotBeDeleted(t *testing
 	// A closed item that says nothing about what it left on the forge tells the
 	// person who has to remove it nothing.
 	for _, want := range []string{"could not delete the branch that merge consumed", outcome.Branch} {
-		if !strings.Contains(fixture.tracker.notes, want) {
-			t.Errorf("tracker notes do not report %q:\n%s", want, fixture.tracker.notes)
+		if !strings.Contains(fixture.tracker.Record().Notes, want) {
+			t.Errorf("tracker notes do not report %q:\n%s", want, fixture.tracker.Record().Notes)
 		}
 	}
 	// The run is settled, so nothing pulls this item's thread again.
@@ -2174,7 +2174,7 @@ func TestASettledMergeWaitsOutADroppedConnectionAtTheBranchDeletion(t *testing.T
 	}
 	fixture.sleep = func(context.Context, time.Duration) error { return nil }
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
@@ -2222,8 +2222,8 @@ type queuedFixture struct {
 	remote       string
 	worktreeRoot string
 	store        *runstate.Store
-	tracker      *fakeTracker
-	forge        *fakeForge
+	tracker      recordingTracker
+	forge        queuedForge
 	// worktrees wraps the repository access the settlement makes, so a test can
 	// drop the connection at one step of it. A fixture that sets none settles
 	// through the real observer.
@@ -2256,7 +2256,7 @@ func (f queuedFixture) run(t *testing.T) Outcome {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := publishing(automatic(newSharedPipeline(t, f.repository, f.worktreeRoot, f.store, f.tracker, provider, []string{"exit 0"}), provider), f.forge)
-	outcome, err := pipeline.Run(context.Background(), f.tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), f.tracker.Record().Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

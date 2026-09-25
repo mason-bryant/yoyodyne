@@ -32,7 +32,7 @@ func TestConvergeCatchesUpATargetNoRunIsGoingToFinish(t *testing.T) {
 	// sweep is driven on its own, so what it does here is its own work rather
 	// than the settle path's. That is the case it exists for — a target branch
 	// left behind the forge by something no run is going to finish.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
 		t.Fatalf("local main = %q, want the promoted commit %q before the sweep", local, outcome.Integration.TargetCommit)
 	}
@@ -71,7 +71,7 @@ func TestReconcileSettlesAQueuedMergeAndCatchesTheTargetUpItself(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
@@ -93,8 +93,8 @@ func TestReconcileSettlesAQueuedMergeAndCatchesTheTargetUpItself(t *testing.T) {
 	if local := publishedCommit(t, fixture.repository, "main"); local != merge {
 		t.Errorf("local main = %q, want the forge's merge commit %q without a sweep", local, merge)
 	}
-	if !strings.Contains(fixture.tracker.notes, "caught up to "+merge) {
-		t.Errorf("tracker notes do not report the catch-up:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Record().Notes, "caught up to "+merge) {
+		t.Errorf("tracker notes do not report the catch-up:\n%s", fixture.tracker.Record().Notes)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestReconcileDoesNotCatchUpWhenTheForgeDroppedTheQueuedMerge(t *testing.T) 
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.dropQueuedMerge()
+	fixture.forge.DropQueuedMerge()
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 {
@@ -130,7 +130,7 @@ func TestConvergeRemovesTheLeftoverBranchOfASettledRun(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
 		t.Fatalf("reconciliation = %#v, want the queued merge settled", settled)
 	}
@@ -256,13 +256,13 @@ func TestACatchupHeldDuringSettleIsFinishedByALaterSweep(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	outcome := fixture.run(t)
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	// Another machine's work lands on the remote target above the merge,
 	// changing the same file the run shipped — and the primary checkout holds
 	// an unsaved edit to that file, so catching up would overwrite it.
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
-	if _, err := fixture.forge.git("worktree", "add", elsewhere, "main"); err != nil {
+	if _, err := fixture.forge.Git("worktree", "add", elsewhere, "main"); err != nil {
 		t.Fatalf("open a worktree on the remote: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(elsewhere, "feature.txt"), []byte("another machine's change\n"), 0o600); err != nil {
@@ -819,12 +819,12 @@ func TestASettleThatCannotFinishThePublicationLeavesTheLocalBranchAlone(t *testi
 	t.Parallel()
 
 	fixture := newQueuedFixture(t)
-	fixture.forge.replayMerge = true
+	fixture.forge.SetReplayMerge(true)
 	outcome := fixture.run(t)
 	// The forge merges as a replay: the remote's new tip carries the change's
 	// content without carrying the promoted commit, so confirming the
 	// publication honestly fails even though a merge really happened.
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 
 	results := fixture.reconcile(t)
 	if len(results) != 1 {

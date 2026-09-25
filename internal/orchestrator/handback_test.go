@@ -291,7 +291,7 @@ func emptyPreservedWorktree(t *testing.T, path string) {
 // reEnterAt records what a re-entry records before the pipeline is asked to
 // continue a run: the run live again at the phase it is picked up in, and the
 // item put back so the resumed run is not one the pipeline refuses.
-func reEnterAt(t *testing.T, store *runstate.Store, tracker *fakeTracker, runID string, phase runstate.Phase) {
+func reEnterAt(t *testing.T, store *runstate.Store, tracker recordingTracker, runID string, phase runstate.Phase) {
 	t.Helper()
 	state, err := store.Load(runID)
 	if err != nil {
@@ -310,7 +310,7 @@ func reEnterAt(t *testing.T, store *runstate.Store, tracker *fakeTracker, runID 
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if _, _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
+	if _, _, err := tracker.Claim(context.Background(), tracker.Record().Item.ID); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 }
@@ -319,7 +319,7 @@ func reEnterAt(t *testing.T, store *runstate.Store, tracker *fakeTracker, runID 
 // started from: a developer that wrote the ten-file change, a reviewer that kept
 // asking for repair until the budget was spent, and a run that ended on a
 // durable blocker with its branch and worktree preserved.
-func stopWithPreservedChange(t *testing.T, repository, worktreeRoot string, store *runstate.Store, tracker *fakeTracker, docket *memoryDocket) Outcome {
+func stopWithPreservedChange(t *testing.T, repository, worktreeRoot string, store *runstate.Store, tracker recordingTracker, docket *memoryDocket) Outcome {
 	t.Helper()
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return writeHandbackChange(request.WorkingDirectory)
@@ -327,7 +327,7 @@ func stopWithPreservedChange(t *testing.T, repository, worktreeRoot string, stor
 	stopping := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	stopping.Docket = docketerOverStore(docket, store, stopping.Config)
 
-	stopped, err := stopping.Run(context.Background(), tracker.item.ID)
+	stopped, err := stopping.Run(context.Background(), tracker.Record().Item.ID)
 	if err == nil {
 		t.Fatal("Run() ended without stopping, so there is no handback to make")
 	}
@@ -367,7 +367,7 @@ func presentHandbackFiles(directory string) []string {
 // repairContinuerOver wires the triage action over the same durable records the
 // pipeline it continues acts on, so what the handback reads and what the resumed
 // run enforces are one product's state rather than two.
-func repairContinuerOver(t *testing.T, continuing Pipeline, store *runstate.Store, docket *memoryDocket, tracker *fakeTracker) RepairContinuer {
+func repairContinuerOver(t *testing.T, continuing Pipeline, store *runstate.Store, docket *memoryDocket, tracker WorkTracker) RepairContinuer {
 	t.Helper()
 	worktrees, ok := continuing.Worktrees.(*gitworktree.Manager)
 	if !ok {

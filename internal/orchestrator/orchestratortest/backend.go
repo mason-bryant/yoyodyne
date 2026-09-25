@@ -142,3 +142,8 @@ func RoleBackend(develop func(backend.RunRequest) error, verdicts ...string) *Ba
 	}
 	return provider
 }
+
+// RequestsMade is every invocation this backend served, in order.
+func (f *Backend) RequestsMade() []backend.RunRequest {
+	return f.Requests
+}
