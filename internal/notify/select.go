@@ -23,13 +23,22 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // FromRun reports what a run crossed between two readings of its durable state.
 // A zero-valued before is a run this sink has not reported on yet, so everything
 // its record already holds is a crossing: a sink that starts late says what
 // happened rather than pretending the run began where it was first read.
-func FromRun(before, after runstate.State) ([]Notification, error) {
+//
+// look is what the repository holds of a run's change, asked the way the docket,
+// the pull's hold, and `yoyo status` ask it (readmodel.Looking). It is asked of
+// one thing only — an approved change the environment stopped, as its ending is
+// said — because whether that run's branch is still there decides whether the
+// line names the resume or the re-run, and a sink catching up hours late reads a
+// record the repository may have moved on from. Nil answers from the run's own
+// record, which is what a sink wired without a repository has.
+func FromRun(before, after runstate.State, look func(runstate.State) triage.Found) ([]Notification, error) {
 	if strings.TrimSpace(after.RunID) == "" {
 		return nil, nil
 	}
@@ -211,9 +220,11 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		// once the cause has cleared. The table's clauses for both kinds below say
 		// otherwise of it — a decision in triage, or nothing recorded for anybody —
 		// so the move is the record's own sentence instead, the one the docket entry
-		// carries and the repair verb refuses in.
+		// carries and the repair verb refuses in. That holds while the run's branch
+		// is there; once it is gone the resume would refuse, so the line says what
+		// is gone and that a re-run is the way on, as those surfaces then do.
 		if after.IntegrationStop != nil {
-			remains.Mover = resumeMove(after)
+			remains.Mover = integrationMove(after, look)
 		}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
 			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
@@ -255,13 +266,27 @@ func endingReason(state runstate.State) string {
 	return "the record names no reason"
 }
 
-// resumeMove is whose move follows an approved change the environment stopped:
-// the harness's, by `yoyo triage resume`, in the sentence the run's record
-// words for every surface. It is derived beside the fact the message states
-// rather than worded again here, so the channel line, the docket entry, and the
-// repair verb's refusal cannot come to say different things about one run.
-func resumeMove(state runstate.State) string {
-	return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
+// integrationMove is whose move follows an approved change the environment
+// stopped: the harness's, by `yoyo triage resume`, in the sentence the run's
+// record words for every surface — while its branch is there, by the rule
+// (triage.IntegrationResumable) the docket, the pull's hold, `yoyo status`, and
+// the repair verb's refusal ask. Once it is gone the move is the sentence those
+// surfaces say of it instead, naming the re-run and no verb that would refuse.
+// It is derived beside the fact the message states rather than worded again
+// here, so the channel line and those surfaces cannot come to say different
+// things about one run.
+func integrationMove(state runstate.State, look func(runstate.State) triage.Found) string {
+	if look == nil {
+		if triage.IntegrationResumable(nil, state.BranchRemoved) {
+			return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
+		}
+		return triage.IntegrationGoneSays(state.RunID, fmt.Sprintf("branch %s removed as the run's record says, not checked", state.Branch))
+	}
+	found := look(state)
+	if triage.IntegrationResumable(&found, false) {
+		return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
+	}
+	return triage.IntegrationGoneSays(state.RunID, found.Describe())
 }
 
 // endingSeverity is how loudly a run ending without a blocker is said. A
