@@ -46,6 +46,10 @@ package protectedpath
 // more. A single-word id is left to the path: the brief's id is "brief", and a
 // done-condition that says "the brief's acceptance criteria hold" is citing it,
 // which the 17 items whose done-means say something of that kind bear out.
+// An id that is also a role's name — program-manager, the design of the role
+// of that name — is the role where the clause says only the name, and the
+// document where it says design or document beside it or writes the file name:
+// read otherwise, every item about the role was refused for naming its design.
 // Documents under the invariants directory are named by path only, for the
 // reason the artifact store excludes them from its identity scheme: an invariant
 // is delivered to every run by its id and cited by it in nearly every item, and
@@ -121,6 +125,10 @@ type Homes struct {
 type ownedDocument struct {
 	Document
 	shape *regexp.Regexp
+	// roleName marks an id that is also the name of one of the harness's roles.
+	// Such an id is read as the document only where the clause says so; see
+	// namesDocument.
+	roleName bool
 }
 
 // ArtifactHomes builds the homes a configuration names — the product artifacts,
@@ -160,7 +168,7 @@ func ArtifactHomes(cfg config.Config, documents ...Document) Homes {
 		if !named {
 			continue
 		}
-		homes.documents = append(homes.documents, ownedDocument{Document: Document{ID: id, Path: clean}, shape: shape})
+		homes.documents = append(homes.documents, ownedDocument{Document: Document{ID: id, Path: clean}, shape: shape, roleName: isRoleName(id)})
 	}
 	sort.Slice(homes.documents, func(i, j int) bool { return homes.documents[i].Path < homes.documents[j].Path })
 	return homes
@@ -210,6 +218,41 @@ func idShape(id string) (*regexp.Regexp, bool) {
 		return nil, false
 	}
 	return shape, true
+}
+
+// isRoleName reports an id that is also the name of one of the harness's roles.
+func isRoleName(id string) bool {
+	for _, name := range domain.RoleNames() {
+		if strings.EqualFold(id, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// documentAfter and documentBefore are the words that make a role's name the
+// document of the same name: "the program manager design", "program-manager.md",
+// "the design program-manager". A possessive is allowed between, because "the
+// program manager's design" is the design too.
+var (
+	documentAfter  = regexp.MustCompile(`(?i)^(?:\.md\b|(?:'s|’s)?\s+(?:design|document)s?\b)`)
+	documentBefore = regexp.MustCompile(`(?i)\b(?:design|document)\s+$`)
+)
+
+// namesDocument reports a match of a document's id that names the document
+// rather than something else the words also are. For most ids every match does.
+// An id that is also a role's name — docs/designs/program-manager.md is the
+// program manager's design, and "program manager" is written in full on every
+// surface — is the role where the clause says only the name: "no program
+// manager is configured" is about the role, and read as the design it refused
+// every item about the role until yoyodyne-ifd.433.5. So such an id is the
+// document only with the word design or document beside it, or as a file name;
+// its path is read as a path whatever is beside it.
+func (d ownedDocument) namesDocument(text string, at []int) bool {
+	if !d.roleName {
+		return true
+	}
+	return documentAfter.MatchString(text[at[1]:]) || documentBefore.MatchString(text[:at[0]])
 }
 
 // Empty reports homes with nothing to check against, which is what a caller
@@ -368,8 +411,11 @@ func (h Homes) Ungranted(description, acceptanceCriteria string, granted []strin
 				note(path, path, clause)
 			}
 			for _, document := range h.documents {
-				for _, named := range standingAlone(clause, document.shape) {
-					note(document.Path, named, clause)
+				for _, at := range standingAloneAt(clause, document.shape) {
+					if !document.namesDocument(clause, at) {
+						continue
+					}
+					note(document.Path, clause[at[0]:at[1]], clause)
 					break
 				}
 			}
@@ -625,11 +671,21 @@ var writtenPath = regexp.MustCompile(`(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]*`)
 // inside a longer identifier is not the id.
 func standingAlone(text string, shape *regexp.Regexp) []string {
 	var found []string
+	for _, at := range standingAloneAt(text, shape) {
+		found = append(found, text[at[0]:at[1]])
+	}
+	return found
+}
+
+// standingAloneAt is standingAlone's matches as positions in the text, for a
+// caller that has to read what stands beside each one.
+func standingAloneAt(text string, shape *regexp.Regexp) [][]int {
+	var found [][]int
 	for _, at := range shape.FindAllStringIndex(text, -1) {
 		if continues(text, at[0]-1) || continues(text, at[1]) {
 			continue
 		}
-		found = append(found, text[at[0]:at[1]])
+		found = append(found, at)
 	}
 	return found
 }

@@ -407,3 +407,68 @@ func TestAClauseRefusedForItsDocumentIsNotRefusedAgainForItsShape(t *testing.T) 
 		}
 	}
 }
+
+// docs/designs/program-manager.md is the design of the role whose name is its
+// id, and the role is written in full on every surface, so a done-condition
+// about the role says the design's id word for word. Such an id is the role
+// unless the clause names the path or names it as a document; yoyodyne-ifd.432.11
+// was refused dispatch on the role, and yoyodyne-ifd.433.5's own first admission
+// on saying the role's name.
+func TestAnIDThatIsARolesNameIsTheRoleUnlessTheClauseNamesTheDocument(t *testing.T) {
+	t.Parallel()
+
+	homes := ArtifactHomes(config.Config{Product: config.Product{
+		Specifications: config.DefaultSpecifications,
+		Designs:        config.DefaultDesigns,
+		Decisions:      config.DefaultDecisions,
+		Invariants:     config.DefaultInvariants,
+	}}, Document{ID: "program-manager", Path: "docs/designs/program-manager.md"})
+
+	for _, role := range []string{
+		// yoyodyne-ifd.432.11's done-means as it was refused dispatch.
+		"Done means: the standing lists each configured program manager with its name, its lane, and its status; the section's empty state says in a sentence that no program manager is configured; and docs/operations.md describes the section.",
+		// yoyodyne-ifd.432.11's done-means as the tracker holds it now.
+		"Done means: the standing the read model derives lists each configured instance of the sixth role with its name, its lane, its status as the design derives it, and where its current report is; the section has the four states every section has, with its empty state saying in a sentence that no instance of that role is configured.",
+		"Done means the program-manager lane report is rewritten each pass, and a program manager's blocked status names its blocker.",
+		"Done means a Program Manager admits only under its own label.",
+	} {
+		if conditions := homes.Ungranted(role, "", nil); len(conditions) != 0 {
+			t.Errorf("Ungranted(%q) = %#v, want the role read as the role", role, conditions)
+		}
+		if problems := homes.ConditionProblems(Subject{Description: role}); len(problems) != 0 {
+			t.Errorf("ConditionProblems(%q) = %v, want the item admitted", role, problems)
+		}
+	}
+
+	for _, document := range []struct {
+		clause string
+		named  string
+	}{
+		{"Done means the program manager design lists the lane report's endpoint.", "program manager"},
+		{"Done means the program-manager design's status table names stale.", "program-manager"},
+		{"Done means the program manager's design names stale.", "program manager"},
+		{"Done means the program manager document says where the report lives.", "program manager"},
+		{"Done means the design program-manager says where the report lives.", "program-manager"},
+		{"Done means program-manager.md says where the report lives.", "program-manager"},
+		{"Done means docs/designs/program-manager.md says where the report lives.", "docs/designs/program-manager.md"},
+	} {
+		conditions := homes.Ungranted(document.clause, "", nil)
+		if len(conditions) != 1 || conditions[0].Path != "docs/designs/program-manager.md" || conditions[0].Named != document.named {
+			t.Errorf("Ungranted(%q) = %#v, want the design named as %q", document.clause, conditions, document.named)
+		}
+	}
+
+	// A done-condition saying a design is recorded is conversation work whatever
+	// it names, and an item carrying it with no executor is refused as before.
+	recorded := "Done means the program manager's lane rule is recorded; the design is ratified by the architect."
+	problems := homes.ConditionProblems(Subject{Description: recorded})
+	if len(problems) != 1 || !strings.Contains(problems[0].Error(), "a design or a ruling is recorded") {
+		t.Fatalf("ConditionProblems(%q) = %v, want the recorded design refused for naming no executor", recorded, problems)
+	}
+
+	// An id that is no role's name keeps the older reading: the words are the
+	// document, with nothing beside them.
+	if conditions := defaultHomes().Ungranted("Done means the slack-reporting design names the sink.", "", nil); len(conditions) != 1 {
+		t.Fatalf("Ungranted() on an id that is no role's name = %#v, want the document", conditions)
+	}
+}

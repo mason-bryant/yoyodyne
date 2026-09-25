@@ -40,6 +40,26 @@ func Roles() []AgentRole {
 	}
 }
 
+// roleProgramManager is the program manager's name, the role type the operator
+// decided on 2026-09-24 (docs/designs/program-manager.md). It is not an
+// AgentRole yet and not among Roles(): no agent can be configured to it until
+// its authority is written in code, and a name Valid() accepted before then
+// would name authority nobody wrote.
+const roleProgramManager = "program-manager"
+
+// RoleNames are the names prose gives the harness's roles: every role in Roles(),
+// and the program manager, which is a role people write about before any agent
+// can fill it. It is what a reader of prose asks when a word could be a role or
+// something else of the same name — a document whose id is a role's name is the
+// case that asked first.
+func RoleNames() []string {
+	names := make([]string, 0, len(Roles())+1)
+	for _, role := range Roles() {
+		names = append(names, string(role))
+	}
+	return append(names, roleProgramManager)
+}
+
 // Valid reports whether a name is one of the harness's roles. An unrecognized
 // name — a typo in an agents block, most often — is refused rather than carried
 // as a role nothing knows how to run, because every posture the harness derives

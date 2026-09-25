@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestValidateIdentifier(t *testing.T) {
 	t.Parallel()
@@ -153,5 +156,25 @@ func TestAMarkerThatNamesNoRoleSaysSo(t *testing.T) {
 		if role := executor.Role(); role != "" {
 			t.Fatalf("%q names the role %q, want no role at all", executor, role)
 		}
+	}
+}
+
+// Every role is a name prose gives a role, and so is the program manager, which
+// is written about before any agent can be configured to it — and is still not
+// a role Valid() accepts.
+func TestRoleNamesAreTheRolesAndTheProgramManager(t *testing.T) {
+	t.Parallel()
+
+	names := RoleNames()
+	for _, role := range Roles() {
+		if !slices.Contains(names, string(role)) {
+			t.Errorf("RoleNames() = %v, missing %q", names, role)
+		}
+	}
+	if !slices.Contains(names, "program-manager") {
+		t.Errorf("RoleNames() = %v, missing the program manager", names)
+	}
+	if AgentRole("program-manager").Valid() {
+		t.Error("Valid() = true for the program manager, whose authority is not yet written in code")
 	}
 }
