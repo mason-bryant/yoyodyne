@@ -12,11 +12,15 @@ package orchestrator
 // development manager answers.
 //
 // The cause is read off the error that ended the run and never off the run's
-// prose afterwards, and it is read two ways: a dirty checkout by the sentinel
-// the worktree manager declares, and a transport that did not answer by the
+// prose afterwards: a dirty checkout, a killed replay, a target the harness
+// would not catch up, and a remote that refused the harness's credential each
+// by the sentinel declared for it, and a transport that did not answer by the
 // recovery package's closed reading of the error — the same reading that
 // decides what the harness waits out and asks again at the boundaries that have
-// a window, applied here to a step that has none. A worktree the convergence
+// a window, applied here to a step that has none. The diverged target and the
+// refused credential are cleared by a person, but what they clear is the
+// branches or the key rather than the change, so they are resumed like the
+// rest once cleared, and refused in words that say what clears them until then. A worktree the convergence
 // sweep retires while the run stands stopped is not a cause at all but a
 // condition met at resume, and it is put back from the branch.
 //
@@ -87,10 +91,17 @@ import (
 // on the branch whatever became of the directory.
 //
 // It is satisfied by gitworktree.Manager.
+//
+// TargetDivergence and VerifyRemoteAccess are the same question asked of the two
+// causes a person clears outside the checkout: whether the target branch can be
+// fast-forwarded onto the remote's again, and whether the remotes take the
+// harness's credential again. Both are reads, so asking them writes nothing.
 type ResumeWorktrees interface {
 	RepairWorktrees
 	ValidateReady(ctx context.Context) error
 	RestoreWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Worktree, error)
+	TargetDivergence(ctx context.Context, targetBranch string) (gitworktree.Catchup, error)
+	VerifyRemoteAccess(ctx context.Context, targetBranch string) error
 }
 
 // ResumeDocket is the docket the resumption reads its stoppage from and settles
@@ -249,6 +260,13 @@ func (r IntegrationResumer) Resume(ctx context.Context, request IntegrationResum
 	if err := r.Worktrees.ValidateReady(ctx); err != nil {
 		return result, CheckoutNotReadyError{RunID: prior.RunID, Cause: err}
 	}
+	// Then the stop's own cause, where it is one a person clears somewhere other
+	// than the checkout: a run made live into a target that still will not catch
+	// up, or a remote that still refuses the key, stops again before it promotes
+	// anything, with its record saying it was resumed.
+	if err := r.causeCleared(ctx, prior); err != nil {
+		return result, err
+	}
 	if err := noRunInFlight(r.Runs, entry.WorkItemID); err != nil {
 		return result, err
 	}
@@ -382,6 +400,62 @@ func (e CheckoutNotReadyError) Error() string {
 }
 
 func (e CheckoutNotReadyError) Unwrap() error { return ErrCheckoutNotReady }
+
+// ErrCauseStands is what a resumption refused because the cause of the stop is
+// still there unwraps to. Nothing was written: the run is still stopped, and
+// asking again once the cause has cleared resumes the same run.
+var ErrCauseStands = errors.New("the cause of the integration stop still stands")
+
+// CauseStandsError refuses a resumption whose stop a person has to clear and
+// has not yet: a target branch that still cannot be fast-forwarded onto the
+// remote's, or a remote that still refuses the harness's credential. It names
+// what clears it, in the words the cause gives, so the refusal is an
+// instruction rather than a second report of the stop.
+type CauseStandsError struct {
+	RunID string
+	Cause runstate.EnvironmentalCause
+	Found string
+}
+
+func (e CauseStandsError) Error() string {
+	return fmt.Sprintf(
+		"the integration of run %s was not resumed, because what stopped it still stands — %s (%s): %s; nothing was written, so asking again once you %s resumes the same run",
+		e.RunID, e.Cause, e.Cause.Title(), e.Found, e.Cause.ClearedBy())
+}
+
+func (e CauseStandsError) Unwrap() error { return ErrCauseStands }
+
+// causeCleared asks whether the cause of the stop is still there, for the two
+// causes a person clears outside the primary checkout. The checkout's own cause
+// is asked by ValidateReady for every stop, and the rest — a transport that did
+// not answer, a replay the harness killed — are not standing conditions anybody
+// can look at: the resumed promotion is the only way to ask them.
+//
+// A question that could not be answered refuses too. The run stays stopped with
+// nothing written, which costs a second ask; making it live on an answer nobody
+// got would cost a second stop recorded as a resumption.
+func (r IntegrationResumer) causeCleared(ctx context.Context, prior runstate.State) error {
+	cause := prior.IntegrationStop.Cause
+	switch cause {
+	case runstate.CauseDivergedTarget:
+		catchup, err := r.Worktrees.TargetDivergence(ctx, prior.TargetBranch)
+		if err != nil {
+			return CauseStandsError{RunID: prior.RunID, Cause: cause, Found: fmt.Sprintf("whether %s can be caught up could not be asked: %v", prior.TargetBranch, err)}
+		}
+		if catchup.Held != "" {
+			return CauseStandsError{RunID: prior.RunID, Cause: cause, Found: catchup.Held}
+		}
+	case runstate.CauseRemoteAuthRefused:
+		if err := r.Worktrees.VerifyRemoteAccess(ctx, prior.TargetBranch); err != nil {
+			found := fmt.Sprintf("whether the remotes take the credential could not be asked: %v", err)
+			if errors.Is(err, gitworktree.ErrRemoteAuthRefused) {
+				found = err.Error()
+			}
+			return CauseStandsError{RunID: prior.RunID, Cause: cause, Found: found}
+		}
+	}
+	return nil
+}
 
 // resumableStop reports a stopped run whose integration there is something to
 // resume, in the run's own record: an approved change, not promoted, that the

@@ -53,9 +53,12 @@ const ResumingIntegrationSays = "approved, resuming integration"
 //
 // The cause is one of the closed set in environmental.go, and it is what makes
 // the stop resumable: a promotion the environment refused is one the environment
-// can stop refusing, where a replay that conflicted or a target that diverged is
-// a decision somebody has to make. The phase says which step the run was in
-// when it stopped, which is the step a resumption re-enters.
+// can stop refusing, where a replay that conflicted is a decision about the
+// change somebody has to make. A target that diverged, or a key the remote
+// refused, needs a person too — but what they settle is the branches or the
+// credential, not the change, so once they have the approval still stands and
+// the resumption carries it on. The phase says which step the run was in when
+// it stopped, which is the step a resumption re-enters.
 type IntegrationStop struct {
 	Cause EnvironmentalCause `json:"cause"`
 	// Detail is the failure the run ended on, folded to a line. It is evidence for

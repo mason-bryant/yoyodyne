@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -173,6 +174,68 @@ func TestCatchUpTargetHoldsWhenTheRemoteHasDivergedFromTheLocalBranch(t *testing
 	}
 	if moved := gitLine(t, repository, "rev-parse", "refs/heads/main"); moved != local {
 		t.Errorf("local main = %q, want it left at %q", moved, local)
+	}
+}
+
+// TargetDivergence is the catch-up's question asked without the catch-up: it
+// holds on a diverged remote in the catch-up's words, answers nothing held once
+// the remote only gained a merge above the local branch, and moves the branch in
+// neither case — the resumed run's own catch-up is what moves it.
+func TestTargetDivergenceAsksTheCatchUpsQuestionAndMovesNothing(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newConvergeManager(t, repository)
+	promoted := promoteOnMain(t, repository, "feature.txt", "the promoted work\n")
+	mergeInRemote(t, remote, "main", promoted)
+
+	fastForward, err := manager.TargetDivergence(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("TargetDivergence() error = %v", err)
+	}
+	if fastForward.Held != "" || fastForward.Advanced {
+		t.Fatalf("divergence = %#v, want a remote the local branch fast-forwards onto held on nothing", fastForward)
+	}
+	if local := gitLine(t, repository, "rev-parse", "refs/heads/main"); local != promoted {
+		t.Fatalf("local main = %q, want it left at %q", local, promoted)
+	}
+
+	rewritten := rewriteRemoteBranch(t, remote, "main")
+	diverged, err := manager.TargetDivergence(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("TargetDivergence() error = %v", err)
+	}
+	if !strings.Contains(diverged.Held, rewritten) || !strings.Contains(diverged.Held, promoted) {
+		t.Fatalf("held = %q, want both commits named", diverged.Held)
+	}
+	if local := gitLine(t, repository, "rev-parse", "refs/heads/main"); local != promoted {
+		t.Fatalf("local main = %q, want it left at %q", local, promoted)
+	}
+}
+
+// A remote that refused the key is ErrRemoteAuthRefused whichever command met
+// it, and a remote refusing for any other reason is not.
+func TestARemoteRefusingTheCredentialIsItsOwnClass(t *testing.T) {
+	t.Parallel()
+
+	args := []string{"-C", "/repository", "-c", "core.hooksPath=/dev/null", "push", "origin", "abc:refs/heads/run"}
+	refused := authRefusal(args, execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 128,
+		Stderr:   "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n",
+	})
+	if !errors.Is(refused, ErrRemoteAuthRefused) || !strings.Contains(refused.Error(), "git push exited 128") || !strings.Contains(refused.Error(), "Permission denied (publickey)") {
+		t.Fatalf("authRefusal(publickey) = %v, want the refused key named with the command", refused)
+	}
+	if rejected := authRefusal(args, execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   " ! [rejected]        abc -> run (non-fast-forward)\n",
+	}); rejected != nil {
+		t.Fatalf("authRefusal(rejected push) = %v, want a rejected push left to its own wording", rejected)
+	}
+	if succeeded := authRefusal(args, execution.ProcessResult{Status: execution.ProcessSucceeded}); succeeded != nil {
+		t.Fatalf("authRefusal(success) = %v", succeeded)
 	}
 }
 

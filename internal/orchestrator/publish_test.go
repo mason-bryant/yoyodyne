@@ -1008,6 +1008,18 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 	if state.Integration != nil || state.Blocker == "" {
 		t.Fatalf("state = %#v, want a blocked run with nothing integrated", state)
 	}
+	// The change is approved and nothing was promoted, so the stop is one the
+	// harness resumes once the branches are settled rather than one that costs a
+	// re-run (yoyodyne-ifd.429.9): the record says so, and so does the blocker.
+	if state.IntegrationStop == nil || state.IntegrationStop.Cause != runstate.CauseDivergedTarget || !state.ResumableIntegration() {
+		t.Fatalf("integration stop = %#v, resumable = %t; want a resumable diverged-target stop", state.IntegrationStop, state.ResumableIntegration())
+	}
+	if outcome.IntegrationStop == nil || outcome.IntegrationStop.Cause != runstate.CauseDivergedTarget {
+		t.Fatalf("outcome integration stop = %#v, want the diverged target on the outcome too", outcome.IntegrationStop)
+	}
+	if !strings.Contains(tracker.blockReason, "`yoyo triage resume "+pipelineRunID+"`") {
+		t.Errorf("blocker does not name the resume:\n%s", tracker.blockReason)
+	}
 }
 
 // A forge that replays what it merges — which is what GitHub's rebase and

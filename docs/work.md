@@ -383,13 +383,23 @@ under load on the way to it, a forge or a network that went away — each ends
 the run, and each is recorded on the run as an *integration stop*: which
 environmental cause it was, and which step the run was in. The cause is read
 from the error that ended the run rather than from the run's prose afterwards,
-in three ways: a dirty checkout by the sentinel the worktree manager declares,
+in five ways: a dirty checkout by the sentinel the worktree manager declares,
 a replay onto the moved target that the harness killed before it finished
-(`replay-killed`) by the one it declares for that, and a tracker, forge, or network that did not answer by the [recovery
+(`replay-killed`) by the one it declares for that, a target branch the harness
+would not catch up to the remote's before promoting (`diverged-target`) by the
+sentinel the run's stop carries, a remote that refused the harness's SSH key or
+forge login on the push or the fetch around it (`remote-auth-refused`, the
+"Permission denied (publickey)" three approved changes each spent a re-run on)
+by the one the worktree manager declares for that, and a tracker, forge, or network that did not answer by the [recovery
 rule](operations.md#waiting-out-a-network-that-dropped)'s closed reading of the
 error — the same reading that decides what the harness waits out at the
-boundaries that have a window, applied to a step that has none. Nothing about
-the change is in question, so nothing about it is anybody's to decide. `yoyo triage resume
+boundaries that have a window, applied to a step that has none. A refused
+credential is never waited out, even where SSH's closing "Connection closed"
+would read as a dropped network on its own. Nothing about
+the change is in question, so nothing about it is anybody's to decide. A
+diverged target and a refused credential do need a person — to settle the
+branches, or to load the key or renew the login — but what they settle is the
+environment and not the change, so the approval stands through it. `yoyo triage resume
 <run-id>` resumes the run at the promotion it stopped short of — replay onto
 where the target now stands, push, merge request — with its approval standing,
 and it charges the item nothing: no review round, no repair grant, no re-run.
@@ -412,7 +422,11 @@ target, none of them for a verdict.
 
 The resume asks everything that can refuse before it writes anything: the
 run's own record has to say it is one of these, the primary checkout has to
-be one a promotion can be made from again, the preserved worktree has to be
+be one a promotion can be made from again, the cause of a `diverged-target`
+stop has to be gone — the local target fast-forwards onto the remote's again —
+and so does the cause of a `remote-auth-refused` one — both remotes list the
+target branch with the harness's credential — each refused in words that say
+what clears it while it still stands, the preserved worktree has to be
 as the harness left it and still hold the approved change, the item must not
 be closed or waiting on other work, and the harness has to have a free slot —
 a full one waits rather than refusing, and so does a held intake. A refused

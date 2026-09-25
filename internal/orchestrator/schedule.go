@@ -3885,13 +3885,14 @@ func (s *Started) record(done completed) {
 // count, because a brake tripped on it summons a decision about a change
 // nobody judged and prescribes a release that fixes nothing.
 //
-// The diverged target is in the class though nothing resumes it. A catch-up the
-// harness will not make is a stop the harness made, and every run reaching
-// integration meets the same one until a person settles the branches — which
-// the item's own blocker already asks of them, in the words docs/operations.md
-// gives for unwedging it. Three identical refusals tripped the brake on
-// 2026-09-21, and what that bought was a second hold on the line over one
-// cause a person had already been told about once.
+// The diverged target is in the class whether or not it stopped an approved
+// change. A catch-up the harness will not make is a stop the harness made, and
+// every run reaching integration meets the same one until a person settles the
+// branches — which the item's own blocker already asks of them, in the words
+// docs/operations.md gives for unwedging it, and after which an approved change
+// it stopped is resumed as an integration stop. Three identical refusals tripped
+// the brake on 2026-09-21, and what that bought was a second hold on the line
+// over one cause a person had already been told about once.
 func environmentalStop(outcome Outcome) bool {
 	if outcome.IntegrationStop != nil || outcome.DivergedTarget != nil {
 		return true

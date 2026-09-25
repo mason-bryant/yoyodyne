@@ -1848,6 +1848,18 @@ remote gained, which is by definition work this repository has never seen.
    promote again. That is the state this recovery is for: resolvable, and back
    under the harness.
 
+6. **Resume the approved changes the divergence stopped.** Each one is recorded
+   as an integration stop of cause `diverged-target`, and its docket entry and
+   blocker name the command:
+
+   ```sh
+   ./bin/yoyo triage resume <run-id>
+   ```
+
+   It carries the change on to its promotion with its approval standing and
+   spends no review round, repair grant, or re-run. Asked before the branches
+   are settled, it refuses, writes nothing, and names what is still diverged.
+
 6. **Decide what happens to the preserved branch.** Its commits carry work a
    reviewer approved and this repository integrated, which the shared remote never
    received; the work items behind them carry a `Publication outstanding` line

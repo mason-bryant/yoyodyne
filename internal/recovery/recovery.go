@@ -91,6 +91,13 @@ func Recoverable(err error) bool {
 // and `git` are subprocesses whose failure is what they printed, and a provider
 // death is the detail its adapter carried out of the stream.
 func RecoverableDetail(detail string) bool {
+	// A refusal of the credential is an answer, whatever else the transport said
+	// on its way out. SSH follows "Permission denied (publickey)" with "Connection
+	// closed by <host>", and reading the second line alone would wait two hours on
+	// a key nobody is going to load.
+	if AuthenticationRefusedDetail(detail) {
+		return false
+	}
 	normalized := strings.ToLower(detail)
 	for _, phrase := range recoverablePhrases {
 		if strings.Contains(normalized, phrase) {
@@ -167,4 +174,39 @@ var recoverablePhrases = []string{
 	// read as a process that was.
 	"failed with status cancelled",
 	"exit code -1:",
+}
+
+// AuthenticationRefusedDetail reports text in which a remote refused the
+// credential the harness presented: an SSH key the server would not take, or a
+// forge that turned an HTTPS login away. It is the other closed reading this
+// package makes, and the opposite verdict: asking again earns the identical
+// answer until somebody loads the key or renews the login, so it is never waited
+// out, and it is never a verdict on the work either.
+//
+// The phrases are what `ssh`, `git`, and GitHub's own remote write, kept as
+// their words for the reason recoverablePhrases keeps them. A bare "denied" or
+// "403" is deliberately absent: a protected branch refusing a push is also a
+// denial, and that one is the forge applying a rule rather than refusing a key.
+func AuthenticationRefusedDetail(detail string) bool {
+	normalized := strings.ToLower(detail)
+	for _, phrase := range authenticationPhrases {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+var authenticationPhrases = []string{
+	// The SSH refusal three approved changes stopped on: yoyodyne-ifd.428.16,
+	// 429.3, and 384.
+	"permission denied (publickey",
+	"host key verification failed",
+	// An HTTPS remote turning the login away, or having none to ask for.
+	"authentication failed for",
+	"invalid username or password",
+	"could not read username",
+	"could not read password",
+	// GitHub's own words for a credential with no write access to the repository.
+	"remote: permission to ",
 }
