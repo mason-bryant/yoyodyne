@@ -144,7 +144,14 @@ func (m *Manager) settleRegistrations(ctx context.Context, wait bool) ([]Unfinis
 	for _, entry := range unfinished {
 		if entry.age < unfinishedRegistrationGrace {
 			entry.Kept = fmt.Sprintf("it was last written %s ago and may still be being filled in", entry.age.Round(time.Second))
-		} else if err := clearRegistration(root, entry.Name); err != nil {
+			settled = append(settled, entry.UnfinishedRegistration)
+			continue
+		}
+		// Clearing an entry changes the registrations under the lease's own
+		// listing, and one that failed part-way may have changed them as well, so
+		// the listing kept on the lease goes either way — see registryState.
+		heldRegistry(ctx).forgetListing()
+		if err := clearRegistration(root, entry.Name); err != nil {
 			entry.Kept = fmt.Sprintf("it could not be removed: %v", err)
 		} else {
 			entry.Cleared = true
