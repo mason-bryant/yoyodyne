@@ -507,6 +507,9 @@ func scanStreamLog(path string, kind StreamKind, priced bool) (streamScan, error
 	// before a terminal named its own role, kept here for the same logs and the
 	// same reason. It decides nothing for a terminal that names itself.
 	reviewing := false
+	// session is the one the last terminal named, which a duplicate terminal
+	// recorded before it named its own is priced against.
+	session := ""
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
 	for scanner.Scan() {
@@ -540,15 +543,25 @@ func scanStreamLog(path string, kind StreamKind, priced bool) (streamScan, error
 			reviewing = true
 			continue
 		}
+		// A second terminal to one invocation is more of that invocation's cost,
+		// by the ledger's rule and for the ledger's reason.
+		if terminal.duplicateTerminal() {
+			cost := costs.Own(terminal.session(session), terminal.Payload.TotalCostUSD)
+			if last := len(scanned.invocations) - 1; last >= 0 {
+				scanned.invocations[last].CostUSD += cost
+			}
+			continue
+		}
 		if !terminal.priced() {
 			continue
 		}
 		announced := reviewing
 		reviewing = false
+		session = terminal.Payload.SessionID
 		scanned.invocations = append(scanned.invocations, Invocation{
 			At:      terminal.Timestamp,
 			Role:    invocationRole(kind, terminal, announced),
-			CostUSD: costs.Own(terminal.Payload.SessionID, terminal.Payload.TotalCostUSD),
+			CostUSD: costs.Own(session, terminal.Payload.TotalCostUSD),
 			Usage:   terminal.tokens(),
 		})
 	}
