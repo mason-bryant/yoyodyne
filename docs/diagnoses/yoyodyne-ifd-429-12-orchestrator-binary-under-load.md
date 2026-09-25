@@ -195,3 +195,115 @@ The wall times are one pass each at a load that moved throughout. They are not
 evidence of a time saving by themselves. The saving the counts support is about
 a tenth of the package's Git processes, at the kernel cost per process the first
 table describes.
+
+## The helper package and the census (yoyodyne-ifd.429.13, landed by 429.13.1)
+
+Step 1 above has its first half. The fakes of other packages' interfaces now
+have exported copies in `internal/orchestrator/orchestratortest`:
+
+- `Tracker`, the work tracker
+- `Backend`, the provider, with `RoleBackend` and `WithVerification`
+- `Forge`, the forge, with `ConnectionReset`
+- `Pricer`, the pricing ledger
+- `PartialWorktreeManager`, a worktree manager whose worktree was never finished
+
+Their fields and methods are exported, because a package outside `orchestrator`
+could not set them otherwise. The package imports nothing from `orchestrator`,
+directly or through any package it reaches, and
+`TestThePackageImportsNothingFromTheOrchestrator` fails if it ever does. A test
+package of its own checks that each fake still satisfies the interface
+`orchestrator` asks of it.
+
+The in-package fakes are untouched. `fakeTracker`, `fakeBackend`, `fakeForge`,
+`fakePricer`, `partialWorktreeManager`, `roleBackend`, `withVerification`, and
+`connectionReset` are still declared in `pipeline_test.go` and `publish_test.go`,
+and every in-package test still uses them. So for now each fake exists twice.
+The second half of step 1 is to point the in-package tests at
+`orchestratortest` and delete the in-package copies. That is the first of the
+migrations, and it is not part of this change.
+
+The census below was taken on the tree of pull request #757 (base 230c2a83),
+with the same type-checked walk as 429.12. It counted 834 tests, 8 more than
+429.12, because main had gained tests since. Moving the fakes changed neither
+count: none of the fakes reaches an internal.
+
+- 681 tests reach no unexported identifier of the package.
+- 153 tests reach 129 distinct unexported identifiers between them.
+
+Main has gained one test since that census: `TestEveryTurnOfAFiringIsToldItsPass`
+in `recurring_test.go`. The census does not classify it.
+
+### By file
+
+A group is one or more test files, so the census is given per file. Files fall
+into three kinds.
+
+**No test reaches internals.** These 30 files hold 177 tests and can move whole:
+
+`baseline_test.go` (4), `brake_test.go` (12), `branchreview_test.go` (8), `codex_test.go` (2), `conflict_test.go` (10), `correction_test.go` (10), `coverage_agreement_test.go` (1), `developermodel_test.go` (2), `directive_test.go` (8), `environmental_test.go` (9), `escalate_test.go` (25), `escalation_test.go` (6), `handback_test.go` (5), `invariant_test.go` (3), `language_agnostic_test.go` (3), `nextmover_agreement_test.go` (3), `outcome_test.go` (6), `phasespend_test.go` (2), `preservedsurfaces_test.go` (4), `promotion_test.go` (2), `protectedtarget_test.go` (7), `publication_test.go` (6), `repairdispatch_test.go` (6), `reviewbase_test.go` (1), `scheduleslots_test.go` (5), `stop_test.go` (6), `stoppage_test.go` (1), `supervision_test.go` (10), `triagecaps_test.go` (6), `usagewindow_test.go` (4)
+
+**Internals are reached by a minority.** These 28 files hold 580 tests. Only the
+85 named below reach internals, and those stay behind while the rest of their
+file moves:
+
+| file | tests | reaching internals | the tests that do |
+| --- | --- | --- | --- |
+| `account_test.go` | 5 | 1 | `TestSimultaneousStartsAreServedByDistinctAccounts` |
+| `amendments_test.go` | 18 | 8 | `TestAChangeWithNoContentWordsIsComparedLiterally`, `TestALongAmendmentRefusalIsFoldedToWhatTheStateWillTake`, `TestARefusalIsNotShownToARoleThatDidNotEarnIt`, `TestCarriedAmendmentRefusalsStopAtTheBound`, `TestOneArgumentSpelledTwoWaysIsRecognisedAndTwoArgumentsAreNot`, `TestOneChangeAskedOfTwoDocumentsIsTwoArguments`, `TestTheDeveloperContractSaysHowToProposeAChange`, `TestTheRecordedRefusalOutlivesTheCarriedOne` |
+| `carryout_test.go` | 30 | 2 | `TestEveryGateIsNamedFromTheRefusalsSentinel`, `TestOnlyThePausesShutForEveryDecisionAreTheWaitingKind` |
+| `claims_test.go` | 18 | 1 | `TestAnAuditorWithoutAClockUsesTheWallClock` |
+| `converge_test.go` | 14 | 5 | `TestConvergeRetiresSettledCheckoutsPastTheTail`, `TestSweepableWorktreesHoldsBackTheMostRecentSettledRuns`, `TestSweepingRecordsACheckoutSomethingElseAlreadyRemoved`, `TestSweepingRecordsTheBranchItDeleted`, `TestSweepingRetiresACheckoutAndPreservesTheWorkInIt` |
+| `conversationlanding_test.go` | 5 | 1 | `TestARevisionReasonOpensWithAnIdentifierAsAWholeWord` |
+| `hold_test.go` | 6 | 1 | `TestARunParksAtItsNextProviderCallAndCarriesOnWhenTheHoldLifts` |
+| `integrationresume_test.go` | 18 | 5 | `TestADivergedTargetAndARefusedKeyAreIntegrationStops`, `TestAKilledReplayIsAnIntegrationStopAndAConflictIsNot`, `TestAResumptionMakesTheStoppedRunLiveAtItsPromotionChargingNothing`, `TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed`, `TestOnlyARunResumedOnPurposeIsPickedUpAtItsPromotion` |
+| `landing_test.go` | 22 | 7 | `TestADependencyTheTrackerRefusesParksTheItemRatherThanFailingTheSettlement`, `TestDecidingWhereAnUndischargedItemGoesReportsATrackerItCouldNotRead`, `TestSettlingAnItemLeftWaitingKeepsTheParkingItAlreadyCarried`, `TestSettlingAnUndischargedItemTwiceMakesItWaitOnce`, `TestTheClosureDerivationReadsTheSameRecordEverywhere`, `TestTheParkingDefaultRecordsTheReasonItSuperseded`, `TestTheParkingReasonStaysInsideWhatTheTrackerHolds` |
+| `pipeline_test.go` | 91 | 12 | `TestBoundedTailKeepsTheEndOfTheOutputOnARuneBoundary`, `TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona`, `TestFailureNoteDescribesEachArtifactFromWhatWasSettledAboutIt`, `TestPipelineBoundsTheFailingCheckOutputItHandsBack`, `TestPipelineRefusesToActOnARunAnotherInvocationHolds`, `TestRunPausesForAnExhaustedUsageLimitAndResumesWhenItResets`, `TestRunPausesForAnOverloadedReviewAndAsksAgain`, `TestRunPausesWhenTheReviewerHitsAnExhaustedUsageLimit`, `TestSingleLineKeepsCommitSubjectsBoundedAndValid`, `TestValidateClaimedItemRejectsIdentityStatusAndBlockerChanges`, `TestValidateReviewPolicyGatesOnTheRoleHoldingTheVerdict`, `TestValidateReviewPolicyRefusesAReviewerNothingCanLaunch` |
+| `protectedpath_test.go` | 14 | 2 | `TestAGrantInTheItemsNotesDoesNotAdmitAPath`, `TestTheDeveloperContractNamesEveryPathBeyondAGrant` |
+| `provideroutage_test.go` | 7 | 2 | `TestRunWaitsOutALoginRefusedOnStderrBeforeAnyEnvelope`, `TestRunWaitsOutAProviderNobodyCanReachSpendingNothing` |
+| `publication_settle_test.go` | 5 | 1 | `TestReconcileFinishesAMergeThatLandedAmongOthers` |
+| `publish_test.go` | 37 | 8 | `TestPipelinePublishingNamesWhicheverRemoteIsMissing`, `TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget`, `TestPipelineStopsWaitingForAMergeThatNeverArrives`, `TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion`, `TestPullRequestBodyCarriesGovernedTextAndComputedFacts`, `TestPullRequestBodyOmitsWhatItHasNothingToSay`, `TestPullRequestBodyStaysInsideWhatAForgeAccepts`, `TestPullRequestTitleCutsAtAWordBoundary` |
+| `reconcile_test.go` | 23 | 4 | `TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks`, `TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview`, `TestAStallAtTheReviewIsHeldToTheRepairsContentCheck`, `TestAVanishedProcessThatDeliveredNothingReturnsItsGrant` |
+| `reconcilewait_test.go` | 5 | 1 | `TestAContinuationThePipelineRefusesIsReportedAsAFailure` |
+| `recovery_test.go` | 12 | 1 | `TestRecordedRetriesAreValidatedAndBounded` |
+| `recurring_test.go` | 28 | 1 | `TestABoundedProblemIsCutOnARuneBoundary` |
+| `repaircontinue_test.go` | 27 | 1 | `TestARepairSupersedesTheBlockerOnBothTheRunAndTheItem` |
+| `reports_test.go` | 3 | 1 | `TestTheDeveloperContractSaysWhatMeritsAReport` |
+| `rerun_test.go` | 39 | 1 | `TestSupersedingAStaleClaimAsksAgainWhetherARunHoldsIt` |
+| `schedule_test.go` | 92 | 11 | `TestADeliveryFailureIsSaidByEveryPassThatMeetsIt`, `TestAFailedFiringIsAProblemThatStillCosts`, `TestAFiredTaskReachesTheScheduleWithItsCost`, `TestAPassDoesNotEraseWhatItSaidAboutStoppedWork`, `TestAPassNamesEachEndingRatherThanCallingEveryStoppageAFailure`, `TestAPassWithNothingDueSaysNothingAboutTheSchedule`, `TestAPullWithoutATriggerIsUnchanged`, `TestAScheduleThatCouldNotBeFiredIsSaidRatherThanStoppingThePass`, `TestAnExclusionSaysWhatBecameOfTheStart`, `TestRepeatedDeliveryFailuresAreOneProblemOnThePass`, `TestWhatADeliveryCostCountsAgainstTheSessionsBudget` |
+| `selfcheck_test.go` | 9 | 1 | `TestABoundedSelfCheckFieldIsCutOnARuneBoundary` |
+| `spend_test.go` | 4 | 1 | `TestADeveloperAttemptAfterTheFirstIsChargedToRepair` |
+| `trackerread_test.go` | 3 | 1 | `TestAPreClaimTrackerWaitIsReadableFromTheSurfacesWhileItStands` |
+| `triage_test.go` | 38 | 2 | `TestAPublicationDocketedUnderTheOlderKeyIsNotDocketedAgain`, `TestARunThatDiedBeforeItClaimedItsItemIsDocketed` |
+| `triageoverride_test.go` | 4 | 2 | `TestARerunReasonNamesTheCrossedCapsAndStaysInsideTheSelectionBound`, `TestARerunReasonSaysNothingAboutOverridesOnAnItemThatHasNone` |
+| `unaccounted_test.go` | 3 | 1 | `TestAReplyThatAccountsForNothingIsToldApartFromOneThatDoes` |
+
+**Internals are reached by most.** In these 12 files, 68 of 77 tests reach
+internals. They stay:
+
+`actions_test.go` (13 of 14), `completion_recording_test.go` (2 of 2), `declarative_test.go` (10 of 13), `definition_repository_test.go` (2 of 3), `dependency_test.go` (3 of 3), `doctor_agreement_test.go` (1 of 1), `durablevocabulary_test.go` (2 of 3), `lostpublication_test.go` (13 of 15), `parity_test.go` (5 of 5), `projectdefinition_test.go` (4 of 5), `protectedrearm_test.go` (1 of 1), `rearm_test.go` (12 of 12)
+
+### What the moved tests still share with the ones that stay
+
+The fakes were the first shared helpers, not the last. Counting the package-level
+test declarations the 681 tests reach:
+
+- 380 are reached by those tests alone, and can move with them.
+- 304 are reached by the 153 as well.
+
+The 304 shared helpers split two ways:
+
+- **228 name nothing in `orchestrator`'s own code.** Examples are the fixed
+  clocks, `pipelineRepository`, the Git helpers, and the verdict constants. They
+  can join `orchestratortest` the way the fakes did.
+- **76 name something `orchestrator` declares,** exported or not. Examples are
+  `newPipeline`, `newSharedPipeline`, `newPublishingPipeline`,
+  `newScheduleHarness`, `hookedWorktrees`, and the baseline fixtures. None of
+  them can go into `orchestratortest`. A helper package that imports
+  `orchestrator` would serve the tests that move out, but the in-package tests
+  cannot import it. So each of these is either kept in two copies or taken out
+  of the tests that stay behind. That is the decision each group's move has to
+  make.
+
+Moved tests also have to go into a directory of their own. A `package
+orchestrator_test` file in `internal/orchestrator` compiles into the same test
+binary as the package's own tests, so it would split nothing.
