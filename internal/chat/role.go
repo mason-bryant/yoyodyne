@@ -117,6 +117,10 @@ type Authority struct {
 	// carry the block that rewrites one. It is the program manager's alone, and a
 	// block from any other role is refused with nothing written.
 	LaneReport bool
+	// RestartRequests is whether this role may ask the supervisor to restart a
+	// part of the product: the program manager's service.request-restart, which
+	// writes a durable request and restarts nothing itself.
+	RestartRequests bool
 }
 
 // MayAct reports whether this role may ask for one tracker action.
@@ -192,10 +196,11 @@ func buildAuthorities() map[domain.AgentRole]Authority {
 			Evaluations:    registry.Holds(role, capability.EvaluationRecord),
 			RepositoryReads: registry.Holds(role, capability.RepositoryRead) &&
 				registry.Holds(role, capability.RepositoryList),
-			Asks:       registry.Holds(role, capability.ExchangeAsk),
-			Answers:    registry.Holds(role, capability.ExchangeAnswer),
-			Memory:     registry.Holds(role, capability.AgentContextMutate),
-			LaneReport: registry.Holds(role, capability.LaneReportWrite),
+			Asks:            registry.Holds(role, capability.ExchangeAsk),
+			Answers:         registry.Holds(role, capability.ExchangeAnswer),
+			Memory:          registry.Holds(role, capability.AgentContextMutate),
+			LaneReport:      registry.Holds(role, capability.LaneReportWrite),
+			RestartRequests: registry.Holds(role, capability.ServiceRequestRestart),
 		}
 	}
 	return built
@@ -343,6 +348,13 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Role:    authority.Role,
 			Refused: "a lane report to be written",
 			Reason:  "a lane report is a program manager's account of its own lane, and this role says where things stand in prose instead",
+		}
+	}
+	if parsed.Restart != nil && !authority.RestartRequests {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "a part of the product to be restarted",
+			Reason:  "asking the supervisor to restart a part is the program manager's, and this role says what it found in prose instead",
 		}
 	}
 	// An ask is refused above the tracker rather than beside it, because it is
@@ -691,8 +703,9 @@ A cap that refuses you is one you may cross yourself, ` + maxDelegatedCapCrossin
 // programManagerContract is the harness policy every program-manager
 // conversation carries. The contract says what is true now rather than what the
 // design will make true: the role reads, asks, remembers, reports, rewrites its
-// lane report, and writes to the tracker inside its lane, which the harness
-// enforces at the act (lane.go).
+// lane report, writes to the tracker inside its lane, which the harness
+// enforces at the act (lane.go), and may record a restart request that nothing
+// acts on yet (restart.go).
 var programManagerContract = `You are a program manager for this product, in a direct conversation with the operator who owns it.
 
 You own one outcome that cuts across the other roles — the line not stalling, spend not being wasted, the writing staying clear, whichever this instance was configured for — and you watch it. What you may change is bounded by a lane: one tracker label this instance owns, under which you may admit and shape work, and outside which you change nothing and ask instead. The lane is written into the harness's authority table rather than into anything you are sent, and the harness enforces it on every action you ask for.
@@ -714,6 +727,8 @@ You own nothing upstream. The brief, the goals, and what is admitted to the back
 ` + laneReportContract + `
 
 ` + exchange.AskingContract + `
+
+` + restartContract + `
 
 ` + reportClause
 

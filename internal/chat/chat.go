@@ -328,6 +328,11 @@ type Options struct {
 	// discusses the idea and still says what it thinks, and an evaluation then
 	// fails plainly rather than appearing to have been recorded.
 	Evaluations Evaluations
+	// RestartRequests is where a program manager's requests that the supervisor
+	// restart a part are recorded. It is optional like the rest, and a
+	// conversation without one refuses a request as having nowhere to go rather
+	// than appearing to have recorded it.
+	RestartRequests RestartRequests
 	// Goals are the goals the repository records, which is what work admitted
 	// here has to name. It is what makes traceability something the harness holds
 	// rather than something the product manager asserts: a goal named on an item
@@ -888,7 +893,11 @@ type Reply struct {
 	// version it became, or why it was refused and the report before it stands.
 	// A reply that carried none has none.
 	LaneReport *LaneReportOutcome `json:"lane_report,omitempty"`
-	Evidence   Evidence           `json:"evidence"`
+	// Restart is the request this reply made of the supervisor, as recorded or
+	// refused. It is recorded and nothing more, so it is reported rather than put
+	// to anybody.
+	Restart  *RestartOutcome `json:"restart,omitempty"`
+	Evidence Evidence        `json:"evidence"`
 }
 
 // Open loads or starts a role's conversation. A recorded conversation with a
@@ -1447,6 +1456,19 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 				return reply, err
 			}
 		}
+		// What the role asked the supervisor to restart, recorded and nothing more.
+		// Like a memory write it never starts another round: the result travels
+		// with whatever this round is already handing back, or waits for the next
+		// turn.
+		if parsed.Restart != nil {
+			outcome := s.performRestartRequest(*parsed.Restart)
+			reply.Restart = &outcome
+			if undelivered != "" {
+				undelivered += renderRestartResult(outcome)
+			} else if err := s.carryResults(renderRestartResult(outcome)); err != nil {
+				return reply, err
+			}
+		}
 		if undelivered != "" {
 			continuation = undelivered + continueAfterResults
 		}
@@ -1953,8 +1975,11 @@ type parsedReply struct {
 	LaneReport        *runstate.LaneReportContent
 	LaneReportCarried bool
 	LaneReportProblem error
-	Reports           []report.Entry
-	ReportProblem     error
+	// Restart is the one part this reply asked the supervisor to restart, where
+	// it asked. Only a role holding service.request-restart may.
+	Restart       *RestartAsk
+	Reports       []report.Entry
+	ReportProblem error
 }
 
 // splitReply separates one answer into the prose the operator reads, the tracker
@@ -2012,6 +2037,11 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 		parsed.Prose = rest
 		return parsed, &MemoryError{Err: err}
 	}
+	prose, restart, err := extractRestart(prose)
+	if err != nil {
+		parsed.Prose = rest
+		return parsed, &RestartError{Err: err}
+	}
 	parsed.Prose = prose
 	parsed.Actions = actions
 	parsed.Proposals = proposals
@@ -2021,6 +2051,7 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	parsed.Reads = reads
 	parsed.Ask = ask
 	parsed.Memories = memories
+	parsed.Restart = restart
 	return parsed, nil
 }
 
@@ -2668,6 +2699,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// What became of its lane report, because a refused one leaves the report
 		// before it standing and the operator reading this has to know which.
 		s.reportLaneReport(out, reply)
+		// What it asked the supervisor to restart, because a request is durable
+		// and shown on the standing, and the operator should hear it from here
+		// first rather than find it there.
+		s.reportRestart(out, reply)
 		// How old the picture the reply rests on was and what the harness did
 		// about it, where it did anything: a re-read the operator never asked for
 		// is a re-read they have to be told about, and a re-read that could not be
@@ -2752,6 +2787,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		var unreadableMemory *MemoryError
 		if errors.As(err, &unreadableMemory) {
 			fmt.Fprintf(out, "%v\nNothing was remembered; ask it what it meant to record.\n\n", unreadableMemory)
+			continue
+		}
+		var unreadableRestart *RestartError
+		if errors.As(err, &unreadableRestart) {
+			fmt.Fprintf(out, "%v\nNothing was requested and nothing was restarted; ask it what it meant to request.\n\n", unreadableRestart)
 			continue
 		}
 		var unreadableConcern *ConcernError

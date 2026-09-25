@@ -891,6 +891,11 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// the chat package's table rather than here, and a store nobody may write
 		// to is never written to.
 		Evaluations: parts.evaluations,
+		// Where a program manager's request that the supervisor restart a part is
+		// recorded. It is wired for every role because the authority to make one
+		// is decided in the chat package's table, and nothing acts on a request
+		// until the supervisor's pass does.
+		RestartRequests: parts.restartRequests,
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
