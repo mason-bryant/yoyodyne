@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
 // The program manager's row of the authority table is held to what its design
@@ -170,5 +172,66 @@ func TestAnExchangeRunsToAndFromTheProgramManager(t *testing.T) {
 	}
 	if prompt := AnsweringPrompt(domain.RoleProgramManager, ""); !strings.Contains(prompt, "program manager") {
 		t.Errorf("the answering prompt does not say who is answering: %q", prompt)
+	}
+}
+
+// Directives, their resolutions and withdrawals, and causing a run are the rest
+// of what the design excludes, and none of them is a block a role writes: a
+// directive is recorded, resolved, and withdrawn by the operator's own commands,
+// and a run is caused by the harness carrying out a development manager's triage
+// decision. So each is held two ways. The registry must hold nothing any of them
+// would be granted under, and the one door a role's reply reaches — the tracker
+// block — refuses every spelling of them, including a creation that names the
+// directive it carries out. A bundle change that grants one fails here.
+func TestTheProgramManagerNeitherDirectsNorCausesRuns(t *testing.T) {
+	t.Parallel()
+
+	registry := rolecapability.MustDefault()
+	for _, excluded := range []struct {
+		what string
+		held capability.Capability
+	}{
+		{"causing a run: a re-run or a repair is a triage decision the harness carries out", capability.WorkTriage},
+		{"causing a run: writing a run's own record", capability.RunStateMutate},
+		{"causing a run: writing inside a worktree", capability.WorktreeMutate},
+		{"causing a run: running the project's checks", capability.ChecksExecute},
+		{"causing a run: publishing to the forge", capability.ForgePublish},
+		{"settling a directive by admitting or closing work outside the lane", capability.BacklogAdmit},
+		{"settling a directive by rewriting any item", capability.WorkItemMutate},
+		{"reordering the backlog outside the lane", capability.BacklogOrder},
+		{"decomposing outside the lane", capability.WorkDecompose},
+		{"repairing stale backlog state", capability.WorkItemRepairState},
+		{"putting a proposal to the operator", capability.ProposalRaise},
+		{"stopping to put a concern to the operator", capability.ConcernRaise},
+		{"the brief and the goals", capability.ArtifactProductMutate},
+		{"the designs and the decision records", capability.ArtifactDesignMutate},
+		{"the invariants", capability.InvariantMutate},
+		{"a verdict", capability.ReviewVerdict},
+		{"the promotion lease", capability.PromotionLease},
+		{"moving the target branch", capability.TargetBranchMutate},
+	} {
+		if registry.Holds(domain.RoleProgramManager, excluded.held) {
+			t.Errorf("the program manager holds %q (%s)", excluded.held, excluded.what)
+		}
+	}
+
+	authority, _ := AuthorityFor(domain.RoleProgramManager)
+	session := &Session{}
+	session.state.Role = domain.RoleProgramManager
+	for _, name := range []string{"directive", "resolve", "withdraw", "carry-out", "cause", "rerun", "repair", "escalate"} {
+		if authority.MayAct(name) {
+			t.Errorf("the program manager may ask for %q", name)
+		}
+		err := session.authorize(parsedReply{Actions: []TrackerAction{{Action: name, ID: "yoyodyne-ifd.1", Reason: "why"}}})
+		var refusal *AuthorityError
+		if !errors.As(err, &refusal) {
+			t.Errorf("authorize() of %q = %v, want an authority refusal", name, err)
+		}
+	}
+	// The one way a role's reply touches a directive is a creation naming the
+	// directive it carries out, and that creation is refused.
+	carryOut := TrackerAction{Action: actionCreate, Title: "t", Description: "d", Goal: "g", Directive: "directive-1", Reason: "why"}
+	if err := session.authorize(parsedReply{Actions: []TrackerAction{carryOut}}); err == nil {
+		t.Error("authorize() let the program manager carry out a directive by creating work")
 	}
 }

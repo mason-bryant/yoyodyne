@@ -1119,11 +1119,12 @@ func TestRunServesEveryConversationalRole(t *testing.T) {
 // product manager is. Each owns documents and decides what they say, and every
 // change either authorizes is recorded by the harness on its behalf, so the
 // authority never takes the form of a tool this process could be talked into
-// using.
+// using. The program manager is held to the same posture: it writes no code,
+// and everything it may change is a tracker write the harness makes for it.
 func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
 	t.Parallel()
 
-	for _, role := range []domain.AgentRole{domain.RoleArchitect, domain.RoleDevelopmentManager} {
+	for _, role := range []domain.AgentRole{domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager} {
 		t.Run(string(role), func(t *testing.T) {
 			t.Parallel()
 
