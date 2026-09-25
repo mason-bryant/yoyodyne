@@ -103,6 +103,7 @@ func runEvents(store *runstate.Store, after, until time.Time) ([]orchestrator.Pa
 		default:
 			continue
 		}
+		event.Key = state.RunID + "/" + string(event.Class)
 		events = append(events, event)
 	}
 	return events, nil
@@ -162,6 +163,7 @@ func admissionEvents(repository string, after, until time.Time) ([]orchestrator.
 			Stream:  runstate.PassStreamTracker,
 			Class:   config.TriggerAdmissions,
 			At:      item.CreatedAt,
+			Key:     item.ID,
 			Subject: item.ID,
 			Detail:  item.Title,
 		})

@@ -5072,7 +5072,9 @@ These are all errors, reported before any work is claimed:
   the same words; a `lane`, `remit`, or `triggers` on an agent of any other role;
   a `lane` the tracker would not carry, or one two agents name; a
   `triggers.every` under `5m`; and a `triggers.on` entry outside `landings`,
-  `admissions`, and `stoppages`, or named twice;
+  `admissions`, and `stoppages`, or named twice; and a `recurring_tasks` entry
+  named for a program manager instance its triggers wake, since an instance's
+  passes are recorded and paced under its own name;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's six, which is how a typo in an
@@ -6020,6 +6022,16 @@ product manager admitting thirty items in one turn is one pass carrying thirty
 admissions, which `yoyo sweeps` shows under the pass's header as
 `carried 30 admissions since its last pass`. A pass that fails leaves the cursor
 where it was, says so on its record, and the next pass carries the same events.
+
+**An event that arrives late is still carried.** The tracker's export is written
+after the tracker's own write, and a run record is readable only once it is
+saved, so an entry can say it happened before a pass was taken and appear only
+after that pass moved the cursor past it. Each stream is therefore read again
+from fifteen minutes behind its cursor — never from before the instance began
+watching it — and the cursor keeps, by item or run, what completed passes
+carried from inside that reach: the late entry goes to the next pass, and
+nothing a pass already carried is handed again. An entry later than fifteen
+minutes is outside what a pass promises to carry.
 
 Four more things decide whether a wake is taken, and none of them is configured.
 An instance seen for the first time, or a stream it has just begun to watch, is

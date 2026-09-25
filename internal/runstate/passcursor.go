@@ -16,6 +16,14 @@ package runstate
 // and neither is an append-only file an offset would stay valid in: a run
 // record is rewritten in place, and the export is regenerated whole.
 //
+// A moment alone would lose what arrives late. The tracker's export is written
+// after the tracker's own write, and a run record is readable only once it is
+// saved, so an entry can say it happened before a pass was taken and appear
+// only after the pass moved the position past it. So every read reaches back
+// PassLateness behind the position, and the cursor keeps what each completed
+// pass carried from inside that reach, by key, so the overlap hands a pass what
+// arrived late and never what a pass already carried.
+//
 // It lives beside the instance's lane report, under the state root, and never
 // in the repository: it is the harness's bookkeeping about one instance, not
 // anything a person edits.
@@ -61,6 +69,13 @@ func validPassStream(stream string) bool {
 	return false
 }
 
+// PassLateness is how far behind its position a stream is read again, which is
+// how late an entry may appear in its stream and still be carried. The export
+// lags the tracker by the moments an export takes, so this is far past any lag
+// a healthy tracker shows; an entry later than this is outside what a pass
+// promises to carry.
+const PassLateness = 15 * time.Minute
+
 const (
 	passCursorFile     = "cursor.json"
 	passCursorLockFile = ".cursor.lock"
@@ -74,8 +89,33 @@ type PassCursor struct {
 	// Streams is where each stream has been read up to: every entry at or before
 	// the moment named has been handed to a pass that completed, or predates the
 	// instance being watched at all.
-	Streams   map[string]time.Time `json:"streams"`
-	UpdatedAt time.Time            `json:"updated_at"`
+	Streams map[string]time.Time `json:"streams"`
+	// WatchedFrom is when each stream began to be watched. A read reaching back
+	// PassLateness never reaches before it, so what happened before the instance
+	// was watched is never handed to it.
+	WatchedFrom map[string]time.Time `json:"watched_from,omitempty"`
+	// Carried is, for each stream, the entries completed passes carried that
+	// are still inside the reach back from the position, by key, with when each
+	// happened. The overlap is read against it, and an entry that falls out of
+	// the reach is dropped from it.
+	Carried   map[string]map[string]time.Time `json:"carried,omitempty"`
+	UpdatedAt time.Time                       `json:"updated_at"`
+}
+
+// ReadFrom is where a stream is read from: PassLateness behind its position,
+// and never before the stream began to be watched.
+func (c PassCursor) ReadFrom(stream string) time.Time {
+	from := c.Streams[stream].Add(-PassLateness)
+	if watched, known := c.WatchedFrom[stream]; known && from.Before(watched) {
+		return watched
+	}
+	return from
+}
+
+// WasCarried reports an entry a completed pass already carried.
+func (c PassCursor) WasCarried(stream, key string) bool {
+	_, carried := c.Carried[stream][key]
+	return carried
 }
 
 // Validate reports every contract violation in the cursor at once.
@@ -101,6 +141,21 @@ func (c PassCursor) Validate() error {
 		}
 		if c.Streams[stream].IsZero() {
 			problems = append(problems, fmt.Errorf("stream %q has no position", stream))
+		}
+	}
+	for stream, carried := range c.Carried {
+		if !validPassStream(stream) {
+			problems = append(problems, fmt.Errorf("carried stream %q is not one a pass reads", stream))
+		}
+		for key := range carried {
+			if key == "" {
+				problems = append(problems, fmt.Errorf("carried stream %q holds an entry with no key", stream))
+			}
+		}
+	}
+	for stream := range c.WatchedFrom {
+		if !validPassStream(stream) {
+			problems = append(problems, fmt.Errorf("watched stream %q is not one a pass reads", stream))
 		}
 	}
 	if c.UpdatedAt.IsZero() {
@@ -183,10 +238,12 @@ func (s *PassCursorStore) Load(agent string) (PassCursor, bool, error) {
 }
 
 // Advance moves the named streams of one instance's cursor to the positions
-// given and leaves every other stream where it was. A position is never moved
-// backwards: two sessions settling passes over one instance must not hand the
-// later of them events the earlier already carried.
-func (s *PassCursorStore) Advance(ctx context.Context, agent string, positions map[string]time.Time, now time.Time) (PassCursor, error) {
+// given, records what the pass carried from each, and leaves every other stream
+// where it was. A position is never moved backwards: two sessions settling
+// passes over one instance must not hand the later of them events the earlier
+// already carried. A stream positioned for the first time begins to be watched
+// at that position.
+func (s *PassCursorStore) Advance(ctx context.Context, agent string, positions map[string]time.Time, carried map[string]map[string]time.Time, now time.Time) (PassCursor, error) {
 	if err := domain.ValidateIdentifier("agent", agent); err != nil {
 		return PassCursor{}, err
 	}
@@ -206,15 +263,57 @@ func (s *PassCursorStore) Advance(ctx context.Context, agent string, positions m
 	if cursor.Streams == nil {
 		cursor.Streams = map[string]time.Time{}
 	}
+	if cursor.WatchedFrom == nil {
+		cursor.WatchedFrom = map[string]time.Time{}
+	}
+	if cursor.Carried == nil {
+		cursor.Carried = map[string]map[string]time.Time{}
+	}
 	for stream, at := range positions {
 		if !validPassStream(stream) {
 			return PassCursor{}, fmt.Errorf("stream %q is not one a pass reads; the streams are %v", stream, PassStreams)
 		}
 		at = at.UTC()
-		if current, kept := cursor.Streams[stream]; kept && !at.After(current) {
-			continue
+		current, kept := cursor.Streams[stream]
+		if !kept {
+			cursor.WatchedFrom[stream] = at
 		}
-		cursor.Streams[stream] = at
+		if !kept || at.After(current) {
+			cursor.Streams[stream] = at
+		}
+	}
+	for stream, keys := range carried {
+		if !validPassStream(stream) {
+			return PassCursor{}, fmt.Errorf("stream %q is not one a pass reads; the streams are %v", stream, PassStreams)
+		}
+		for key, at := range keys {
+			if key == "" {
+				return PassCursor{}, fmt.Errorf("an entry of the %s stream was carried with no key", stream)
+			}
+			if cursor.Carried[stream] == nil {
+				cursor.Carried[stream] = map[string]time.Time{}
+			}
+			cursor.Carried[stream][key] = at.UTC()
+		}
+	}
+	// What has fallen out of the reach back from the position can no longer be
+	// read again, so it no longer needs remembering.
+	for stream, keys := range cursor.Carried {
+		reach := cursor.ReadFrom(stream)
+		for key, at := range keys {
+			if at.Before(reach) {
+				delete(keys, key)
+			}
+		}
+		if len(keys) == 0 {
+			delete(cursor.Carried, stream)
+		}
+	}
+	if len(cursor.WatchedFrom) == 0 {
+		cursor.WatchedFrom = nil
+	}
+	if len(cursor.Carried) == 0 {
+		cursor.Carried = nil
 	}
 	at := now
 	if at.IsZero() {

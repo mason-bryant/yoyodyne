@@ -30,10 +30,10 @@ func TestAPassCursorIsWrittenAndReadBackPerStream(t *testing.T) {
 	if _, found, err := store.Load("reliability-pm"); err != nil || found {
 		t.Fatalf("Load() = %v, %v; want an instance never watched to have no cursor", found, err)
 	}
-	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at, PassStreamTracker: at}, at); err != nil {
+	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at, PassStreamTracker: at}, nil, at); err != nil {
 		t.Fatalf("Advance() error = %v", err)
 	}
-	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at.Add(time.Hour)}, at.Add(time.Hour)); err != nil {
+	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at.Add(time.Hour)}, nil, at.Add(time.Hour)); err != nil {
 		t.Fatalf("Advance() error = %v", err)
 	}
 	cursor, found, err := store.Load("reliability-pm")
@@ -58,10 +58,10 @@ func TestAPassCursorNeverMovesBackwards(t *testing.T) {
 
 	store, _ := newPassCursorStore(t)
 	at := time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC)
-	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at}, at); err != nil {
+	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at}, nil, at); err != nil {
 		t.Fatalf("Advance() error = %v", err)
 	}
-	cursor, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at.Add(-time.Hour)}, at)
+	cursor, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamRuns: at.Add(-time.Hour)}, nil, at)
 	if err != nil {
 		t.Fatalf("Advance() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAPassCursorRefusesAStreamNothingReads(t *testing.T) {
 
 	store, _ := newPassCursorStore(t)
 	at := time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC)
-	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{"forge": at}, at); err == nil || !strings.Contains(err.Error(), "not one a pass reads") {
+	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{"forge": at}, nil, at); err == nil || !strings.Contains(err.Error(), "not one a pass reads") {
 		t.Fatalf("Advance() error = %v, want the stream refused", err)
 	}
 }
@@ -97,5 +97,44 @@ func TestAnUnreadablePassCursorIsAnError(t *testing.T) {
 	}
 	if _, found, err := store.Load("reliability-pm"); err == nil || found {
 		t.Fatalf("Load() = %v, %v; want the unreadable cursor reported", found, err)
+	}
+}
+
+// A stream is read again from PassLateness behind its position, never from
+// before it began to be watched, and what a completed pass carried is kept
+// while it is inside that reach and dropped once it falls out of it.
+func TestAPassCursorRemembersWhatWasCarriedInsideTheReach(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newPassCursorStore(t)
+	watched := time.Date(2026, 9, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamTracker: watched}, nil, watched); err != nil {
+		t.Fatalf("Advance() error = %v", err)
+	}
+	cursor, _, _ := store.Load("reliability-pm")
+	if !cursor.ReadFrom(PassStreamTracker).Equal(watched) {
+		t.Errorf("ReadFrom() = %s, want no reach back before the stream was watched", cursor.ReadFrom(PassStreamTracker))
+	}
+
+	passed := watched.Add(time.Hour)
+	cursor, err := store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamTracker: passed},
+		map[string]map[string]time.Time{PassStreamTracker: {"yoyodyne-ifd.1": passed.Add(-time.Minute)}}, passed)
+	if err != nil {
+		t.Fatalf("Advance() error = %v", err)
+	}
+	if !cursor.ReadFrom(PassStreamTracker).Equal(passed.Add(-PassLateness)) || !cursor.WasCarried(PassStreamTracker, "yoyodyne-ifd.1") {
+		t.Fatalf("cursor = %+v, want the reach behind the position and the carried entry remembered", cursor)
+	}
+	if !cursor.WatchedFrom[PassStreamTracker].Equal(watched) {
+		t.Errorf("watched from = %s, want it kept at %s", cursor.WatchedFrom[PassStreamTracker], watched)
+	}
+
+	later := passed.Add(time.Hour)
+	cursor, err = store.Advance(context.Background(), "reliability-pm", map[string]time.Time{PassStreamTracker: later}, nil, later)
+	if err != nil {
+		t.Fatalf("Advance() error = %v", err)
+	}
+	if cursor.WasCarried(PassStreamTracker, "yoyodyne-ifd.1") {
+		t.Errorf("carried = %v, want an entry outside the reach dropped", cursor.Carried)
 	}
 }

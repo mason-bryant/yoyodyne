@@ -31,6 +31,13 @@ package orchestrator
 // one pass carrying thirty admissions, and a pass that failed leaves the same
 // events for the next one rather than losing them.
 //
+// An entry can appear in its stream after a pass whose window already covers
+// the moment it says it happened: the tracker's export is written after the
+// tracker's own write. So each stream is read again from runstate.PassLateness
+// behind the position, and what a completed pass carried from inside that
+// reach is kept on the cursor by key, so the late entry is handed to the next
+// pass and nothing is handed twice.
+//
 // Two bounds keep an armed wake from becoming a turn every pull. It is not
 // taken sooner than the recurring-task minimum after the instance's last pass,
 // for the reason that minimum exists — every pass is a conversation turn — and
@@ -84,6 +91,9 @@ type PassEvent struct {
 	// At is when it happened, as the stream records it, and is what the cursor
 	// is compared against.
 	At time.Time
+	// Key names this event within its stream, so an entry read again inside
+	// the reach behind the cursor is known to have been carried already.
+	Key string
 	// Subject is the work item it is about, and Detail one line saying what
 	// happened to it.
 	Subject string
@@ -102,7 +112,7 @@ type PassEvents interface {
 // satisfied by *runstate.PassCursorStore.
 type PassCursors interface {
 	Load(agent string) (runstate.PassCursor, bool, error)
-	Advance(ctx context.Context, agent string, positions map[string]time.Time, now time.Time) (runstate.PassCursor, error)
+	Advance(ctx context.Context, agent string, positions map[string]time.Time, carried map[string]map[string]time.Time, now time.Time) (runstate.PassCursor, error)
 }
 
 // InstanceConversations says whether a turn is in flight on an instance's
@@ -131,6 +141,9 @@ type passWake struct {
 	// now completes: the moment it was read up to. A stream that could not be
 	// read is absent, so its cursor stays where it was.
 	positions map[string]time.Time
+	// carried is the events, by stream and key, the cursor records once a pass
+	// taken now completes.
+	carried map[string]map[string]time.Time
 	// problems are the streams that could not be read.
 	problems []string
 }
@@ -258,7 +271,7 @@ func (t Trigger) pass(ctx context.Context, agent string, instance config.AgentCo
 // the first pass is handed what happened since the instance was watched, not
 // every run and item the product has ever recorded.
 func (t Trigger) readWake(ctx context.Context, agent string, triggers config.Triggers, now time.Time) (passWake, error) {
-	wake := passWake{cursor: map[string]time.Time{}, positions: map[string]time.Time{}}
+	wake := passWake{cursor: map[string]time.Time{}, positions: map[string]time.Time{}, carried: map[string]map[string]time.Time{}}
 	watched := map[string]map[config.TriggerEvent]bool{}
 	for _, class := range triggers.On {
 		stream := passStreamOf(class)
@@ -289,20 +302,34 @@ func (t Trigger) readWake(ctx context.Context, agent string, triggers config.Tri
 			continue
 		}
 		wake.cursor[stream] = after
-		events, err := t.Events.Events(ctx, stream, after, now)
+		events, err := t.Events.Events(ctx, stream, cursor.ReadFrom(stream), now)
 		if err != nil {
 			wake.problems = append(wake.problems, fmt.Sprintf("the %s stream could not be read for the program manager instance %s, so what it holds waits past the cursor: %v", stream, agent, err))
 			continue
 		}
+		carried := map[string]time.Time{}
 		for _, event := range events {
-			if watched[stream][event.Class] {
-				wake.events = append(wake.events, event)
+			if !watched[stream][event.Class] {
+				continue
+			}
+			// Read again from inside the reach behind the cursor: what a completed
+			// pass carried is not handed again, and what arrived since is.
+			if event.Key != "" && cursor.WasCarried(stream, event.Key) {
+				continue
+			}
+			if !event.At.After(after) && event.Key == "" {
+				continue
+			}
+			wake.events = append(wake.events, event)
+			if event.Key != "" {
+				carried[event.Key] = event.At
 			}
 		}
 		wake.positions[stream] = now
+		wake.carried[stream] = carried
 	}
 	if len(unpositioned) > 0 {
-		if _, err := t.Cursors.Advance(ctx, agent, unpositioned, now); err != nil {
+		if _, err := t.Cursors.Advance(ctx, agent, unpositioned, nil, now); err != nil {
 			return passWake{}, fmt.Errorf("begin watching the streams of the program manager instance %s: %w", agent, err)
 		}
 	}
@@ -328,7 +355,7 @@ func (t Trigger) advance(ctx context.Context, agent string, wake passWake, answe
 	}
 	write, stopWriting := recordContext(ctx)
 	defer stopWriting()
-	if _, err := t.Cursors.Advance(write, agent, wake.positions, taken); err != nil {
+	if _, err := t.Cursors.Advance(write, agent, wake.positions, wake.carried, taken); err != nil {
 		return fmt.Sprintf("the cursor of %s could not be moved past this pass, so the next pass carries its events again: %v", agent, err)
 	}
 	return ""

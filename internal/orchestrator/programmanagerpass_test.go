@@ -40,6 +40,7 @@ func (r *recordedEvents) admit(at time.Time, count int) {
 			Stream:  runstate.PassStreamTracker,
 			Class:   config.TriggerAdmissions,
 			At:      at,
+			Key:     fmt.Sprintf("yoyodyne-ifd.9%02d", index),
 			Subject: fmt.Sprintf("yoyodyne-ifd.9%02d", index),
 			Detail:  fmt.Sprintf("admitted item %d", index),
 		})
@@ -47,11 +48,11 @@ func (r *recordedEvents) admit(at time.Time, count int) {
 }
 
 func (r *recordedEvents) land(at time.Time, item string) {
-	r.events = append(r.events, PassEvent{Stream: runstate.PassStreamRuns, Class: config.TriggerLandings, At: at, Subject: item, Detail: "run run-1 landed"})
+	r.events = append(r.events, PassEvent{Stream: runstate.PassStreamRuns, Class: config.TriggerLandings, At: at, Key: "landed/" + item, Subject: item, Detail: "run run-1 landed"})
 }
 
 func (r *recordedEvents) stop(at time.Time, item string) {
-	r.events = append(r.events, PassEvent{Stream: runstate.PassStreamRuns, Class: config.TriggerStoppages, At: at, Subject: item, Detail: "run run-2 stopped"})
+	r.events = append(r.events, PassEvent{Stream: runstate.PassStreamRuns, Class: config.TriggerStoppages, At: at, Key: "stopped/" + item, Subject: item, Detail: "run run-2 stopped"})
 }
 
 // busyConversations says a turn is in flight on the instances it names.
@@ -401,5 +402,36 @@ func TestAnUnreadableStreamKeepsItsCursorAndCostsTheOtherNothing(t *testing.T) {
 	}
 	if after := h.cursor(t, runstate.PassStreamRuns); !after.Equal(recurringNow.Add(10 * time.Minute)) {
 		t.Errorf("runs cursor = %s, want it moved past the pass", after)
+	}
+}
+
+// An entry that appears in its stream after a pass whose window already covers
+// the moment it says it happened — an item the tracker's export wrote down late
+// — is carried by the next pass, and what the first pass carried is not carried
+// again.
+func TestAnEventThatArrivesLateIsCarriedByTheNextPass(t *testing.T) {
+	t.Parallel()
+
+	h := newPassHarness(t, instance(0, config.TriggerAdmissions))
+	h.role.answers = []scriptedTurn{{result: complete("one admitted")}, {result: complete("the late one")}}
+	h.fire(t, recurringNow)
+
+	h.events.events = append(h.events.events, PassEvent{Stream: runstate.PassStreamTracker, Class: config.TriggerAdmissions, At: recurringNow.Add(time.Minute), Key: "yoyodyne-ifd.1", Subject: "yoyodyne-ifd.1"})
+	if fired := h.fire(t, recurringNow.Add(10*time.Minute)); len(fired.Fired) != 1 || fired.Fired[0].Events["admissions"] != 1 {
+		t.Fatalf("fired = %+v, want the first pass carrying the one admission", fired.Fired)
+	}
+
+	// Created before that pass was taken, and only in the stream after it.
+	h.events.events = append(h.events.events, PassEvent{Stream: runstate.PassStreamTracker, Class: config.TriggerAdmissions, At: recurringNow.Add(9 * time.Minute), Key: "yoyodyne-ifd.2", Subject: "yoyodyne-ifd.2"})
+	fired := h.fire(t, recurringNow.Add(20*time.Minute))
+	if len(fired.Fired) != 1 || fired.Fired[0].Events["admissions"] != 1 {
+		t.Fatalf("fired = %+v, want the late admission carried by the next pass", fired.Fired)
+	}
+	last := h.role.messages[len(h.role.messages)-1]
+	if !strings.Contains(last, "yoyodyne-ifd.2") || strings.Contains(last, "yoyodyne-ifd.1") {
+		t.Errorf("message = %q, want the late admission and not the one already carried", last)
+	}
+	if again := h.fire(t, recurringNow.Add(40*time.Minute)); len(again.Fired) != 0 {
+		t.Errorf("fired = %+v, want nothing carried a second time", again.Fired)
 	}
 }

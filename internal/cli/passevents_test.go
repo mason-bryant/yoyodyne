@@ -47,7 +47,7 @@ func TestAdmissionsAreTheItemsTheExportRecordsAsCreatedInTheWindow(t *testing.T)
 		t.Fatalf("events = %d, want the thirty created inside the window", len(events))
 	}
 	for _, event := range events {
-		if event.Class != config.TriggerAdmissions || event.Stream != runstate.PassStreamTracker || !strings.HasPrefix(event.Detail, "item ") {
+		if event.Class != config.TriggerAdmissions || event.Stream != runstate.PassStreamTracker || !strings.HasPrefix(event.Detail, "item ") || event.Key != event.Subject {
 			t.Fatalf("event = %+v, want an admission read from the tracker", event)
 		}
 	}
@@ -109,6 +109,9 @@ func TestRunEventsAreTheRunsThatLandedOrStoppedInTheWindow(t *testing.T) {
 	classes := map[string]config.TriggerEvent{}
 	for _, event := range events {
 		classes[event.Subject] = event.Class
+		if !strings.HasSuffix(event.Key, "/"+string(event.Class)) || !strings.HasPrefix(event.Key, "run-") {
+			t.Errorf("key = %q, want the run and the class, so a record read again is known as carried", event.Key)
+		}
 	}
 	if len(events) != 2 || classes["yoyodyne-ifd.landed"] != config.TriggerLandings || classes["yoyodyne-ifd.stopped"] != config.TriggerStoppages {
 		t.Fatalf("events = %+v, want the landing and the stoppage alone", events)
