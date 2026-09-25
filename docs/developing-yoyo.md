@@ -256,7 +256,9 @@ does a Git command a test runs beside one. The tracker's conformance checks in
 `internal/beads` bound each `bd` command the same way, in
 `conformanceTimeout`. Ten minutes catches a command that has hung, which any
 figure does, and it sits under `TEST_TIMEOUT`, so the hang is reported as the
-command it was. What a suite is held to in total is still
+command it was. [The record](diagnoses/yoyodyne-ifd-429-11-git-budget-under-load.md)
+has the reports this came from and the suite passing with the load between 34
+and 54 on sixteen cores. What a suite is held to in total is still
 [`execution.check_timeout`](configuration.md#how-long-a-check-may-take), which
 is the operator's to set against the concurrency they run.
 
