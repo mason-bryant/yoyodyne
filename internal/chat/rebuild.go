@@ -43,7 +43,10 @@ import (
 // prompt. It is a fraction of MaxTurnInputBytes rather than the whole of it,
 // because the turn still has to fit beside it: a rebuild that filled the budget
 // would produce a turn refused for its own size, which is the substitution
-// failing in a way that reads as the operator's message being too long.
+// failing in a way that reads as the operator's message being too long. It is
+// spent on what has been said, oldest dropped first, and a turn whose fresh
+// session is refused on a rebuild this size is rebuilt once on half of it; see
+// shrinkRebuild.
 const maxRebuiltContextBytes = 256 << 10
 
 // maxRebuiltMessages bounds how many recorded messages, either side's, the
@@ -217,7 +220,57 @@ func (s *Session) rebuiltPrompt(systemPrompt, prompt, why string) (string, error
 			"the rebuilt context and this turn are %d bytes together, limit is %d",
 			len(rebuilt)+len(systemPrompt)+len(prompt), MaxTurnInputBytes)
 	}
+	s.rebuiltFrom = &rebuildInput{systemPrompt: systemPrompt, prompt: prompt, why: why}
 	return rebuilt + prompt, nil
+}
+
+// rebuildInput is what a turn's rebuild was made from: the turn's own prompt
+// and system prompt, and the reason the provider was given for holding no
+// session. It is kept so the rebuild can be made again on a smaller bound
+// without unpicking the prompt it was put in front of.
+type rebuildInput struct {
+	systemPrompt string
+	prompt       string
+	why          string
+}
+
+// rebuildMessageBudget is what this turn's rebuild may spend on what has been
+// said.
+func (s *Session) rebuildMessageBudget() int {
+	if s.rebuiltMessageBytes > 0 {
+		return s.rebuiltMessageBytes
+	}
+	return maxRebuiltContextBytes
+}
+
+// shrinkRebuild is the turn rebuilt again on half the bound it was just refused
+// on, and false where there is nothing to shrink.
+//
+// The byte bound is a guess at what a provider will take rather than something
+// any provider states, so a fresh session can be refused as too long on a
+// rebuild the bound allowed. That refusal is the one every later turn would meet
+// as well, because each of them rebuilds the same record for the same fresh
+// session; what gets the conversation past it is a smaller rebuild, and the
+// oldest of what it carried is what goes, said in its framing as any other drop
+// is. It is halved once rather than until something fits: a rebuild half the
+// size refused again is a provider refusing something other than this, and
+// guessing further down only hands the role less of its conversation.
+//
+// A rebuild the halving leaves as it was — everything said already fits in
+// half — is not asked again, because the same request would be refused the same
+// way.
+func (s *Session) shrinkRebuild(request backend.RunRequest) (backend.RunRequest, bool) {
+	from := s.rebuiltFrom
+	if from == nil || !strings.HasPrefix(request.Prompt, rebuiltContextHeader) || !strings.HasSuffix(request.Prompt, from.prompt) {
+		return request, false
+	}
+	s.rebuiltMessageBytes = s.rebuildMessageBudget() / 2
+	prompt, err := s.rebuiltPrompt(from.systemPrompt, from.prompt, from.why)
+	if err != nil || prompt == request.Prompt {
+		return request, false
+	}
+	request.Prompt = prompt
+	return request, true
 }
 
 // Why a provider is being handed a reconstruction rather than a session, as the
@@ -235,7 +288,7 @@ const (
 // conversation this is and why it is being handed this at all, the picture the
 // conversation is working from, and the account of what has been said.
 func (s *Session) rebuiltContext(events []execution.Event, why string) string {
-	said := recordedMessages(events)
+	said := recordedMessages(events, s.rebuildMessageBudget())
 	briefing := s.workingBriefing()
 	if said == "" && briefing == "" {
 		return ""
@@ -313,13 +366,13 @@ func (s *Session) workingBriefing() string {
 
 // recordedMessages is what has been said on both sides, read back out of the
 // conversation's event log in the order it was recorded and bounded twice: to the
-// most recent messages, and to the byte budget a rebuild may spend. Both bounds
+// most recent messages, and to budget, the bytes a rebuild may spend. Both bounds
 // count the operator's messages and the role's replies alike, because the two are
 // one exchange and a budget spent on one side alone would keep answers whose
 // questions were dropped. An account that dropped something says so, because a
 // role told it has everything and given part of it will reason as though the
-// missing part never happened.
-func recordedMessages(events []execution.Event) string {
+// missing part never happened — and that holds where it dropped everything, too.
+func recordedMessages(events []execution.Event, budget int) string {
 	spoken := make([]recordedMessage, 0, len(events))
 	for _, event := range events {
 		var fromOperator bool
@@ -344,7 +397,7 @@ func recordedMessages(events []execution.Event) string {
 	}
 	// The budget is spent from the most recent backwards, so what a long
 	// conversation keeps is the part nearest to what is being said now.
-	kept, budget := make([]recordedMessage, 0, len(spoken)), maxRebuiltContextBytes
+	kept := make([]recordedMessage, 0, len(spoken))
 	for index := len(spoken) - 1; index >= 0; index-- {
 		if len(spoken[index].text) > budget {
 			dropped += index + 1
@@ -352,9 +405,6 @@ func recordedMessages(events []execution.Event) string {
 		}
 		budget -= len(spoken[index].text)
 		kept = append([]recordedMessage{spoken[index]}, kept...)
-	}
-	if len(kept) == 0 {
-		return ""
 	}
 	var rendered strings.Builder
 	if dropped > 0 {
