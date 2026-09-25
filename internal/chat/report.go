@@ -347,7 +347,12 @@ func (s *Session) markReportDelivered(id string) {
 // characters copied out of a listing by a provider, so one that names nothing is
 // a plausible mistake rather than a rare one, and a handling recorded against it
 // would take no report out of anybody's view while reading as though it had.
-func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
+//
+// A handling that maps the report's requests has each covering item read before
+// anything is written and each admission matched to what the block's creation was
+// assigned, then notes on every item that answers a request which requests it
+// answers, and records the mapping on the handling itself. See reportcoverage.go.
+func (s *Session) recordReportHandling(ctx context.Context, outcome *TrackerOutcome) {
 	if s.options.Reports == nil {
 		outcome.fail(errNoReports)
 		return
@@ -366,6 +371,18 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 		outcome.fail(errors.New("handle names no report, so nothing was recorded"))
 		return
 	}
+	requests, err := s.resolveRequests(ctx, outcome)
+	if err != nil {
+		outcome.fail(fmt.Errorf("nothing was recorded: %w", err))
+		return
+	}
+	if err := s.noteCoveringItems(ctx, outcome, subject, requests); err != nil {
+		outcome.fail(fmt.Errorf("the report was not recorded as handled: %w", err))
+		return
+	}
+	if len(requests) == 0 {
+		requests = nil
+	}
 	handling := report.Handling{
 		SchemaVersion: report.HandlingSchemaVersion,
 		ReportID:      subject.ID,
@@ -375,6 +392,7 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 		ProductID:     s.options.ProductID,
 		RepositoryID:  s.options.RepositoryID,
 		Reason:        strings.TrimSpace(outcome.Action.Reason),
+		Requests:      requests,
 		RecordedAt:    s.options.clock().Now(),
 	}
 	if err := s.options.Reports.Handle(handling); err != nil {
@@ -385,8 +403,8 @@ func (s *Session) recordReportHandling(outcome *TrackerOutcome) {
 	// this conversation has not been shown yet is not then offered to it as
 	// something still waiting.
 	s.markReportDelivered(subject.ID)
-	outcome.applied("recorded what became of %s, reported at %q by the %s%s",
-		subject.ID, subject.Severity, RoleTitle(subject.Role), reportedOn(subject))
+	outcome.applied("recorded what became of %s, reported at %q by the %s%s%s",
+		subject.ID, subject.Severity, RoleTitle(subject.Role), reportedOn(subject), mappingClause(requests))
 }
 
 // reportedOn names the work the report was about, where it was about any. A

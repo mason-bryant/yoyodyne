@@ -439,8 +439,99 @@ type Handling struct {
 	// Reason is what was done about the report, or why it needed nothing. It is
 	// required: a handling with no reason takes a report out of everybody's view
 	// and says nothing about why, which is worse than leaving it in.
-	Reason     string    `json:"reason"`
+	Reason string `json:"reason"`
+	// Requests is what the report asked for, one request at a time, and what
+	// became of each. It is absent on a handling that maps nothing — a report that
+	// asked for nothing, or was declined whole — and present wherever a report was
+	// handled as covered by work: a report can carry two requests, and a handling
+	// that named one covering item for both lost the second with nothing anybody
+	// could audit. On 2026-09-05 the development manager's report asking the
+	// docket to consume recorded decisions and closed status was handled as covered
+	// by yoyodyne-ifd.269, which covered the decisions; the closed-status half
+	// lapsed silently for three weeks.
+	Requests   []Request `json:"requests,omitempty"`
 	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// MaxRequestsPerHandling bounds how many requests one handling maps, and
+// MaxRequestBytes bounds the words one request is quoted in. A report is two
+// sentences, so a handling that finds more requests in one than this is reading
+// something other than the report.
+const (
+	MaxRequestsPerHandling = 10
+	MaxRequestBytes        = 512
+)
+
+// Request is one thing a report asked for and what became of it: covered by an
+// item that already exists, admitted as an item of its own, or declined. Exactly
+// one of the three is set, so every request a handling names has an answer and
+// none has two.
+type Request struct {
+	// Request is the request in the handler's words, quoted rather than
+	// paraphrased where it can be, because it is what a later reader checks the
+	// covering item against.
+	Request string `json:"request"`
+	// CoveredBy is the item that already covers the request.
+	CoveredBy string `json:"covered_by,omitempty"`
+	// Admitted is the item admitted for the request, in the same handling.
+	Admitted string `json:"admitted,omitempty"`
+	// Declined is why nothing is being done about the request.
+	Declined string `json:"declined,omitempty"`
+}
+
+// Item is the work item that answers the request, and is empty for a request
+// that was declined.
+func (r Request) Item() string {
+	if covered := strings.TrimSpace(r.CoveredBy); covered != "" {
+		return covered
+	}
+	return strings.TrimSpace(r.Admitted)
+}
+
+// Validate reports every contract violation in one mapped request at once.
+func (r Request) Validate() error {
+	var problems []error
+	switch request := strings.TrimSpace(r.Request); {
+	case request == "":
+		problems = append(problems, errors.New("request is required"))
+	case len(request) > MaxRequestBytes:
+		problems = append(problems, fmt.Errorf("request is %d bytes, limit is %d", len(request), MaxRequestBytes))
+	case strings.ContainsAny(request, "\r\n"):
+		problems = append(problems, errors.New("request cannot span lines"))
+	}
+	answers := 0
+	for _, answer := range []string{r.CoveredBy, r.Admitted, r.Declined} {
+		if strings.TrimSpace(answer) != "" {
+			answers++
+		}
+	}
+	if answers != 1 {
+		problems = append(problems, fmt.Errorf("request %q must be exactly one of covered_by, admitted, or declined", strings.TrimSpace(r.Request)))
+	}
+	if len(strings.TrimSpace(r.Declined)) > MaxHandlingReasonBytes {
+		problems = append(problems, fmt.Errorf("declined is %d bytes, limit is %d", len(strings.TrimSpace(r.Declined)), MaxHandlingReasonBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// Covering groups a handling's requests by the item that answers them, in the
+// order each item first appears, for the one question a covering item's reader
+// asks: which of this report's requests is this item answering. Declined
+// requests are answered by no item and are not in it.
+func Covering(requests []Request) ([]string, map[string][]string) {
+	var items []string
+	covers := make(map[string][]string)
+	for _, request := range requests {
+		item := request.Item()
+		if item == "" {
+			continue
+		}
+		if _, seen := covers[item]; !seen {
+			items = append(items, item)
+		}
+		covers[item] = append(covers[item], strings.TrimSpace(request.Request))
+	}
+	return items, covers
 }
 
 // Validate reports every contract violation in the handling at once.
@@ -469,6 +560,20 @@ func (h Handling) Validate() error {
 		problems = append(problems, errors.New("reason is required"))
 	case len(reason) > MaxHandlingReasonBytes:
 		problems = append(problems, fmt.Errorf("reason is %d bytes, limit is %d", len(reason), MaxHandlingReasonBytes))
+	}
+	if len(h.Requests) > MaxRequestsPerHandling {
+		problems = append(problems, fmt.Errorf("%d requests mapped, limit is %d", len(h.Requests), MaxRequestsPerHandling))
+	}
+	seen := make(map[string]bool, len(h.Requests))
+	for i, request := range h.Requests {
+		if err := request.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("requests[%d]: %w", i, err))
+		}
+		quoted := strings.TrimSpace(request.Request)
+		if seen[quoted] {
+			problems = append(problems, fmt.Errorf("request %q is mapped twice", quoted))
+		}
+		seen[quoted] = true
 	}
 	if h.RecordedAt.IsZero() {
 		problems = append(problems, errors.New("recorded_at is required"))
@@ -551,13 +656,35 @@ func Tally(reports []Report) string {
 // Render describes what became of one report, for a listing that has just shown
 // the report itself. It is indented under it and folded to one line: the reason
 // came from whoever handled the report, and a listing is a listing.
+//
+// A handling that mapped the report's requests lists each under it with what
+// answered it, so whoever checks the handling later — the development manager,
+// a program manager — reads which item was said to cover what, and can hold the
+// item to it, rather than reading one sentence that named one item for the lot.
 func (h Handling) Render() string {
 	handler := string(h.Role)
 	if h.Agent != "" && h.Agent != string(h.Role) {
 		handler = h.Agent + " (" + string(h.Role) + ")"
 	}
-	return fmt.Sprintf("      handled %s by the %s (%s): %s\n",
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      handled %s by the %s (%s): %s\n",
 		h.RecordedAt.UTC().Format(time.RFC3339), handler, h.RunID, strings.Join(strings.Fields(h.Reason), " "))
+	for _, request := range h.Requests {
+		fmt.Fprintf(&rendered, "        request %q: %s\n", strings.TrimSpace(request.Request), request.answer())
+	}
+	return rendered.String()
+}
+
+// answer says what became of one request, in the words a listing prints.
+func (r Request) answer() string {
+	switch {
+	case strings.TrimSpace(r.CoveredBy) != "":
+		return "covered by " + strings.TrimSpace(r.CoveredBy)
+	case strings.TrimSpace(r.Admitted) != "":
+		return "admitted as " + strings.TrimSpace(r.Admitted)
+	default:
+		return "declined: " + strings.Join(strings.Fields(r.Declined), " ")
+	}
 }
 
 // Render describes one collected report for whoever is reading the pile. The

@@ -597,6 +597,25 @@ records and the later one is what is read. There is no vocabulary of outcomes:
 "admitted as ifd.150", "already fixed", "not worth doing" are the same fact to
 everything that reads this, and the reason says which.
 
+The one structure a handling does carry is for a report handled as covered by
+work. A report can ask for two things, and a reason naming one covering item
+answers for both whether that item covers both or not: on 2026-09-05 a
+development manager report asking the docket to consume recorded decisions *and*
+closed status was handled as covered by `yoyodyne-ifd.269`, which did the
+decisions, and the closed-status half lapsed silently until it surfaced three
+weeks later as 125 dead docket entries. So such a handling lists the report's
+requests in `requests`, and gives each exactly one answer: `covered_by` names the
+item that already covers it, `admitted` names a creation earlier in the same
+block that admits it, and `declined` says why nothing is being done. A request
+with no answer refuses the whole block, and the refusal quotes the request; so
+does a reason that says "covered by" an item with no mapping beside it. An
+admission the block asked for that did not happen fails the handling, and the
+report stays in the pile. The harness notes on every item that answers a request
+which of the report's requests it answers, and records the mapping on the
+handling — with each admission by the identifier it was assigned — so the
+development manager or a program manager can check later that each covering item
+actually covered what it was said to.
+
 Where the decision is work, the admission can name the report it came from, and
 the item then records it. That citation is not bookkeeping: it is what a later
 admission citing the same report is checked against, and where one is found
@@ -607,7 +626,8 @@ could not have succeeded — see [the conversation](conversation.md) for what el
 a creation is refused for.
 
 That is what `/reports` and `yoyo reports` are showing you when they count the
-unhandled ones and print what was decided under the rest. It is also the honest
+unhandled ones and print what was decided under the rest, with each mapped
+request and what answered it on a line of its own. It is also the honest
 limit of it: the harness carries reports to the role that decides, and nothing
 here judges whether it decided well.
 
