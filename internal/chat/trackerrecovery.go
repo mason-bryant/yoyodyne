@@ -106,7 +106,10 @@ func (r recoveringTracker) Create(ctx context.Context, item beads.NewWorkItem) (
 // way every other reader of decomposition reads it, from the field or from the
 // parent-child edge, so a listing that states it only as the edge still matches.
 // That bd's own listing carries the field is pinned against a capture of it in
-// internal/beads (TestACapturedListingStatesParentageAsAnEdgeAttributedToTheChild).
+// internal/beads (TestACapturedListingStatesParentageAsAnEdgeAttributedToTheChild),
+// and that it gives back the title, the parent, and multi-line notes byte for
+// byte is pinned against bd itself (TestListedNotesConformance), without which
+// this match could stop firing with nothing failing.
 func (r recoveringTracker) landedCreation(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, bool, error) {
 	held, err := r.tracker.List(ctx, "")
 	if err != nil {
