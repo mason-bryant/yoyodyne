@@ -302,6 +302,24 @@ agents:
     persona:
       version: v1
       path: personas/developer.md
+  # The first program manager, created on the operator's direction of
+  # 2026-09-25: it owns the factory not getting stuck or halting on a person.
+  # docs/designs/program-manager.md; triggers fire once yoyodyne-ifd.430.13.4 lands.
+  factory-flow-pm:
+    role: program-manager
+    backend: claude-code
+    model: fable
+    instances: 1
+    persona:
+      version: v1
+      path: personas/program-manager.md
+    lane: factory-flow
+    remit:
+      version: r1
+      path: remits/factory-flow.md
+    triggers:
+      every: 2h
+      on: [admissions, stoppages]
   development-manager:
     role: development-manager
     backend: claude-code
