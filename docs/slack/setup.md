@@ -504,7 +504,17 @@ Into the work item's thread, as they happen:
   version, `execution.usage_limit_unknown_reset_pause`. See
   [serving a turn from a permitted alternate model](../configuration.md#serving-a-turn-from-a-permitted-alternate-model)
   and [pinning an agent to a model version](../configuration.md#pinning-an-agent-to-a-model-version)
-- the blocker that stopped a run, if one did, said as `critical`
+- the blocker that stopped a run, if one did, said at the severity whoever moves
+  next and whatever stopped it warrant — `critical` only where that is you: a
+  cause somebody has to fix on the machine, such as a target branch that
+  diverged from the remote's, a credential the remote refused, or a primary
+  checkout holding uncommitted state. A stoppage the environment caused that a
+  role or the harness moves next — a lost race for the target, a replay the
+  harness killed, a tracker or forge that did not answer, a usage window — is a
+  `note`, and stays in the item's thread. One the work caused — findings nobody
+  repaired, a check that kept failing, paths the item never granted, a replay
+  that conflicted — is a `warning`, at the channel level, because it is the
+  development manager's real decision
 - the run ending any other way — failed, cancelled, timed out — said in that word
   rather than in one word for all of them. A run the harness could not carry and
   one it stopped on time are `warning`s, because nobody chose either; a

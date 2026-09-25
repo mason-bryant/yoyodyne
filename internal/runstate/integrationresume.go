@@ -88,6 +88,23 @@ func (s IntegrationStop) Validate() error {
 	return errors.Join(problems...)
 }
 
+// ContendedIntegrationFailure opens the failure a run records when its
+// promotion kept losing its target branch to other promotions until its retries
+// were spent. The pipeline writes it and LostItsRace reads it, so the two are
+// one phrase rather than a pattern matched against prose.
+const ContendedIntegrationFailure = "integration lost its target branch"
+
+// LostItsRace reports a run that ended because the target branch kept moving
+// under its promotion: approved, never promoted, and stopped on the contended
+// integration rather than on anything the environment was recorded as
+// refusing. It is no verdict on the change — other work landed first — and it
+// is read from the failure because that is the one place the record has ever
+// said it, including on every run stopped this way before this existed.
+func (s State) LostItsRace() bool {
+	return s.Integration == nil && s.IntegrationStop == nil &&
+		strings.HasPrefix(strings.TrimSpace(s.Failure), ContendedIntegrationFailure)
+}
+
 // Describe says what the stop was, the way a docket entry or a listing reads it.
 func (s IntegrationStop) Describe() string {
 	return fmt.Sprintf("approved, then stopped at the %s phase by the environment: %s (%s)", s.Phase, s.Cause, s.Cause.Title())

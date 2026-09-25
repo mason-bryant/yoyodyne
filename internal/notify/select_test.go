@@ -1069,14 +1069,14 @@ func TestASubstitutedTurnIsSaidAtNoteAndNamesBothModels(t *testing.T) {
 	}
 }
 
-func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
+func TestARunThatStoppedOnItsWorkIsSaidAsAWarning(t *testing.T) {
 	before := running()
 	after := endedRun(before, runstate.StatusFailed)
 	after.Failure = "the repair budget was spent with the checks still failing"
 	after.Blocker = runstate.RecordBlocker("the checks kept failing after every repair round it was granted")
 	kinds, notifications := crossed(t, before, after)
 	blockerRecorded := only(t, notifications, KindBlockerRecorded)
-	if blockerRecorded.Event.Severity != report.SeverityCritical {
+	if blockerRecorded.Event.Severity != report.SeverityWarning {
 		t.Fatalf("a blocker is a %s among %v", blockerRecorded.Event.Severity, kinds)
 	}
 	message, err := Render(blockerRecorded.Topic, blockerRecorded.Speaker, blockerRecorded.Event)
@@ -1086,7 +1086,7 @@ func TestARunThatStoppedAndStayedStoppedIsSaidAsCritical(t *testing.T) {
 	if !strings.Contains(message.Body, after.Failure) {
 		t.Fatalf("body %q does not carry the recorded reason", message.Body)
 	}
-	if !strings.Contains(message.Body, "Critical") {
+	if !strings.Contains(message.Body, "Warning") {
 		t.Fatalf("body %q does not say its severity in words", message.Body)
 	}
 	// The whole reason the vocabulary exists: a stoppage keeps the change, and
@@ -1118,7 +1118,7 @@ func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
 		word     string
 		severity report.Severity
 	}{
-		{runstate.StatusFailed, "the checks kept failing", KindBlockerRecorded, "blocked", report.SeverityCritical},
+		{runstate.StatusFailed, "the checks kept failing", KindBlockerRecorded, "blocked", report.SeverityWarning},
 		{runstate.StatusFailed, "", KindRunEnded, string(runstate.OutcomeFailed), report.SeverityWarning},
 		{runstate.StatusCancelled, "", KindRunEnded, string(runstate.OutcomeCancelled), report.SeverityNote},
 		{runstate.StatusTimedOut, "", KindRunEnded, string(runstate.OutcomeTimedOut), report.SeverityWarning},
@@ -1170,8 +1170,8 @@ func TestAStoppageRecordedAfterTheRunAlreadyEndedIsStillSaid(t *testing.T) {
 	settled.Blocker = runstate.RecordBlocker("the run was interrupted with nothing integrated and its worktree preserved")
 	kinds, notifications := crossed(t, crashed, settled)
 	stoppage := only(t, notifications, KindBlockerRecorded)
-	if stoppage.Event.Severity != report.SeverityCritical {
-		t.Fatalf("the stoppage is a %s among %v, want it to reach the operator as critical", stoppage.Event.Severity, kinds)
+	if stoppage.Event.Severity != report.SeverityWarning || stoppage.Reach() != ReachChannel {
+		t.Fatalf("the stoppage is a %s reaching the %s among %v, want a warning at the channel for the development manager's decision", stoppage.Event.Severity, stoppage.Reach(), kinds)
 	}
 	message, err := Render(stoppage.Topic, stoppage.Speaker, stoppage.Event)
 	if err != nil {
@@ -1209,7 +1209,7 @@ func TestAnEndingWhoseRecordNamesNoReasonIsStillASentence(t *testing.T) {
 	}{
 		{runstate.StatusCancelled, "", KindRunEnded},
 		{runstate.StatusTimedOut, "", KindRunEnded},
-		// A blocker recorded on a run whose failure is empty reaches the critical
+		// A blocker recorded on a run whose failure is empty reaches the stoppage
 		// line with the same absence, and a record written before the sweep filled
 		// that reason in is exactly such a run.
 		{runstate.StatusFailed, "the interrupted run left a worktree nothing could settle", KindBlockerRecorded},
@@ -1271,7 +1271,7 @@ func TestWhatRemainsIsSaidAsTheRecordHasItRatherThanGuessed(t *testing.T) {
 // The stoppage that reaches a record saying "succeeded". A run promotes its work
 // and records it, the target turns out not to carry the promotion, and the sweep
 // hands the item to a person and leaves the status the run wrote for itself
-// alone. Reading the status here silenced the critical line on the one record
+// alone. Reading the status here silenced the stoppage line on the one record
 // where the status is the least true thing about the run: the item is blocked,
 // the docket says a person owns it, and the channel said nothing.
 func TestAStoppageOnARecordThatSaysSucceededIsStillSaid(t *testing.T) {
@@ -1290,8 +1290,8 @@ func TestAStoppageOnARecordThatSaysSucceededIsStillSaid(t *testing.T) {
 	settled.Blocker = runstate.RecordBlocker("the run recorded a promotion main does not carry")
 	kinds, notifications := crossed(t, landed, settled)
 	stoppage := only(t, notifications, KindBlockerRecorded)
-	if stoppage.Event.Severity != report.SeverityCritical {
-		t.Fatalf("the stoppage is a %s among %v, want it to reach the operator as critical", stoppage.Event.Severity, kinds)
+	if stoppage.Event.Severity != report.SeverityWarning || stoppage.Reach() != ReachChannel {
+		t.Fatalf("the stoppage is a %s reaching the %s among %v, want a warning at the channel for the development manager's decision", stoppage.Event.Severity, stoppage.Reach(), kinds)
 	}
 	message, err := Render(stoppage.Topic, stoppage.Speaker, stoppage.Event)
 	if err != nil {

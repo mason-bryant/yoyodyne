@@ -818,6 +818,27 @@ sink with the rest of the product and starts it again whenever it dies, within
 the supervisor's bounds, so the timer is no longer yours.
 [`docs/slack/setup.md`](slack/setup.md#6-start-the-sink) has the rest of it.
 
+**What each severity means in the channel.** `critical` is what reaches you
+wherever you are, so it is kept for what is yours to act on or already costing
+somebody: a line stopped for hours, the provider holding every role, a stoppage
+whose cause only a person can fix on the machine — a target branch that diverged
+from the remote's, a credential the remote refused, a primary checkout carrying
+state the harness does not own. `warning` is a real risk or a real decision that
+belongs to one of the roles: a stoppage the work caused — findings nobody
+repaired, a check that kept failing, paths the item never granted — is the
+development manager's, and is said as one at the top of the channel. `note` is
+the ordinary course of things: a stoppage the environment caused and a role or
+the harness moves next — a lost race for the target, a replay the harness's
+budget killed, a tracker read that timed out, a usage window — is said as a note
+in the item's thread, because nothing was judged and nobody but that role has
+anything to do. A stoppage's next mover is read the way the docket, the pull's
+hold, and `yoyo status` read it, with the operator named ahead of the harness's
+resume or the development manager's decision where the cause is one only a
+person clears. It used to be `critical` for every
+stoppage whoever decided it; on 2026-09-25 that paged the operator for an
+approved change that lost its race for main twice and waited on the development
+manager to re-run it.
+
 **The top of the channel reads as a status board.** Each thread's opening message
 carries one reaction saying what that item is doing now — working, with the
 reviewer, blocked, or landed — replaced as the record moves and taken off when it

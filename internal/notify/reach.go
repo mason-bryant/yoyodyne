@@ -130,8 +130,10 @@ var reaches = map[Kind]Reach{
 	KindLandingRed:        ReachChannel,
 	KindLandingUnverified: ReachChannel,
 	// Work that stopped. A park waits on something outside the run, a blocker is
-	// the development manager's decision and moves nothing until it is made, and a
-	// run that ended without succeeding has materially changed what exists.
+	// a decision somebody has to make and moves nothing until it is made, and a
+	// run that ended without succeeding has materially changed what exists. A
+	// blocker the environment caused and a role or the harness moves next is the
+	// exception, answered from the event in reachOf.
 	KindRunParked:       ReachChannel,
 	KindBlockerRecorded: ReachChannel,
 	KindRunEnded:        ReachChannel,
@@ -300,12 +302,20 @@ func (k Kind) Reach() Reach {
 // take the whole collapsed backlog with it, since the deliveries it replaced are
 // suppressed either way.
 //
-// One kind answers from the record rather than from the table, for the reason
-// the whose-move clause does: a recorded directive that left something unsettled
-// pauses the work it affects until somebody settles it, and one that settled
-// nothing is in force already and stops nothing. They are opposite news, and the
-// pausing one is what the operator's own survey counts among the kinds that must
-// not be drowned.
+// Two kinds answer from the record rather than from the table. The first, for
+// the reason the whose-move clause does: a recorded directive that left
+// something unsettled pauses the work it affects until somebody settles it, and
+// one that settled nothing is in force already and stops nothing. They are
+// opposite news, and the pausing one is what the operator's own survey counts
+// among the kinds that must not be drowned.
+//
+// The second is a stoppage said as a note, which is one the environment caused
+// and a role or the harness moves next — a lost race, a usage window, a tracker
+// that did not answer. Nothing about it is the operator's, and nothing was
+// judged, so it goes in the item's thread with the rest of that item's
+// narrative rather than to the top of the channel. The severity is the
+// selector's derivation (stoppageSeverity), so reading it here is reading the
+// same account rather than classifying the stoppage a second time.
 func reachOf(topic Topic, event Event) Reach {
 	if event.Severity == report.SeverityCritical {
 		return ReachChannel
@@ -313,6 +323,9 @@ func reachOf(topic Topic, event Event) Reach {
 	reach := event.Kind.Reach()
 	if event.Kind == KindDirectiveRecorded && strings.TrimSpace(event.Detail.Unresolved) != "" {
 		reach = ReachChannel
+	}
+	if event.Kind == KindBlockerRecorded && event.Severity == report.SeverityNote {
+		reach = ReachThread
 	}
 	if reach == ReachThread && topic.Kind == TopicProduct {
 		// The digest is the exemption, and it says the channel rather than the
