@@ -380,7 +380,7 @@ func openDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
 	open := make([]triage.Entry, 0, len(entries))
 	closed := 0
 	for _, entry := range entries {
-		if entry.Closed != nil && entry.Closed.Holds(now) && !carryOutStopped(entry) {
+		if !entry.Undecided(now) {
 			closed++
 			continue
 		}
@@ -392,14 +392,6 @@ func openDocket(entries []triage.Entry, now time.Time) ([]triage.Entry, int) {
 		return nil, closed
 	}
 	return open, closed
-}
-
-// carryOutStopped reports a settled entry whose decision the harness has tried to
-// carry out since it was decided, and been stopped. The finding has to be about
-// this decision — made after it — because a finding about an earlier decision on
-// the same stoppage is one this decision has since superseded.
-func carryOutStopped(entry triage.Entry) bool {
-	return entry.Closed != nil && entry.CarryOut != nil && entry.CarryOut.RefusedAt.After(entry.Closed.ClosedAt)
 }
 
 // standingDocket is what the docket already holds for each key: an entry nobody

@@ -578,3 +578,32 @@ func TestAnAttemptThatNeverBecameARunIsDocketedAndReadBack(t *testing.T) {
 		t.Fatalf("entry did not survive intact: %#v", reloaded[0])
 	}
 }
+
+// Where the docket window stopped is kept per product and read back as it was
+// written, and a product whose window was never recorded stands at the oldest
+// end of the docket rather than failing to read.
+func TestTheDocketWindowPositionIsReadBackAsRecorded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestDocketStore(t, t.TempDir())
+	if position, err := store.WindowPosition(); err != nil || position.Started() {
+		t.Fatalf("WindowPosition() before any record = %+v, %v; want the oldest end and no error", position, err)
+	}
+	recorded := triage.WindowPosition{
+		Since: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+		Key:   triage.Key(triage.ClassStoppedRun, "run-0123456789abcdef0123456789abcdef"),
+	}
+	if err := store.RecordWindowPosition(recorded); err != nil {
+		t.Fatalf("RecordWindowPosition() error = %v", err)
+	}
+	read, err := store.WindowPosition()
+	if err != nil {
+		t.Fatalf("WindowPosition() error = %v", err)
+	}
+	if !read.Since.Equal(recorded.Since) || read.Key != recorded.Key {
+		t.Fatalf("WindowPosition() = %+v, want %+v", read, recorded)
+	}
+	if err := store.RecordWindowPosition(triage.WindowPosition{Key: strings.Repeat("k", triage.MaxKeyBytes+1)}); err == nil {
+		t.Fatal("a position whose key no entry could carry was recorded")
+	}
+}

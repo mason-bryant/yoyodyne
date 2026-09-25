@@ -70,6 +70,48 @@ func (s *DocketStore) Path() string { return filepath.Join(s.root, "docket.jsonl
 // join rather than an edit.
 func (s *DocketStore) ClosurePath() string { return filepath.Join(s.root, "docket-closed.jsonl") }
 
+// WindowPath names where the development manager's docket window last stopped.
+func (s *DocketStore) WindowPath() string { return filepath.Join(s.root, "docket-window.json") }
+
+// docketWindow is the one record at WindowPath.
+type docketWindow struct {
+	Position triage.WindowPosition `json:"position"`
+}
+
+// WindowPosition reads where the last docket window stopped, which is where the
+// next one resumes. A product whose window has never been recorded stands at the
+// oldest end of the docket, which is not a failure to read.
+//
+// It is kept per product beside the docket rather than on a conversation,
+// because the docket is per product and so is the role that decides it: a fresh
+// conversation for that role resuming the walk is the point, since a window that
+// restarted at every `--new` would show the same oldest few forever.
+func (s *DocketStore) WindowPosition() (triage.WindowPosition, error) {
+	data, err := os.ReadFile(s.WindowPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return triage.WindowPosition{}, nil
+	}
+	if err != nil {
+		return triage.WindowPosition{}, fmt.Errorf("read the docket window: %w", err)
+	}
+	var recorded docketWindow
+	if err := json.Unmarshal(data, &recorded); err != nil {
+		return triage.WindowPosition{}, fmt.Errorf("decode the docket window: %w", err)
+	}
+	return recorded.Position, nil
+}
+
+// RecordWindowPosition records where a docket window stopped. It replaces the
+// record whole, since only the latest position means anything, and it is written
+// the way every replaced record here is — whole, synced, and named by a rename —
+// so an interrupted write leaves the last position rather than half of one.
+func (s *DocketStore) RecordWindowPosition(position triage.WindowPosition) error {
+	if len(position.Key) > triage.MaxKeyBytes {
+		return fmt.Errorf("docket window key is %d bytes, limit is %d", len(position.Key), triage.MaxKeyBytes)
+	}
+	return replaceJSONFile(s.root, s.WindowPath(), "docket window", docketWindow{Position: position})
+}
+
 // RecordOnce records one entry and reports whether this call is what created
 // it. Docketing is idempotent because the thing it describes is one event: a
 // run stops once, and the process that stopped it and the sweep that settles it
