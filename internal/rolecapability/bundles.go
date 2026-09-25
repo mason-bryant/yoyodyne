@@ -225,10 +225,6 @@ func declaredAhead() []Ahead {
 			Reason:     "the lane report and the one typed block that rewrites it are their own child of yoyodyne-ifd.430.13; until it lands no reply writes a lane report",
 		},
 		{
-			Capability: capability.ServiceRequestRestart,
-			Reason:     "the durable restart request is its own child of yoyodyne-ifd.430.13, and what executes one is the supervisor's pass under yoyodyne-ifd.413; until the first lands no request can be written",
-		},
-		{
 			Capability: capability.ReportFile,
 			Reason:     "reports are read from every role's reply today whatever its bundle holds, so no site asks for this yet; the program manager holds it because its design says so, and making the other roles' reports ask for it is a change to their bundles nobody has ruled on",
 		},

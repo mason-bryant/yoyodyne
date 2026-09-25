@@ -257,8 +257,9 @@ The sixth is the [program manager](designs/program-manager.md): an agent filling
 it watches one outcome across the others and may change work only inside its own
 lane. `yoyo init` configures none — an instance is a lane and a remit somebody
 chose — and until the lane is built every tracker write the role holds is
-refused, so an instance configured today reads, asks, remembers, and reports,
-and nothing more.
+refused, so an instance configured today reads, asks, remembers, reports, and
+records [a request that a part be restarted](operations.md#starting-the-product-and-stopping-it),
+which nothing acts on yet, and nothing more.
 [Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 

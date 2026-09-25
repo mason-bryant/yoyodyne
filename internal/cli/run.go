@@ -96,6 +96,10 @@ type components struct {
 	// reason: the reasoning outlives the conversation that reached it, and a
 	// decision taken weeks later is the one that most needs it.
 	evaluations *runstate.EvaluationStore
+	// restartRequests is where a program manager's requests that the supervisor
+	// restart a part of the product are kept, until the supervisor's pass acts on
+	// them.
+	restartRequests *runstate.RestartRequestStore
 	// docket is the work that has stopped moving, waiting for the development
 	// manager to decide what becomes of it. It is built beside the reports for
 	// the same reason: an entry outlives the run that produced it, and a run
@@ -257,6 +261,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	restartRequests, err := runstate.NewRestartRequestStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	docket, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -322,27 +330,28 @@ func buildComponents(configPath string) (components, error) {
 		return components{}, err
 	}
 	return components{
-		config:         cfg,
-		configPath:     resolved.Path,
-		repository:     repository,
-		stateRoot:      stateRoot,
-		runner:         processRunner,
-		store:          store,
-		reports:        reports,
-		amendments:     amendments,
-		evaluations:    evaluations,
-		docket:         docket,
-		branchReviews:  branchReviews,
-		directives:     directives,
-		holds:          holds,
-		intake:         intake,
-		watch:          watch,
-		releasedClaims: releasedClaims,
-		usageLimits:    usageLimits,
-		outages:        outages,
-		spend:          spendLog,
-		worktrees:      worktrees,
-		redactValues:   execution.SensitiveEnvironmentValues(os.Environ()),
+		config:          cfg,
+		configPath:      resolved.Path,
+		repository:      repository,
+		stateRoot:       stateRoot,
+		runner:          processRunner,
+		store:           store,
+		reports:         reports,
+		amendments:      amendments,
+		evaluations:     evaluations,
+		restartRequests: restartRequests,
+		docket:          docket,
+		branchReviews:   branchReviews,
+		directives:      directives,
+		holds:           holds,
+		intake:          intake,
+		watch:           watch,
+		releasedClaims:  releasedClaims,
+		usageLimits:     usageLimits,
+		outages:         outages,
+		spend:           spendLog,
+		worktrees:       worktrees,
+		redactValues:    execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
 }
 

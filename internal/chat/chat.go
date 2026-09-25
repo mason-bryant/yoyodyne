@@ -322,6 +322,11 @@ type Options struct {
 	// discusses the idea and still says what it thinks, and an evaluation then
 	// fails plainly rather than appearing to have been recorded.
 	Evaluations Evaluations
+	// RestartRequests is where a program manager's requests that the supervisor
+	// restart a part are recorded. It is optional like the rest, and a
+	// conversation without one refuses a request as having nowhere to go rather
+	// than appearing to have recorded it.
+	RestartRequests RestartRequests
 	// Goals are the goals the repository records, which is what work admitted
 	// here has to name. It is what makes traceability something the harness holds
 	// rather than something the product manager asserts: a goal named on an item
@@ -845,6 +850,10 @@ type Reply struct {
 	// order it asked, with the revision each became or why it was refused. They
 	// already happened, so they are reported rather than put to anybody.
 	Memories []MemoryOutcome `json:"memories,omitempty"`
+	// Restart is the request this reply made of the supervisor, as recorded or
+	// refused. It is recorded and nothing more, so it is reported rather than put
+	// to anybody.
+	Restart  *RestartOutcome `json:"restart,omitempty"`
 	Evidence Evidence        `json:"evidence"`
 }
 
@@ -1370,6 +1379,19 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 				return reply, err
 			}
 		}
+		// What the role asked the supervisor to restart, recorded and nothing more.
+		// Like a memory write it never starts another round: the result travels
+		// with whatever this round is already handing back, or waits for the next
+		// turn.
+		if parsed.Restart != nil {
+			outcome := s.performRestartRequest(*parsed.Restart)
+			reply.Restart = &outcome
+			if undelivered != "" {
+				undelivered += renderRestartResult(outcome)
+			} else if err := s.carryResults(renderRestartResult(outcome)); err != nil {
+				return reply, err
+			}
+		}
 		if undelivered != "" {
 			continuation = undelivered + continueAfterResults
 		}
@@ -1867,7 +1889,10 @@ type parsedReply struct {
 	Ask *exchange.Ask
 	// Memories are what this reply asked to be remembered, revised, or retired
 	// in the agent's own memory. Most replies ask for none.
-	Memories      []MemoryWrite
+	Memories []MemoryWrite
+	// Restart is the one part this reply asked the supervisor to restart, where
+	// it asked. Only a role holding service.request-restart may.
+	Restart       *RestartAsk
 	Reports       []report.Entry
 	ReportProblem error
 }
@@ -1923,6 +1948,11 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 		parsed.Prose = rest
 		return parsed, &MemoryError{Err: err}
 	}
+	prose, restart, err := extractRestart(prose)
+	if err != nil {
+		parsed.Prose = rest
+		return parsed, &RestartError{Err: err}
+	}
 	parsed.Prose = prose
 	parsed.Actions = actions
 	parsed.Proposals = proposals
@@ -1932,6 +1962,7 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	parsed.Reads = reads
 	parsed.Ask = ask
 	parsed.Memories = memories
+	parsed.Restart = restart
 	return parsed, nil
 }
 
@@ -2573,6 +2604,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// What it put into its own memory, because a memory enters every later turn
 		// and one the operator was never told about is agent state they cannot see.
 		s.reportMemories(out, reply)
+		// What it asked the supervisor to restart, because a request is durable
+		// and shown on the standing, and the operator should hear it from here
+		// first rather than find it there.
+		s.reportRestart(out, reply)
 		// How old the picture the reply rests on was and what the harness did
 		// about it, where it did anything: a re-read the operator never asked for
 		// is a re-read they have to be told about, and a re-read that could not be
@@ -2657,6 +2692,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		var unreadableMemory *MemoryError
 		if errors.As(err, &unreadableMemory) {
 			fmt.Fprintf(out, "%v\nNothing was remembered; ask it what it meant to record.\n\n", unreadableMemory)
+			continue
+		}
+		var unreadableRestart *RestartError
+		if errors.As(err, &unreadableRestart) {
+			fmt.Fprintf(out, "%v\nNothing was requested and nothing was restarted; ask it what it meant to request.\n\n", unreadableRestart)
 			continue
 		}
 		var unreadableConcern *ConcernError
