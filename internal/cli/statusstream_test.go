@@ -378,21 +378,21 @@ func TestStatusSpendPrintsTheFiguresTheReadModelReads(t *testing.T) {
 		report.Rows = append(report.Rows, row)
 	}
 
-	reading := readmodel.ReadThroughput(context.Background(), readmodel.ThroughputSources{
+	reading := readmodel.ReadSpend(context.Background(), readmodel.SpendSources{
 		Ledger: fixedLedger{report: report},
 		Now:    func() time.Time { return now },
 	})
-	if reading.SpendProblem != "" {
-		t.Fatalf("the read model could not read the spend: %s", reading.SpendProblem)
+	if reading.Problem != "" {
+		t.Fatalf("the read model could not read the spend: %s", reading.Problem)
 	}
-	var today readmodel.Window
+	var week readmodel.SpendWindow
 	for _, window := range reading.Windows {
-		if window.Label == "today" {
-			today = window
+		if window.Label == "last 7 days" {
+			week = window
 		}
 	}
-	if len(today.Kinds) != len(runstate.EveryPricedKind) {
-		t.Fatalf("today's split %+v, want one share per kind the report prices", today.Kinds)
+	if len(week.Kinds) != len(runstate.EveryPricedKind) {
+		t.Fatalf("the week's split %+v, want one share per kind the report prices", week.Kinds)
 	}
 
 	var terminal bytes.Buffer
@@ -412,10 +412,10 @@ func TestStatusSpendPrintsTheFiguresTheReadModelReads(t *testing.T) {
 	}
 	// TOTAL, the three words of the window, calls, the four token columns, USD.
 	fields := strings.Fields(total)
-	if len(fields) != 10 || fields[4] != strconv.Itoa(today.Invocations) || fields[9] != fmt.Sprintf("%.2f", today.CostUSD) {
-		t.Fatalf("terminal's total line = %q, the read model's window is %+v", total, today)
+	if len(fields) != 10 || fields[4] != strconv.Itoa(week.Invocations) || fields[9] != fmt.Sprintf("%.2f", week.CostUSD) {
+		t.Fatalf("terminal's total line = %q, the read model's window is %+v", total, week)
 	}
-	if want := fmt.Sprintf("cost: $%.2f", today.CostUSD); !strings.Contains(printed, want) {
+	if want := fmt.Sprintf("cost: $%.2f", week.CostUSD); !strings.Contains(printed, want) {
 		t.Fatalf("terminal = %q, want it to contain %q", printed, want)
 	}
 	// The one split: each kind's share as the read model read it is the share
@@ -424,10 +424,10 @@ func TestStatusSpendPrintsTheFiguresTheReadModelReads(t *testing.T) {
 		t.Fatalf("terminal = %q, want a line splitting the total by kind", printed)
 	}
 	parts := strings.Split(split, "   ")
-	if len(parts) != len(today.Kinds) {
-		t.Fatalf("terminal splits %q into %d kinds, the read model into %d: %+v", split, len(parts), len(today.Kinds), today.Kinds)
+	if len(parts) != len(week.Kinds) {
+		t.Fatalf("terminal splits %q into %d kinds, the read model into %d: %+v", split, len(parts), len(week.Kinds), week.Kinds)
 	}
-	for index, share := range today.Kinds {
+	for index, share := range week.Kinds {
 		want := fmt.Sprintf(": $%.2f from %d ", share.CostUSD, share.Invocations)
 		if !strings.Contains(parts[index], want) {
 			t.Fatalf("terminal's share %d is %q, the read model's is %+v", index, parts[index], share)
@@ -436,12 +436,12 @@ func TestStatusSpendPrintsTheFiguresTheReadModelReads(t *testing.T) {
 	// And both are the report's own sum rather than two sums that happen to
 	// agree: the figures are the ones the report's method produces.
 	totals := report.Totals()
-	if today.CostUSD != totals.CostUSD || today.Invocations != totals.Calls || len(today.Kinds) != len(totals.ByKind) {
-		t.Fatalf("the read model's window %+v is not the report's totals %+v", today, totals)
+	if week.CostUSD != totals.CostUSD || week.Invocations != totals.Calls || len(week.Kinds) != len(totals.ByKind) {
+		t.Fatalf("the read model's window %+v is not the report's totals %+v", week, totals)
 	}
 	for index, share := range totals.ByKind {
-		if today.Kinds[index] != (readmodel.KindSpend{Kind: share.Kind, Invocations: share.Calls, CostUSD: share.CostUSD}) {
-			t.Fatalf("the read model's share %d is %+v, the report's is %+v", index, today.Kinds[index], share)
+		if week.Kinds[index] != (readmodel.KindSpend{Kind: share.Kind, Invocations: share.Calls, CostUSD: share.CostUSD}) {
+			t.Fatalf("the read model's share %d is %+v, the report's is %+v", index, week.Kinds[index], share)
 		}
 	}
 }

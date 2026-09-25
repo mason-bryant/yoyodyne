@@ -165,32 +165,42 @@ func TestDashboardReadsTheTokenFromTheConfiguredSource(t *testing.T) {
 	})
 }
 
-// A store the throughput reader cannot open costs the reading its half and
-// not the other, and the reason reaches the JSON the page reads: the error
-// state says what failed rather than that a source was absent.
-func TestDashboardThroughputNamesAStoreItCouldNotOpen(t *testing.T) {
+// A store a reading cannot open costs that reading its figures, and the reason
+// reaches the JSON the page reads: the error state says what failed rather than
+// that a source was absent. The throughput and the spend read different stores
+// and carry the refusal each under its own name.
+func TestDashboardReadingsNameAStoreTheyCouldNotOpen(t *testing.T) {
 	t.Parallel()
-	// Both stores refuse a relative root, so both halves carry the refusal; a
-	// root only one of them refuses would cost only that half.
-	sources := throughputSources("relative/state", "yoyodyne")
-	if sources.Runs != nil || sources.Ledger != nil || sources.RunsProblem == "" || sources.LedgerProblem == "" {
-		t.Fatalf("sources over an unopenable root: %+v", sources)
+	// Both stores refuse a relative root.
+	throughput := throughputSources("relative/state", "yoyodyne")
+	if throughput.Runs != nil || throughput.RunsProblem == "" {
+		t.Fatalf("throughput sources over an unopenable root: %+v", throughput)
 	}
-	reading := readmodel.ReadThroughput(context.Background(), sources)
-	encoded, err := json.Marshal(reading)
+	spend := spendSources("relative/state", "yoyodyne")
+	if spend.Ledger != nil || spend.LedgerProblem == "" {
+		t.Fatalf("spend sources over an unopenable root: %+v", spend)
+	}
+
+	encoded, err := json.Marshal(readmodel.ReadThroughput(context.Background(), throughput))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{
-		`"runs_problem":"the recorded runs could not be opened: state root must be an absolute path"`,
-		`"spend_problem":"the spend could not be opened: state root must be an absolute path"`,
-	} {
-		if !strings.Contains(string(encoded), expected) {
-			t.Fatalf("the JSON lacks %s: %s", expected, encoded)
-		}
+	if !strings.Contains(string(encoded), `"runs_problem":"the recorded runs could not be opened: state root must be an absolute path"`) {
+		t.Fatalf("the throughput JSON does not name the store it could not open: %s", encoded)
 	}
 	if !strings.Contains(string(encoded), `"label":"today"`) {
 		t.Fatalf("the windows are missing from a reading with unopenable sources: %s", encoded)
+	}
+
+	priced, err := json.Marshal(readmodel.ReadSpend(context.Background(), spend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(priced), `"problem":"the spend could not be opened: state root must be an absolute path"`) {
+		t.Fatalf("the spend JSON does not name the store it could not open: %s", priced)
+	}
+	if !strings.Contains(string(priced), `"label":"last 24 hours"`) || !strings.Contains(string(priced), `"days":null`) {
+		t.Fatalf("an unreadable spend drops its windows or invents a listing: %s", priced)
 	}
 }
 

@@ -504,7 +504,18 @@ input:focus-visible {
   color: var(--muted);
 }
 
-/* ---- section 2: the cards ------------------------------------------------- */
+/* ---- section 2: the spend box --------------------------------------------- */
+
+/* The box's label, which opens the month behind the two windows. */
+.spend-open {
+  margin: 0.75rem 0 0;
+}
+
+.spend-label {
+  font-weight: 600;
+}
+
+/* ---- section 3: the cards ------------------------------------------------- */
 
 .cards {
   list-style: none;
@@ -589,7 +600,7 @@ input:focus-visible {
   font-weight: 600;
 }
 
-/* ---- section 3: the pipeline ------------------------------------------------ */
+/* ---- section 4: the pipeline ------------------------------------------------ */
 
 .stages {
   list-style: none;
@@ -734,7 +745,7 @@ input:focus-visible {
   font-size: 0.9rem;
 }
 
-/* ---- section 4: throughput and cost ------------------------------------------ */
+/* ---- section 5: throughput, and the windows the spend box shares with it ------ */
 
 .windows {
   display: grid;
@@ -804,7 +815,7 @@ input:focus-visible {
   font-weight: 600;
 }
 
-/* ---- section 5: capacity ------------------------------------------------------ */
+/* ---- section 6: capacity ------------------------------------------------------ */
 
 .hold {
   border: 1px solid var(--held);
@@ -984,6 +995,18 @@ input:focus-visible {
 .grouping-detail {
   color: var(--ink-soft);
   font-size: 0.88rem;
+}
+
+/* A day of the spend listing opens nothing, so it is text where an item's
+   title is a button; one no priced record reaches is muted and says so. */
+.grouping-day {
+  font-variant-numeric: tabular-nums;
+}
+
+.grouping-day-unreached .grouping-day,
+.grouping-day-unreached .grouping-detail {
+  color: var(--muted);
+  font-style: italic;
 }
 
 /* The card: every field the item has, under a plain label; prose keeps its

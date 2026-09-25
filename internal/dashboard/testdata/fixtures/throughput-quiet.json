@@ -12,12 +12,7 @@
       "cancelled": 0,
       "timed_out": 0,
       "failed": 0,
-      "landed_items": [],
-      "cost_usd": 0,
-      "invocations": 0,
-      "kinds": [],
-      "unpriced": 0,
-      "floor": false
+      "landed_items": []
     },
     {
       "label": "last 7 days",
@@ -30,12 +25,7 @@
       "cancelled": 0,
       "timed_out": 0,
       "failed": 0,
-      "landed_items": [],
-      "cost_usd": 0,
-      "invocations": 0,
-      "kinds": [],
-      "unpriced": 0,
-      "floor": false
+      "landed_items": []
     }
   ]
 }

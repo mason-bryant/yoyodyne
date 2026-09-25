@@ -40,8 +40,9 @@ import (
 
 var updateRenders = flag.Bool("update-renders", false, "rewrite the rendered pages under testdata/renders from the fixtures")
 
-// sections are the five the design names, by the id each carries in the shell.
-var sections = []string{"band", "live", "pipeline", "throughput", "capacity"}
+// sections are the six the page carries, by the id each carries in the shell:
+// the five the design names, and the spend box above Running now.
+var sections = []string{"band", "spend", "live", "pipeline", "throughput", "capacity"}
 
 // popups are the two dialogs the page opens over the sections: a grouping — of
 // the pipeline listed by title, or of the attention line listed by what waits
@@ -74,10 +75,10 @@ func strict(t *testing.T, name string, body []byte, into any) {
 	}
 }
 
-// The shell carries the five sections, and each of them carries its four
-// states with the lines the script fills, so a section the script has not
-// reached yet says it is reading rather than being blank.
-func TestTheShellCarriesFiveSectionsEachWithItsStates(t *testing.T) {
+// The shell carries the six sections, and each of them carries its four states
+// with the lines the script fills, so a section the script has not reached yet
+// says it is reading rather than being blank.
+func TestTheShellCarriesEverySectionEachWithItsStates(t *testing.T) {
 	t.Parallel()
 	w := serve(t, stubReader{standing: standingWith("title")})
 	_, body := w.get("/", nil)
@@ -135,7 +136,7 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	standings, throughputs, items := 0, 0, 0
+	standings, throughputs, spends, items := 0, 0, 0, 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -170,6 +171,21 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 				}
 			}
 			throughputs++
+		case strings.HasPrefix(name, "spend-"):
+			var spend readmodel.Spend
+			strict(t, name, body, &spend)
+			// The two windows the box shows, in the order it shows them and with
+			// the rolling one said to be rolling; and the month behind them,
+			// which is a list where it could be read and absent where it could
+			// not, as the server sends it.
+			if len(spend.Windows) != 2 || spend.Windows[0].Label != "last 24 hours" || !spend.Windows[0].Rolling ||
+				spend.Windows[1].Label != "last 7 days" || spend.Windows[1].Rolling {
+				t.Fatalf("fixture %s does not carry the two windows: %+v", name, spend)
+			}
+			if (spend.Problem == "") != (spend.Days != nil) || (spend.Days != nil && len(spend.Days) != 30) {
+				t.Fatalf("fixture %s names %d days beside a problem of %q", name, len(spend.Days), spend.Problem)
+			}
+			spends++
 		case strings.HasPrefix(name, "item-"):
 			var item readmodel.WorkItem
 			strict(t, name, body, &item)
@@ -181,11 +197,11 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 			}
 			items++
 		default:
-			t.Fatalf("fixture %s is neither a standing, a throughput, nor an item", name)
+			t.Fatalf("fixture %s is none of a standing, a throughput, a spend, or an item", name)
 		}
 	}
-	if standings < 4 || throughputs < 3 || items < 3 {
-		t.Fatalf("expected the standing, throughput, and item fixtures, found %d, %d, and %d", standings, throughputs, items)
+	if standings < 4 || throughputs < 3 || spends < 3 || items < 3 {
+		t.Fatalf("expected the standing, throughput, spend, and item fixtures, found %d, %d, %d, and %d", standings, throughputs, spends, items)
 	}
 }
 
@@ -202,13 +218,13 @@ func TestServesTheThroughputToTheTokenAlone(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
 		t.Fatalf("throughput with the token: %d %s", response.StatusCode, body)
 	}
-	for _, expected := range []string{`"label":"today"`, `"label":"last 7 days"`, `"landed":4`, `"landed_items":[{"run_id"`, `"spend_problem":"the spend could not be read: open streams: permission denied"`} {
+	for _, expected := range []string{`"label":"today"`, `"label":"last 7 days"`, `"landed":4`, `"landed_items":[{"run_id"`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("throughput lacks %s: %s", expected, body)
 		}
 	}
-	if strings.Contains(body, "runs_problem") {
-		t.Fatalf("a source that was read is reported as a problem: %s", body)
+	if strings.Contains(body, "runs_problem") || strings.Contains(body, "cost_usd") {
+		t.Fatalf("the throughput reports a problem it did not have, or a cost the spend owns: %s", body)
 	}
 	if response, body := w.get("/api/throughput", nil); response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "landed") {
 		t.Fatalf("throughput without the token: %d %s", response.StatusCode, body)
@@ -224,6 +240,48 @@ func TestServesTheThroughputToTheTokenAlone(t *testing.T) {
 	response, body = broken.get("/api/throughput", bearer(broken.server.Token()))
 	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"error":"the state root could not be resolved"`) || strings.Contains(body, "windows") {
 		t.Fatalf("throughput over unreadable state: %d %s", response.StatusCode, body)
+	}
+}
+
+// The spend is served as JSON to the token and to nobody else, refused whole
+// when the state cannot be read, and carries what the read model said about
+// each window and about the month behind them.
+func TestServesTheSpendToTheTokenAlone(t *testing.T) {
+	t.Parallel()
+	var spend readmodel.Spend
+	strict(t, "spend-busy", fixture(t, "spend-busy"), &spend)
+	w := serve(t, stubReader{standing: standingWith("title"), spend: spend})
+
+	response, body := w.get("/api/spend", bearer(w.server.Token()))
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("spend with the token: %d %s", response.StatusCode, body)
+	}
+	for _, expected := range []string{
+		`"label":"last 24 hours"`, `"rolling":true`, `"label":"last 7 days"`, `"since_day":"2026-09-13"`,
+		`"cost_usd":1232.58`, `"unpriced":1`, `"floor":true`, `"reaches":"2026-09-01"`,
+		`"days":[{"day":"2026-09-19"`, `"reached":false`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("the spend lacks %s: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "problem") {
+		t.Fatalf("a source that was read is reported as a problem: %s", body)
+	}
+	if response, body := w.get("/api/spend", nil); response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "cost_usd") {
+		t.Fatalf("spend without the token: %d %s", response.StatusCode, body)
+	}
+	if response, _ := w.get("/api/spend", all(bearer(w.server.Token()), withHost("evil.test"))); response.StatusCode != http.StatusForbidden {
+		t.Fatalf("spend to a foreign host: %d", response.StatusCode)
+	}
+	if response, _ := w.request(http.MethodPost, "/api/spend", bearer(w.server.Token())); response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("spend POST: %d", response.StatusCode)
+	}
+
+	broken := serve(t, stubReader{failure: errors.New("the state root could not be resolved")})
+	response, body = broken.get("/api/spend", bearer(broken.server.Token()))
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"error":"the state root could not be resolved"`) || strings.Contains(body, "windows") {
+		t.Fatalf("spend over unreadable state: %d %s", response.StatusCode, body)
 	}
 }
 
@@ -489,7 +547,7 @@ func TestARenderWithoutNodeFailsUnlessDeclaredUnavailable(t *testing.T) {
 
 // The page's script draws every section in every state from the fixtures, and
 // what it draws is what the renders under testdata/renders hold. Each of the
-// five sections reaches each of its four states in at least one scenario, each
+// six sections reaches each of its four states in at least one scenario, each
 // of the two pop-ups reaches each of its four and is closed in another, the
 // page reaches its own four, and no scenario sets a style or sends the token
 // anywhere but as a bearer to this origin — render.js refuses both.
@@ -597,9 +655,9 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"What to do: nothing needs doing",
 			"no reset named, and nothing probes: the run stopped",
 		},
-		"quiet":      {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran and nothing was spent in the last 7 days", "No run or conversation is waiting on provider capacity"},
+		"quiet":      {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran in the last 7 days", "Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.", "No run or conversation is waiting on provider capacity"},
 		"degraded":   {`<span class="figure">—</span>`, `<li class="stage stage-unreadable">`, "Could not be read: the admitted work could not be read", `<button class="grouping-open pile-label" type="button" data-grouping="stage:developing">developing</button>`},
-		"unreadable": {"Could not be read: the recorded runs could not be read: open runs: input/output error; the spend could not be read", "yoyo doctor says whether bd answers in this checkout"},
+		"unreadable": {"Could not be read: the recorded runs could not be read: open runs: input/output error", "Could not be read: the spend could not be read: open streams: input/output error", "yoyo doctor says whether bd answers in this checkout"},
 		"held": {
 			`<p id="banner" class="banner" role="status">Every role is paused`, "Every role is held: 5 agents on opus, and none names an alternate", "pullable, and nothing is choosing", "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z",
 			// One thing waiting, and it is the operator's: the figure says so and
@@ -608,8 +666,31 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 		},
 		"stale":            {`class="freshness freshness-stale">stale<`, "so this is the reading from 14:05:09"},
 		"throughput-stale": {`class="freshness freshness-stale">stale<`, "The last reading failed for the throughput", `<p id="throughput-stale" class="stale" role="status">The last reading failed`},
-		"refused":          {"permission denied", "yoyo doctor says what cannot be read"},
-		"wrong-token":      {"that is not the token this dashboard printed when it started"},
+		// The spend box while the month is still being priced, and after a poll
+		// that failed on a page that had already been drawn: the figures it had
+		// stay, marked stale, rather than the box going blank.
+		"spend-pending": {`<section id="spend" class="panel spend" data-state="loading"`, "Pricing the last thirty days…"},
+		"spend-stale":   {`class="freshness freshness-stale">stale<`, "The last reading failed for the spend", `<p id="spend-stale" class="stale" role="status">The last reading failed`, "at least $191.53 from 84 invocations"},
+		// The month behind the box: one line per local day, newest first, with
+		// the by-kind split beside each; the days the log does not reach saying
+		// so rather than reading as zero; and the two lines that are not days —
+		// the spend with no moment, and the records that could not be priced.
+		"spend-days": {
+			`<h2 id="grouping-heading" class="popup-title">Spend by day (32 lines)</h2>`,
+			"one line per local day for the past 30 days, newest first, priced from the spend log",
+			`<span class="grouping-title grouping-day">2026-09-19</span>`,
+			"$92.00 from 31 invocations — $57.04 on 19 runs, $27.60 on 9 conversations, $4.60 on 2 branch reviews, $2.76 on 1 exchange",
+			`<span class="grouping-title grouping-day">2026-09-08</span>`, "nothing spent",
+			`<li class="grouping-item grouping-day-unreached">`,
+			`<span class="grouping-title grouping-day">2026-08-21</span>`, "no priced record reaches this far back",
+			"$4.25 from 2 invocations whose moment could not be read, counted in every window above and on no day here",
+			"1 exchange record could not be read, so every figure here and above is a floor",
+		},
+		"spend-days-empty":   {`<h2 id="grouping-heading" class="popup-title">Spend by day</h2>`, `<p id="grouping-empty" class="empty">Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.</p>`},
+		"spend-days-error":   {`<h2 id="grouping-heading" class="popup-title">Spend by day</h2>`, "the spend could not be read: open streams: input/output error", "yoyo status --spend 30 prices the same records"},
+		"spend-days-loading": {`<h2 id="grouping-heading" class="popup-title">Spend by day</h2>`, `aria-labelledby="grouping-heading" data-state="loading"`, `<span id="grouping-waiting">Pricing the last thirty days…</span>`},
+		"refused":            {"permission denied", "yoyo doctor says what cannot be read"},
+		"wrong-token":        {"that is not the token this dashboard printed when it started"},
 		// The card: every field under a plain label, the run in the terminal's
 		// words, and a field the item has nothing in saying so.
 		"card": {
@@ -634,7 +715,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 		"grouping-landed":  {`Landed last 7 days (4 items)`, "from 2026-09-13, local days, newest first", `data-item="yoyodyne-ifd.439"`, "landed 2026-09-19 13:41:00", `data-item="yoyodyne-ifd.435"`},
 		"grouping-empty":   {`<h2 id="grouping-heading" class="popup-title">Startable</h2>`, "the harness is choosing nothing: Paused on the provider's usage window until 18:50Z", `<p id="grouping-empty" class="empty">No admitted item is startable.</p>`},
 		"grouping-error":   {`<h2 id="grouping-heading" class="popup-title">Admitted</h2>`, "Could not be read: the admitted work could not be read: bd list", "yoyo doctor says whether bd answers in this checkout"},
-		"grouping-loading": {`<h2 id="grouping-heading" class="popup-title">Landed today</h2>`, "Pricing the week…"},
+		"grouping-loading": {`<h2 id="grouping-heading" class="popup-title">Landed today</h2>`, `<span id="grouping-waiting">Reading what the runs came to…</span>`},
 		// The card over the grouping it was opened from: a stopped run with its
 		// change preserved, said as `yoyo status` says it.
 		"grouping-card": {
@@ -714,7 +795,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			t.Errorf("the %s render carries a pop-up nobody opened", scenario)
 		}
 	}
-	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy", "attention-amendment": "busy", "attention-error": "degraded"} {
+	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy", "attention-amendment": "busy", "attention-error": "degraded", "spend-days": "busy"} {
 		if body := page(scenario); strings.Contains(body, `class="panel `) || !strings.Contains(body, "the "+beneath+" render") {
 			t.Errorf("the %s render does not stand alone over the %s render", scenario, beneath)
 		}
@@ -727,7 +808,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			t.Errorf("the busy render does not open %s from both its title and its id", id)
 		}
 	}
-	for _, key := range []string{"admitted", "held", "startable", "running", "landed:today", "landed:week", "pile:held", "pile:directive", "stage:developing", "stage:integrating", "attention"} {
+	for _, key := range []string{"admitted", "held", "startable", "running", "landed:today", "landed:week", "pile:held", "pile:directive", "stage:developing", "stage:integrating", "attention", "spend:days"} {
 		if !strings.Contains(page("busy"), `data-grouping="`+key+`"`) {
 			t.Errorf("the busy render has nothing that opens the %s grouping", key)
 		}
@@ -735,7 +816,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	// A stage that could not be read still opens, so the reason is readable in
 	// full rather than only as a dash; so does the attention tile, and so does
 	// the tile when nothing waits.
-	for _, key := range []string{"admitted", "held", "startable", "attention"} {
+	for _, key := range []string{"admitted", "held", "startable", "attention", "spend:days"} {
 		if !strings.Contains(page("degraded"), `data-grouping="`+key+`"`) {
 			t.Errorf("the degraded render has nothing that opens the unreadable %s stage", key)
 		}

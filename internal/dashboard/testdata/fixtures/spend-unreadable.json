@@ -1,0 +1,38 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "last 24 hours",
+      "rolling": true,
+      "since": "2026-09-18T14:05:09Z",
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    },
+    {
+      "label": "last 7 days",
+      "rolling": false,
+      "since": "2026-09-13T00:00:00Z",
+      "since_day": "2026-09-13",
+      "days": 7,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    }
+  ],
+  "days": null,
+  "undated": {
+    "day": "",
+    "reached": false,
+    "cost_usd": 0,
+    "invocations": 0,
+    "kinds": null
+  },
+  "unpriced": 0,
+  "floor": false,
+  "problem": "the spend could not be read: open streams: input/output error"
+}

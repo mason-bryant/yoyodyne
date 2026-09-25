@@ -71,11 +71,14 @@
                   <span class="detail">4 runs in the last 7 days</span>
                 </dd>
               </div>
-              <div class="tile tile-unreadable">
-                <dt>Cost</dt>
+              <div class="tile">
+                <dt>
+                  <button class="grouping-open tile-label" type="button" data-grouping="spend:days">Cost</button>
+                </dt>
                 <dd>
-                  <span class="figure">—</span>
-                  <span class="unit">could not be read</span>
+                  <span class="figure">≥ $191.53</span>
+                  <span class="unit">in the last 24 hours</span>
+                  <span class="detail">at least $1,232.58 in the last 7 days</span>
                 </dd>
               </div>
             </dl>
@@ -84,6 +87,56 @@
               <li>Could not be read: the admitted work could not be read: bd list: failed to open database: embeddeddolt: openat LOCK: operation not permitted</li>
               <li>Could not be read: the recorded directives could not be read: open directives: permission denied</li>
             </ul>
+          </div>
+        </section>
+        <section id="spend" class="panel spend" data-state="ready" aria-labelledby="spend-heading">
+          <div class="panel-head">
+            <h2 id="spend-heading">What the harness is spending</h2>
+            <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
+          </div>
+          <div class="section-ready">
+            <p id="spend-stale" class="stale" role="status" hidden></p>
+            <div id="spend-windows" class="windows">
+              <div class="window">
+                <h3 class="window-label">last 24 hours</h3>
+                <p class="window-span">rolling, from 2026-09-18 14:05:09</p>
+                <dl class="figures">
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>at least $191.53 from 84 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$118.75 on 52 runs, $57.46 on 25 conversations, $9.58 on 4 branch reviews, $5.74 on 3 exchanges</dd>
+                  </div>
+                  <div class="figure-row figure-unreadable">
+                    <dt>Not priced</dt>
+                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="window">
+                <h3 class="window-label">last 7 days</h3>
+                <p class="window-span">from 2026-09-13, local days</p>
+                <dl class="figures">
+                  <div class="figure-row figure-cost">
+                    <dt>Cost</dt>
+                    <dd>at least $1,232.58 from 452 invocations</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Of which</dt>
+                    <dd>$764.20 on 280 runs, $369.77 on 136 conversations, $61.63 on 23 branch reviews, $36.98 on 13 exchanges</dd>
+                  </div>
+                  <div class="figure-row figure-unreadable">
+                    <dt>Not priced</dt>
+                    <dd>1 exchange record could not be read, so the cost is a floor</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+            <p id="spend-open" class="spend-open">
+              <button class="grouping-open spend-label" type="button" data-grouping="spend:days">Every day for the past 30 days</button>
+            </p>
           </div>
         </section>
         <section id="live" class="panel live" data-state="ready" aria-labelledby="live-heading">
@@ -188,18 +241,16 @@
         </section>
         <section id="throughput" class="panel throughput" data-state="ready" aria-labelledby="throughput-heading">
           <div class="panel-head">
-            <h2 id="throughput-heading">Throughput and cost</h2>
+            <h2 id="throughput-heading">Throughput</h2>
             <p class="panel-note">
-              local calendar days, today counting as the first; the figures
-              <code>yoyo status --spend</code>
-              prints
+              local calendar days, today counting as the first; the endings
+              <code>yoyo status</code>
+              prints, and what each cost is in the spend box above
             </p>
           </div>
           <div class="section-ready">
             <p id="throughput-stale" class="stale" role="status" hidden></p>
-            <ul id="throughput-problems" class="degraded">
-              <li>Could not be read: the spend could not be read: open streams: permission denied</li>
-            </ul>
+            <ul id="throughput-problems" class="degraded" hidden></ul>
             <div id="windows" class="windows">
               <div class="window">
                 <h3 class="window-label">today</h3>
@@ -216,10 +267,6 @@
                   <div class="figure-row">
                     <dt>Started</dt>
                     <dd>6 runs</dd>
-                  </div>
-                  <div class="figure-row figure-unreadable">
-                    <dt>Cost</dt>
-                    <dd>could not be read</dd>
                   </div>
                 </dl>
               </div>
@@ -238,10 +285,6 @@
                   <div class="figure-row">
                     <dt>Started</dt>
                     <dd>41 runs</dd>
-                  </div>
-                  <div class="figure-row figure-unreadable">
-                    <dt>Cost</dt>
-                    <dd>could not be read</dd>
                   </div>
                 </dl>
               </div>
