@@ -369,27 +369,42 @@ execution:
   integration_retries_before_reconciliation: 2
 ```
 
-Each retry replays the change onto wherever the target went, runs the
+Each lost race replays the change onto wherever the target went, runs the
 configured checks again, and obtains a **fresh independent review**. The earlier
 approval is discarded rather than carried over: it described a diff on the base
 the change no longer sits on, and an approval that survived a replay would be
 authorizing a promotion nobody judged. Nothing is handed back to the developer,
-so a retry spends no repair attempt — the change is not what went wrong.
+so a replay spends no repair attempt — the change is not what went wrong.
 
-Retries are counted in durable run state before each one begins, so a process
-that dies mid-retry resumes against the budget it had rather than a fresh one. A
-run that spends the budget stops and records a blocker on the work item saying
-plainly that the checks passed and the reviewer approved, and that what needs
-looking at is the target branch. Setting the bound to `0` restores the earlier
-behavior: the first refused promotion ends the run.
+**Losing the race spends nothing.** The budget bounds replays that stop on the
+change: one that conflicts, and one whose replayed change fails its checks or
+draws a repair verdict. Those are stops about the change, and a replay is
+charged for one once, at the latest when the next race is lost. A replay that
+passes its checks and is approved is charged nothing, so a run whose replays
+keep passing keeps replaying until it lands, however busy the target is. Every
+lost race is recorded on the run before its replay begins — `integration_retries`
+counts the races and `charged_replays` the replays that spent the budget, so a
+process that dies mid-replay comes back to both — and each is said in the
+item's thread at note severity. A lost race is never docketed and never blocks
+the item. A run whose charged replays have spent the budget stops at its next
+lost race and records a blocker on the work item saying how many replays
+stopped on the change and how many races were lost, and that the change
+standing at the promotion was approved. Setting the bound to `0` permits no
+replay at all: the first refused promotion ends the run, which is the one way a
+lost race by itself stops a run, and only because the project asked for it.
+
+Whether a replay whose diff is byte-identical to the one approved may promote
+without a fresh review is a question about the gate and the architect's to
+rule on. Until the architect rules, every replay is reviewed afresh as above.
 
 A merge the forge queued can lose the same race after the run is over: the
 target moves on, the queued head falls behind it, and its checks fail on files
 the change does not touch. `yoyo reconcile` reads a queued merge's checks on
 every sweep and, finding that, withdraws the queued merge and replays the change
 onto the target through the same run — checks again, a fresh review, and the
-merge queued again — spending one retry from this same budget. A run that has
-spent it is handed back instead
+merge queued again — under this same budget, read the same way: the update
+is a lost race, and spends nothing unless the replay stops on the change. A run
+whose charged replays have spent it is handed back instead
 ([operations](../operations.md#recovering-interrupted-runs)).
 
 A replay that **conflicts** is never retried and never resolved automatically.

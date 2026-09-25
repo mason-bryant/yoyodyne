@@ -156,6 +156,16 @@ func FromRun(before, after runstate.State, look func(runstate.State) triage.Foun
 			Requested: describeFindings(after.ReviewFindingDetails),
 		})
 	}
+	// A lost race is the harness's own act as the promotion is, and it is said
+	// once per race: the run's count moving is the race, recorded before the
+	// replay begins. It is a note, because nothing is wrong with the change and
+	// nothing waits on anybody — the replay re-earns the gate by itself.
+	if after.IntegrationRetries > before.IntegrationRetries {
+		say(KindRaceLost, report.SeverityNote, Harness(), Detail{
+			TargetBranch: after.TargetBranch,
+			Races:        after.IntegrationRetries,
+		})
+	}
 	// A promotion is the harness's own act — no agent performs one — so the
 	// harness is the speaker rather than any persona.
 	if before.Integration == nil && after.Integration != nil {

@@ -706,6 +706,11 @@ type Outcome struct {
 	// review, so it is evidence about the target moving rather than about the
 	// change being wrong.
 	IntegrationRetries int `json:"integration_retries,omitempty"`
+	// ChargedReplays counts the replays that stopped on the change — conflicted,
+	// failed their checks, or drew a repair verdict — which are the only replays
+	// execution.integration_retries_before_reconciliation bounds. A lost race
+	// whose replay passed is in IntegrationRetries and not here.
+	ChargedReplays int `json:"charged_replays,omitempty"`
 	// TransientRelaunches counts the provider invocations this run reissued after
 	// one died without judging the work. It is evidence about the provider rather
 	// than about the change or the target branch, and a run reporting some and
@@ -2293,8 +2298,21 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	if !contendedIntegration(cause) {
 		return false, nil
 	}
+	// Losing the race is not what the budget bounds. A replay whose checks passed
+	// and whose reviewer approved says nothing against the change, so it is
+	// charged nothing and the run replays again; what spends the budget is a
+	// replay that stopped on the change — handed back for a failing check or a
+	// repair verdict, or conflicting. The previous replay's charge is settled
+	// here, now that its gate is over, and the mark moves with it so the same
+	// replay is never read as charged twice. A budget of zero still means the
+	// first refused promotion ends the run, which is what an operator writing it
+	// asked for.
 	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
-	if a.state.IntegrationRetries >= limit {
+	a.state.ChargedReplays = a.state.ReplaysCharged()
+	a.state.ReplayRepairMark = a.state.RepairAttempts
+	a.outcome.ChargedReplays = a.state.ChargedReplays
+	a.outcome.IntegrationRetries = a.state.IntegrationRetries
+	if a.state.ChargedReplays >= limit {
 		a.observe(ctx, deliveryIntegrate, "contended")
 		return false, a.blockOnContendedIntegration(cause, limit)
 	}
@@ -2312,6 +2330,10 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 		return false, errors.Join(err, recordErr)
 	}
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
+		// A conflict is a stop about the change, so it is charged as one; the run
+		// ends on it either way, and the count says what the replay cost.
+		a.state.ChargedReplays++
+		a.outcome.ChargedReplays = a.state.ChargedReplays
 		a.observe(ctx, deliveryIntegrate, "conflicted")
 		return false, a.blockOnRebaseConflict(err)
 	}
@@ -2398,13 +2420,14 @@ func (a *activeRun) block(notes string) error {
 	return nil
 }
 
-// blockOnContendedIntegration ends a run that kept losing its target branch. It
-// is the integration-side twin of the repair blockers: the change is sound as
+// blockOnContendedIntegration ends a run whose target branch moved again once
+// its integration budget was spent — by replays that stopped on the change, or
+// by a budget of zero. It is the integration-side twin of the repair blockers: the change is sound as
 // far as every gate could tell, and what it needs is a person to say what the
 // target is supposed to look like.
 func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
-	blocked := fmt.Errorf("integration lost its target branch after %d of %d permitted retry(s): %w",
-		a.state.IntegrationRetries, limit, cause)
+	blocked := fmt.Errorf("integration lost its target branch with %d of %d permitted replay(s) already stopped on the change: %w",
+		a.state.ChargedReplays, limit, cause)
 	if err := a.block(renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
 		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
 	}
@@ -6046,8 +6069,11 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // generous, and what holds that is other budgets rather than the rounds. An
 // approval sends the change to promotion rather than back to the developer, so
 // the only thing that asks for another verdict inside one run is a promotion
-// that lost its race and replayed — which spends an integration retry, and
-// execution.integration_retries_before_reconciliation bounds those. A trivial
+// that lost its race and replayed. A replay that passes spends nothing, so
+// those approvals are bounded by how often other work lands on the target
+// rather than by a budget: each one is a race somebody else's promotion caused.
+// A replay that stops on the change is what
+// execution.integration_retries_before_reconciliation bounds. A trivial
 // residue does send the change back, and what bounds that is the run's own repair
 // budget, which is spent by the attempt whether or not the verdict that asked for
 // it cost a round: a run gets execution.repair_attempts_before_replan and no
@@ -7047,20 +7073,28 @@ func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit i
 	return strings.Join(lines, "\n")
 }
 
-// renderIntegrationBlockerNotes describes a run that kept losing its target
-// branch. It says plainly that nothing was found wrong with the change, because
-// the artifacts it preserves are worth picking up rather than replanning: what
-// the reader has to settle is what the target branch is supposed to hold.
+// renderIntegrationBlockerNotes describes a run stopped at its promotion by the
+// integration budget. Losing the race alone never spends it — a replay that
+// passes costs nothing — so a run reaches this either because its project
+// permits no replays at all, or because earlier replays stopped on the change
+// as many times as the budget allows. The note says which, and says plainly
+// that the change standing at the promotion was approved, because the
+// artifacts it preserves are worth picking up rather than replanning.
 func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) string {
+	headline := "Yoyodyne stopped this item: its target branch moved under the promotion after its replays had already stopped on the change as many times as the budget permits, so the change was never integrated."
+	if limit == 0 {
+		headline = "Yoyodyne stopped this item: its target branch moved under the promotion, and execution.integration_retries_before_reconciliation is 0, which permits no replay, so the change was never integrated."
+	}
 	lines := []string{
-		"Yoyodyne stopped this item: its target branch kept moving under the promotion, so the change was never integrated.",
-		fmt.Sprintf("Integration retries: %d of %d permitted", outcome.IntegrationRetries, limit),
+		headline,
+		fmt.Sprintf("Replays that stopped on the change: %d of %d permitted", outcome.ChargedReplays, limit),
+		fmt.Sprintf("Races lost to the moving target: %d", outcome.IntegrationRetries+1),
 		"Failure: " + failure,
 		"Run: " + outcome.RunID,
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
 		"Base commit: " + outcome.BaseCommit,
-		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
+		"The change standing at the promotion passed its checks and the reviewer approved it; nothing here says it is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
@@ -7469,6 +7503,9 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.IntegrationRetries > 0 {
 		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
 	}
+	if outcome.ChargedReplays > 0 {
+		lines = append(lines, "Replays that stopped on the change: "+strconv.Itoa(outcome.ChargedReplays))
+	}
 	// A run that absorbed the provider dying under it and finished anyway says
 	// nothing about the change, but it is the only place the deaths are counted
 	// where somebody watching the item will see them: a provider degrading run
@@ -7593,6 +7630,9 @@ func renderFailureNotes(outcome Outcome) string {
 	}
 	if outcome.IntegrationRetries > 0 {
 		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
+	}
+	if outcome.ChargedReplays > 0 {
+		lines = append(lines, "Replays that stopped on the change: "+strconv.Itoa(outcome.ChargedReplays))
 	}
 	if outcome.TransientRelaunches > 0 {
 		lines = append(lines, "Relaunches after a provider death: "+strconv.Itoa(outcome.TransientRelaunches))

@@ -463,7 +463,7 @@ func baselineScenarios() []baselineScenario {
 		},
 		{
 			name:    "integration-retries-are-bounded-and-block-the-item",
-			freezes: "A run that keeps losing its target branch stops at execution.integration_retries_before_reconciliation and blocks with nothing promoted and the change preserved.",
+			freezes: "A run whose project permits no replay -- execution.integration_retries_before_reconciliation at 0 -- stops on its first lost race and blocks with nothing promoted and the change preserved; at any other budget a lost race whose replay passes spends nothing.",
 			drive:   baselineIntegrationBudgetSpent,
 		},
 		{

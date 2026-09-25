@@ -206,11 +206,12 @@ execution:
   repair_attempts_before_replan: %d
   # A promotion that loses a race -- to another run, or to whoever moved the
   # target branch while this one was working -- is replayed onto where the
-  # target went and tried again, up to this many times. Every retry re-runs the
-  # checks and asks for a fresh independent review, because the change that
-  # would now be promoted is not the one that was approved. A replay that
-  # conflicts is never resolved automatically: it stops the run and is left for
-  # a person.
+  # target went and tried again. Every replay re-runs the checks and asks for a
+  # fresh independent review, because the change that would now be promoted is
+  # not the one that was approved. Losing the race costs nothing: this bounds
+  # the replays that stop on the change -- one that fails its checks or draws a
+  # repair verdict -- and 0 permits no replay at all. A replay that conflicts
+  # is never resolved automatically: it stops the run and is left for a person.
   integration_retries_before_reconciliation: %d
   # A provider invocation that dies without judging the work -- an API error its
   # own retries did not outlast, or a response cut off mid-flight -- is reissued
