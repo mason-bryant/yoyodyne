@@ -670,6 +670,92 @@ func TestParentFieldConformance(t *testing.T) {
 	}
 }
 
+// TestListedNotesConformance pins what the recovery from a timed-out creation
+// rests on and which only a fake has ever answered: that an item bd lists carries
+// its title, its parent, and its notes exactly as they were created.
+//
+// A `bd create` killed at the timeout after the store took it is not asked for
+// again blindly, because a second creation is a second item — that is how
+// yoyodyne-ifd.428.21 and 428.22 came from one admission. The conversation's
+// tracker (chat's landedCreation) instead lists everything and takes the item
+// whose title, parent, and notes are the creation's own for the one that landed.
+// Every check of that match drives an in-memory tracker that hands back whatever
+// it was given, so all of them pass identically against a bd whose listing
+// folds, trims, or cuts a line of the notes — and against that bd the match
+// never fires, and the duplicates it exists to stop come back with nothing
+// failing.
+//
+// The notes are the shape an admission actually writes: several lines, blank
+// lines between them, and a Goal served line, which is the part a listing that
+// cut or reflowed long text would lose first. They are compared byte for byte
+// rather than as the match compares them, so a difference the match would
+// tolerate today is still seen here before a later reading comes to depend on
+// it. The parent is set because the match requires it and a child is what a
+// decomposition admits.
+func TestListedNotesConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	epic, err := client.Create(ctx, NewWorkItem{
+		Title:       "Duplicate admissions from one timed-out write",
+		Description: "The work it was broken into is below it.",
+		Type:        "epic",
+	})
+	if err != nil {
+		t.Fatalf("Create() an epic error = %v", err)
+	}
+
+	const title = "A second admission citing a report already admitted from is refused"
+	notes := "Admitted to the backlog by the product manager in conversation chat-91253e0e070c17b0663651cc48602122, after turn 762.\n" +
+		"\n" +
+		"Reason: The reviewer's report from the 433.2 run: the duplicate guard's only evidence is a fake, and a real " +
+		"listing that does not round-trip notes would leave the guard silently inert. It is long enough that a listing " +
+		"which wrapped or cut long lines would show it here rather than in the tracker.\n" +
+		"\n" +
+		goal.Note("Run development nearly autonomously. The human's routine interface is the product manager: they state "+
+			"intent, approve the brief and goals, and answer questions the product manager escalates.") + "\n" +
+		"\n" +
+		"Admitted from report report-0a3f2715a01305b58f18038e0e2737e2, filed at \"warning\" by the reviewer."
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       title,
+		Description: "One piece of it.",
+		Type:        "task",
+		Parent:      epic.ID,
+		Notes:       notes,
+	})
+	if err != nil {
+		t.Fatalf("Create() with multi-line notes error = %v", err)
+	}
+
+	// The unfiltered listing, because that is the one the recovery reads: it does
+	// not know what status the landed item was left in.
+	listed, err := client.List(ctx, "")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	item, found := itemIn(listed, created.ID)
+	if !found {
+		t.Fatalf("List() = %#v, want the created item %s among them; the recovery cannot find an item the listing omits",
+			listed, created.ID)
+	}
+	if item.Notes != notes {
+		t.Fatalf("List() gave the notes as\n%q\nwant them byte for byte as created\n%q\nthe recovery from a timed-out "+
+			"creation matches on them, so a listing that alters them makes every retry a duplicate", item.Notes, notes)
+	}
+	if item.Title != title {
+		t.Fatalf("List() gave the title as %q, want %q as created; the recovery matches on it", item.Title, title)
+	}
+	if got := item.DecomposedFrom(); got != epic.ID {
+		t.Fatalf("List() gave the item as decomposed from %q, want the epic %s; the recovery matches on it", got, epic.ID)
+	}
+	if named, records := goal.NamedIn(item.Notes); !records || named == "" {
+		t.Fatalf("List() notes name no goal (recorded = %v), want the Goal served line carried through", records)
+	}
+}
+
 // blocksEdge is the bd relation that makes one item wait for another. It is
 // spelled again here rather than taken from the client, because a check of what
 // bd answers that named the relation the way the reading under test names it
