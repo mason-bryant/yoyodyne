@@ -110,10 +110,11 @@ type ReconcileReleases interface {
 // handle says nothing about what a developer did, so recovering from one is a
 // question about recorded evidence and observable artifacts — never a reason to
 // start a second developer for an item. A run the pipeline can still continue
-// on its own is therefore left exactly as it is by the settle. The one
-// continuation the sweep makes itself is ContinueWaits, and it keeps that rule:
-// what it continues is the run's own attempt in the run's own session, through
-// the Continue the sweep verb wires, and never a second developer.
+// on its own is therefore left exactly as it is by the settle. The
+// continuations the sweep makes itself are ContinueWaits and ContinueUpdates,
+// and both keep that rule: what they continue is the run's own attempt or the
+// run's own promotion, through the Continue the sweep verb wires, and never a
+// second developer.
 type Reconciler struct {
 	Tracker   WorkTracker
 	Worktrees ReconcileWorktrees
@@ -142,15 +143,36 @@ type Reconciler struct {
 	// rather than reporting it resumable. Zero takes DefaultVanishedGrace.
 	VanishedGrace time.Duration
 	// Continue is how ContinueWaits continues a run that exited on its
-	// in-process usage-limit bound: the run's own pipeline re-entering the run
-	// named, in the worktree and developer session it already has, which is
-	// Pipeline.Continue. It is the one provider invocation the sweep makes, and
+	// in-process usage-limit bound, and how ContinueUpdates carries a queued
+	// head through its update: the run's own pipeline re-entering the run named,
+	// in the worktree and developer session it already has, which is
+	// Pipeline.Continue. It is the provider invocation the sweep makes, and
 	// it is optional for the reason the docket is: a reconciler wired without
 	// one settles and reports exactly as it would have and continues nothing.
 	// Only the sweep verb wires it, because whatever wires it hosts the
 	// continued run for as long as the run takes — a conversation's settle must
 	// not, and does not.
 	Continue func(ctx context.Context, workItemID, runID string) (Outcome, error)
+	// Checks reads the checks of a merge the forge still holds queued, and
+	// withdraws one that is red before it is handed back or its head rewritten.
+	// Optional: a reconciler wired without it reads a queued merge as queued and
+	// nothing more.
+	Checks ReconcileChecks
+	// IntegrationRetries is execution.integration_retries_before_reconciliation:
+	// bringing a queued head up to date is a replay, and spends the budget a
+	// replay spends. A run that has spent it is handed back instead.
+	IntegrationRetries int
+	// Intake and Capacity are read before a queued head is put back at its
+	// promotion, because that makes a finished run live again: a held intake and
+	// a full harness each leave the merge queued for the next sweep. A capacity
+	// of zero has no room.
+	Intake   IntakeHolds
+	Capacity int
+	// HostsRuns says this sweep's last steps host the runs it makes live —
+	// ContinueWaits and ContinueUpdates with a Continue wired — which only the
+	// sweep verb does. A queued head is put back at its promotion only by a sweep
+	// that will host it; any other pass leaves the merge queued for one that will.
+	HostsRuns bool
 }
 
 // DefaultVanishedGrace is how long a run the harness stopped on time is left
@@ -427,6 +449,16 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 	// attempt already established. The reading says how long that lasts, because
 	// "resumable" on its own is the word that let two of these stand for a day
 	// and a half.
+	// A run this sweep put back at its promotion to bring a queued head up to
+	// date is owed that continuation, which ContinueUpdates hosts. Read as
+	// anything else — an integrating run with no promotion on its record — it
+	// would be abandoned over the update that was meant to land it.
+	if updatingQueuedHead(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = "the run was put back at its promotion to bring its queued head up to date onto its target, and the sweep's last step continues it: " +
+			state.IntegrationResumptions[len(state.IntegrationResumptions)-1].Reason
+		return result, nil
+	}
 	if stoppedProviderIsResumable(state) {
 		result := reconciliationOf(state, ActionResumable)
 		result.Detail = fmt.Sprintf("the run's provider was stopped because %s and it can continue from durable state; `yoyo run %s` continues it, and a sweep after %s of nothing continuing it settles it as a stopped run",
@@ -578,8 +610,11 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 //     branch the merge consumed is deleted after the closure and cannot affect
 //     it, which is what stops a reset connection at the last step of the
 //     hygiene from leaving a finished item open.
-//   - The forge is still holding the merge. Nothing is decided, the run stays
-//     outstanding, and a later sweep asks again.
+//   - The forge is still holding the merge. Its checks are read and written
+//     onto the publication, and a red one is decided on (settleStillQueued):
+//     updated onto the target where it fell behind and failed on files its
+//     change does not touch, handed back as a dropped merge otherwise. A merge
+//     whose checks are not red stays outstanding, and a later sweep asks again.
 //   - The forge dropped it: the request is closed, or open with no merge queued
 //     for it any more. Something the base branch requires went unmet, and the
 //     harness does not merge past a requirement — not with administrator
@@ -604,10 +639,10 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("ask the forge about the queued merge for run %s: %w", state.RunID, err)
 	}
 	if !observed.Merged && observed.AutoMerge {
-		result := reconciliationOf(state, ActionQueued)
-		result.Detail = fmt.Sprintf("the forge still has the merge of pull request %d into %s queued",
-			published.Number, state.Integration.TargetBranch)
-		return result, nil
+		// Still queued is not the whole answer: a merge held for checks that will
+		// never pass is not going to happen, so the checks are read beside it and
+		// decided on (queuedchecks.go).
+		return r.settleStillQueued(ctx, state)
 	}
 	published.State = observed.State
 	published.Merged = observed.Merged

@@ -1167,3 +1167,76 @@ func environmentCarries(environment []string, name string) bool {
 	}
 	return false
 }
+
+// A queued merge's checks are read as the head, the files its change touches,
+// each check's standing with the files a failing one annotates, and how far the
+// base has moved on without the head.
+func TestGitHubChecksReadsTheHeadItsChecksAndHowFarBehindItIs(t *testing.T) {
+	t.Parallel()
+
+	head := "1111111111111111111111111111111111111111"
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr view 713", execution.ProcessResult{Status: execution.ProcessSucceeded,
+		Stdout: `{"headRefOid":"` + head + `","files":[{"path":"internal/feature.go"}]}`})
+	runner.reply("/check-runs?per_page", execution.ProcessResult{Status: execution.ProcessSucceeded,
+		Stdout: `{"check_runs":[{"id":9,"name":"go test","status":"completed","conclusion":"failure"},{"id":10,"name":"vet","status":"completed","conclusion":"success"},{"id":11,"name":"race","status":"in_progress","conclusion":null}]}`})
+	runner.reply("check-runs/9/annotations", execution.ProcessResult{Status: execution.ProcessSucceeded,
+		Stdout: `[{"path":"internal/other/other_test.go"},{"path":".github"},{"path":"internal/other/other_test.go"}]`})
+	runner.reply("compare/"+head+"...main", execution.ProcessResult{Status: execution.ProcessSucceeded,
+		Stdout: `{"ahead_by":31,"behind_by":0}`})
+
+	reading, err := (GitHub{Runner: runner}).Checks(context.Background(), 713, "main")
+	if err != nil {
+		t.Fatalf("Checks() error = %v", err)
+	}
+	if reading.HeadCommit != head || len(reading.Files) != 1 || reading.Files[0] != "internal/feature.go" {
+		t.Errorf("head = %q, files = %v", reading.HeadCommit, reading.Files)
+	}
+	if len(reading.Failing) != 1 || reading.Failing[0].Name != "go test" {
+		t.Fatalf("failing = %#v, want the one failed check", reading.Failing)
+	}
+	if paths := reading.Failing[0].Paths; len(paths) != 2 || paths[0] != ".github" || paths[1] != "internal/other/other_test.go" {
+		t.Errorf("annotated paths = %v, want each file once", paths)
+	}
+	if reading.Passing != 1 || len(reading.Pending) != 1 || reading.Pending[0] != "race" {
+		t.Errorf("passing = %d, pending = %v", reading.Passing, reading.Pending)
+	}
+	if reading.BehindBy != 31 {
+		t.Errorf("behind by = %d, want how far main has moved on without the head", reading.BehindBy)
+	}
+
+	// A comparison that says nothing about the distance is not a head level with
+	// its base.
+	silent := &scriptedRunner{}
+	for match, result := range runner.replies {
+		silent.reply(match, result)
+	}
+	silent.reply("compare/"+head+"...main", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{}`})
+	if _, err := (GitHub{Runner: silent}).Checks(context.Background(), 713, "main"); err == nil {
+		t.Error("Checks() over a comparison naming no distance returned no error")
+	}
+}
+
+// Withdrawing a queued merge is the forge's disable-auto, and a request with
+// nothing armed has nothing to withdraw.
+func TestGitHubDisableAutoMergeWithdrawsTheQueuedMerge(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge 713", execution.ProcessResult{Status: execution.ProcessSucceeded})
+	if err := (GitHub{Runner: runner}).DisableAutoMerge(context.Background(), 713); err != nil {
+		t.Fatalf("DisableAutoMerge() error = %v", err)
+	}
+	if calls := runner.matching("pr merge 713"); len(calls) != 1 || !contains(calls[0], "--disable-auto") {
+		t.Fatalf("calls = %v, want one disable-auto", calls)
+	}
+
+	refused := &scriptedRunner{}
+	refused.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	refused.reply("pr merge 713", execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "GraphQL: Resource not accessible by integration"})
+	if err := (GitHub{Runner: refused}).DisableAutoMerge(context.Background(), 713); err == nil {
+		t.Error("DisableAutoMerge() reported a refused withdrawal as done")
+	}
+}

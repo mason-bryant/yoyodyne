@@ -89,6 +89,9 @@ var structuredStrings = map[string]string{
 	"pull_request.state":                                            "the forge's state name",
 	"pull_request.merge_method":                                     "an enumeration",
 	"pull_request.merge_commit":                                     "a commit",
+	"pull_request.checks.head_commit":                               "matched against the commit pattern",
+	"pull_request.checks.failing[].paths[]":                         "repository paths a check annotated, bounded in number",
+	"pull_request.checks.failing[].on_change[]":                     "repository paths the change touched, bounded in number",
 }
 
 var timeType = reflect.TypeOf(time.Time{})

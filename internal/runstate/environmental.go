@@ -163,6 +163,17 @@ const (
 	// until somebody loads the key or renews the login. Only the integration stop
 	// records it.
 	CauseRemoteAuthRefused EnvironmentalCause = "remote-auth-refused"
+	// CauseQueuedHeadBehind is an approved change whose merge the forge had
+	// queued, whose head then fell behind the target branch, and whose checks
+	// failed on files the change does not touch — so the failure is one it met on
+	// a target that has moved on, not one it brought. The reconciling sweep
+	// withdraws the queued merge and puts the run back at its promotion, where the
+	// promotion finds the target moved and replays the change onto it with the
+	// gate re-earned, exactly as a promotion that lost its race does. Pull request
+	// 713 sat queued that way from the evening of 2026-09-24, 31 commits behind
+	// main and failing two tests its change never touched (yoyodyne-ifd.429.16).
+	// Only the sweep records it, on the resumption it makes.
+	CauseQueuedHeadBehind EnvironmentalCause = "queued-head-behind"
 )
 
 // Valid reports a cause this harness recognizes. A record naming anything else
@@ -170,7 +181,7 @@ const (
 // declared is a budget nothing accounted for.
 func (c EnvironmentalCause) Valid() bool {
 	switch c {
-	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow, CauseReplayKilled, CauseDivergedTarget, CauseRemoteAuthRefused:
+	case CauseHandbackMissingChange, CauseDirtyPrimary, CauseWorktreeCheckoutKilled, CauseSandboxSpawnFailure, CauseStaleBinaryDispatch, CauseTransportFailure, CauseProcessVanished, CauseUsageWindow, CauseReplayKilled, CauseDivergedTarget, CauseRemoteAuthRefused, CauseQueuedHeadBehind:
 		return true
 	default:
 		return false
@@ -230,6 +241,8 @@ func (c EnvironmentalCause) Title() string {
 		return "the target branch could not be fast-forwarded onto the remote's before promoting, so the harness would not catch it up"
 	case CauseRemoteAuthRefused:
 		return "the remote refused the credential the harness presented"
+	case CauseQueuedHeadBehind:
+		return "its queued merge's head fell behind the target and failed checks on files the change does not touch"
 	default:
 		return string(c)
 	}

@@ -735,6 +735,11 @@ type PullRequest struct {
 	// every triage counter fails in: a process that dies between the two has
 	// recorded a re-arm it did not make rather than made one it did not record.
 	MergeRearms int `json:"merge_rearms,omitempty"`
+	// Checks is the forge's check state for the request's head as the
+	// reconciling sweep last read it, written on every sweep that finds the merge
+	// still queued. It is what says whether a queued merge is going to land at
+	// all, and it is absent until a sweep has read it.
+	Checks *PullRequestChecks `json:"checks,omitempty"`
 }
 
 // MergeDrop is the moment a promoted change stopped being something the forge
@@ -796,6 +801,11 @@ func (p PullRequest) Validate() error {
 	// repeated.
 	if p.MergeRearms > 0 && strings.TrimSpace(p.MergeMethod) == "" {
 		problems = append(problems, errors.New("pull_request merge_rearms requires the merge method the repeated request was made by"))
+	}
+	if p.Checks != nil {
+		if err := p.Checks.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("pull_request %w", err))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -1140,6 +1150,12 @@ func (s *State) recordedTexts() []recordedText {
 	if s.Changes != nil {
 		nested("changes.files", "changes.files", &s.Changes.Files, MaxChangeRecordBytes)
 		nested("changes.diff_stat", "changes.diff_stat", &s.Changes.DiffStat, MaxChangeRecordBytes)
+	}
+	// A check's name is the forge's, and the repository's workflows phrase it.
+	if s.PullRequest != nil && s.PullRequest.Checks != nil {
+		for index := range s.PullRequest.Checks.Failing {
+			nested("pull_request.checks.failing[].name", at("pull_request.checks.failing", index, "name"), &s.PullRequest.Checks.Failing[index].Name, maxCheckNameBytes)
+		}
 	}
 	own("publish_failure", &s.PublishFailure, MaxRecordedTextBytes, truncatedNote(MaxRecordedTextBytes))
 	// The drop's reason is the publication failure's sentence kept beside the

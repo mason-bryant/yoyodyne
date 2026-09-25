@@ -387,8 +387,14 @@ func (a Attention) What() string {
 				return fmt.Sprintf("run %s promoted %s into %s and its record holds no pull request for branch %s, so nothing has asked the forge to merge it",
 					a.ID, a.WorkItemID, target, a.Publication.Branch)
 			}
-			return fmt.Sprintf("run %s promoted %s into %s and the forge has not published it: pull request #%d %s",
+			what := fmt.Sprintf("run %s promoted %s into %s and the forge has not published it: pull request #%d %s",
 				a.ID, a.WorkItemID, target, a.Publication.PullRequest.Number, a.Publication.PullRequest.URL)
+			// The checks the last sweep read ride on the line, because a merge the
+			// forge is holding says nothing about whether it will land.
+			if checks := a.Publication.PullRequest.Checks; checks != nil {
+				what += "; " + checks.Describe(a.Publication.TargetBranch)
+			}
+			return what
 		}
 	case AttentionOutage:
 		if a.Outage != nil {

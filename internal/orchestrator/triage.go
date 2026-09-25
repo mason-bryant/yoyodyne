@@ -97,6 +97,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -1492,6 +1493,7 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 			MergeMethod: published.MergeMethod,
 			MergeCommit: published.MergeCommit,
 			Message:     state.PublishFailure,
+			Checks:      publicationChecks(published, state),
 			ApprovedAt:  publicationApprovedAt(state).UTC(),
 		},
 		Counters: counters,
@@ -1500,6 +1502,19 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 		return triage.Entry{}, fmt.Errorf("docket the unmerged publication of run %s: %w", state.RunID, err)
 	}
 	return entry, nil
+}
+
+// publicationChecks is the entry's account of the request's checks, in the
+// sentence every surface says of them, or nothing where no sweep has read them.
+func publicationChecks(published runstate.PullRequest, state runstate.State) string {
+	if published.Checks == nil {
+		return ""
+	}
+	target := state.TargetBranch
+	if state.Integration != nil {
+		target = state.Integration.TargetBranch
+	}
+	return oneline.Bound(published.Checks.Describe(target), triage.MaxBlockerBytes)
 }
 
 // counters are what the item has already spent and been given, beside what it is

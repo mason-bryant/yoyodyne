@@ -589,22 +589,34 @@ func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
 // deliberately given no backend: settling an interrupted run is never a reason
 // to invoke a provider. The forge client it does get can only ask what became
 // of a merge the forge queued, which is the one thing a finished run can still
-// be waiting on. The one continuation the sweep makes — a run that exited on
-// its in-process usage-limit bound, continued once its deadline has passed —
-// is wired by the sweep verb alone, in reconcile.go, because whatever wires it
+// be waiting on. The continuations the sweep makes — a run that exited on
+// its in-process usage-limit bound, continued once its deadline has passed, and
+// a queued merge put back at its promotion to bring its head up to date — are
+// wired by the sweep verb alone, in reconcile.go, because whatever wires it
 // hosts the continued run to its end and the conversation's settle must not.
 func reconcilerFrom(parts components) orchestrator.Reconciler {
+	forge := publish.GitHub{
+		Runner:       parts.runner,
+		Dir:          parts.repository,
+		Remote:       parts.config.Execution.Remote,
+		PushRemote:   parts.config.Execution.PushRemote,
+		RedactValues: parts.redactValues,
+	}
 	return orchestrator.Reconciler{
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
-		Publisher: publish.GitHub{
-			Runner:       parts.runner,
-			Dir:          parts.repository,
-			Remote:       parts.config.Execution.Remote,
-			PushRemote:   parts.config.Execution.PushRemote,
-			RedactValues: parts.redactValues,
-		},
+		Publisher: forge,
+		// A merge the forge still holds is read with its checks, and a red one is
+		// withdrawn before it is handed back or brought up to date.
+		Checks: forge,
+		// Bringing a queued head up to date is a replay, spent from the replay's
+		// own budget, and it makes a finished run live again, so it reads the
+		// hold and the slots a resumption reads. Only the sweep verb hosts the run
+		// it makes live; a pass without Continue leaves the merge queued.
+		IntegrationRetries: parts.config.Execution.IntegrationRetriesBeforeReconciliation,
+		Intake:             parts.intake,
+		Capacity:           parts.config.Execution.MaxConcurrentDevelopers,
 		// A run this sweep stops is docketed as it is settled, so a stoppage the
 		// process that made it never got to record still reaches the development
 		// manager.

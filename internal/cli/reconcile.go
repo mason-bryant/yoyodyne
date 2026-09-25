@@ -66,7 +66,13 @@ type reconcileOutput struct {
 	// step that invokes a provider, so a document carrying any is one that was
 	// written after those runs finished.
 	Continuations []orchestrator.WaitContinuation `json:"continuations"`
-	Error         string                          `json:"error,omitempty"`
+	// Updates is what this sweep did about the queued merges it put back at
+	// their promotion because their head fell behind the target and failed
+	// checks the change does not touch: each run hosted by this process through
+	// the replay, the re-review, and the merge queued again, with what it came
+	// to. Like the continuations it is written once those runs have finished.
+	Updates []orchestrator.UpdateContinuation `json:"updates"`
+	Error   string                            `json:"error,omitempty"`
 }
 
 // reconcileSweep is everything one sweep found, gathered so the reporting takes
@@ -82,6 +88,7 @@ type reconcileSweep struct {
 	Stall         *watchdog.Reading
 	StallProblem  string
 	Continuations []orchestrator.WaitContinuation
+	Updates       []orchestrator.UpdateContinuation
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -127,6 +134,10 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return reportReconcileResult(stdout, stderr, *jsonOutput, reconcileSweep{}, err)
 	}
 	reconciler := reconcilerFrom(parts)
+	// This sweep hosts the runs it makes live, as its last step, so a queued head
+	// that fell behind its target is put back at its promotion here rather than
+	// left queued for a pass that will host it.
+	reconciler.HostsRuns = true
 	results, err := reconciler.Reconcile(ctx)
 	// A promoted run whose record names no pull request is asked about first, by
 	// its branch, and the request the forge holds is written onto the record: the
@@ -193,21 +204,52 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	// The runs that exited on their in-process usage-limit bound and whose
 	// deadline has since passed are continued last, after everything the sweep
-	// reads and settles, because this is the one step that invokes a provider
+	// reads and settles, because this is the step that invokes a provider
 	// and takes as long as a developer attempt takes. This process hosts each
 	// continued run to its end, exactly as `yoyo run` would, so the terminal
 	// sees the rest of the sweep before it waits: in the text form the report
 	// above is printed first and each continuation is said as it starts and as
 	// it ends; the JSON form is one document, so it is written once the
 	// continued runs have finished, with what they came to in it.
+	//
+	// The queued merges the settlement put back at their promotion, to bring a
+	// head that fell behind its target up to date, are hosted the same way: each
+	// is a replay, a re-run of the checks, and a review.
+	//
+	// The two are hosted side by side rather than one after the other: a run put
+	// back at its promotion is live with nothing serving it until it is taken
+	// up, and waiting behind a continuation that takes a developer attempt's
+	// length would leave it looking to the claim audit like a claim nothing is
+	// working on.
 	reconciler.Continue = continueWaitFrom(parts, stderr)
+	updater := reconciler
+	updater.Continue = continueUpdateFrom(parts, stderr)
+	type hostedRuns struct {
+		continuations []orchestrator.WaitContinuation
+		continueErr   error
+		updates       []orchestrator.UpdateContinuation
+		updateErr     error
+	}
+	host := func() hostedRuns {
+		var hosted hostedRuns
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			hosted.updates, hosted.updateErr = updater.ContinueUpdates(ctx)
+		}()
+		hosted.continuations, hosted.continueErr = reconciler.ContinueWaits(ctx)
+		<-done
+		return hosted
+	}
 	if *jsonOutput {
-		continuations, continueErr := reconciler.ContinueWaits(ctx)
-		sweep.Continuations = continuations
-		return reportReconcileResult(stdout, stderr, true, sweep, errors.Join(err, continueErr))
+		hosted := host()
+		sweep.Continuations = hosted.continuations
+		sweep.Updates = hosted.updates
+		return reportReconcileResult(stdout, stderr, true, sweep, errors.Join(err, hosted.continueErr, hosted.updateErr))
 	}
 	code := reportReconcileResult(stdout, stderr, false, sweep, err)
-	continuations, continueErr := reconciler.ContinueWaits(ctx)
+	hosted := host()
+	continuations, continueErr, updates, updateErr := hosted.continuations, hosted.continueErr, hosted.updates, hosted.updateErr
 	if continueErr != nil {
 		fmt.Fprintf(stderr, "continuing the runs whose usage-limit deadline has passed failed: %v\n", continueErr)
 		code = 1
@@ -215,7 +257,53 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if printContinuations(stdout, stderr, continuations) {
 		code = 1
 	}
+	if updateErr != nil {
+		fmt.Fprintf(stderr, "updating the queued merges whose head fell behind their target failed: %v\n", updateErr)
+		code = 1
+	}
+	if printUpdates(stdout, stderr, updates) {
+		code = 1
+	}
 	return code
+}
+
+// continueUpdateFrom is the continuation a queued head is brought up to date
+// by: the same pipeline, re-entering the run named at its promotion. It says so
+// on standard error first, for the reason continueWaitFrom does.
+func continueUpdateFrom(parts components, stderr io.Writer) func(context.Context, string, string) (orchestrator.Outcome, error) {
+	return func(ctx context.Context, workItemID, runID string) (orchestrator.Outcome, error) {
+		fmt.Fprintf(stderr, "updating run %s for %s: its queued merge's head fell behind its target and failed checks its change does not touch; this sweep hosts the replay, the checks, the review, and the merge queued again\n", runID, workItemID)
+		pipeline := pipelineFrom(parts)
+		return pipeline.Continue(ctx, workItemID, runID)
+	}
+}
+
+// printUpdates says what each queued head the sweep brought up to date came to,
+// and reports whether any of them is a failure of the sweep's own.
+func printUpdates(stdout, stderr io.Writer, updates []orchestrator.UpdateContinuation) bool {
+	failed := false
+	for _, update := range updates {
+		fmt.Fprintf(stdout, "%s (%s): queued head brought up to date onto its target\n", update.RunID, update.WorkItemID)
+		if !update.Continued {
+			if update.Detail != "" {
+				fmt.Fprintf(stdout, "  %s\n", update.Detail)
+			}
+		} else if outcome := update.Outcome; outcome != nil {
+			switch {
+			case outcome.PullRequest != nil && outcome.PullRequest.MergeQueued:
+				fmt.Fprintf(stdout, "  replayed, checked, reviewed, and its merge queued again on pull request #%d\n", outcome.PullRequest.Number)
+			case outcome.Blocked:
+				fmt.Fprintf(stdout, "  ended %s in the %s phase with a blocker on the item; the development manager decides what happens to it\n", outcome.Status, outcome.Phase)
+			default:
+				fmt.Fprintf(stdout, "  ended %s in the %s phase\n", outcome.Status, nonEmptyValue(string(outcome.Phase), "unrecorded"))
+			}
+		}
+		if update.Failure != "" {
+			failed = true
+			fmt.Fprintf(stderr, "  not updated: %s\n", update.Failure)
+		}
+	}
+	return failed
 }
 
 // continueWaitFrom is the continuation the sweep continues a run with: the
@@ -393,6 +481,11 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			failed = true
 		}
 	}
+	for _, update := range sweep.Updates {
+		if update.Failure != "" {
+			failed = true
+		}
+	}
 	if jsonOutput {
 		output := reconcileOutput{
 			Runs:          results,
@@ -405,12 +498,16 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 			Stall:         sweep.Stall,
 			StallProblem:  sweep.StallProblem,
 			Continuations: sweep.Continuations,
+			Updates:       sweep.Updates,
 		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
 		}
 		if output.Continuations == nil {
 			output.Continuations = []orchestrator.WaitContinuation{}
+		}
+		if output.Updates == nil {
+			output.Updates = []orchestrator.UpdateContinuation{}
 		}
 		if output.Supervision == nil {
 			output.Supervision = []orchestrator.SupervisionResult{}

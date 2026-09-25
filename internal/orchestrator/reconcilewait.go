@@ -109,7 +109,8 @@ func exitsOnInProcessBound(state runstate.State) bool {
 
 // ContinueWaits continues every run that exited on its in-process usage-limit
 // bound and whose recorded deadline has since passed with nothing serving the
-// wait. It is the one step of the sweep that invokes a provider, and it does so
+// wait. It is one of the two steps of the sweep that invoke a provider —
+// ContinueUpdates is the other — and it does so
 // under the rule the rest of the sweep keeps: it never starts a second
 // developer for an item. What it continues is the run's own attempt, in the
 // worktree and developer session the run already has, through the same
