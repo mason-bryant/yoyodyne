@@ -1509,6 +1509,24 @@ func TestTextCarriedIgnoresOnlyWhatATrackerMayRewrite(t *testing.T) {
 	}
 }
 
+// Whether a note is the last thing an item's notes say, which is what a retry
+// asks before appending it again: the same text earlier in the notes is an older
+// write, and an empty note is never the end of anything.
+func TestNotesEndWithOnlyTheLastThingAppended(t *testing.T) {
+	t.Parallel()
+
+	const note = "Scope addition, operator-directed:\nthe sweep reads the forge as well as the tracker."
+	if !NotesEndWith("Admitted long ago.\r\n\r\nScope addition, operator-directed:   \r\nthe sweep reads the forge as well as the tracker.\n", note) {
+		t.Fatal("a note stored last, with the tracker's own line endings, read as not appended")
+	}
+	if NotesEndWith("Admitted long ago.\n\n"+note+"\n\nA later note.", note) {
+		t.Fatal("a note followed by a later one read as the last thing appended")
+	}
+	if NotesEndWith("Admitted long ago.", "  ") {
+		t.Fatal("an empty note read as appended")
+	}
+}
+
 type fakeRunner struct {
 	responses []string
 	results   []execution.ProcessResult

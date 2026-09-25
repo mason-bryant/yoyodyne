@@ -778,6 +778,16 @@ func textCarried(stored, written string) bool {
 	return strings.Contains(normalizeText(stored), normalizeText(written))
 }
 
+// NotesEndWith reports whether an item's notes end with a note a write appended,
+// compared as textCarried compares. It is the end rather than anywhere because
+// notes are only ever appended to: a note found earlier in them is an older write
+// that happens to read the same, and only one at the end can be the write that
+// was just asked for.
+func NotesEndWith(notes, note string) bool {
+	wanted := normalizeText(note)
+	return wanted != "" && strings.HasSuffix(normalizeText(notes), wanted)
+}
+
 func normalizeText(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	for index, line := range lines {

@@ -128,6 +128,24 @@ where the spend an action makes before it writes is the case this exists for. Th
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
+A tracker call that fails in a way a later attempt could survive — a `bd` killed
+at its timeout, a contended store — is waited out and asked again, under the
+rule and the window of
+[waiting out a network that dropped](operations.md#waiting-out-a-network-that-dropped).
+**A write that is not safe to repeat is checked before it is asked again.**
+Reads are asked again as they stand. So are linking and unlinking a dependency
+and an update that appends no note, because each leaves the tracker as the
+first attempt did. A write that adds something is checked for having landed
+first, because a `bd` killed at its timeout may already have written. A creation
+is checked by listing the tracker for the item it would have made under its
+parent. An update, a block, and the clearing of a blocked status are checked by
+reading the item for the note they were appending at the end of its notes. A
+close is checked by reading the item for being closed. A write the check finds is
+reported as applied and not made a second time, and a write whose check cannot
+be read is not asked again at all. That is the difference between one copy of a
+note and two, and on 2026-09-24 between one admitted item and
+yoyodyne-ifd.428.22 beside 428.21.
+
 **One thing a creation is refused for is being work already in the tracker.**
 Before an item is created the harness compares it against every item the tracker
 holds, closed work included, and looks for two things: work already admitted from

@@ -18,9 +18,18 @@ package chat
 // added, which is exactly the order the item asked for: the timed-out write is
 // reported per 327 only after the retries are spent.
 //
-// A creation is the exception to asking again blindly, because it is the one
-// write whose repetition is a second thing rather than the same thing twice: see
-// Create below.
+// Not every write is asked for again the same way, because not every write is
+// safe to repeat. Reads are, and so are the writes that set something to a value
+// — a dependency linked or unlinked, a field replaced — since the second of those
+// leaves the tracker as the first did. A write that adds something is not: a note
+// appended again is the note twice, and an item created again is a second item.
+// So a write in that class is asked for again only after the tracker has been
+// asked whether the attempt that failed landed, and one that did is reported as
+// what landed rather than made a second time. yoyodyne-ifd.433.2 taught that to
+// the creation alone; yoyodyne-ifd.433.3 made it the rule for every write it
+// covers, and the test that lists which write is in which class
+// (TestEveryTrackerOperationIsClassifiedForRetry) is what stops a new one being
+// added here without anybody deciding which it is.
 //
 // It is wrapped once, where the session opens, rather than at each of the thirty
 // call sites, so no call site can opt out and no later one can forget. And every
@@ -71,31 +80,15 @@ func (r recoveringTracker) List(ctx context.Context, status string) ([]beads.Wor
 	})
 }
 
-// Create is the one write that is not safe to ask for twice. A note appended
-// again is the same note twice; an item created again is a second item, and on
-// 2026-09-24 that is how yoyodyne-ifd.428.21 and 428.22 came from one admission:
-// the `bd create` that made 428.21 was killed at the timeout after the store had
-// taken it, and the retry made 428.22. So before a creation is asked for again,
-// the tracker is asked whether the attempt that failed landed, and an item it
-// left behind is the answer rather than something to create beside.
+// Create is not safe to ask for twice. An item created again is a second item,
+// and on 2026-09-24 that is how yoyodyne-ifd.428.21 and 428.22 came from one
+// admission: the `bd create` that made 428.21 was killed at the timeout after the
+// store had taken it, and the retry made 428.22. What the tracker is asked first
+// is whether it now holds the item the failed attempt would have made.
 func (r recoveringTracker) Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
-	attempted := false
-	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
-		if attempted {
-			landed, found, err := r.landedCreation(ctx, item)
-			if err != nil {
-				// A creation nothing could settle is not asked for again: the listing's
-				// failure goes through the same rule, so a store that answers on the
-				// next attempt is asked both questions again then.
-				return beads.WorkItem{}, fmt.Errorf("could not tell whether the creation that failed reached the tracker, so it is not asked for again: %w", err)
-			}
-			if found {
-				return landed, nil
-			}
-		}
-		attempted = true
-		return r.tracker.Create(ctx, item)
-	})
+	return recoveringTrackerWrite(ctx, r.session, "creation",
+		func(ctx context.Context) (beads.WorkItem, bool, error) { return r.landedCreation(ctx, item) },
+		func(ctx context.Context) (beads.WorkItem, error) { return r.tracker.Create(ctx, item) })
 }
 
 // landedCreation finds the item a failed creation left behind, if it left one.
@@ -128,24 +121,58 @@ func (r recoveringTracker) landedCreation(ctx context.Context, item beads.NewWor
 	return beads.WorkItem{}, false, nil
 }
 
+// Update is not safe to repeat where it appends a note, which nearly every
+// conversation's update does, because the note is what it adds. Everything else
+// an update carries — a title, a priority, a parking, a parent, a label added or
+// taken off — is set to a value, so an update that appends nothing is asked for
+// again as it stands. One that does is asked for again only once the item's
+// notes are read and found not to end with the note: bd applies the whole update
+// in one invocation, so the note there is the whole update there.
 func (r recoveringTracker) Update(ctx context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error) {
-	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
-		return r.tracker.Update(ctx, id, change)
-	})
+	return recoveringTrackerWrite(ctx, r.session, "update",
+		func(ctx context.Context) (beads.WorkItem, bool, error) {
+			return r.landedNote(ctx, id, change.AppendNotes)
+		},
+		func(ctx context.Context) (beads.WorkItem, error) { return r.tracker.Update(ctx, id, change) })
 }
 
+// Block and Unblock set a status and append the reason for it in one
+// invocation, so they are checked the way an update's note is.
 func (r recoveringTracker) Block(ctx context.Context, id, reason string) (beads.WorkItem, error) {
-	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
-		return r.tracker.Block(ctx, id, reason)
-	})
+	return recoveringTrackerWrite(ctx, r.session, "block",
+		func(ctx context.Context) (beads.WorkItem, bool, error) { return r.landedNote(ctx, id, reason) },
+		func(ctx context.Context) (beads.WorkItem, error) { return r.tracker.Block(ctx, id, reason) })
 }
 
 func (r recoveringTracker) Unblock(ctx context.Context, id, note string) (beads.WorkItem, error) {
-	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
-		return r.tracker.Unblock(ctx, id, note)
-	})
+	return recoveringTrackerWrite(ctx, r.session, "clearing of a blocked status",
+		func(ctx context.Context) (beads.WorkItem, bool, error) { return r.landedNote(ctx, id, note) },
+		func(ctx context.Context) (beads.WorkItem, error) { return r.tracker.Unblock(ctx, id, note) })
 }
 
+// landedNote reads whether an item's notes end with a note a failed write was
+// appending. The end rather than anywhere, because notes are only appended to:
+// the same words earlier in them are an older write. A write that appends
+// nothing has nothing to find and is reported as not landed without a read,
+// which is what asks it again as it stands.
+//
+// What this cannot tell apart is the failed write from an identical note
+// appended immediately before it. A conversation's notes name the conversation
+// and the turn that wrote them, so that is two writes of one note from one turn,
+// and reading it as landed errs toward the single copy.
+func (r recoveringTracker) landedNote(ctx context.Context, id, note string) (beads.WorkItem, bool, error) {
+	if strings.TrimSpace(note) == "" {
+		return beads.WorkItem{}, false, nil
+	}
+	item, err := r.tracker.Show(ctx, id)
+	if err != nil {
+		return beads.WorkItem{}, false, err
+	}
+	return item, beads.NotesEndWith(item.Notes, note), nil
+}
+
+// A dependency linked or unlinked again leaves the tracker as the first attempt
+// did, so these are asked for again as they stand.
 func (r recoveringTracker) AddBlocker(ctx context.Context, id, blockerID string) error {
 	return r.session.recoveringTrackerCall(ctx, func(ctx context.Context) error {
 		return r.tracker.AddBlocker(ctx, id, blockerID)
@@ -158,9 +185,46 @@ func (r recoveringTracker) RemoveBlocker(ctx context.Context, id, blockerID stri
 	})
 }
 
+// Complete is checked rather than repeated. A close asked for again leaves the
+// item closed either way, but what it answers need not be the same: a close the
+// store took is followed by a `bd close` on an item that is already closed, and
+// that is a different request from the one that failed. Every conversation that
+// closes an item has read it open first and refuses to close work that has
+// already left the backlog, so an item that now reads as closed is this close
+// having landed.
 func (r recoveringTracker) Complete(ctx context.Context, id, reason string) (beads.WorkItem, error) {
-	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
-		return r.tracker.Complete(ctx, id, reason)
+	return recoveringTrackerWrite(ctx, r.session, "close",
+		func(ctx context.Context) (beads.WorkItem, bool, error) {
+			item, err := r.tracker.Show(ctx, id)
+			if err != nil {
+				return beads.WorkItem{}, false, err
+			}
+			return item, strings.TrimSpace(item.Status) == "closed", nil
+		},
+		func(ctx context.Context) (beads.WorkItem, error) { return r.tracker.Complete(ctx, id, reason) })
+}
+
+// recoveringTrackerWrite is recoveringTrackerValue around a write that is not
+// safe to repeat. Every attempt after the first begins by asking whether the one
+// before it landed, and a write that did is answered with what the tracker now
+// holds rather than asked for again. A write nothing could settle is not asked
+// for again either: the read's own failure goes through the same rule, so a store
+// that answers on the next attempt is asked both questions again then.
+func recoveringTrackerWrite[T any](ctx context.Context, s *Session, write string, landed func(context.Context) (T, bool, error), attempt func(context.Context) (T, error)) (T, error) {
+	attempted := false
+	return recoveringTrackerValue(ctx, s, func(ctx context.Context) (T, error) {
+		if attempted {
+			value, found, err := landed(ctx)
+			if err != nil {
+				var zero T
+				return zero, fmt.Errorf("could not tell whether the %s that failed reached the tracker, so it is not asked for again: %w", write, err)
+			}
+			if found {
+				return value, nil
+			}
+		}
+		attempted = true
+		return attempt(ctx)
 	})
 }
 
