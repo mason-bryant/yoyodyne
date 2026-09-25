@@ -1499,6 +1499,10 @@ func printChatEvidence(writer io.Writer, evidence chat.Evidence) {
 	if evidence.SessionID != "" {
 		fmt.Fprintf(writer, "provider session: %s\n", evidence.SessionID)
 	}
+	// How close that session is to being compacted, where it has been measured.
+	if evidence.SessionBudgetBytes > 0 {
+		fmt.Fprintf(writer, "provider session size: %d of %d bytes before compaction\n", evidence.SessionBytes, evidence.SessionBudgetBytes)
+	}
 	fmt.Fprintf(writer, "turns: %d\n", evidence.Turns)
 }
 
