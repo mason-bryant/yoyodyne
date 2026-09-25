@@ -37,6 +37,7 @@ the prose the check reads, every one of them a term with a row below.
 | `heartbeat`   | how often to repeat                                                                                                                        | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md)                                                                                                                         |
 | `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
 | `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
+| `program manager` | a role instance that owns one named work stream: it admits work only under that stream's own tracker label, and asks the product manager for anything outside it. There is one program manager role type, with what it may do fixed in code, and each configured instance owns one stream and one label. Written in full wherever a person reads it; `pgm` is the identifier form only — in configuration keys, code, and instance identifiers — because *PM* already means the product manager | the program manager design document the architect is writing under yoyodyne-ifd.430, the configuration that declares each instance, and the surfaces that name role instances — each named here as it comes to exist |
 | `re-arm`      | repeat the merge request a forge dropped, once per publication — the `yoyo triage rearm` verb and the budget it spends                     | `yoyo triage rearm` and its help; the merge re-arms count in `yoyo status`; the development manager's triage decisions and `yoyo ground`; the guides that say when to type it — [operations](operations.md), [recovery](configuration/recovery.md), [the conversation](conversation.md), and [configuration](configuration.md); `internal/orchestrator` and `internal/runstate` |
 | `seat`        | an instance of a specific persona type — a developer seat, the product manager seat — often with persistent memory but not always. A *developer slot* is the harness's word for the capacity one developer seat fills: the seat is what does the work, and the slot is what it takes up while it does | the operator's own conversations, which is where the word came from; [a developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label), the yoyodyne-ifd.388 mechanism, and the reliability seat yoyodyne-ifd.415 configured under it |
 | `sink`        | the process that posts to Slack                                                                                                            | `yoyo slack` and `yoyo doctor` output; `internal/slack`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                                 |
@@ -74,6 +75,14 @@ that seat fills. So the configuration guide, the status line, and the scheduler
 say *slot* when they count, fill, free, or configure capacity, and *seat* when
 they mean the developer that sits in one — the reliability seat is the developer
 that works in the slot configured to prefer the `reliability` label.
+
+`program manager` is the operator's too. He decided the role on 2026-09-24,
+and its row is here before any document or surface names it, so the word is
+defined from its first use. It is always written in full for a person, never
+shortened to *PM*, which already means the product manager; `pgm` is the form
+an identifier takes and nothing else. Its row names no document yet because
+none exists: each place of use is added to the row as it comes to exist,
+starting with the architect's design document.
 
 ## Replaced rather than registered
 
