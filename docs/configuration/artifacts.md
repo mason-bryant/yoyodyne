@@ -643,7 +643,14 @@ the ruling it obeys, and a citation is not a condition. A document is named by
 its path or, where its id is two words or more, by its id however the prose
 joins the words ("the slack-reporting design" names
 `docs/designs/slack-reporting-design.md`); a one-word id such as `brief` is left
-to the path, and an invariant is named by its path only. The run asks the same
+to the path, and an invariant is named by its path only. An id that is also the
+name of one of the harness's roles is read as the document only where the clause
+names its path or names it as a document — the word `design` or `document`
+beside the id, or its file name — and the bare phrase is the role: "no program
+manager is configured" is about the role, while "the program manager design"
+names `docs/designs/program-manager.md`. A done-condition saying a design is
+recorded, published, or ratified is still refused on an item naming no
+executor, whichever document it names. The run asks the same
 question of the item it is handed, over the acceptance criteria as well, before
 it claims the item, and refuses to start rather than parking on the condition
 afterwards — which is what covers an item whose criteria were written with the
