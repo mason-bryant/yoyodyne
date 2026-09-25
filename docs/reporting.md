@@ -38,6 +38,15 @@ invocation's own cost, or one whose running total restarted, and both are
 recorded whole. Nothing asks the provider which of the two it does; the rule
 reads it off the figures, and it can never produce a negative one.
 
+An invocation the provider ended twice is priced at both endings. The second
+terminal is recorded as a `duplicate_terminal_result` anomaly rather than as a
+second invocation, but the provider charged for the turn that produced it, so
+its figure is priced by the same rule against the one before it and added to
+the invocation it followed — in the same phase, without counting another
+invocation. Until yoyodyne-ifd.435.2 that money was on the anomaly event alone,
+and where nothing resumed the session afterwards no surface counted it: $0.88
+of run-f3755e3f's last attempt.
+
 That is a correction rather than a refinement, and it is the difference between
 this product's recorded spend and the operator's bill. Every figure on this page
 was wrong by it until yoyodyne-ifd.432.10. Management conversations resume one

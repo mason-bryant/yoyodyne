@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1212,4 +1213,102 @@ func TestStorePricesRepairAttemptsAtWhatEachAddedToTheDevelopersSession(t *testi
 	if phases.TotalUSD() != price.Runs[0].CostUSD {
 		t.Fatalf("split = %v, run = %v", phases.TotalUSD(), price.Runs[0].CostUSD)
 	}
+}
+
+// appendDuplicateTerminal records the anomaly a backend writes when the provider
+// ends one invocation a second time, in the shape run-f3755e3f recorded it: no
+// role and no session in the payload, which is what the reader has to price by
+// the terminal before it.
+func appendDuplicateTerminal(t *testing.T, store *Store, runID string, sequence uint64, cost float64) {
+	t.Helper()
+	appendEvent(t, store, runID, sequence, execution.EventProcessOutput, map[string]any{
+		"provider_type":   "result",
+		"anomaly":         execution.DuplicateTerminalAnomaly,
+		"terminal_reason": "completed",
+		"total_cost_usd":  cost,
+	})
+}
+
+// run-f3755e3f's developer was ended twice by the provider four times, each time
+// after a watcher woke the session for one more turn. The first terminal decided
+// the invocation, and the later turn's spend was on the anomaly event alone, so
+// a run whose last invocation ended that way was priced without it: $0.88 of the
+// run's closing turn was on no cost surface at all. The figures below are that
+// run's own, from its first development attempt, its first review, and its last
+// attempt, which is the one nothing resumed afterwards.
+func TestStorePricesEveryTerminalAnInvocationEndedWith(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.435.1"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 44.4602215)
+	appendDuplicateTerminal(t, store, state.RunID, 2, 44.8557805)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 45.694919)
+	appendEvent(t, store, state.RunID, 4, execution.EventReviewStarted, nil)
+	appendRoleCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, domain.RoleReviewer, 0.78572375)
+	appendEvent(t, store, state.RunID, 6, execution.EventReviewCompleted, nil)
+	appendRoleCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, domain.RoleDeveloper, 264.6636765)
+	appendDuplicateTerminal(t, store, state.RunID, 8, 265.540555)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	run := price.Runs[0]
+	// Every ending's increment, each priced against the figure before it in the
+	// developer's session: 44.46, then 0.40, 0.84, 218.97, and 0.88. The sum is
+	// the session's last reported total, plus the reviewer's own session.
+	want := 265.540555 + 0.78572375
+	if !nearCost(run.CostUSD, want) {
+		t.Fatalf("run = %v, want %v; the first terminal alone would have made it %v",
+			run.CostUSD, want, 264.6636765+0.78572375)
+	}
+	if !nearCost(run.Phases.TotalUSD(), run.CostUSD) {
+		t.Fatalf("split = %v, run = %v", run.Phases.TotalUSD(), run.CostUSD)
+	}
+	// A duplicate is charged to the invocation it followed, and is not one of its
+	// own: the development attempt carries its duplicate's $0.40, and the phase
+	// split still counts three developer invocations and one review.
+	if !nearCost(run.Phases.Development.CostUSD, 44.8557805) || run.Phases.Development.Invocations != 1 {
+		t.Fatalf("development = %#v, want the first terminal and its duplicate as one invocation", run.Phases.Development)
+	}
+	if run.Phases.Repair.Invocations != 2 || run.Phases.Review.Invocations != 1 {
+		t.Fatalf("phases = %#v, want the duplicates to add no invocation", run.Phases)
+	}
+}
+
+// A duplicate that names its own session, as the backend records one now, is
+// priced against that session.
+func TestStorePricesADuplicateTerminalAgainstTheSessionItNames(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.435.2"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 6.0)
+	appendEvent(t, store, state.RunID, 2, execution.EventProcessOutput, map[string]any{
+		"anomaly":        execution.DuplicateTerminalAnomaly,
+		"role":           string(domain.RoleDeveloper),
+		"session_id":     "session-" + string(domain.RoleDeveloper),
+		"total_cost_usd": 6.5,
+	})
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	if run := price.Runs[0]; !nearCost(run.CostUSD, 6.5) || run.Phases.Development.Invocations != 1 {
+		t.Fatalf("run = %v with development %#v, want 6.5 from one invocation", run.CostUSD, run.Phases.Development)
+	}
+}
+
+func nearCost(got, want float64) bool {
+	return math.Abs(got-want) < 1e-9
 }

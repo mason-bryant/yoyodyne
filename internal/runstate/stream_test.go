@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -771,5 +772,45 @@ func TestAResumedConversationIsPricedAtWhatEachTurnAddedRatherThanTheWholeAgain(
 	if totals.CostUSD != 3.00 {
 		t.Fatalf("the conversation reads as %v, want the session's final total of 3; "+
 			"summing what each turn reported would have made it %v", totals.CostUSD, 8.65)
+	}
+}
+
+// A duplicate terminal is priced by the ledger's rule in the listing too, so
+// `yoyo status --spend` and `yoyo cost` count the same money for a run whose
+// provider ended an invocation twice. The figures are run-f3755e3f's last
+// attempt, which nothing resumed afterwards.
+func TestStreamStoreSpendsWhatADuplicateTerminalCost(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, _, _ := streamStores(t, root)
+	store := newStreamStore(t, root)
+
+	today := time.Date(2026, 9, 22, 12, 0, 0, 0, time.Local)
+	state := testState(t, StatusSucceeded)
+	if err := runs.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendStreamEvent(t, runs, state.RunID, 1, execution.EventRunCompleted, today, invocationPayload(255.2897625, 1, 1, 1, 1))
+	appendStreamEvent(t, runs, state.RunID, 2, execution.EventProcessOutput, today, map[string]any{
+		"anomaly":        execution.DuplicateTerminalAnomaly,
+		"total_cost_usd": 256.107327,
+	})
+	appendStreamEvent(t, runs, state.RunID, 3, execution.EventRunCompleted, today, invocationPayload(264.6636765, 1, 1, 1, 1))
+	appendStreamEvent(t, runs, state.RunID, 4, execution.EventProcessOutput, today, map[string]any{
+		"anomaly":        execution.DuplicateTerminalAnomaly,
+		"total_cost_usd": 265.540555,
+	})
+
+	report, err := store.Spend(SpendQuery{Now: today})
+	if err != nil {
+		t.Fatalf("Spend() error = %v", err)
+	}
+	totals := report.Totals()
+	if totals.Calls != 2 {
+		t.Fatalf("priced %d invocation(s), want two: a duplicate is not an invocation of its own", totals.Calls)
+	}
+	if math.Abs(totals.CostUSD-265.540555) > 1e-9 {
+		t.Fatalf("the run reads as %v, want the session's last reported total 265.540555", totals.CostUSD)
 	}
 }
