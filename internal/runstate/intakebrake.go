@@ -36,7 +36,8 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // IntakeBrakeDecision is what the development manager decided about a brake
@@ -380,15 +381,7 @@ const MaxBrakeClauseBytes = 240
 // clauseBrakeText folds a stop reason to the one bounded clause a repeated
 // line can carry.
 func clauseBrakeText(text string) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= MaxBrakeClauseBytes {
-		return folded
-	}
-	cut := MaxBrakeClauseBytes
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimRight(folded[:cut], " ") + "…"
+	return oneline.Fold(text, MaxBrakeClauseBytes)
 }
 
 func plural(count int) string {
@@ -416,11 +409,7 @@ func (b IntakeBrake) Entries() []string {
 // singleLineBrakeText folds prose to one bounded line for a sentence that has
 // room for one. The record keeps the whole of it.
 func singleLineBrakeText(text string) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= MaxBrakeTextBytes {
-		return folded
-	}
-	return folded[:MaxBrakeTextBytes-1] + "…"
+	return oneline.Fold(text, MaxBrakeTextBytes-len(oneline.Marker))
 }
 
 // BoundBrakeText holds one line of brake prose to what the record accepts,

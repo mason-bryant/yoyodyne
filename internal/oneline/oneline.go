@@ -22,9 +22,24 @@ func Fold(value string, limit int) string {
 	if len(folded) <= limit {
 		return folded
 	}
-	cut := max(limit, 0)
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
+	return cut(folded, limit) + Marker
+}
+
+// Bound is Fold without the marker: the folded line cut on a rune boundary to at
+// most limit bytes, for a record whose bound leaves no room for one or whose
+// reader is told some other way that it was cut.
+func Bound(value string, limit int) string {
+	folded := strings.Join(strings.Fields(value), " ")
+	if len(folded) <= limit {
+		return folded
 	}
-	return strings.TrimSpace(folded[:cut]) + Marker
+	return cut(folded, limit)
+}
+
+func cut(folded string, limit int) string {
+	end := max(limit, 0)
+	for end > 0 && !utf8.RuneStart(folded[end]) {
+		end--
+	}
+	return strings.TrimSpace(folded[:end])
 }

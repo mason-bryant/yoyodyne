@@ -3,7 +3,8 @@ package report
 import (
 	"context"
 	"fmt"
-	"strings"
+
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // Builds answers how far the target branch has moved past one harness build:
@@ -66,10 +67,7 @@ func (g *Gauge) Lag(build string) (Lag, bool) {
 	var lag Lag
 	behind, err := g.builds.Behind(g.ctx, build)
 	if err != nil {
-		lag.Problem = strings.Join(strings.Fields(err.Error()), " ")
-		if len(lag.Problem) > maxLagProblemBytes {
-			lag.Problem = lag.Problem[:maxLagProblemBytes] + "…"
-		}
+		lag.Problem = oneline.Fold(err.Error(), maxLagProblemBytes)
 	} else {
 		lag.Behind = behind
 	}

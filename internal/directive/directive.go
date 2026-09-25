@@ -34,9 +34,9 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // SchemaVersion is versioned independently of run, conversation, and report
@@ -628,15 +628,7 @@ func indented(value string) string {
 // oneLine folds a value into a single bounded line, so a directive stays one
 // entry of a listing or one note on a work item whatever it contains.
 func oneLine(value string) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= maxLineBytes {
-		return folded
-	}
-	cut := maxLineBytes
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, maxLineBytes)
 }
 
 func boundedText(field, value string, limit int, required bool) error {

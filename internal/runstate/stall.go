@@ -35,9 +35,9 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // StallSchemaVersion is 1 and has never changed.
@@ -454,13 +454,5 @@ func (s *StallStore) validate(event StallEvent) error {
 // written. It cuts on a rune boundary: a sentence truncated mid-rune is not
 // text.
 func boundedStallDetail(text string, limit int) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimRight(folded[:cut], " ")
+	return oneline.Bound(text, limit)
 }

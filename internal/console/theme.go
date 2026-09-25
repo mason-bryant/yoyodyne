@@ -4,6 +4,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // A theme dresses the conversation so that one kind of thing can be told from
@@ -254,15 +256,7 @@ func titleText(title string) string {
 		}
 		return character
 	}, title)
-	folded := strings.Join(strings.Fields(printable), " ")
-	if len(folded) <= maxTitleBytes {
-		return folded
-	}
-	cut := maxTitleBytes
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut])
+	return oneline.Bound(printable, maxTitleBytes)
 }
 
 // Rule returns the horizontal rule that separates what the operator said from
