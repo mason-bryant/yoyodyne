@@ -193,10 +193,10 @@ type RerunRecords interface {
 	Withdraw(ctx context.Context, docketKey string) error
 }
 
-// RerunItems is the work item the stoppage is about. It is read and never
-// written: what becomes of an item is the fresh run's to record, and a re-run
-// that reopened what it wanted to run would be deciding the thing it is here to
-// carry out somebody else's decision about.
+// RerunItems is the work item the stoppage is about. It is read, and written in
+// exactly one case: what becomes of an item is the fresh run's to record, and a
+// re-run that reopened what it wanted to run would be deciding the thing it is
+// here to carry out somebody else's decision about.
 //
 // It is the one condition a re-run asks outside the harness's own records, and
 // it is asked because a fresh run starts on the item itself. The pipeline reads
@@ -204,9 +204,16 @@ type RerunRecords interface {
 // reading is what keeps an item the pipeline would refuse from spending the
 // stoppage's only claim on a run that would then decline to start.
 //
+// The one write is Release, and it is the in-progress counterpart of what the
+// pipeline's claim does for a stale blocked status: a claim the stopped run left
+// on the item, with that run terminal and nothing of the item in flight, is a
+// status nothing is working behind, and it is given back with a note saying so
+// rather than left to refuse the decision. See supersedeStaleClaim.
+//
 // It is satisfied by beads.Client.
 type RerunItems interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
+	Release(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
 // PreservedRetirer retires what the stopped run left behind, once the fresh run
@@ -220,7 +227,8 @@ type PreservedRetirer interface {
 }
 
 // Rerunner starts a fresh run of an item triage decided to run again. It reads
-// the work item and writes nothing to it, it has no forge access, and it decides
+// the work item and writes to it only to give back a claim the stopped run left
+// behind (see RerunItems), it has no forge access, and it decides
 // nothing about the work: what it does is check that a decision somebody else
 // made may be carried out, and then carry it out.
 type Rerunner struct {
@@ -290,8 +298,12 @@ type RerunResult struct {
 	// environment before any agent of it ran, so the claim taken for it was given
 	// back and the stoppage keeps its re-run. The run itself happened and is
 	// reported below; what did not happen is anything the claim was spent on.
-	ClaimGivenBack bool    `json:"claim_given_back,omitempty"`
-	Outcome        Outcome `json:"outcome"`
+	ClaimGivenBack bool `json:"claim_given_back,omitempty"`
+	// SupersededClaim is the note the item was given when the claim the stopped
+	// run left on it was released so the fresh run could start, and empty where
+	// the item was not left claimed.
+	SupersededClaim string  `json:"superseded_claim,omitempty"`
+	Outcome         Outcome `json:"outcome"`
 	// Preserved is what the stopped run left behind and what became of it.
 	Preserved runstate.PreservedArtifacts `json:"preserved"`
 	// RecordProblem names a durable record this action could not update after the
@@ -360,7 +372,8 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// The item is read before the claim, for the reason the hold below is: a fresh
 	// run starts on the item itself, so an item the pipeline would refuse must not
 	// spend the stoppage's one re-run on finding that out.
-	if err := r.itemCanBeRun(ctx, entry.WorkItemID); err != nil {
+	item, err := r.itemCanBeRun(ctx, entry.WorkItemID)
+	if err != nil {
 		return result, err
 	}
 	// The hold is read before the claim, so a held harness leaves the stoppage its
@@ -385,6 +398,17 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	if !free {
 		result.CapacityFull = &full
 		return result, nil
+	}
+	// A claim the stopped run left on the item is given back last of everything
+	// before the re-run's own claim, because it is the one write this carry-out
+	// makes to the item and everything that could refuse has already been asked.
+	// The fresh run claims the item again as it starts.
+	if item.Status == claimedItemStatus {
+		note, err := r.supersedeStaleClaim(ctx, entry, prior, decision)
+		if err != nil {
+			return result, unspentRefusal(err)
+		}
+		result.SupersededClaim = note
 	}
 
 	claimed, err := r.Reruns.Claim(ctx, runstate.Rerun{
@@ -612,16 +636,66 @@ var ErrItemNotStartable = errors.New("the work item is not in a state a run may 
 // The refusal says what has to become true, because that is the whole of what
 // this being free is worth: the stoppage keeps its re-run, so the same decision
 // is carried out by asking again once the item has been put back.
-func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
+//
+// A claim is the one status read more widely here than the pipeline reads it,
+// and only because this action gives it back before the fresh run starts. By
+// the time this is asked, the stopped run has been proved terminal and nothing
+// of the item is in flight, so an item still reading in_progress is holding a
+// claim nothing is working behind — the in-progress twin of a stale blocked
+// status, which the pipeline's claim already corrects. Refusing it was what
+// stood yoyodyne-ifd.429.3's recorded re-run off four times over run-7dda71fb: the
+// claim audit leaves a claim standing while the run's branch survives, this
+// refused an item that was claimed, and nothing else in the harness moves the
+// status. Everything else the pipeline refuses an item for is still refused.
+func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) (beads.WorkItem, error) {
 	item, err := r.Items.Show(ctx, workItemID)
 	if err != nil {
-		return fmt.Errorf("read the work item the stoppage is about: %w", err)
+		return beads.WorkItem{}, fmt.Errorf("read the work item the stoppage is about: %w", err)
 	}
-	if err := validateReadyItem(item, workItemID); err != nil {
-		return fmt.Errorf("%w: %w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision",
+	statuses := startableStatuses
+	if item.Status == claimedItemStatus {
+		statuses = []string{claimedItemStatus}
+	}
+	if err := validateWorkItem(item, workItemID, statuses...); err != nil {
+		return beads.WorkItem{}, fmt.Errorf("%w: %w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision",
 			ErrItemNotStartable, err)
 	}
-	return nil
+	return item, nil
+}
+
+// claimedItemStatus is the tracker status of work a run has claimed.
+const claimedItemStatus = "in_progress"
+
+// supersedeStaleClaim gives back the claim the stopped run left on the item, so
+// the fresh run the decision authorizes can claim it, and reports the note the
+// item was given saying what moved it and why.
+//
+// What makes the claim stale is asked again here rather than carried from the
+// readings before it, because this is the write that acts on it: the stopped
+// run is terminal, which nothing takes back, and no run of the item is in
+// flight. A run in flight is the claim's live holder, and giving its claim back
+// would put two developers on one piece of work, so that is refused exactly as
+// the reading before it refuses. Between this reading and the release nothing
+// can start a run of the item either, because a claimed item is not one the
+// pipeline starts on.
+//
+// Release verifies the status it wrote, so an item that did not come back open
+// is reported rather than handed to a fresh run the pipeline would refuse.
+func (r Rerunner) supersedeStaleClaim(ctx context.Context, entry triage.Entry, prior runstate.State, decision runstate.TriageDecision) (string, error) {
+	if !prior.Status.Terminal() {
+		return "", fmt.Errorf("%s is claimed and its stopped run %s is recorded as %s rather than ended, so the claim may be that run's and is not given back",
+			entry.WorkItemID, prior.RunID, prior.Status)
+	}
+	if err := noRunInFlight(r.Runs, entry.WorkItemID); err != nil {
+		return "", fmt.Errorf("%s is claimed by a run in flight, so its claim is not given back: %w", entry.WorkItemID, err)
+	}
+	note := fmt.Sprintf(
+		"The harness released this item's in_progress claim to carry out the development manager's re-run of the stoppage of run %s (%s): that run ended as %s and no run of this item is in flight, so the claim was left over from it rather than held by anything working on the item. The fresh run claims the item again as it starts.",
+		prior.RunID, decision.Cite(), prior.Status)
+	if _, err := r.Items.Release(ctx, entry.WorkItemID, note); err != nil {
+		return "", fmt.Errorf("give back the claim run %s left on %s, which a fresh run has to take: %w", prior.RunID, entry.WorkItemID, err)
+	}
+	return note, nil
 }
 
 // noRunInFlight refuses a re-run of an item something is already running. The
@@ -1140,6 +1214,9 @@ func (result RerunResult) Render() string {
 	}
 	fmt.Fprintf(&rendered, "re-ran %s on the stopped work of run %s\n", result.WorkItemID, result.PriorRunID)
 	fmt.Fprintf(&rendered, "chosen because %s\n", result.Reason)
+	if result.SupersededClaim != "" {
+		fmt.Fprintf(&rendered, "the claim run %s left on %s was released first; the item's notes say why\n", result.PriorRunID, result.WorkItemID)
+	}
 	if result.Outcome.RunID != "" {
 		fmt.Fprintf(&rendered, "fresh run: %s\n", result.Outcome.RunID)
 	}
