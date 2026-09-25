@@ -156,10 +156,9 @@ func TestAWellFormedEntryOfEitherClassIsAccepted(t *testing.T) {
 	}
 }
 
-// A resumable stall past its developer attempt names the step the repair
-// continues it at, and the renderers print that step verbatim, so the entry
-// accepts only the two steps that follow a completed attempt.
-func TestAResumableStallIsContinuedOnlyAtTheChecksOrTheReview(t *testing.T) {
+// A step to continue at is only ever said of a resumable stall. Which steps are
+// accepted is the run state's to say, and the docket store asks it.
+func TestAStepToContinueAtRequiresAResumableStall(t *testing.T) {
 	t.Parallel()
 
 	stall := func(step string) Entry {
@@ -174,12 +173,6 @@ func TestAResumableStallIsContinuedOnlyAtTheChecksOrTheReview(t *testing.T) {
 	for _, step := range []string{"", "checking", "reviewing"} {
 		if err := stall(step).Validate(); err != nil {
 			t.Fatalf("Validate() error = %v for a stall resumed at %q", err, step)
-		}
-	}
-	for _, step := range []string{"developing", "integrating", "reveiwing"} {
-		err := stall(step).Validate()
-		if err == nil || !strings.Contains(err.Error(), "resumes_at: \""+step+"\" is not a step") {
-			t.Fatalf("Validate() error = %v, want a stall resumed at %q refused", err, step)
 		}
 	}
 	notResumable := stall("reviewing")

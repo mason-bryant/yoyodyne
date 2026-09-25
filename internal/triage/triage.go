@@ -992,8 +992,10 @@ type Entry struct {
 	// stalled is owed the review asked again on the change it has, with no
 	// developer invoked, and an entry that said the session is carried on would
 	// describe an attempt that never happens.
-	// Validate holds it to the two steps that can follow a completed attempt,
-	// so a stray value is refused rather than printed verbatim.
+	// It carries a run phase as a plain string, as IntegrationStop.Phase does,
+	// because this package sits beneath the run state that owns phases; the
+	// docket store holds it to the checks or the review, through
+	// runstate.StallResumeStep, wherever an entry is written or read back.
 	ResumesAt string `json:"resumes_at,omitempty"`
 	// Unready is why dispatch declined to start this item, on the one class that
 	// describes work which never ran. It carries the whole of what a development
@@ -1256,9 +1258,6 @@ func (e Entry) Validate() error {
 	if e.ResumesAt != "" && !e.SessionResumable {
 		problems = append(problems, errors.New("resumes_at: only a resumable stall is continued at a step, so it requires session_resumable"))
 	}
-	if e.ResumesAt != "" && !resumableStallStep(e.ResumesAt) {
-		problems = append(problems, fmt.Errorf("resumes_at: %q is not a step a stall is continued at past its developer attempt; only %q and %q are", e.ResumesAt, stallStepChecking, stallStepReviewing))
-	}
 	if e.Artifacts.Found != nil {
 		if err := e.Artifacts.Found.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("artifacts: found: %w", err))
@@ -1418,21 +1417,6 @@ func (e Entry) Validate() error {
 		return fmt.Errorf("invalid triage docket entry: %w", err)
 	}
 	return nil
-}
-
-// The steps a stall past its developer attempt is continued at. They are the
-// run state's checking and reviewing phases spelled as the docket carries them:
-// this package sits beneath runstate and cannot name its type, so the
-// orchestrator's tests hold the two spellings together.
-const (
-	stallStepChecking  = "checking"
-	stallStepReviewing = "reviewing"
-)
-
-// resumableStallStep reports whether step is one a stall past its developer
-// attempt is continued at.
-func resumableStallStep(step string) bool {
-	return step == stallStepChecking || step == stallStepReviewing
 }
 
 // Render describes one entry for whoever is reading the docket. Everything a

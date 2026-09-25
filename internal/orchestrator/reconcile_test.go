@@ -1820,8 +1820,8 @@ func TestAStallAtTheReviewIsHeldToTheRepairsContentCheck(t *testing.T) {
 		t.Fatalf("a review-phase stall is continuable = %t, past the attempt = %t, owes a change = %t; want all three",
 			continuableStall(state), stallResumesPastTheAttempt(state), resumesAnExistingChange(state))
 	}
-	// What the docket carries for either step is what the entry's own
-	// validation accepts, which holds its spelling to the run state's phases.
+	// What the docket carries for either step is a well-formed entry, and reads
+	// back through the run state's conversion as the phase it stalled in.
 	for _, phase := range []runstate.Phase{runstate.PhaseChecking, runstate.PhaseReviewing} {
 		at := state
 		at.Phase = phase
@@ -1838,8 +1838,8 @@ func TestAStallAtTheReviewIsHeldToTheRepairsContentCheck(t *testing.T) {
 			SessionResumable: true,
 			ResumesAt:        resumesAtOf(at),
 		}
-		if err := entry.Validate(); err != nil || entry.ResumesAt != string(phase) {
-			t.Fatalf("entry resumed at %q: Validate() = %v, want the %s phase accepted", entry.ResumesAt, err, phase)
+		if back, ok := runstate.StallResumeStep(entry.ResumesAt); entry.Validate() != nil || !ok || back != phase {
+			t.Fatalf("entry resumed at %q: Validate() = %v, read back as %q, want the %s phase", entry.ResumesAt, entry.Validate(), back, phase)
 		}
 	}
 	if phase := continuedPhase(state, true); phase != runstate.PhaseReviewing {
