@@ -599,6 +599,12 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewSupervisionStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Supervision = store
 	}
+	// The program manager instances and their open restart requests, which
+	// nothing acts on until the supervisor's periodic pass does.
+	sources.ProgramManagers = programManagerAgents(cfg)
+	if store, err := runstate.NewRestartRequestStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.RestartRequests = store
+	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}
@@ -631,6 +637,19 @@ func agentEndpoints(cfg config.Config) []readmodel.AgentEndpoint {
 		endpoints = append(endpoints, endpoint)
 	}
 	return endpoints
+}
+
+// programManagerAgents is every configured agent on the program manager role,
+// sorted by name.
+func programManagerAgents(cfg config.Config) []string {
+	var names []string
+	for name, agent := range cfg.Agents {
+		if agent.Role == domain.RoleProgramManager {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // developerEndpoints is every endpoint a developer run's turn can be asked of:

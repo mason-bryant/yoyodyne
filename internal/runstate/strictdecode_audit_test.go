@@ -98,6 +98,7 @@ var strictSites = map[string]strictSite{
 	"internal/amendment/amendment.go:Decode":           {strictValidator, "an amendment block in an agent's reply"},
 	"internal/chat/concern.go:decodeConcerns":          {strictValidator, "a concern block in a conversation reply"},
 	"internal/chat/memory.go:decodeMemoryWrites":       {strictValidator, "a memory block in a conversation reply"},
+	"internal/chat/restart.go:decodeRestart":           {strictValidator, "a restart block in a conversation reply"},
 	"internal/chat/proposal.go:decodeProposals":        {strictValidator, "a proposal block in a conversation reply"},
 	"internal/chat/tracker.go:decodeTrackerActions":    {strictValidator, "a tracker-action block in a conversation reply"},
 	"internal/evaluation/evaluation.go:Decode":         {strictValidator, "an evaluation block in an agent's reply"},

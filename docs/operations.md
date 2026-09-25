@@ -77,6 +77,26 @@ reattached`. A part somebody starts by hand while the product is up is taken
 back the same way, which is also what brings a degraded part back once its
 cause is fixed.
 
+**A program manager may ask for a part to be restarted, and nothing acts on
+the request yet.** A [program manager](designs/program-manager.md) that thinks
+one of the four parts should be restarted ends its reply with one
+`yoyodyne-restart` block naming the part and why. The harness writes that down
+as a durable request under the state root — at
+`products/<product>/program-managers/restart-requests.jsonl`, recording the
+instance, the part, when, and the conversation turn that asked — and does
+nothing else: no instance restarts, stops, or signals a process, and the harness
+is the only thing that ever will. A part the section does not declare is
+refused naming the four, and each instance has at most one open request per
+part: a second while the first is unanswered is refused naming the first. The
+executor is the supervisor's periodic pass, `yoyodyne-ifd.413`, which will treat
+a request as it treats a death, under the same backoff and bound, and record
+what it did on the request. Until that lands a request is recorded, carried in
+`yoyo status --json` under `standing.program_managers` as the instance's open
+`restart_requests`, and acted on by nothing — and the program manager is told
+exactly that in the result, so it never reports a part as restarted. A request
+waits on that pass rather than on you, so it is not on the "Needs a human" line;
+to restart a part yourself, `yoyo stop` and `yoyo start` are still the verbs.
+
 **`yoyo stop` stops the supervisor first**, so nothing restarts a part on its
 way down, and then the parts in the reverse of the order they were started in,
 waiting for each to let go of its lease. A part that is not running is reported

@@ -80,6 +80,7 @@ var expresses = map[string]expression{
 			capability.ProposalRaise, capability.ConcernRaise, capability.ResearchCommission,
 			capability.EvaluationRecord, capability.ExchangeAsk, capability.WorkItemMutate,
 			capability.RepositoryRead, capability.RepositoryList, capability.AgentContextMutate,
+			capability.ServiceRequestRestart,
 		},
 		gap: "the repository block is refused unless the role holds both the read and the list; that the named read is the pair is a rule of the derivation rather than a capability either half states",
 	},
@@ -484,7 +485,7 @@ var expresses = map[string]expression{
 	"rolecapability.declared-ahead": {
 		question: "which capabilities does a bundle hold that no site asks for yet?",
 		asks: []capability.Capability{
-			capability.ReadModelRead, capability.LaneReportWrite, capability.ServiceRequestRestart,
+			capability.ReadModelRead, capability.LaneReportWrite,
 			capability.ReportFile, capability.AmendmentPropose,
 		},
 		gap: "holding one of these grants nothing until the site that asks for it is built; each entry names what builds it",

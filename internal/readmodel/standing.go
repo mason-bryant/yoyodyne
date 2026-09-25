@@ -222,6 +222,12 @@ type Sources struct {
 	// them all off — a part the supervisor has left down is the one state here
 	// that nothing else reports.
 	Supervision Supervision
+	// ProgramManagers names every configured agent on the program manager role,
+	// and RestartRequests is the log of their requests that the supervisor
+	// restart a part. Both are optional: a reading without them carries no
+	// program managers rather than reporting that none has asked for anything.
+	ProgramManagers []string
+	RestartRequests RestartRequests
 	// Agents is every configured agent, as the configuration resolved it: what
 	// each asks for and what each may be served by instead. It is the other half
 	// of the hold above, because a refusal holds a role only against what that
@@ -468,6 +474,14 @@ type Standing struct {
 	// line with its reason. It is nil where nothing was wired to read it.
 	Services        *Services `json:"services,omitempty"`
 	ServicesProblem string    `json:"services_problem,omitempty"`
+
+	// ProgramManagers is each program manager instance as its one query carries
+	// it, today its open restart requests. It is not a fifth line: a request is
+	// waiting on the supervisor's pass rather than on a person, and it is
+	// carried for the surfaces that show the instance. It is absent where no
+	// instance is configured and none has asked for anything.
+	ProgramManagers        []ProgramManager `json:"program_managers,omitempty"`
+	ProgramManagersProblem string           `json:"program_managers_problem,omitempty"`
 }
 
 // maxUndecidedReportAge is how long the oldest report nobody has decided about
@@ -597,6 +611,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	// the standing surfaces: it is said here with the reason the supervisor
 	// recorded, and the record is carried whole beside the lines.
 	standing.Services, standing.ServicesProblem = readServices(sources)
+	standing.ProgramManagers, standing.ProgramManagersProblem = ReadProgramManagers(sources)
 	needs = append(needs, standing.Services.Attention()...)
 	needsProblem = joinProblems(needsProblem, standing.ServicesProblem)
 	// Held work is on both lines for the reason handed-off work below is, and says
