@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,11 @@ type rerunHarness struct {
 	// fresh run may start on it, and itemErr a tracker that could not be asked.
 	item    beads.WorkItem
 	itemErr error
-	started []startedRun
+	// released is each note a released claim carried, and releaseErr a tracker
+	// that refuses the release.
+	released   []string
+	releaseErr error
+	started    []startedRun
 	// outcome is what the starter reports, and failure what it returns. A test
 	// that cares about what the action does after a run sets them.
 	outcome Outcome
@@ -96,11 +101,22 @@ func (h *rerunHarness) RetirePreserved(context.Context, gitworktree.Worktree, st
 	return h.retirement, h.retireErr
 }
 
-// Show is the tracker's answer about the item, read and never written. A harness
-// leaves the item open; the sequences that are about the item's own state are the
-// ones that move it.
+// Show is the tracker's answer about the item. A harness leaves the item open;
+// the sequences that are about the item's own state are the ones that move it.
 func (h *rerunHarness) Show(context.Context, string) (beads.WorkItem, error) {
 	return h.item, h.itemErr
+}
+
+// Release is the one write a re-run makes to the item: giving back a claim the
+// stopped run left on it. Each note is kept so a test can read what the item was
+// told, and releaseErr is a tracker that would not take the write.
+func (h *rerunHarness) Release(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+	if h.releaseErr != nil {
+		return beads.WorkItem{}, h.releaseErr
+	}
+	h.released = append(h.released, reason)
+	h.item.Status = "open"
+	return h.item, nil
 }
 
 func (h *rerunHarness) rerunner() Rerunner {
@@ -660,13 +676,19 @@ func TestARerunOfAnItemNoRunCanStartOnIsRefusedAndSpendsNothing(t *testing.T) {
 		want string
 	}{
 		{
-			// A status a run has already taken. Blocked is deliberately not here:
-			// stopping a run blocks the item, and refusing the re-run for that was
-			// the 102.5 seam — a decision spent on the field rather than on
-			// anything the item was actually waiting for.
-			name: "the item is already claimed",
-			item: beads.WorkItem{ID: docketedItem, Status: "in_progress"},
-			want: `status is "in_progress", want open or blocked`,
+			// Blocked and a claim the stopped run left are deliberately not here on
+			// their own: stopping a run blocks the item or leaves it claimed, and
+			// refusing the re-run for either was a decision spent on the field rather
+			// than on anything the item was actually waiting for — the 102.5 seam for
+			// the one, and 429.3's four refusals for the other. A claimed item still
+			// waiting on unfinished work is refused for the work.
+			name: "a claimed item is still waiting on unfinished work",
+			item: beads.WorkItem{
+				ID:           docketedItem,
+				Status:       "in_progress",
+				Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.102.5", Type: "blocks", Status: "open"}},
+			},
+			want: "blocked by: yoyodyne-ifd.102.5",
 		},
 		{
 			name: "the item is closed",
@@ -714,8 +736,166 @@ func TestARerunOfAnItemNoRunCanStartOnIsRefusedAndSpendsNothing(t *testing.T) {
 			if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
 				t.Fatalf("a re-run refused on the item's own state spent the stoppage's claim")
 			}
+			if len(harness.released) != 0 {
+				t.Fatalf("released = %q, want a refused re-run to leave the item as it found it", harness.released)
+			}
 		})
 	}
+}
+
+// The shape yoyodyne-ifd.429.3 was stood off in four times: the stopped run is
+// terminal, its branch survives so the claim audit leaves its claim standing,
+// and the item still reads in_progress. The claim has nothing working behind it,
+// so the carry-out gives it back with a note saying what moved it and why — as
+// the pipeline's claim does for a stale blocked status — and the decision fires.
+func TestARerunSupersedesTheClaimATerminalStoppedRunLeft(t *testing.T) {
+	t.Parallel()
+
+	var pipelined *pipelinedRerun
+	pipelined = newPipelinedRerun(t, func() {
+		// The release has landed by the time the fresh run starts, which is what
+		// the pipeline's own start reads the item for.
+		if pipelined.tracker.item.Status != "open" {
+			t.Errorf("item status = %q when the fresh run starts, want the stale claim given back", pipelined.tracker.item.Status)
+		}
+	})
+	pipelined.tracker.item.Status = "in_progress"
+	pipelined.tracker.claimed = true
+
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID})
+	if err != nil {
+		t.Fatalf("Rerun() error = %v, want the recorded decision carried out", err)
+	}
+	if !result.Started || result.Outcome.Integration == nil {
+		t.Fatalf("result = %#v, want the fresh run started and integrated", result)
+	}
+	if !pipelined.tracker.released {
+		t.Fatalf("the claim the stopped run left was never given back")
+	}
+	// What moved the status and why is on the item, in the note the release carried.
+	for _, want := range []string{"released this item's in_progress claim", priorRunID, "no run of this item is in flight", decidedIn} {
+		if !strings.Contains(pipelined.tracker.releaseReason, want) {
+			t.Fatalf("release note = %q, want it to say %q", pipelined.tracker.releaseReason, want)
+		}
+	}
+	if result.SupersededClaim != pipelined.tracker.releaseReason {
+		t.Fatalf("result says the note was %q, the item was given %q", result.SupersededClaim, pipelined.tracker.releaseReason)
+	}
+	// Given back before the fresh run claimed it, and claimed by that run again.
+	release, claim := slices.Index(pipelined.tracker.calls, "release"), slices.Index(pipelined.tracker.calls, "claim")
+	if release < 0 || claim < 0 || release > claim {
+		t.Fatalf("tracker calls = %v, want the stale claim released before the fresh run's claim", pipelined.tracker.calls)
+	}
+	if !strings.Contains(result.Render(), "was released first") {
+		t.Fatalf("render = %q, want the release said", result.Render())
+	}
+}
+
+// A claim a live run holds is not stale, whichever run it is, and giving it back
+// would put two developers on one piece of work. It is refused before anything
+// is written or spent.
+func TestARerunLeavesAClaimALiveRunHolds(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.item.Status = "in_progress"
+	live := runningState("run-00001111222233334444555566667777", docketedItem)
+	if err := harness.runs.Create(live); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), live.RunID) {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the live run %s", err, live.RunID)
+	}
+	if len(harness.released) != 0 {
+		t.Fatalf("released = %q, want a live run's claim left where it is", harness.released)
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a re-run refused for a live claim spent the stoppage's claim")
+	}
+}
+
+// The supersession asks again, where it writes, whether anything holds the item:
+// a run reserved while the readings before it were being made is the claim's
+// live holder, and is refused exactly as the reading before it refuses.
+func TestSupersedingAStaleClaimAsksAgainWhetherARunHoldsIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	live := runningState("run-00001111222233334444555566667777", docketedItem)
+	if err := harness.runs.Create(live); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	prior, err := harness.runs.Load(docketedRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	entry, err := harness.rerunner().entry(docketedRunID)
+	if err != nil {
+		t.Fatalf("entry() error = %v", err)
+	}
+	if _, err := harness.rerunner().supersedeStaleClaim(context.Background(), entry, prior, triageDecided(runstate.TriageDecisionRerun, docketedRunID)); err == nil || !strings.Contains(err.Error(), live.RunID) {
+		t.Fatalf("supersedeStaleClaim() error = %v, want a refusal naming the live run", err)
+	}
+	if len(harness.released) != 0 {
+		t.Fatalf("released = %q, want a live run's claim left where it is", harness.released)
+	}
+}
+
+// A tracker that will not take the release leaves the claim standing and the
+// stoppage its re-run: nothing was started on an item still claimed.
+func TestARerunWhoseStaleClaimCannotBeGivenBackSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.item.Status = "in_progress"
+	harness.releaseErr = errors.New("bd update failed")
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "bd update failed") || !strings.Contains(err.Error(), "keeps its re-run") {
+		t.Fatalf("Rerun() error = %v, want the failed release named and the re-run kept", err)
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a re-run whose stale claim stood spent the stoppage's claim")
+	}
+}
+
+// A re-run claim refused after the stale item claim was given back says so: the
+// item reads open with a note promising a fresh run, and the refusal is where the
+// reader learns none followed.
+func TestARerunClaimRefusedAfterTheStaleClaimWasReleasedSaysSo(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.item.Status = "in_progress"
+	rerunner := harness.rerunner()
+	rerunner.Reruns = refusingRerunClaims{RerunRecords: harness.reruns, err: errors.New("claimed by another carry-out")}
+	_, err := rerunner.Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "claimed by another carry-out") || !strings.Contains(err.Error(), "had already been released") {
+		t.Fatalf("Rerun() error = %v, want the refused claim named and the release said", err)
+	}
+	if len(harness.released) != 1 {
+		t.Fatalf("released = %q, want the stale claim given back once", harness.released)
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+}
+
+// refusingRerunClaims is a re-run record whose Claim is refused, as it is when a
+// concurrent carry-out of the same stoppage took it first.
+type refusingRerunClaims struct {
+	RerunRecords
+	err error
+}
+
+func (r refusingRerunClaims) Claim(context.Context, runstate.Rerun) (runstate.Rerun, error) {
+	return runstate.Rerun{}, r.err
 }
 
 // A tracker that could not be asked refuses the re-run rather than claiming
@@ -1529,6 +1709,10 @@ func TestTheRecordedReasonCitesTheDecisionItWasReadFrom(t *testing.T) {
 type openWorkItem string
 
 func (id openWorkItem) Show(context.Context, string) (beads.WorkItem, error) {
+	return beads.WorkItem{ID: string(id), Status: "open"}, nil
+}
+
+func (id openWorkItem) Release(context.Context, string, string) (beads.WorkItem, error) {
 	return beads.WorkItem{ID: string(id), Status: "open"}, nil
 }
 

@@ -502,6 +502,57 @@ func TestARepairSupersedesTheBlockerOnBothTheRunAndTheItem(t *testing.T) {
 	if got := strings.Join(harness.tracker.calls, ","); got != "record,claim" {
 		t.Fatalf("tracker calls = %q, want the decision recorded and then the item claimed", got)
 	}
+	// An item put back from blocked is not told about a claim it never held.
+	if strings.Contains(harness.tracker.notes, "still read in_progress") {
+		t.Fatalf("item notes = %q, want no account of a claim the item did not carry", harness.tracker.notes)
+	}
+}
+
+// The item's other stale status: the stopped run left it claimed rather than
+// blocked. The run is terminal and nothing of the item is in flight, so the
+// claim has nothing working behind it; the continuation supersedes it, and the
+// item is told what moved it and why before the claim changes hands.
+func TestARepairSupersedesAClaimTheStoppedRunLeftAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, continuableState())
+	harness.tracker.item.Status = "in_progress"
+	harness.tracker.claimed = true
+	result, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || len(harness.started) != 1 {
+		t.Fatalf("continued = %t, started = %#v, want the decision carried out", result.Continued, harness.started)
+	}
+	if got := strings.Join(harness.tracker.calls, ","); got != "record,claim" {
+		t.Fatalf("tracker calls = %q, want the account recorded and then the item claimed", got)
+	}
+	for _, want := range []string{result.Reason, "still read in_progress from run " + result.RunID, "no run of this item in flight"} {
+		if !strings.Contains(harness.tracker.notes, want) {
+			t.Fatalf("item notes = %q, want them to say %q", harness.tracker.notes, want)
+		}
+	}
+}
+
+// A claim a live run holds is not the stopped run's to supersede, and giving it
+// to the continuation would put two developers on one piece of work.
+func TestARepairLeavesAClaimALiveRunHolds(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, continuableState())
+	harness.tracker.item.Status = "in_progress"
+	live := runningState("run-00001111222233334444555566667777", continuableState().WorkItemID)
+	if err := harness.runs.Create(live); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if err == nil || !strings.Contains(err.Error(), live.RunID) {
+		t.Fatalf("Continue() error = %v, want a refusal naming the live run %s", err, live.RunID)
+	}
+	if len(harness.started) != 0 || harness.tracker.notes != "" || len(harness.tracker.calls) != 0 {
+		t.Fatalf("started = %#v, notes = %q, calls = %v, want nothing continued or written", harness.started, harness.tracker.notes, harness.tracker.calls)
+	}
 }
 
 // The per-item grant counter is what bounds this: triage acts alone once, so an

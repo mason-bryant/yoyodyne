@@ -495,7 +495,7 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	// still says it is blocked is a run nothing can resume and nothing will
 	// notice. Recording why comes before the claim, so the item never reads as
 	// work somebody quietly restarted.
-	if err := c.supersedeOnItem(ctx, entry.WorkItemID, result.Reason); err != nil {
+	if err := c.supersedeOnItem(ctx, entry.WorkItemID, itemRecord(result.Reason, item, prior)); err != nil {
 		return result, err
 	}
 	continued, err := c.supersedeOnRun(prior, granted, result.Reason, result.Stall)
@@ -720,6 +720,24 @@ func continuableItem(item beads.WorkItem, workItemID string) error {
 			ErrItemNotStartable, item.ID, strings.Join(blockers, ", "))
 	}
 	return nil
+}
+
+// itemRecord is what the item is told about this re-entry: the decision, and,
+// where the item still read in_progress, that the claim the stopped run left on
+// it is the one being superseded and why that is safe.
+//
+// That is the in-progress twin of the stale blocked status the claim clears
+// with a note of its own. By the time this is written the run has been proved
+// terminal and nothing of the item is in flight, so the claim has nothing
+// working behind it; the continuation takes it over, and the item's notes say
+// what moved it rather than leaving a claim that silently changed hands.
+func itemRecord(reason string, item beads.WorkItem, prior runstate.State) string {
+	if item.Status != claimedItemStatus {
+		return reason
+	}
+	return reason + fmt.Sprintf(
+		"\nThe item still read in_progress from run %s, which ended as %s with no run of this item in flight, so that claim was left over from the stopped run rather than held by anything working on the item; the continuation of the same run supersedes it.",
+		prior.RunID, prior.Status)
 }
 
 // supersedeOnItem records the decision on the work item and puts it back to work
