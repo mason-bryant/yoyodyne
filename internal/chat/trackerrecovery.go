@@ -18,6 +18,10 @@ package chat
 // added, which is exactly the order the item asked for: the timed-out write is
 // reported per 327 only after the retries are spent.
 //
+// A creation is the exception to asking again blindly, because it is the one
+// write whose repetition is a second thing rather than the same thing twice: see
+// Create below.
+//
 // It is wrapped once, where the session opens, rather than at each of the thirty
 // call sites, so no call site can opt out and no later one can forget. And every
 // wait is recorded on the conversation's log before it is taken, for the reason a
@@ -28,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -66,10 +71,58 @@ func (r recoveringTracker) List(ctx context.Context, status string) ([]beads.Wor
 	})
 }
 
+// Create is the one write that is not safe to ask for twice. A note appended
+// again is the same note twice; an item created again is a second item, and on
+// 2026-09-24 that is how yoyodyne-ifd.428.21 and 428.22 came from one admission:
+// the `bd create` that made 428.21 was killed at the timeout after the store had
+// taken it, and the retry made 428.22. So before a creation is asked for again,
+// the tracker is asked whether the attempt that failed landed, and an item it
+// left behind is the answer rather than something to create beside.
 func (r recoveringTracker) Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
+	attempted := false
 	return recoveringTrackerValue(ctx, r.session, func(ctx context.Context) (beads.WorkItem, error) {
+		if attempted {
+			landed, found, err := r.landedCreation(ctx, item)
+			if err != nil {
+				// A creation nothing could settle is not asked for again: the listing's
+				// failure goes through the same rule, so a store that answers on the
+				// next attempt is asked both questions again then.
+				return beads.WorkItem{}, fmt.Errorf("could not tell whether the creation that failed reached the tracker, so it is not asked for again: %w", err)
+			}
+			if found {
+				return landed, nil
+			}
+		}
+		attempted = true
 		return r.tracker.Create(ctx, item)
 	})
+}
+
+// landedCreation finds the item a failed creation left behind, if it left one.
+// An item is taken for it only where it carries everything the creation wrote
+// that identifies it — the title, the parent, and the notes, which name the
+// conversation and the turn that asked — so an item somebody admitted earlier
+// under the same title is never mistaken for this one. The parent is read the
+// way every other reader of decomposition reads it, from the field or from the
+// parent-child edge, so a listing that states it only as the edge still matches.
+// That bd's own listing carries the field is pinned against a capture of it in
+// internal/beads (TestACapturedListingStatesParentageAsAnEdgeAttributedToTheChild).
+func (r recoveringTracker) landedCreation(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, bool, error) {
+	held, err := r.tracker.List(ctx, "")
+	if err != nil {
+		return beads.WorkItem{}, false, err
+	}
+	title := strings.TrimSpace(item.Title)
+	parent := strings.TrimSpace(item.Parent)
+	notes := strings.TrimSpace(item.Notes)
+	for _, candidate := range held {
+		if strings.TrimSpace(candidate.Title) == title &&
+			candidate.DecomposedFrom() == parent &&
+			strings.TrimSpace(candidate.Notes) == notes {
+			return candidate, true, nil
+		}
+	}
+	return beads.WorkItem{}, false, nil
 }
 
 func (r recoveringTracker) Update(ctx context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error) {
