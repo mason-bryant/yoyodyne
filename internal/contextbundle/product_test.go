@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
@@ -1273,6 +1274,23 @@ func TestCommandHelpIsBounded(t *testing.T) {
 	}
 	if unbounded := "Usage: yoyo <command>\n"; boundedCommandHelp(unbounded) != strings.TrimSpace(unbounded) {
 		t.Fatalf("help inside the bound was changed: %q", boundedCommandHelp(unbounded))
+	}
+}
+
+// Help with no line to cut at is still cut on a rune boundary: the byte the bound
+// lands on here is the middle of an "é", and half of one is broken text.
+func TestCommandHelpWithNoLineIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	help := "x" + strings.Repeat("é", maxCommandHelpBytes)
+	if utf8.ValidString(help[:maxCommandHelpBytes]) {
+		t.Fatal("the bound falls on a rune boundary, so this test no longer exercises a mid-rune cut")
+	}
+	bounded := boundedCommandHelp(help)
+	kept, marked := strings.CutSuffix(bounded, "\n[the rest of the command help is not included here]")
+	if !marked || !utf8.ValidString(kept) || len(kept) > maxCommandHelpBytes || len(kept) < maxCommandHelpBytes-1 {
+		t.Fatalf("bounded help kept %d bytes, marked = %v, valid = %v, want at most %d valid bytes and the omission said",
+			len(kept), marked, utf8.ValidString(kept), maxCommandHelpBytes)
 	}
 }
 

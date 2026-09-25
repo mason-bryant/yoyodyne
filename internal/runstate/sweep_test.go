@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -217,15 +218,45 @@ func TestASweepMustSayWhatBecameOfIt(t *testing.T) {
 
 // The record has to hold what a whole firing can actually produce. A firing folds
 // at most sweep.MaxMergedTurns turns together and each turn's block is capped at
-// sweep.MaxBlockBytes, so an encoded bound below that product is a bound that
-// throws the busiest passes' reports away as it writes them.
+// sweep.MaxBlockBytes, and each byte of what a block decodes to can take up to
+// maxJSONGrowth bytes once the record encodes it again, so an encoded bound below
+// that product is a bound that throws the busiest passes' reports away as it
+// writes them.
 func TestTheEncodedBoundHoldsTheLargestFiringAnAccountCanReach(t *testing.T) {
 	t.Parallel()
 
-	reachable := sweep.MaxMergedTurns * sweep.MaxBlockBytes
+	reachable := sweep.MaxMergedTurns * sweep.MaxBlockBytes * maxJSONGrowth
 	if maxEncodedSweepBytes <= reachable {
-		t.Fatalf("the encoded sweep bound is %d bytes and a firing's account can reach %d (%d turns of %d), so the heaviest passes would not store",
-			maxEncodedSweepBytes, reachable, sweep.MaxMergedTurns, sweep.MaxBlockBytes)
+		t.Fatalf("the encoded sweep bound is %d bytes and a firing's account can reach %d once encoded (%d turns of %d, grown up to %d times), so the heaviest passes would not store",
+			maxEncodedSweepBytes, reachable, sweep.MaxMergedTurns, sweep.MaxBlockBytes, maxJSONGrowth)
+	}
+	if encoded, err := json.Marshal("<"); err != nil || len(encoded)-2 != maxJSONGrowth {
+		t.Fatalf("json.Marshal(%q) = %s, %v; want the %d-byte escape the growth is sized on", "<", encoded, err, maxJSONGrowth)
+	}
+}
+
+// And a firing whose every turn filled its block with text JSON escapes is
+// stored rather than refused. Each finding here is text a block of its turn can
+// carry, and there are as many of them as a firing can merge.
+func TestAnAccountOfEscapedTextIsWrittenAndReadBack(t *testing.T) {
+	t.Parallel()
+
+	perFinding := sweep.MaxBlockBytes/sweep.MaxFindings - 64
+	account := &sweep.Result{Status: sweep.StatusComplete, Summary: "a pass that quoted a lot of markup"}
+	for i := 0; i < sweep.MaxPassFindings; i++ {
+		account.Findings = append(account.Findings, sweep.Finding{
+			Issue:       strings.Repeat("<", min(perFinding, sweep.MaxTextBytes)),
+			Disposition: sweep.DispositionLeft,
+		})
+	}
+	at := time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
+	store := newSweepStore(t)
+	if err := store.Append(Sweep{Task: "a-sweep", Role: "development-manager", StartedAt: at, EndedAt: at.Add(time.Minute), Turns: sweep.MaxMergedTurns, Result: account}); err != nil {
+		t.Fatalf("Append() of an account of escaped text error = %v", err)
+	}
+	listed, unreadable, err := store.List()
+	if err != nil || len(unreadable) != 0 || len(listed) != 1 || listed[0].Result == nil || len(listed[0].Result.Findings) != sweep.MaxPassFindings {
+		t.Fatalf("List() = %d sweep(s), %d unreadable, %v; want the account read back whole", len(listed), len(unreadable), err)
 	}
 }
 

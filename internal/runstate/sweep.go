@@ -61,9 +61,18 @@ const SweepSchemaVersion = 1
 // rather than against a round number, because a bound below that is a bound that
 // throws the busiest passes' reports away as it writes them. One turn's block is
 // capped at sweep.MaxBlockBytes and a firing folds at most sweep.MaxMergedTurns
-// of them together, so the account cannot exceed that product; what is here is
-// comfortably above it, and a test in this package keeps the two in step.
-const maxEncodedSweepBytes = 512 << 10
+// of them together, so the account cannot exceed that product before it is
+// encoded. Encoding it again for the record can grow it by up to maxJSONGrowth,
+// so the bound is sized against the encoded product rather than the decoded one:
+// a pass that quoted code or markup in every finding is a busy pass, not a
+// hostile one. What is here is comfortably above that, and a test in this
+// package keeps the two in step.
+const maxEncodedSweepBytes = 2 << 20
+
+// maxJSONGrowth is the most bytes JSON encoding writes for one byte of text:
+// "<", ">" and "&" are each escaped as six bytes, < and its kind. Every
+// other character grows less.
+const maxJSONGrowth = 6
 
 // MaxSweepTextBytes bounds the prose a record carries — what stopped a firing,
 // and what stopped the last one on its claim. It is exported because what writes

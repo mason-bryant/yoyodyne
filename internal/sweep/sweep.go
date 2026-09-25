@@ -31,8 +31,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/fenced"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // Fence opens the one block a swept turn may carry its account in. It is a
@@ -330,11 +332,18 @@ func noteDropped(summary string, findings, questions int) string {
 	}
 	// The note is what a reader most needs of the two, so it is the part kept
 	// whole: the summary is cut back far enough to leave room for it.
+	// The cut falls on a rune boundary: the record is read back through JSON,
+	// which turns each byte of a broken rune into three, and a summary that grew
+	// past its bound that way is a record refused on read.
 	room := MaxSummaryBytes - len(note) - 2
 	if room <= 0 {
-		return note[:min(len(note), MaxSummaryBytes)]
+		return oneline.Bound(note, MaxSummaryBytes)
 	}
-	return strings.TrimSpace(summary[:min(len(summary), room)]) + " " + note
+	cut := min(len(summary), room)
+	for cut > 0 && cut < len(summary) && !utf8.RuneStart(summary[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(summary[:cut]) + " " + note
 }
 
 // Extract splits a reply into what the role said and the account it gave of its
