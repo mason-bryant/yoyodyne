@@ -186,3 +186,40 @@ func (f *Tracker) AddBlocker(_ context.Context, _ string, blockerID string) erro
 	f.Item.Dependencies = append(f.Item.Dependencies, beads.Dependency{ID: blockerID, Type: "blocks"})
 	return nil
 }
+
+// TrackerRecord is what a tracker has recorded, read in one piece. It is how a
+// fixture shared by tests on this fake and tests on another reads the record
+// without naming either fake.
+type TrackerRecord struct {
+	Item        beads.WorkItem
+	Claimed     bool
+	Notes       string
+	NoteRecords []string
+	Closed      bool
+	CloseReason string
+	Blocked     bool
+	BlockReason string
+	Calls       []string
+}
+
+// Record is what this tracker has recorded so far.
+func (f *Tracker) Record() TrackerRecord {
+	return TrackerRecord{
+		Item: f.Item, Claimed: f.Claimed, Notes: f.Notes, NoteRecords: f.NoteRecords,
+		Closed: f.Closed, CloseReason: f.CloseReason, Blocked: f.Blocked, BlockReason: f.BlockReason,
+		Calls: f.Calls,
+	}
+}
+
+// SetItemStatus puts the held item in a status nothing the harness did gave it,
+// which is how a test expresses the item moving outside the run.
+func (f *Tracker) SetItemStatus(status string) {
+	f.Item.Status = status
+}
+
+// ForgetSettlement takes back a closure or a blocker as though neither had been
+// recorded, which is what a process killed before either reached the tracker
+// leaves.
+func (f *Tracker) ForgetSettlement() {
+	f.Blocked, f.BlockReason, f.Closed = false, "", false
+}

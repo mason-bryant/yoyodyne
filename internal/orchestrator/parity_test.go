@@ -562,11 +562,11 @@ func TestHumanApprovalDefinitionEndsAStoppedRunWhereThePipelineLeavesIt(t *testi
 			if !destination.Terminal {
 				t.Fatalf("the %q state sends %q to %q, which is a state; %s ends the run", parityCheck, stoppage.outcome, destination.Name, stoppage.what)
 			}
-			want := terminalTheRunEarned(fixture.tracker.closed, fixture.tracker.blocked, succeeded)
+			want := terminalTheRunEarned(fixture.tracker.Record().Closed, fixture.tracker.Record().Blocked, succeeded)
 			if destination.Name != want {
 				t.Errorf("the %q state sends %q to %q, and the run %s left is a %q one: closed=%t blocked=%t succeeded=%t",
 					parityCheck, stoppage.outcome, destination.Name, stoppage.what, want,
-					fixture.tracker.closed, fixture.tracker.blocked, succeeded)
+					fixture.tracker.Record().Closed, fixture.tracker.Record().Blocked, succeeded)
 			}
 			walkTranscript(t, parityScenario{
 				trace:    "human-approval-" + stoppage.outcome,

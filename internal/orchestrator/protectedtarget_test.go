@@ -73,7 +73,7 @@ func (r *protectedRun) assertMainNotAhead(t *testing.T) {
 }
 
 func runGitQuiet(directory string, arguments ...string) error {
-	_, err := (&fakeForge{remote: directory}).git(arguments...)
+	_, err := (&fakeForge{remote: directory}).Git(arguments...)
 	return err
 }
 
@@ -215,13 +215,13 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 
 	fixture := newQueuedFixture(t)
 	protectBranch(t, fixture.remote, "main")
-	fixture.forge.protection = publish.BranchProtection{Protected: true, By: "branch protection"}
+	fixture.forge.SetTargetProtection(publish.BranchProtection{Protected: true, By: "branch protection"})
 	outcome := fixture.run(t)
 
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.BaseCommit {
 		t.Fatalf("local main = %q after a queued merge, want the base %q", local, outcome.BaseCommit)
 	}
-	if outcome.WorkItemClosed || fixture.tracker.closed {
+	if outcome.WorkItemClosed || fixture.tracker.Record().Closed {
 		t.Fatal("a queued merge closed the item before the forge merged it")
 	}
 	if outcome.CleanupFailure != "" || outcome.WorktreeRemoved {
@@ -235,7 +235,7 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 		t.Fatal("the queued landing is not outstanding, so nothing would ever settle it")
 	}
 
-	fixture.forge.performQueuedMerge(t)
+	fixture.forge.PerformQueuedMerge(t)
 	results := fixture.reconcile(t)
 	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the queued landing settled", results)
@@ -245,7 +245,7 @@ func TestAQueuedMergeOnAProtectedTargetIsLandedByReconciliation(t *testing.T) {
 		t.Errorf("local main = %q, want it fast-forwarded onto the forge's merge %q", local, remoteTarget)
 	}
 	assertRemoteCarriesPromotion(t, fixture.repository, fixture.remote, "main", outcome.Integration.SourceCommit)
-	if !fixture.tracker.closed {
+	if !fixture.tracker.Record().Closed {
 		t.Error("the confirmed landing did not close the item")
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
@@ -341,16 +341,15 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 	cases := []struct {
 		name string
 		// answer is what the forge does with the request after the process died.
-		answer func(t *testing.T, forge *fakeForge, landed string)
+		answer func(t *testing.T, forge queuedForge, landed string)
 	}{
-		{name: "left open", answer: func(*testing.T, *fakeForge, string) {}},
-		{name: "merged", answer: func(t *testing.T, forge *fakeForge, landed string) {
-			if err := forge.mergeIntoRemote("main", landed); err != nil {
+		{name: "left open", answer: func(*testing.T, queuedForge, string) {}},
+		{name: "merged", answer: func(t *testing.T, forge queuedForge, landed string) {
+			if err := forge.MergeByHand("main", landed); err != nil {
 				t.Fatalf("merge the request: %v", err)
 			}
-			forge.merged = true
 		}},
-		{name: "queued", answer: func(_ *testing.T, forge *fakeForge, _ string) { forge.queued = true }},
+		{name: "queued", answer: func(_ *testing.T, forge queuedForge, _ string) { forge.HoldQueuedMerge() }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -358,25 +357,25 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			fixture := newQueuedFixture(t)
 			protectBranch(t, fixture.remote, "main")
 			forge := fixture.forge
-			forge.queueMerge = false
-			forge.protection = publish.BranchProtection{Protected: true, By: "branch protection"}
+			forge.SetQueueMerge(false)
+			forge.SetTargetProtection(publish.BranchProtection{Protected: true, By: "branch protection"})
 			// The forge declines, so the run goes on past the merge request and stops;
 			// what a killed process leaves is the record as it stood when the forge
 			// was asked, which is taken here and put back afterwards.
-			forge.mergeErr = publish.MergeRefused{Number: 1, Method: publish.MergeCommit, Status: "BLOCKED", Reason: "held"}
+			forge.SetMergeErr(publish.MergeRefused{Number: 1, Method: publish.MergeCommit, Status: "BLOCKED", Reason: "held"})
 			var killed runstate.State
-			forge.onMerge = func() {
+			forge.SetOnMerge(func() {
 				recorded, err := fixture.store.Load(pipelineRunID)
 				if err != nil {
 					t.Fatalf("Load() at the merge request error = %v", err)
 				}
 				killed = recorded
-			}
+			})
 			provider := roleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			pipeline := publishing(automatic(newSharedPipeline(t, fixture.repository, fixture.worktreeRoot, fixture.store, fixture.tracker, provider, []string{"exit 0"}), provider), forge)
-			outcome, _ := pipeline.Run(context.Background(), fixture.tracker.item.ID)
+			outcome, _ := pipeline.Run(context.Background(), fixture.tracker.Record().Item.ID)
 			if killed.Integration == nil || !killed.Integration.ThroughPullRequest || killed.Status.Terminal() {
 				t.Fatalf("record at the merge request = status %q, integration %#v; want a live landing on the record", killed.Status, killed.Integration)
 			}
@@ -385,9 +384,9 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			if err := fixture.store.Save(killed); err != nil {
 				t.Fatalf("Save() error = %v", err)
 			}
-			fixture.tracker.blocked, fixture.tracker.blockReason, fixture.tracker.closed = false, "", false
-			fixture.tracker.item.Status = "in_progress"
-			forge.mergeErr = nil
+			fixture.tracker.ForgetSettlement()
+			fixture.tracker.SetItemStatus("in_progress")
+			forge.SetMergeErr(nil)
 			landed := killed.Integration.SourceCommit
 			tc.answer(t, forge, landed)
 
@@ -402,8 +401,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 			local := publishedCommit(t, fixture.repository, "main")
 			switch tc.name {
 			case "left open":
-				if results[0].Action != ActionBlocked || fixture.tracker.closed || !fixture.tracker.blocked {
-					t.Fatalf("action = %q, closed = %t, blocked = %t; want the unlanded change handed to a person", results[0].Action, fixture.tracker.closed, fixture.tracker.blocked)
+				if results[0].Action != ActionBlocked || fixture.tracker.Record().Closed || !fixture.tracker.Record().Blocked {
+					t.Fatalf("action = %q, closed = %t, blocked = %t; want the unlanded change handed to a person", results[0].Action, fixture.tracker.Record().Closed, fixture.tracker.Record().Blocked)
 				}
 				if local != outcome.BaseCommit {
 					t.Errorf("local main = %q, want the base %q it never left", local, outcome.BaseCommit)
@@ -415,8 +414,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Errorf("second reconciliation = %#v, want nothing owed by a run handed to a person", again)
 				}
 			case "merged":
-				if results[0].Action != ActionCompleted || !fixture.tracker.closed {
-					t.Fatalf("action = %q, closed = %t; want the merged landing completed", results[0].Action, fixture.tracker.closed)
+				if results[0].Action != ActionCompleted || !fixture.tracker.Record().Closed {
+					t.Fatalf("action = %q, closed = %t; want the merged landing completed", results[0].Action, fixture.tracker.Record().Closed)
 				}
 				if remote := publishedCommit(t, fixture.remote, "main"); local != remote {
 					t.Errorf("local main = %q, want it caught up onto the forge's merge %q", local, remote)
@@ -425,8 +424,8 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Errorf("worktree removed = %t, branch removed = %t; want the landed run cleaned up", settled.WorktreeRemoved, settled.BranchRemoved)
 				}
 			case "queued":
-				if results[0].Action != ActionQueued || fixture.tracker.closed {
-					t.Fatalf("action = %q, closed = %t; want the queued landing left waiting", results[0].Action, fixture.tracker.closed)
+				if results[0].Action != ActionQueued || fixture.tracker.Record().Closed {
+					t.Fatalf("action = %q, closed = %t; want the queued landing left waiting", results[0].Action, fixture.tracker.Record().Closed)
 				}
 				if local != outcome.BaseCommit {
 					t.Errorf("local main = %q, want the base %q until the forge merges", local, outcome.BaseCommit)
@@ -435,12 +434,11 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 					t.Fatalf("settled = %#v, want a finished run waiting on its queued merge", settled)
 				}
 				// The forge merges, and the ordinary queued-merge settlement lands it.
-				if err := forge.mergeIntoRemote("main", landed); err != nil {
+				if err := forge.MergeByHand("main", landed); err != nil {
 					t.Fatalf("merge the request: %v", err)
 				}
-				forge.queued, forge.merged = false, true
-				if again := fixture.reconcile(t); len(again) != 1 || again[0].Action != ActionCompleted || !fixture.tracker.closed {
-					t.Fatalf("second reconciliation = %#v, closed = %t; want the queued landing completed", again, fixture.tracker.closed)
+				if again := fixture.reconcile(t); len(again) != 1 || again[0].Action != ActionCompleted || !fixture.tracker.Record().Closed {
+					t.Fatalf("second reconciliation = %#v, closed = %t; want the queued landing completed", again, fixture.tracker.Record().Closed)
 				}
 				if remote, local := publishedCommit(t, fixture.remote, "main"), publishedCommit(t, fixture.repository, "main"); local != remote {
 					t.Errorf("local main = %q, want it caught up onto the forge's merge %q", local, remote)

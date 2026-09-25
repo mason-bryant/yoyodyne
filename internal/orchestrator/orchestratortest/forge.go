@@ -229,3 +229,58 @@ func (f *Forge) Protection(_ context.Context, branch string) (publish.BranchProt
 	}
 	return f.TargetProtection, nil
 }
+
+// OpenedRequests is every pull request this forge was asked to open, in order.
+func (f *Forge) OpenedRequests() []publish.Request {
+	return f.Opened
+}
+
+// MergeRequests is every merge this forge accepted, in order.
+func (f *Forge) MergeRequests() []publish.MergeRequest {
+	return f.Merges
+}
+
+// HoldsQueuedMerge says whether the forge is holding a queued merge.
+func (f *Forge) HoldsQueuedMerge() bool {
+	return f.Queued
+}
+
+// HoldQueuedMerge is the forge holding a merge nobody asked this process for,
+// which is what a request queued before a process died leaves behind.
+func (f *Forge) HoldQueuedMerge() {
+	f.Queued = true
+}
+
+// ForgetMerges is the forge losing every merge it was asked for, queued or not.
+func (f *Forge) ForgetMerges() {
+	f.Queued = false
+	f.Merges = nil
+}
+
+// MergeByHand is somebody merging head into base at the forge outside any
+// request the harness made, which leaves the pull request merged and nothing
+// queued.
+func (f *Forge) MergeByHand(base, head string) error {
+	if err := f.MergeIntoRemote(base, head); err != nil {
+		return err
+	}
+	f.Queued, f.Merged = false, true
+	return nil
+}
+
+// SetQueueMerge, SetReplayMerge, SetMergeErr, SetHeadCommit,
+// SetTargetProtection, and SetOnMerge arrange the forge after it was built, for
+// a fixture that builds it before the test says how it behaves.
+func (f *Forge) SetQueueMerge(queue bool) { f.QueueMerge = queue }
+
+func (f *Forge) SetReplayMerge(replay bool) { f.ReplayMerge = replay }
+
+func (f *Forge) SetMergeErr(err error) { f.MergeErr = err }
+
+func (f *Forge) SetHeadCommit(commit string) { f.HeadCommit = commit }
+
+func (f *Forge) SetTargetProtection(protection publish.BranchProtection) {
+	f.TargetProtection = protection
+}
+
+func (f *Forge) SetOnMerge(onMerge func()) { f.OnMerge = onMerge }

@@ -3561,7 +3561,7 @@ func (f *fakeBackend) requestsForRole(role domain.AgentRole) []backend.RunReques
 	return matching
 }
 
-func newPipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend, commands []string) (Pipeline, *runstate.Store) {
+func newPipeline(t *testing.T, repository string, tracker WorkTracker, provider backend.Backend, commands []string) (Pipeline, *runstate.Store) {
 	t.Helper()
 	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
 	if err != nil {
@@ -3598,7 +3598,7 @@ const testGitBudget = 10 * time.Minute
 // newSharedPipeline builds a pipeline over an explicit worktree root and run
 // state store, so two pipelines can be built over the same durable artifacts:
 // that is what a restarted or a concurrent process sees.
-func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store StateStore, tracker WorkTracker, provider *fakeBackend, commands []string) Pipeline {
+func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store StateStore, tracker WorkTracker, provider backend.Backend, commands []string) Pipeline {
 	t.Helper()
 	processRunner := execution.OSProcessRunner{}
 	worktrees, err := gitworktree.New(gitworktree.Options{
@@ -3884,14 +3884,14 @@ func automaticFixture(t *testing.T) (string, *fakeTracker, *fakeBackend, Pipelin
 	return repository, tracker, provider, pipeline, store
 }
 
-func newAutomaticPipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend, commands []string) (Pipeline, *runstate.Store) {
+func newAutomaticPipeline(t *testing.T, repository string, tracker WorkTracker, provider backend.Backend, commands []string) (Pipeline, *runstate.Store) {
 	t.Helper()
 	pipeline, store := newPipeline(t, repository, tracker, provider, commands)
 	return automatic(pipeline, provider), store
 }
 
 // automatic turns a pipeline into one that reviews and integrates on its own.
-func automatic(pipeline Pipeline, provider *fakeBackend) Pipeline {
+func automatic(pipeline Pipeline, provider backend.Backend) Pipeline {
 	pipeline.Config.Approvals.Integration = domain.ApprovalAutomatic
 	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendClaudeCode, Model: testReviewerModel, Instances: 1}
 	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: testReviewerModel}

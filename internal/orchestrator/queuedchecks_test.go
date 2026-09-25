@@ -22,7 +22,7 @@ import (
 // the head's checks, and every queued merge it was asked to withdraw. Withdrawing
 // one is the forge no longer holding it.
 type checkedForge struct {
-	*fakeForge
+	queuedForge
 	reading   publish.CheckReading
 	withdrawn []int
 }
@@ -30,14 +30,15 @@ type checkedForge struct {
 func (f *checkedForge) Checks(_ context.Context, number int, _ string) (publish.CheckReading, error) {
 	reading := f.reading
 	if reading.HeadCommit == "" {
-		reading.HeadCommit = f.merges[len(f.merges)-1].HeadCommit
+		merges := f.MergeRequests()
+		reading.HeadCommit = merges[len(merges)-1].HeadCommit
 	}
 	return reading, nil
 }
 
 func (f *checkedForge) DisableAutoMerge(_ context.Context, number int) error {
 	f.withdrawn = append(f.withdrawn, number)
-	f.queued = false
+	f.DropQueuedMerge()
 	return nil
 }
 
@@ -46,12 +47,12 @@ func (f *checkedForge) DisableAutoMerge(_ context.Context, number int) error {
 func queuedOnProtectedTarget(t *testing.T) (queuedFixture, *checkedForge, Outcome) {
 	t.Helper()
 	fixture := newQueuedFixture(t)
-	fixture.forge.protection = publish.BranchProtection{Protected: true, By: "ruleset"}
+	fixture.forge.SetTargetProtection(publish.BranchProtection{Protected: true, By: "ruleset"})
 	outcome := fixture.run(t)
 	if outcome.Integration == nil || !outcome.Integration.ThroughPullRequest {
 		t.Fatalf("integration = %#v, want a landing through the pull request", outcome.Integration)
 	}
-	return fixture, &checkedForge{fakeForge: fixture.forge}, outcome
+	return fixture, &checkedForge{queuedForge: fixture.forge}, outcome
 }
 
 // sweep is the reconciler the reconcile verb builds: the forge's checks read,
@@ -98,8 +99,8 @@ func TestAQueuedHeadBehindItsTargetFailingUnrelatedChecksIsUpdatedAndRequeued(t 
 	if len(results) != 1 || results[0].Action != ActionUpdating || results[0].Failure != "" {
 		t.Fatalf("reconciliation = %#v, want the queued head put back at its promotion", results)
 	}
-	if len(forge.withdrawn) != 1 || forge.queued {
-		t.Fatalf("withdrawn = %v, queued = %t; want the queued merge withdrawn before the head is rewritten", forge.withdrawn, forge.queued)
+	if len(forge.withdrawn) != 1 || forge.HoldsQueuedMerge() {
+		t.Fatalf("withdrawn = %v, queued = %t; want the queued merge withdrawn before the head is rewritten", forge.withdrawn, forge.HoldsQueuedMerge())
 	}
 	resumed, err := fixture.store.Load(pipelineRunID)
 	if err != nil {
@@ -109,11 +110,11 @@ func TestAQueuedHeadBehindItsTargetFailingUnrelatedChecksIsUpdatedAndRequeued(t 
 		t.Fatalf("record = status %q, phase %q, integration %#v, resumptions %#v; want a live run at its promotion",
 			resumed.Status, resumed.Phase, resumed.Integration, resumed.IntegrationResumptions)
 	}
-	if fixture.tracker.blocked || fixture.tracker.closed {
-		t.Fatalf("blocked = %t, closed = %t; an update hands nothing back and closes nothing", fixture.tracker.blocked, fixture.tracker.closed)
+	if fixture.tracker.Record().Blocked || fixture.tracker.Record().Closed {
+		t.Fatalf("blocked = %t, closed = %t; an update hands nothing back and closes nothing", fixture.tracker.Record().Blocked, fixture.tracker.Record().Closed)
 	}
-	if !strings.Contains(fixture.tracker.notes, "go test (on internal/elsewhere/elsewhere_test.go, which this change does not touch)") {
-		t.Errorf("the item was not told which check failed and on what:\n%s", fixture.tracker.notes)
+	if !strings.Contains(fixture.tracker.Record().Notes, "go test (on internal/elsewhere/elsewhere_test.go, which this change does not touch)") {
+		t.Errorf("the item was not told which check failed and on what:\n%s", fixture.tracker.Record().Notes)
 	}
 
 	updates, err := reconciler.ContinueUpdates(context.Background())
@@ -127,10 +128,10 @@ func TestAQueuedHeadBehindItsTargetFailingUnrelatedChecksIsUpdatedAndRequeued(t 
 	if replayed.IntegrationRetries != 1 {
 		t.Errorf("integration retries = %d, want the update charged as the one replay it is", replayed.IntegrationRetries)
 	}
-	if replayed.PullRequest == nil || !replayed.PullRequest.MergeQueued || len(forge.merges) != 2 {
-		t.Fatalf("outcome pull request = %#v, merges = %d; want the replayed change's merge queued again", replayed.PullRequest, len(forge.merges))
+	if replayed.PullRequest == nil || !replayed.PullRequest.MergeQueued || len(forge.MergeRequests()) != 2 {
+		t.Fatalf("outcome pull request = %#v, merges = %d; want the replayed change's merge queued again", replayed.PullRequest, len(forge.MergeRequests()))
 	}
-	if again := forge.merges[1].HeadCommit; again == outcome.PullRequest.HeadCommit {
+	if again := forge.MergeRequests()[1].HeadCommit; again == outcome.PullRequest.HeadCommit {
 		t.Errorf("the merge was queued again on the old head %s, want the replayed one", again)
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
@@ -170,15 +171,15 @@ func TestAQueuedHeadFailingACheckOnItsOwnChangeIsHandedBack(t *testing.T) {
 	if len(results) != 1 || results[0].Action != ActionBlocked {
 		t.Fatalf("reconciliation = %#v, want the red merge handed back", results)
 	}
-	if len(forge.withdrawn) != 1 || forge.queued {
-		t.Fatalf("withdrawn = %v, queued = %t; want the queued merge withdrawn so nothing lands it", forge.withdrawn, forge.queued)
+	if len(forge.withdrawn) != 1 || forge.HoldsQueuedMerge() {
+		t.Fatalf("withdrawn = %v, queued = %t; want the queued merge withdrawn so nothing lands it", forge.withdrawn, forge.HoldsQueuedMerge())
 	}
-	if !fixture.tracker.blocked {
+	if !fixture.tracker.Record().Blocked {
 		t.Fatal("the red change was left queued rather than handed back")
 	}
 	for _, want := range []string{"lint (on feature.txt, which this change touches)", "fail on this change", "withdrew the queued merge"} {
-		if !strings.Contains(fixture.tracker.blockReason, want) {
-			t.Errorf("blocker does not say %q:\n%s", want, fixture.tracker.blockReason)
+		if !strings.Contains(fixture.tracker.Record().BlockReason, want) {
+			t.Errorf("blocker does not say %q:\n%s", want, fixture.tracker.Record().BlockReason)
 		}
 	}
 	settled, err := fixture.store.Load(pipelineRunID)
@@ -215,7 +216,7 @@ func TestAStuckQueuedMergeIsDocketedWithItsChecks(t *testing.T) {
 	if len(results) != 1 || results[0].Action != ActionQueued || !strings.Contains(results[0].Detail, "left queued for the next sweep") {
 		t.Fatalf("reconciliation = %#v, want the merge left queued for a sweep that hosts runs", results)
 	}
-	if len(forge.withdrawn) != 0 || !forge.queued {
+	if len(forge.withdrawn) != 0 || !forge.HoldsQueuedMerge() {
 		t.Fatalf("withdrawn = %v; a merge nothing will update is not withdrawn", forge.withdrawn)
 	}
 

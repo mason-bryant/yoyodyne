@@ -918,7 +918,7 @@ func newObserver(t *testing.T, repository, worktreeRoot string) ReconcileWorktre
 
 // reconcileSweep runs exactly one reconciliation over the durable state a
 // restarted process would find.
-func reconcileSweep(t *testing.T, repository, worktreeRoot string, store ReconcileStore, tracker *fakeTracker) []Reconciliation {
+func reconcileSweep(t *testing.T, repository, worktreeRoot string, store ReconcileStore, tracker WorkTracker) []Reconciliation {
 	t.Helper()
 	worktrees := newObserver(t, repository, worktreeRoot)
 	results, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Reconcile(context.Background())
