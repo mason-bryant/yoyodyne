@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -190,11 +191,17 @@ func TestOnlyALengthRefusalIsReadAsOne(t *testing.T) {
 		"flagged prompt too long": {result: backendapi.RunResult{IsError: true, FinalText: "Prompt is too long"}, want: true},
 		"request too large": {result: backendapi.RunResult{IsError: true, StopReason: "api_error",
 			FinalText: `API Error: 413 {"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}`}, want: true},
-		"codex context length":   {err: errors.New("stream error: context_length_exceeded"), want: true},
-		"unflagged notice":       {result: backendapi.RunResult{FinalText: "Prompt is too long"}, want: true},
-		"overload":               {result: backendapi.RunResult{IsError: true, FinalText: "API Error: 529 overloaded"}},
-		"answer about length":    {result: backendapi.RunResult{FinalText: "The prompt is too long for the reviewer; " + strings.Repeat("split it. ", 80)}},
-		"successful short reply": {result: backendapi.RunResult{FinalText: "Done."}},
+		"codex context length": {err: errors.New("stream error: context_length_exceeded"), want: true},
+		"unflagged notice":     {result: backendapi.RunResult{FinalText: "Prompt is too long"}, want: true},
+		"overload":             {result: backendapi.RunResult{IsError: true, FinalText: "API Error: 529 overloaded"}},
+		"answer about length":  {result: backendapi.RunResult{FinalText: "The prompt is too long for the reviewer; " + strings.Repeat("split it. ", 80)}},
+		// Short served replies that mention the phrases are the role talking about
+		// this very feature, and reading one as a refusal would throw away a healthy
+		// session and repeat a finished turn.
+		"short reply naming the error":           {result: backendapi.RunResult{FinalText: "Done — context_length_exceeded now starts a fresh session."}},
+		"short reply naming a failed compaction": {result: backendapi.RunResult{FinalText: "Fixed the compaction failed test."}},
+		"short reply quoting the notice":         {result: backendapi.RunResult{FinalText: "It said: Prompt is too long"}},
+		"successful short reply":                 {result: backendapi.RunResult{FinalText: "Done."}},
 	}
 	for name, tc := range cases {
 		if got := refusedAsTooLong(tc.result, tc.err) != ""; got != tc.want {
@@ -218,4 +225,99 @@ func (f *failingOnceBackend) Run(ctx context.Context, request backendapi.RunRequ
 		return backendapi.RunResult{LastEvent: result.LastEvent}, f.err
 	}
 	return result, err
+}
+
+// A session the failover's alternate was holding, refused as too long there, is
+// recorded against the endpoint that refused it and replaced on that endpoint
+// with a fresh session rebuilt from the record.
+func TestAnAlternatesSessionRefusedAsTooLongIsRecordedAgainstTheAlternate(t *testing.T) {
+	t.Parallel()
+
+	held := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "claude-session-1", FinalText: "Two goals, then."},
+		{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backendapi.UsageLimit{Kind: "five_hour", ResetsAt: time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)},
+		},
+	}}
+	crossed := &speakingBackend{results: []backendapi.RunResult{
+		{SessionID: "second-session-1", FinalText: "The second one first."},
+		{IsError: true, FinalText: "Prompt is too long"},
+		{SessionID: "second-session-2", FinalText: "Carrying on over here."},
+	}}
+	options := crossingOptions(t, held, crossed)
+	options.UsageLimits = newTestUsageLimits(t)
+	session := openTestSession(t, options)
+
+	for _, message := range []string{"what should we do?", "and after that?", "is that still right?"} {
+		if _, err := session.Send(context.Background(), message); err != nil {
+			t.Fatalf("Send(%q) error = %v", message, err)
+		}
+	}
+	if len(crossed.requests) != 3 {
+		t.Fatalf("the alternate was asked %d times, want the crossing, the refused attempt, and the fresh one", len(crossed.requests))
+	}
+	if refused := crossed.requests[1]; refused.SessionID != "second-session-1" {
+		t.Fatalf("refused attempt resumed %q, want the alternate's own session", refused.SessionID)
+	}
+	fresh := crossed.requests[2]
+	if fresh.SessionID != "" || !strings.Contains(fresh.Prompt, sessionSetAside) || !strings.Contains(fresh.Prompt, "The second one first.") {
+		t.Fatalf("fresh attempt resumed %q with prompt %q, want no session and the record rebuilt", fresh.SessionID, fresh.Prompt)
+	}
+	if strings.Count(fresh.Prompt, rebuiltContextHeader) != 1 {
+		t.Fatalf("fresh prompt = %q, want the reconstruction exactly once", fresh.Prompt)
+	}
+
+	events, err := options.Store.LoadEvents(session.Evidence().ConversationID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	var payload struct {
+		Replaced string `json:"replaced_session"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	found := 0
+	for _, event := range events {
+		if event.Type != execution.EventSessionReplaced {
+			continue
+		}
+		found++
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("session.replaced payload: %v", err)
+		}
+	}
+	if found != 1 || payload.Replaced != "second-session-1" || payload.Provider != "second-provider" || payload.Model != "second-model" {
+		t.Fatalf("session.replaced (%d recorded) = %+v, want the alternate's session on the alternate's endpoint", found, payload)
+	}
+	recorded, err := options.Store.Load(options.identity())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if recorded.ProviderSessionID != "second-session-2" || recorded.SessionSetAside != "" {
+		t.Fatalf("recorded = %#v, want the fresh session held and nothing left set aside", recorded)
+	}
+}
+
+// A conversation with no session for a reason nobody recorded — an old record
+// with no backend on it — is not told its session was refused as too long.
+func TestARebuildWithNoRecordedReplacementDoesNotClaimOne(t *testing.T) {
+	t.Parallel()
+
+	provider := &speakingBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: "Two goals, then."}}}
+	session := openTestSession(t, testOptions(t, provider))
+	if _, err := session.Send(context.Background(), "what should we do?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	session.state.ProviderSessionID = ""
+	session.state.Backend = ""
+	rebuilt, err := session.rebuildForOwnEndpoint(backendapi.RunRequest{Prompt: "and after that?"})
+	if err != nil {
+		t.Fatalf("rebuildForOwnEndpoint() error = %v", err)
+	}
+	if strings.Contains(rebuilt.Prompt, sessionSetAside) || strings.Contains(rebuilt.Prompt, crossedProviders) ||
+		!strings.Contains(rebuilt.Prompt, noSessionHeld) {
+		t.Fatalf("prompt = %q, want it told only that no session is held", rebuilt.Prompt)
+	}
 }

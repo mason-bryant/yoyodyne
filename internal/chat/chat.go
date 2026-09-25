@@ -1588,11 +1588,18 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		// fresh session with the context rebuilt from the record, under the same
 		// conversation. Only a turn that resumed a session is answered this way: one
 		// that already carried the rebuild has nothing a fresh session would drop.
-		resumed := request.SessionID != "" || policy.AlternateSessionID != ""
-		if why := refusedAsTooLong(result, err); why != "" && resumed && !replaced {
+		// Which session that was is read off where the attempt actually went: the
+		// alternate's own, where the failover moved the turn onto an endpoint that
+		// holds one.
+		refusedOn := s.servingEndpoint(served)
+		resumed := request.SessionID
+		if policy.AlternateSessionID != "" && refusedOn.Provider == policy.AlternateEndpoint.Provider {
+			resumed = policy.AlternateSessionID
+		}
+		if why := refusedAsTooLong(result, err); why != "" && resumed != "" && !replaced {
 			replaced = true
 			s.state.LastSequence = lastSequence
-			request = s.replaceSession(request, why)
+			request = s.replaceSession(request, refusedOn, resumed, why)
 			lastSequence = s.state.LastSequence
 			// The alternate's session is the conversation's session, and it was set
 			// aside with it, so the failover is asked afresh rather than holding on to
@@ -1694,6 +1701,8 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
+		// A fresh session has served a turn, so nothing is set aside any more.
+		s.state.SessionSetAside = ""
 	}
 	// The endpoint this turn was actually served on, which is the configured one
 	// unless a substitution moved it. Recording the configured one here would leave

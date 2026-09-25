@@ -3542,8 +3542,11 @@ conversation changes — its agent's memory, its report position, and its pictur
 carry over as they are.
 
 The conversation's event log records a `session.replaced` event naming the
-session set aside and what the provider said. The session is cleared on the
-record before the fresh attempt, so a fresh attempt that is refused too fails
+session set aside, the endpoint that refused it — the alternate's, where failover
+had moved the turn — and what the provider said. A reply the provider did not flag
+as a failure is read as this refusal only when the provider's notice is the whole
+of it, so a role that merely mentions one of these errors is never mistaken for
+one. The session is cleared on the record before the fresh attempt, so a fresh attempt that is refused too fails
 that turn only, and the next turn rebuilds again rather than resuming the session
 that was refused. A turn is given one fresh session, not a loop of them.
 

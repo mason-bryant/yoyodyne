@@ -68,9 +68,14 @@ type Conversation struct {
 	Role    domain.AgentRole `json:"role"`
 	Backend domain.Backend   `json:"backend"`
 	// ProviderSessionID is the session a later process resumes. It is empty
-	// until a turn completes, and a conversation without one can only be
-	// started again rather than continued.
+	// until a turn completes, and a conversation that has taken turns without one
+	// is continued from its record rather than from a session.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	// SessionSetAside is what the provider said when it refused this
+	// conversation's session as too long to continue, and empty once a fresh
+	// session has served a turn. It is what lets a rebuild tell the role why it
+	// has no session, rather than inferring a reason from the session's absence.
+	SessionSetAside string `json:"session_set_aside,omitempty"`
 	// ProviderModel is the selector the conversation requested and
 	// ProviderResolvedModel is what the provider reported serving it, because a
 	// floating family alias makes the resolved identifier the only real record.

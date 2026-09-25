@@ -122,12 +122,18 @@ const rebuiltContextHeader = "# This conversation, rebuilt from its record"
 //
 // It is also the turn after one whose fresh session failed: the session the
 // provider refused was set aside before that attempt, so there is nothing to
-// resume here either, and the reconstruction says which of the two it is.
+// resume here either. Which of the two it is comes from the record — a set-aside
+// session is recorded as one — and a conversation with no session for any other
+// reason is told only that there is none.
 func (s *Session) rebuildForOwnEndpoint(request backend.RunRequest) (backend.RunRequest, error) {
-	if s.state.Backend != "" && s.state.Backend != s.options.Provider {
+	switch {
+	case s.state.SessionSetAside != "":
+		return s.rebuildFromRecord(request, sessionSetAside)
+	case s.state.Backend != "" && s.state.Backend != s.options.Provider:
 		return s.rebuildFromRecord(request, crossedProviders)
+	default:
+		return s.rebuildFromRecord(request, noSessionHeld)
 	}
-	return s.rebuildFromRecord(request, sessionSetAside)
 }
 
 // rebuildForAlternate prepares a turn the failover is moving onto the alternate,
@@ -203,6 +209,7 @@ func (s *Session) rebuildFromRecord(request backend.RunRequest, why string) (bac
 const (
 	crossedProviders = "The provider that was holding it is not the one serving this turn, so none of its session reaches you."
 	sessionSetAside  = "The provider session that was holding it was refused as too long to continue, or could not be compacted, so this turn is served in a fresh session and none of the old one reaches you."
+	noSessionHeld    = "No provider session is held for it, so none of an earlier one reaches you."
 )
 
 // rebuiltContext is what the provider is told before the turn itself: which
@@ -372,11 +379,12 @@ func messageText(event execution.Event) string {
 // reads into an answer of its own: every one arrives as a refusal like any other.
 var sessionTooLong = regexp.MustCompile(`(?i)prompt is too long|conversation (is )?too long|request_too_large|request exceeds the maximum size|context_length_exceeded|exceeds (the|its) context window|context window (is )?(exceeded|full)|error during compaction|compaction failed|failed to compact`)
 
-// maxUnflaggedTooLongBytes bounds a reply read as a too-long refusal although the
-// provider did not flag it as a failure. A provider has been seen to end such a
-// turn with its notice as the whole of an unflagged result; a reply that runs past
-// this is a role talking about length, not a provider refusing it.
-const maxUnflaggedTooLongBytes = 512
+// unflaggedTooLong is the same refusal where the provider ended the turn without
+// flagging it as a failure, which it has been seen to do with its notice as the
+// whole of the result. Only the notice on its own is read that way: a served
+// reply that mentions one of these phrases is a role talking about length, and
+// reading it as a refusal would throw away a healthy session and a finished turn.
+var unflaggedTooLong = regexp.MustCompile(`(?i)^(prompt is too long|conversation (is )?too long|request_too_large|context_length_exceeded)[.!]?$`)
 
 // refusedAsTooLong is what the provider said where it refused this turn's session
 // as too long to continue, and empty where it did anything else.
@@ -394,7 +402,7 @@ func refusedAsTooLong(result backend.RunResult, err error) string {
 			return described
 		}
 	default:
-		if text := strings.TrimSpace(result.FinalText); len(text) <= maxUnflaggedTooLongBytes && sessionTooLong.MatchString(text) {
+		if text := strings.TrimSpace(result.FinalText); unflaggedTooLong.MatchString(text) {
 			return text
 		}
 	}
@@ -403,7 +411,9 @@ func refusedAsTooLong(result backend.RunResult, err error) string {
 
 // replaceSession sets aside the provider session a turn was refused on as too
 // long, records that it did and why, and hands back the turn rebuilt from the
-// record for a fresh session under the same conversation.
+// record for a fresh session under the same conversation. refusedOn and replaced
+// are the endpoint the refused attempt actually went to and the session it
+// resumed there, which is the alternate's where the failover had moved the turn.
 //
 // Nothing about the conversation but the session changes. The identifier, the
 // memory store keyed to the role, the report position, and the picture are all
@@ -418,16 +428,15 @@ func refusedAsTooLong(result backend.RunResult, err error) string {
 // made, does not stop the fresh attempt: an answer with less context than it
 // should have, or one the log does not explain, is worth more to the operator
 // than none, and what is missing is named on the reply.
-func (s *Session) replaceSession(request backend.RunRequest, why string) backend.RunRequest {
-	replaced := s.state.ProviderSessionID
-	if request.SessionID != "" {
-		replaced = request.SessionID
-	}
+func (s *Session) replaceSession(request backend.RunRequest, refusedOn backend.Endpoint, replaced, why string) backend.RunRequest {
 	s.state.ProviderSessionID = ""
+	s.state.SessionSetAside = singleLine(why, maxTrackerFailureBytes)
 	if err := s.emit(execution.EventSessionReplaced, map[string]any{
 		"replaced_session": replaced,
-		"provider":         s.state.Backend,
-		"reason":           singleLine(why, maxTrackerFailureBytes),
+		"provider":         refusedOn.Provider,
+		"account":          refusedOn.AccountAlias,
+		"model":            refusedOn.Model,
+		"reason":           s.state.SessionSetAside,
 	}); err != nil {
 		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(
 			"the provider session set aside as too long was not recorded: "+err.Error(), maxTrackerFailureBytes))
