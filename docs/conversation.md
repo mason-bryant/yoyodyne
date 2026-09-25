@@ -1740,7 +1740,11 @@ stall judges nothing; what it spends is the grant the decision spent when it was
 recorded, so one decision still buys one continuation. It is the one continuation
 the preserved worktree does not have to hold a change for — a first attempt
 stopped early may never have written anything, and an empty worktree is exactly
-what the attempt it is owed starts from.
+what the attempt it is owed starts from. A stall at the review or the checks,
+after the attempt finished, is continued at that step instead: the entry says
+so, the review is asked again on the change the run has with no developer
+invoked, and the branch is kept — so the worktree does have to hold that change,
+as it does for any repair.
 
 **It supersedes the blocker rather than needing you to remember to.** The run
 that stopped blocked its item and recorded the blocker on its own state, which

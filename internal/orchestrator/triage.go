@@ -1152,12 +1152,24 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time, found tri
 		// from the same predicate the repair carry-out admits a stall by, so the
 		// entry cannot offer a continuation the verb then refuses.
 		SessionResumable: continuableStall(state),
-		Counters:         counters,
+		// And where it is carried on, from the predicate that decides the phase the
+		// carry-out puts the run back at, for the same reason.
+		ResumesAt: resumesAtOf(state),
+		Counters:  counters,
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)
 	}
 	return entry, nil
+}
+
+// resumesAtOf is the step a resumable stall past its developer attempt is
+// continued at, as the docket carries it, and empty for every other stoppage.
+func resumesAtOf(state runstate.State) string {
+	if !stallResumesPastTheAttempt(state) {
+		return ""
+	}
+	return string(state.Phase)
 }
 
 // docketIntegrationStop carries the run's record of the environment stopping
