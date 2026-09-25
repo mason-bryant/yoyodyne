@@ -18,6 +18,10 @@ revisions:
       by: architect
       at: 2026-09-07T20:00:00Z
       reason: approved amendment 162f375c from yoyodyne-ifd.344 - goal identity recorded in its normative home, bracketed identifiers assigned once and never reused, attributions resolving by identity with prose fallback for entries stating none, and a duplicated identity resolving to neither and reported
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: 'approved amendment 62a9fcd1 from yoyodyne-ifd.418 - ''in force'' retired from the register at the operator''s objection; the sentence says ''active'', which is the artifact vocabulary already'
 ---
 
 # The artifact contract: specification shape and identity
@@ -28,7 +32,7 @@ This is the normative statement of what the harness checks of governed documents
 
 A specification opens with an introduction saying what the thing is and why it exists, then states its goals under a heading whose **whole text** is `Goals`, at any level — a title merely opening with the word is a title. Each goal is one top-level list entry; its statement is that entry's opening paragraph rejoined onto one line, ending at a blank line, an unindented line, a nested entry, or the emphasized `*Supports: …*` trailer — recognized by the emphasis it opens with, written directly under the entry, indented with it, no blank line between. Content after the statement describes the goal; a heading below the `Goals` heading divides goals; the section ends at the next heading at the same level or above, or at **any** heading stating what the product will not do, wherever nested. A non-goals document states its content under a `Non-goals` heading and states no goals; index and non-goals documents are not malformed for lacking goals, and a document that should state goals and does not is still reported.
 
-A goal entry may open with a stable identifier in square brackets — `- [traceable-chain] Maintain a traceable chain …` — lower-case letters, digits, and single hyphens. That identifier is the goal's identity: assigned once, never reused, and unchanged when the statement is reworded. An attribution resolves by identity where one is stated, and by the statement's words where none is. An identity carried by two goals in force resolves to neither and is reported, because choosing between them would attribute work to a goal nobody picked.
+A goal entry may open with a stable identifier in square brackets — `- [traceable-chain] Maintain a traceable chain …` — lower-case letters, digits, and single hyphens. That identifier is the goal's identity: assigned once, never reused, and unchanged when the statement is reworded. An attribution resolves by identity where one is stated, and by the statement's words where none is. An identity carried by two active goals resolves to neither and is reported, because choosing between them would attribute work to a goal nobody picked.
 
 ## Identity
 

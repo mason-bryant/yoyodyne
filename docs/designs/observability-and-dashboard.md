@@ -18,6 +18,10 @@ revisions:
       by: architect
       at: 2026-09-19T14:10:00Z
       reason: 'operator direction of 2026-09-19 (directive-6de828a8) - the bind address and allowed hosts become configuration with loopback defaults; a non-loopback bind is an opt-in requiring a supplied token, with Host and Origin validated against the configured set and every other rule unchanged; the read-only, no-write-path property recorded as what makes the opt-in safe, and plain-HTTP transport stated honestly'
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: 'yoyodyne-ifd.430.6 companion, also landing approved amendment 7b674d9e from yoyodyne-ifd.432.9 - the read model gains the program-manager query and the page a section projecting it; the section list is restated as shipped, with spend in its own box under the status band and throughput reporting endings only'
 ---
 
 # One observability read model, and the read-only dashboard that projects it
@@ -37,6 +41,7 @@ A shared Go package, independent of HTTP and of any rendering, reading only the 
 - integrated-work totals over explicit daily and weekly windows, counting the same events the CLI counts;
 - provider cost with every figure classified: known (provider-reported), unknown, or unattributable, and an `estimated` class reserved for future sources that is never summed silently into known — unknown renders as unknown, never as zero, exactly as the cost surfaces already hold;
 - capacity: per configured account alias, the model, active invocation count, state — healthy, waiting, usage-limited, or **capacity-blocked** — the recorded reset time, and recent capacity events. The capacity-blocked state exists as a read-model query, carried in `yoyo status --json` as `standing.capacity_blocked`, derived from the run records and the usage-limit log, naming each parked or blocked run and each refused conversation with its reset time, the time already waited, and a remedy.
+- program managers: per configured instance, its name, lane, the status derived as [program-manager](program-manager.md) specifies — blocked from an open cited request, stale from the pass records against the instance's schedule, working otherwise — its open restart requests, and its current lane report, served whole one instance at a time.
 
 The model also serves what Slack's governed behavior already needs — per-item status for thread reactions, directive lifecycle marks, item titles for thread openers — so the sink presents these derivations instead of computing them.
 
@@ -44,7 +49,7 @@ The model also serves what Slack's governed behavior already needs — per-item 
 
 ## The dashboard *(the sections yoyodyne-ifd.141 builds)*
 
-A locally hosted, read-only page with five visually distinct sections: a top status band (active agents, queued work, attention count, throughput, cost); live agent and work cards (role, item title and id, phase, provider and model, elapsed time); a compact pipeline view showing where work accumulates or blocks; daily and weekly throughput with total provider cost, labeled for completeness; and the capacity panel from the model's capacity query, credentials nowhere. Attractiveness is an acceptance requirement — hierarchy, typography, spacing, accessible color, responsive layout, useful empty, loading, and error states, a small amount of purposeful motion — and polish must never imply precision the model did not claim. Simple polling; push infrastructure is deferred unless polling proves inadequate. A degraded source gets a prominent indicator while the page stays usable. Restarting the dashboard changes no workflow state and loses no history, because the history lives in the durable records, not in the page.
+A locally hosted, read-only page with seven visually distinct sections: a top status band (active agents, queued work, attention count, throughput, landed today and this week); a spend box directly under it, showing the last 24 hours rolling and the last seven local days by kind — runs, conversations, branch reviews, exchanges, side threads — with a 30-day daily listing behind it, every figure classified and every floor marked; live agent and work cards (role, item title and id, phase, provider and model, elapsed time); a compact pipeline view showing where work accumulates or blocks; throughput over the same two windows, reporting endings only in the run history's own words, with cost left to the spend box; the capacity panel from the model's capacity query, credentials nowhere; and the program managers, each instance with its name in full, its lane, its status as blocked, stale, or working, and a link opening its lane report, from the model's `program_managers` query per [program-manager](program-manager.md). Attractiveness is an acceptance requirement — hierarchy, typography, spacing, accessible color, responsive layout, useful empty, loading, and error states, a small amount of purposeful motion — and polish must never imply precision the model did not claim. Simple polling; push infrastructure is deferred unless polling proves inadequate. A degraded source gets a prominent indicator while the page stays usable. Restarting the dashboard changes no workflow state and loses no history, because the history lives in the durable records, not in the page.
 
 The dashboard is a projection, never an engine: it owns no workflow, conversation, provider, or configuration state, and offers no write of any kind. This is the boundary [the v1 non-goals] now record, and this design binds to it.
 

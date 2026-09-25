@@ -14,6 +14,10 @@ revisions:
       by: architect
       at: 2026-09-07T00:30:00Z
       reason: 'yoyodyne-ifd.294 - the config.lock baseline ratified as a contract: bundle name, bundle revision digest, per-value digests and never values, a version field, generated and committed, nothing in the load path reading it, held by a conformance test; recorded in the baseline section, the 2026-09-02 ratification entries confirmed present'
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: 'approved amendment eb9b385e from yoyodyne-ifd.418 - the same retirement; ''already applies'' in place of ''in force'''
 ---
 
 # Portable agent configuration
@@ -144,7 +148,7 @@ checkable.
 **`yoyo config materialize`** turns an inheriting configuration into an explicit
 one. It resolves the effective configuration, writes it as a complete standalone
 file with no `extends`, copies the personas into `.yoyodyne/personas/`, and
-records the baseline of section 4. It writes what is already in force, so it
+records the baseline of section 4. It writes what already applies, so it
 cannot lose a project value. This replaces
 [the four manual steps](../configuration.md#converting-an-inheriting-configuration-to-an-explicit-one)
 documented today, whose step 3 is "re-apply what was yours" and whose failure

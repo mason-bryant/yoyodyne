@@ -33,7 +33,15 @@ revisions:
     - action: amended
       by: architect
       at: 2026-09-07T00:30:00Z
-      reason: yoyodyne-ifd.313 - the operator-approved communication rule recorded as binding on every communicator, final text from the item with his three amendments applied verbatim; governs the recurring-loop reports from their first posts, with yoyodyne-ifd.314's reach rule implementing placement beneath it
+      reason: yoyodyne-ifd.313 - the operator-approved communication rule recorded as binding on every communicator, final text from the item with the operator's three amendments applied verbatim; governs the recurring-loop reports from their first posts, with yoyodyne-ifd.314's reach rule implementing placement beneath it
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: 'approved amendment 8eb60865 from yoyodyne-ifd.441 - the degraded class stops enumerating shipped states, which had gone stale at two while five shipped; the admitting rule is what the design owns'
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: 'approved amendment ee80baf9 from yoyodyne-ifd.363 - the 2026-09-07 entry''s reason reworded from a gendered pronoun to ''the operator''s'', no other word of it changed and nothing in the prose changed; shipped documents say nothing about the operator''s pronouns'
 ---
 
 # Slack reporting: events out, directives in, one thread per topic
@@ -67,7 +75,7 @@ A sink starting with no cursor for a stream initializes that cursor at now and r
 
 **What may arrive as a direct message.** A direct message is admitted only by naming its class, and a state fitting neither class does not DM — that is the gate a developer must not widen silently, stated here rather than in `heartbeat.go`:
 
-- **Degraded** — the system is stopped, stale, or choosing nothing over ready work: something only a human fixes. The two shipped states (a watch session running a build the harness moved past; nothing started while work was ready) are this class, and the original stopped-and-waiting states are too.
+- **Degraded** — the system is stopped, stale, or choosing nothing over ready work: something only a human fixes. Which states ship in this class is the operator guide's to list, because the list moves with every state admitted; what does not move is the admitting rule, and a state that fits neither class does not DM.
 - **Advisory-once** — a fact addressed to a person that speaks exactly once per fact, deduplicated durably, never repeated, never urgent in presentation. The bundle-improvement notice is its first member: one DM per newly-available improvement, the dedup key recorded durably so restarts cannot re-announce.
 
 **6. One vocabulary, two directions.** Outbound events and inbound directives are two halves of one contract, correlated by topic (section: *Addressing*). The inbound half creates **no new directive machinery**: a thread reply is a new *receiver* for the existing directive record — same kinds, same pause semantics, same resolution — so nothing about the channel can weaken directive governance, because the channel does not have its own governance to weaken.
