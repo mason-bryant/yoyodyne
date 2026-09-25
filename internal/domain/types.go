@@ -24,12 +24,19 @@ const (
 	RoleDevelopmentManager AgentRole = "development-manager"
 	RoleDeveloper          AgentRole = "developer"
 	RoleReviewer           AgentRole = "reviewer"
+	// RoleProgramManager is the program manager, the role type the operator
+	// decided on 2026-09-24 (docs/designs/program-manager.md): an agent filling it
+	// owns one outcome across the other five, admits work inside one lane, and asks
+	// the product manager for everything outside it. It is last rather than placed
+	// in the hierarchy because it is not a step of it: it watches the whole line.
+	RoleProgramManager AgentRole = "program-manager"
 )
 
 // Roles are the harness's roles in the order the hierarchy runs: product intent,
 // then design, then decomposition, then the two roles that do the work inside a
-// run. It is the whole set, so a caller that has to name what is allowed reads
-// it from here rather than repeating the list.
+// run — and then the program manager, which watches the line rather than
+// standing in it. It is the whole set, so a caller that has to name what is
+// allowed reads it from here rather than repeating the list.
 func Roles() []AgentRole {
 	return []AgentRole{
 		RoleProductManager,
@@ -37,27 +44,20 @@ func Roles() []AgentRole {
 		RoleDevelopmentManager,
 		RoleDeveloper,
 		RoleReviewer,
+		RoleProgramManager,
 	}
 }
 
-// roleProgramManager is the program manager's name, the role type the operator
-// decided on 2026-09-24 (docs/designs/program-manager.md). It is not an
-// AgentRole yet and not among Roles(): no agent can be configured to it until
-// its authority is written in code, and a name Valid() accepted before then
-// would name authority nobody wrote.
-const roleProgramManager = "program-manager"
-
-// RoleNames are the names prose gives the harness's roles: every role in Roles(),
-// and the program manager, which is a role people write about before any agent
-// can fill it. It is what a reader of prose asks when a word could be a role or
+// RoleNames are the names prose gives the harness's roles: every role in
+// Roles(). It is what a reader of prose asks when a word could be a role or
 // something else of the same name — a document whose id is a role's name is the
 // case that asked first.
 func RoleNames() []string {
-	names := make([]string, 0, len(Roles())+1)
+	names := make([]string, 0, len(Roles()))
 	for _, role := range Roles() {
 		names = append(names, string(role))
 	}
-	return append(names, roleProgramManager)
+	return names
 }
 
 // Valid reports whether a name is one of the harness's roles. An unrecognized
@@ -66,7 +66,7 @@ func RoleNames() []string {
 // from a role has no answer for it.
 func (r AgentRole) Valid() bool {
 	switch r {
-	case RoleProductManager, RoleArchitect, RoleDevelopmentManager, RoleDeveloper, RoleReviewer:
+	case RoleProductManager, RoleArchitect, RoleDevelopmentManager, RoleDeveloper, RoleReviewer, RoleProgramManager:
 		return true
 	default:
 		return false
@@ -318,9 +318,16 @@ func ConversationWith(role AgentRole) WorkItemExecutor {
 // nothing forces one but the refusal.
 var WorkItemExecutors = conversationExecutors()
 
+// The program manager is not among them. Its role is filled by instances, each
+// owning one lane, so a marker naming the role names no conversation in
+// particular; and its work reaches it through its own passes over its lane
+// rather than by an item handed to it.
 func conversationExecutors() []WorkItemExecutor {
 	executors := make([]WorkItemExecutor, 0, len(Roles()))
 	for _, role := range Roles() {
+		if role == RoleProgramManager {
+			continue
+		}
 		executors = append(executors, ConversationWith(role))
 	}
 	return executors

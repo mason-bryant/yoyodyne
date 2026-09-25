@@ -1,6 +1,6 @@
 package rolecapability
 
-// The five roles' capabilities, written down.
+// The six roles' capabilities, written down.
 //
 // Every line below is read off the authority inventory rather than decided here.
 // The conversation authority table says what a role may ask for; the artifact and
@@ -70,6 +70,7 @@ func bundles() []Bundle {
 				capability.ProposalRaise,
 				capability.ConcernRaise,
 				capability.ExchangeAsk,
+				capability.ExchangeAnswer,
 				// The three roles that hold a standing conversation carry a memory of
 				// their own, and the two that are gated inside a run do not. That split is
 				// the agent-memory design's rather than a preference: memory is what tunes
@@ -95,6 +96,7 @@ func bundles() []Bundle {
 				capability.ArtifactDesignMutate,
 				capability.InvariantMutate,
 				capability.ExchangeAsk,
+				capability.ExchangeAnswer,
 				capability.AgentContextMutate,
 			},
 		},
@@ -110,6 +112,7 @@ func bundles() []Bundle {
 				capability.WorkDecompose,
 				capability.WorkTriage,
 				capability.ExchangeAsk,
+				capability.ExchangeAnswer,
 				capability.AgentContextMutate,
 			},
 		},
@@ -148,6 +151,90 @@ func bundles() []Bundle {
 				capability.RunStateMutate,
 				capability.ReviewVerdict,
 			},
+		},
+		{
+			// The program manager's set is its design's, restated capability for
+			// capability (docs/designs/program-manager.md, "The fixed capability
+			// set"), and it is narrower than the product manager's on every axis. It
+			// holds no close and no retire: closing is the harness's on a landing
+			// and withdrawing scope is the product manager's. It holds no triage,
+			// no crossing, no run cause, no artifact write, no worktree, no checks,
+			// and no verdict. Its tracker writes are the lane-scoped names rather
+			// than the product manager's or the development manager's, so what
+			// bounds them is a scope over each action rather than a narrower role
+			// holding a wider name.
+			//
+			// It holds no ProviderInvoke either, and that is the design's list rather
+			// than an oversight: a pass is a recurring-task firing of the role's own
+			// conversation, which asks nothing of a bundle before it spends, and no
+			// registered action runs on this role's behalf.
+			Role: domain.RoleProgramManager,
+			Owns: "one outcome across the line, watched on a schedule: the work admitted inside its own lane, and its lane report",
+			Holds: []capability.Capability{
+				capability.WorkItemRead,
+				capability.RepositoryRead,
+				capability.RepositoryList,
+				capability.ReadModelRead,
+				capability.WorkItemAdmit,
+				capability.WorkItemAttribute,
+				capability.WorkItemUpdate,
+				capability.WorkItemLabel,
+				capability.WorkItemReprioritize,
+				capability.WorkItemPark,
+				capability.WorkItemUnpark,
+				capability.WorkItemLink,
+				capability.WorkItemUnlink,
+				capability.WorkItemReparent,
+				capability.AgentContextMutate,
+				capability.LaneReportWrite,
+				capability.ReportFile,
+				capability.AmendmentPropose,
+				capability.ExchangeAsk,
+				capability.ExchangeAnswer,
+				capability.ServiceRequestRestart,
+			},
+		},
+	}
+}
+
+// Ahead is one capability a bundle holds before anything enforces it, and the
+// work that builds what does.
+type Ahead struct {
+	Capability capability.Capability
+	Reason     string
+}
+
+// declaredAhead is every capability the program manager's bundle holds whose
+// enforcement site is not built yet, and why.
+//
+// The bundle is the design's set, whole, because the design fixes it in one
+// statement and splitting it across the changes that build each part would leave
+// the registry saying something different after every one of them. What that
+// costs is capabilities held before anything reads them, and this list is where
+// that is said rather than left to be inferred from a bundle: each entry names
+// what builds the site that will ask for it. Holding one of these grants nothing
+// today, because nothing yet performs the act on any role's behalf.
+func declaredAhead() []Ahead {
+	return []Ahead{
+		{
+			Capability: capability.ReadModelRead,
+			Reason:     "the read-model block a pass opens with and the one named query a reply may ask for are their own child of yoyodyne-ifd.430.13; until it lands the program manager is handed no read-model query",
+		},
+		{
+			Capability: capability.LaneReportWrite,
+			Reason:     "the lane report and the one typed block that rewrites it are their own child of yoyodyne-ifd.430.13; until it lands no reply writes a lane report",
+		},
+		{
+			Capability: capability.ServiceRequestRestart,
+			Reason:     "the durable restart request is its own child of yoyodyne-ifd.430.13, and what executes one is the supervisor's pass under yoyodyne-ifd.413; until the first lands no request can be written",
+		},
+		{
+			Capability: capability.ReportFile,
+			Reason:     "reports are read from every role's reply today whatever its bundle holds, so no site asks for this yet; the program manager holds it because its design says so, and making the other roles' reports ask for it is a change to their bundles nobody has ruled on",
+		},
+		{
+			Capability: capability.AmendmentPropose,
+			Reason:     "proposals are read from a developer run's reply today and from no conversation, and no site asks for this yet; the developer's bundle is pinned and does not carry it, and the program manager's proposal block arrives with its pass",
 		},
 	}
 }

@@ -1073,6 +1073,7 @@ project rewrites any persona it likes and the boundaries do not move:
 | architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
 | developer, reviewer | yes | nothing | no | none |
+| [program manager](designs/program-manager.md) | yes | nothing yet: admits, attributes, updates, labels, reparents, orders, parks, and links **only inside its own lane**, and no lane is enforced yet, so every one of those is refused; never closes, retires, or records triage | yes | none |
 
 The product manager's admitting is the one row a setting moves, and it moves in
 one direction only. `approvals.work_items` decides what may reach the queue
@@ -1136,7 +1137,7 @@ documents it is given: description of the implementation, never intent.
 ### Reading the repository at a recorded commit
 
 The three management roles — product manager, architect, development manager —
-can have the harness read the repository for them. It is the same arrangement
+and the program manager can have the harness read the repository for them. It is the same arrangement
 the tracker has: the role names a path in a bounded block, the harness performs
 the read, records it, tells you, and hands the content back as evidence before
 the reply finishes. The role still has no filesystem. What was refused with the
@@ -1310,7 +1311,11 @@ for:
 ```
 
 The channel runs between the three roles that hold judgement about the product —
-the product manager, the architect, and the development manager. The developer
+the product manager, the architect, and the development manager — and the
+[program manager](designs/program-manager.md), whose requests to the architect
+and the development manager are asks rather than acts. Each end is its own
+capability, `exchange.ask` to put a question and `exchange.answer` to be put one,
+and every role on the channel holds both. The developer
 and the reviewer are not on it: their judgement is exercised inside a run,
 against a change and a worktree, and an opinion from either with none of that in
 front of it is worth less than the round it would cost.
@@ -1396,8 +1401,8 @@ item's price. What the record holds is the product, the repository, the two role
 and the conversation the asker spoke from — nothing that says which piece of work
 the question was for — and the conversation is no stand-in for one, since a role
 stays in the same conversation across everything it discusses. That is also why
-the membership above matters here: the roles on this channel own documents and
-queues, and the two that work inside a run are not on it.
+the membership above matters here: the roles on this channel own documents,
+queues, or a lane, and the two that work inside a run are not on it.
 
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog

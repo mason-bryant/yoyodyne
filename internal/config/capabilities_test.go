@@ -19,7 +19,8 @@ import (
 
 // TestBuiltinAgentsCarryTheirRolesRegisteredCapabilities is the agreement claim:
 // every agent the shipped bundle declares holds exactly what the registry says
-// its role holds, and the five roles between them are the whole of the registry.
+// its role holds, and the five roles between them are the whole of the registry
+// but the program manager, which no project is given by default.
 func TestBuiltinAgentsCarryTheirRolesRegisteredCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +51,15 @@ func TestBuiltinAgentsCarryTheirRolesRegisteredCapabilities(t *testing.T) {
 		described[agent.Role] = true
 	}
 	for _, role := range registry.Roles() {
+		// The program manager is the one role the shipped bundle leaves out: an
+		// instance is a lane and a remit somebody chose, so a project configures
+		// its own rather than inheriting one nobody asked for.
+		if role == domain.RoleProgramManager {
+			if described[role] {
+				t.Errorf("the shipped bundle configures a program manager; its instances are each project's to declare")
+			}
+			continue
+		}
 		if !described[role] {
 			t.Errorf("the registry describes the %s and the shipped bundle configures no agent for it", role.Title())
 		}

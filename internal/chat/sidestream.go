@@ -39,8 +39,15 @@ import (
 func (a Authority) OnSideStream() Authority {
 	narrowed := a
 	narrowed.TrackerActions = nil
+	narrowed.LaneActions = nil
 	for _, action := range a.TrackerActions {
-		if sidestream.Permits(trackerCapabilities[action]) {
+		// A lane-scoped action is held through its lane-scoped name, so that is
+		// the name the side thread is asked about.
+		held := trackerCapabilities[action]
+		if a.LaneScoped(action) {
+			held = laneCapabilities[action]
+		}
+		if sidestream.Permits(held) {
 			narrowed.TrackerActions = append(narrowed.TrackerActions, action)
 		}
 	}
@@ -54,6 +61,7 @@ func (a Authority) OnSideStream() Authority {
 	narrowed.RepositoryReads = a.RepositoryReads && sidestream.Permits(capability.RepositoryRead) &&
 		sidestream.Permits(capability.RepositoryList)
 	narrowed.Asks = a.Asks && sidestream.Permits(capability.ExchangeAsk)
+	narrowed.Answers = a.Answers && sidestream.Permits(capability.ExchangeAnswer)
 	// A side thread writes no memory of its own: what it worked out reaches the
 	// agent's memory once, as the merge the harness writes when it concludes.
 	narrowed.Memory = a.Memory && sidestream.Permits(capability.AgentContextMutate)
