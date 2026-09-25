@@ -294,6 +294,14 @@ type Publication struct {
 	// merged one, which is otherwise finished work rather than something
 	// somebody has to look at.
 	Message string `json:"message,omitempty"`
+	// Checks is the harness's account of the request's checks as the reconciling
+	// sweep last read them from the forge — which failed and on what files, how
+	// far behind its target the head is, and when that was read — and is empty
+	// where no sweep has read them. It is carried because a merge the forge is
+	// holding says nothing about whether it will land: two queued merges sat
+	// against red builds for a day and more while the docket said only that they
+	// were queued (yoyodyne-ifd.429.16).
+	Checks string `json:"checks,omitempty"`
 	// ApprovedAt is when the publication was approved and left unmerged, which
 	// is when the run that made it ended. The age an entry reports is measured
 	// from here to when it was docketed, so it is an age rather than a countdown
@@ -1419,6 +1427,9 @@ func (e Entry) Validate() error {
 			if len(e.Publication.Message) > MaxBlockerBytes {
 				problems = append(problems, fmt.Errorf("publication: message is %d bytes, limit is %d", len(e.Publication.Message), MaxBlockerBytes))
 			}
+			if len(e.Publication.Checks) > MaxBlockerBytes {
+				problems = append(problems, fmt.Errorf("publication: checks is %d bytes, limit is %d", len(e.Publication.Checks), MaxBlockerBytes))
+			}
 		}
 		if strings.TrimSpace(e.Blocker) != "" {
 			problems = append(problems, errors.New("a publication entry names no blocker: the change is integrated and only its publication is unfinished"))
@@ -2110,6 +2121,14 @@ func (e Entry) renderPublication() string {
 		merge = "the forge has its merge queued"
 	}
 	fmt.Fprintf(&rendered, "      Forge state: %s, %s\n", nonEmpty(published.State, "unreported"), merge)
+	// A queued merge is never shown without its checks beside it, because a merge
+	// the forge is holding for checks that will not pass is not going to land.
+	switch {
+	case published.Checks != "":
+		fmt.Fprintf(&rendered, "      Checks: %s\n", published.Checks)
+	case published.MergeQueued:
+		rendered.WriteString("      Checks: not yet read by a reconcile sweep, so whether the queued merge can land is unknown\n")
+	}
 	if published.MergeCommit != "" {
 		fmt.Fprintf(&rendered, "      Forge merge commit: %s\n", published.MergeCommit)
 	}

@@ -387,3 +387,26 @@ func TestEveryMoverALaneReportMayNameIsAMover(t *testing.T) {
 		}
 	}
 }
+
+// A queued merge's line carries the checks the last sweep read, so the forge
+// holding a merge is never said without whether it can land.
+func TestAQueuedPublicationLineCarriesItsChecks(t *testing.T) {
+	t.Parallel()
+	published := runstate.State{
+		RunID: "run-queued", WorkItemID: "yoyodyne-ifd.437.4", Branch: "yoyodyne/item/queued",
+		Integration: &runstate.Integration{TargetBranch: "main"},
+		PullRequest: &runstate.PullRequest{Number: 713, URL: "https://forge.example/pr/713", MergeQueued: true,
+			Checks: &runstate.PullRequestChecks{
+				HeadCommit: "1111111111111111111111111111111111111111",
+				ReadAt:     moment,
+				Failing:    []runstate.FailingCheck{{Name: "go test", Paths: []string{"internal/other/other_test.go"}}},
+				BehindBy:   31,
+			}},
+	}
+	what := awaitingForgeAttention(published).What()
+	for _, want := range []string{"pull request #713", "checks failing: go test (on internal/other/other_test.go, which this change does not touch)", "31 commit(s) behind main"} {
+		if !strings.Contains(what, want) {
+			t.Errorf("line %q does not say %q", what, want)
+		}
+	}
+}

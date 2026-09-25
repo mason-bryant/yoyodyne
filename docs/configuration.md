@@ -3880,6 +3880,15 @@ plainly that the checks passed and the reviewer approved, and that what needs
 looking at is the target branch. Setting the bound to `0` restores the earlier
 behavior: the first refused promotion ends the run.
 
+A merge the forge queued can lose the same race after the run is over: the
+target moves on, the queued head falls behind it, and its checks fail on files
+the change does not touch. `yoyo reconcile` reads a queued merge's checks on
+every sweep and, finding that, withdraws the queued merge and replays the change
+onto the target through the same run — checks again, a fresh review, and the
+merge queued again — spending one retry from this same budget. A run that has
+spent it is handed back instead
+([operations](operations.md#recovering-interrupted-runs)).
+
 A replay that **conflicts** is never retried and never resolved automatically.
 The replay is abandoned, the branch and worktree are left exactly as they were,
 both sides of the conflict survive, and the run stops with a blocker on the

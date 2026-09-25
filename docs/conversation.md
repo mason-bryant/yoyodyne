@@ -1511,7 +1511,13 @@ to decide about off the end of it.
 An unfinished publication is docketed too: one the harness already recorded as
 outstanding — a merge the forge dropped, or one it performed that could not be
 confirmed — and one that has simply been sitting unmerged past
-`triage.stuck_merge_age`.
+`triage.stuck_merge_age`. A merge the forge is still holding is never docketed
+as only that: its entry carries the checks the last reconcile sweep read — which
+failed and on what files, and how far behind its target the head is — or says
+that no sweep has read them yet. A red one rarely stays queued long enough to
+be docketed at all, because the sweep brings a head that fell behind its target
+up to date and hands back one whose own change fails
+([operations](operations.md#recovering-interrupted-runs)).
 
 Each entry carries the evidence rather than a summary of it: the blocker in the
 words it was recorded in — or, for a death that recorded none, the failure the

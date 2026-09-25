@@ -1318,6 +1318,54 @@ work. It
 is asked again on the recoverable-failure backoff before it gives up, and what
 it leaves if it does is recorded below.
 
+**A merge the forge still holds is read with its checks.** "Queued" says the
+forge will merge the request once the base branch's requirements are met, and
+nothing about whether they ever will be: pull request 609 sat queued for 33
+hours against a red build, and 713 sat 31 commits behind main failing two tests
+its change never touched while the development manager waited on it because the
+record said the merge was queued. So every sweep that finds a merge still queued
+also asks the forge for the head's checks — which failed, the files each failing
+check's annotations name, and how many commits the target has that the head
+does not — writes that onto the run's publication record, and decides on it:
+
+- **Checks passing, or still running.** The merge stays queued, and the reading
+  goes with it everywhere the merge is named: the sweep's line, the "Needs a
+  human" entry for the publication, and the docket entry once the request has
+  sat past `triage.stuck_merge_age`.
+- **A head behind its target whose failing checks name no file the change
+  touches.** The failure is one the change met on a target that has moved on,
+  not one it brought, so the harness does what a promotion that lost its race
+  does. The sweep withdraws the queued merge first — a merge left armed would
+  land the rewritten head the moment its checks passed, before any reviewer
+  saw it — tells the item, and puts the run back at its promotion (an
+  integration resumption of cause `queued-head-behind`). The sweep's last step
+  hosts it, beside the usage-limit continuations: the promotion finds the target
+  moved, replays the change onto it, runs the checks again, gets a fresh
+  independent review, and queues the merge again. That spends one
+  `execution.integration_retries_before_reconciliation`, the budget every replay
+  spends, and a run that has spent it is handed back instead. `yoyo reconcile
+  --json` carries what each came to under `updates`. Where the moment is wrong
+  rather than the run — intake held, every developer slot taken, or a pass that
+  hosts no runs, such as the settle a conversation makes — the merge is left
+  queued with the checks beside it and the reason, for the next `yoyo reconcile`.
+- **Anything else red** — a failing check whose annotations name a file the
+  change touches, or a head already level with its target, where nothing but the
+  change differs and an update would change nothing — is handed back. The queued
+  merge is withdrawn and the run is settled as a merge the forge dropped: a
+  blocker on the item naming the failing check and the files, the drop recorded
+  on the run, and the publication on the docket where `yoyo triage rearm` is
+  decided. A run whose change was promoted onto the local target first, or whose
+  worktree or branch is gone, cannot be replayed, and is handed back the same way
+  when its head falls behind.
+
+A check that annotates no file says nothing about whose failure it is, and is
+not read as the change's: a head behind its target failing only such checks is
+brought up to date, and if it still fails once level with its target it is
+handed back. A reading the forge could not give leaves the merge queued, says
+so, and writes nothing — a check state nobody read is not a red one. A merge
+nobody has read the checks of yet is docketed saying exactly that rather than
+as approved and queued with nothing beside it.
+
 Three settle-path outcomes leave a publication outstanding for a person, each
 with its own line on the work item. A merge the forge **dropped** is the
 first: something the base branch required went unmet, the harness does not
@@ -1359,12 +1407,15 @@ still reach you when the evidence demands it — a preserved blocker, a diverged
 remote, a catch-up that could not finish — but none of them asks reconcile to
 exercise judgement: it reports and leaves the decision where it belongs.
 Settling never invokes a provider either: a lost process handle is not a
-reason to start a second developer for an item. The one provider invocation the
-sweep makes is the last thing it does, and it starts no second developer: a run
+reason to start a second developer for an item. The provider invocations the
+sweep makes are the last thing it does, and none of them starts a second
+developer: a run
 [paused on a usage limit](#waiting-out-a-provider-usage-limit) whose process
 exited on the in-process bound is continued by the sweep itself once its
 deadline has passed, in the run's own worktree and developer session, which is
-the same run's own attempt reissued rather than a new one.
+the same run's own attempt reissued rather than a new one; and a queued merge
+the settlement put back at its promotion to bring its head up to date is
+carried through its replay, its checks, and its review by the same run.
 
 **None of the three stands forever.** Every sweep asks the remote again about
 each publication the record says is merged and unfinished, and finishes the ones
@@ -1566,7 +1617,7 @@ needs the checkout it was going to hand back. The branch is still there and so i
 the preserved work, so replanning or re-running the item is not affected.
 
 The last reading the sweep takes — after every settlement above and before the
-one thing it continues, below — is whether anything is happening at all. When
+runs it continues, below — is whether anything is happening at all. When
 no developer run has started or ended for `--stall-after` — ten minutes by
 default — the tracker reports work ready, and no hold, no still-moving run and no provider usage window
 accounts for it, that is recorded against the product as a stall and said here:
@@ -2042,7 +2093,9 @@ Needs a human (3):
   listed is one that is not. The unpublished promotions are the same set the
   channel's hourly line counts as awaiting the forge, read by the same
   derivation, and each says who it is waiting on: the forge's while it holds the
-  merge queued, the development manager's once it has dropped one, the
+  merge queued — with the checks the last sweep read beside it, since a merge
+  held for checks that will not pass is [not left queued](#recovering-interrupted-runs)
+  — the development manager's once it has dropped one, the
   operator's for a request nothing ever asked it to merge, and the harness's for
   a promotion whose record holds no request at all — the next
   [`yoyo reconcile`](#recovering-interrupted-runs) looks the request up by the
