@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -113,5 +114,9 @@ func boundUnchecked(reason string) string {
 	if len(reason) <= triage.MaxFoundUncheckedBytes {
 		return reason
 	}
-	return reason[:triage.MaxFoundUncheckedBytes-3] + "..."
+	cut := triage.MaxFoundUncheckedBytes - len("...")
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+	return reason[:cut] + "..."
 }

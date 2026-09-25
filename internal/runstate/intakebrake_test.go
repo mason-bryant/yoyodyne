@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // The brake's record rides the hold it placed: written with it, revised under
@@ -297,5 +298,48 @@ func TestASummonsClaimsAFiringOutOfCadence(t *testing.T) {
 	recorded, _, err := store.List()
 	if err != nil || len(recorded) != 1 || recorded[0].Summoned == "" {
 		t.Fatalf("List() = %#v, %v, want the summoned pass read back as one", recorded, err)
+	}
+}
+
+// A provider's error is as likely as anything to carry multi-byte text, and one
+// long enough to be cut is stored cut on a rune boundary and marked as cut. A
+// byte cut here stored half a rune on the brake record, which is not a shorter
+// reason but a record that is not text.
+func TestBrakeTextIsCutOnARuneBoundaryAndMarked(t *testing.T) {
+	t.Parallel()
+
+	const marker = " […]"
+	reason := "x" + strings.Repeat("é", MaxBrakeTextBytes)
+	if utf8.ValidString(reason[:MaxBrakeTextBytes-len(marker)]) {
+		t.Fatal("the reason's byte cut falls on a rune boundary, so this test would not see a byte cut")
+	}
+
+	root := t.TempDir()
+	store := newIntakeStoreAt(t, root, "yoyodyne")
+	trippedAt := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	trip := IntakeBrake{
+		Blocked:        []BrakeBlockedRun{{RunID: "run-1", WorkItemID: "yoyodyne-ifd.398", Reason: "a configured check still failed"}},
+		CooldownEndsAt: trippedAt.Add(30 * time.Minute),
+	}
+	if _, err := store.Brake(trip, "1 run(s) blocked", trippedAt); err != nil {
+		t.Fatalf("Brake() error = %v", err)
+	}
+	if _, err := store.DecideBrake(BrakeDecisionProbe, reason, "development-manager conversation chat-1, turn 4", trippedAt.Add(time.Minute)); err != nil {
+		t.Fatalf("DecideBrake() error = %v", err)
+	}
+
+	loaded, found, err := newIntakeStoreAt(t, root, "yoyodyne").Held()
+	if err != nil || !found || loaded.Brake == nil {
+		t.Fatalf("Held() = %#v, %t, %v, want the brake read back", loaded, found, err)
+	}
+	stored := loaded.Brake.DecisionReason
+	if !utf8.ValidString(stored) {
+		t.Fatalf("stored decision reason is not valid UTF-8: %q", stored[len(stored)-16:])
+	}
+	if len(stored) > MaxBrakeTextBytes {
+		t.Fatalf("stored decision reason is %d bytes, want at most %d", len(stored), MaxBrakeTextBytes)
+	}
+	if !strings.HasSuffix(stored, marker) || !strings.HasPrefix(stored, "xé") {
+		t.Fatalf("stored decision reason = %q..., want the reason's start kept and the cut marked", stored[:16])
 	}
 }

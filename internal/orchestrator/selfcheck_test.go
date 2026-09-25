@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
@@ -347,4 +348,16 @@ func (passingChecks) Run(_ context.Context, _, _ string, commands []string, last
 		})
 	}
 	return results, lastSequence, nil
+}
+
+// A field stored short is cut on a rune boundary, so what the record keeps of a
+// check's detail is still text.
+func TestABoundedSelfCheckFieldIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	const limit = 64
+	cut := bounded("x"+strings.Repeat("é", limit), limit)
+	if !utf8.ValidString(cut) || len(cut) > limit || len(cut) < limit-1 {
+		t.Fatalf("bounded() = %q (%d bytes), want valid text within %d bytes and no shorter than a rune under it", cut, len(cut), limit)
+	}
 }

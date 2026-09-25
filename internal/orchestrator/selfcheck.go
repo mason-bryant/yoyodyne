@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/composition"
 	"github.com/mason-bryant/yoyodyne/internal/fenced"
@@ -133,12 +134,17 @@ func recordedExecution(execution runstate.VerificationExecution) selfcheck.Execu
 // refuses anything longer, so this is the guard on the schema's own bound rather
 // than on the agent — the two are stated separately on purpose, and a record
 // that somehow arrived past one of them is stored short rather than refused at
-// the save, which is the point in a run where a refusal costs the most.
+// the save, which is the point in a run where a refusal costs the most. The cut
+// falls on a rune boundary, so what is stored short is still text.
 func bounded(value string, limit int) string {
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit]
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 // probeRefused reports a developer that recorded an environment which could not

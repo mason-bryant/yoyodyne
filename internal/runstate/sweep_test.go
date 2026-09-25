@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -501,5 +502,25 @@ func TestANoticeStatesItselfAsAFindingLeftForSomebody(t *testing.T) {
 	unowned := ForgeNotice{Number: 9, HeadBranch: "feature/by-hand", BaseBranch: "main", Contained: true}.Finding()
 	if !strings.Contains(unowned.Issue, "no work item") {
 		t.Errorf("issue = %q, want it to say no item could be named", unowned.Issue)
+	}
+}
+
+// A problem too long for the record is stored cut on a rune boundary and marked
+// as cut, never with half a rune at its end.
+func TestASettledProblemIsCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	store := newSweepStore(t)
+	if _, err := store.Claim(context.Background(), "a-sweep", time.Hour, time.Now()); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	problem := "x" + strings.Repeat("é", MaxSweepTextBytes)
+	settled, err := store.Settle(context.Background(), "a-sweep", problem)
+	if err != nil {
+		t.Fatalf("Settle() error = %v", err)
+	}
+	if !utf8.ValidString(settled.Problem) || len(settled.Problem) > MaxSweepTextBytes || !strings.HasSuffix(settled.Problem, " […]") {
+		t.Fatalf("settled problem is %d bytes, valid UTF-8 %t, ending %q; want valid text within %d bytes marked as cut",
+			len(settled.Problem), utf8.ValidString(settled.Problem), settled.Problem[len(settled.Problem)-8:], MaxSweepTextBytes)
 	}
 }

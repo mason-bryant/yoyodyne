@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestEventRoundTrip(t *testing.T) {
@@ -112,5 +113,18 @@ func TestNewEventRejectsUnencodablePayload(t *testing.T) {
 	_, err := NewEvent("run-1", 1, time.Now(), EventAgentMessage, "test", make(chan int))
 	if err == nil || !strings.Contains(err.Error(), "encode event payload") {
 		t.Fatalf("NewEvent() error = %v", err)
+	}
+}
+
+// Recorded text is cut on a rune boundary, so a long message in multi-byte text
+// is kept as shorter text rather than as bytes that are not text.
+func TestTruncateEventTextCutsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	truncated := TruncateEventText("x" + strings.Repeat("é", MaxEventTextBytes))
+	kept, marked := strings.CutSuffix(truncated, "…[truncated]")
+	if !marked || !utf8.ValidString(truncated) || len(kept) > MaxEventTextBytes {
+		t.Fatalf("TruncateEventText() kept %d bytes, marked %t, valid UTF-8 %t; want valid text within %d bytes marked as cut",
+			len(kept), marked, utf8.ValidString(truncated), MaxEventTextBytes)
 	}
 }
