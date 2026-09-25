@@ -430,6 +430,57 @@ func TestGatherCarriesTheTriageDocketToTheDevelopmentManager(t *testing.T) {
 	}
 }
 
+// The window is decided against the tracker as it stands: a stoppage whose work
+// item the tracker holds as closed is counted and not listed, and a stoppage on
+// open work is listed and leaves the walk's position past it, where the next
+// picture resumes.
+func TestGatherWindowsTheDocketAgainstTheTrackerAndRecordsWhereItStopped(t *testing.T) {
+	t.Parallel()
+
+	gather := func(status string) (chat.Briefing, *runstate.DocketStore) {
+		store, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+		if err != nil {
+			t.Fatalf("runstate.NewDocketStore() error = %v", err)
+		}
+		listing := fmt.Sprintf(`[{"id":"yoyodyne-task","title":"the stopped item","status":%q,"priority":2,"issue_type":"task"}]`, status)
+		ground := conversationGround{
+			runner:         &scriptedRunner{outputs: map[string]string{"bd": listing, "git": "a1a1a1a1a1a1\n"}},
+			repository:     t.TempDir(),
+			specifications: "docs/product",
+			docket:         docketerOverDocket(stoppedRunState(t), store),
+			docketWindow:   store,
+			gitBinary:      "git",
+			timeout:        time.Second,
+		}
+		briefing, err := ground.Gather(context.Background())
+		if err != nil {
+			t.Fatalf("Gather() error = %v", err)
+		}
+		return briefing, store
+	}
+
+	closed, closedStore := gather("closed")
+	if strings.Contains(closed.Text, "the repair budget was spent") ||
+		!strings.Contains(closed.Text, "1 docket entry(s) are not listed because the work item they stopped is closed.") {
+		t.Fatalf("a stoppage on closed work was listed, or not counted:\n%s", closed.Text)
+	}
+	if position, err := closedStore.WindowPosition(); err != nil || position.Started() {
+		t.Fatalf("WindowPosition() = %+v, %v; want nothing walked past", position, err)
+	}
+
+	open, openStore := gather("blocked")
+	if !strings.Contains(open.Text, "the repair budget was spent") {
+		t.Fatalf("a stoppage on open work was not listed:\n%s", open.Text)
+	}
+	position, err := openStore.WindowPosition()
+	if err != nil {
+		t.Fatalf("WindowPosition() error = %v", err)
+	}
+	if want := triage.Key(triage.ClassStoppedRun, "run-0123456789abcdef0123456789abcdef"); position.Key != want {
+		t.Fatalf("WindowPosition() = %+v, want the walk past %s", position, want)
+	}
+}
+
 // What the development manager decided is what takes the stoppage out of the
 // next conversation she opens. The docket is rebuilt from the same durable run
 // records every time it is gathered, so without the closure the same entry is

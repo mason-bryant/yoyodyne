@@ -1519,6 +1519,29 @@ its change still there, an approved publication does not finish, dispatch
 declines to start an item whose stated prerequisites the tree does not meet, and
 a developer or a reviewer says the item cannot be met as it stands.
 
+**What her conversation carries is a window onto the docket, not the docket.**
+The docket is a log that only grows, and a conversation has a budget. So each
+picture she is given lists at most 25 entries, within a fixed size, chosen like
+this. Only live entries are in it: entries whose work item is still open, and
+that nobody has decided about or whose decision has lapsed. Whether an item is
+closed is read from the tracker as the picture is taken. If the tracker cannot
+be read, nothing is left out, and the window says so. A stopped run that left
+more than one entry is listed once, and the entry says how many were folded into
+it and how long the run has waited. Critical entries come first: an item a role
+raised as unmeetable, and a decision of hers the harness was stopped carrying
+out by a gate that will not clear on its own. After them come the oldest
+stoppages. The window says how many live entries it did not list, how long the
+oldest of those has waited, and how many entries it left out because their work
+is closed. It walks the docket the way
+[the report pile](reporting.md#who-reads-them-and-what-became-of-each-one) is
+walked. Where the last window stopped is recorded per product, beside the
+docket, and the next window starts past it and goes back to the oldest when it
+reaches the end. So an entry one picture had no room for is the first thing the
+next picture lists, whether that picture comes from a refresh or from a new
+conversation. On 2026-09-25 the window listed the newest entries on the log
+instead: eleven of them, mostly on closed items. Twelve stopped runs waited
+behind them for between seven and thirty-six days.
+
 The last is the only entry that is a judgement rather than an observation, and
 the only one raised before anything has been spent failing. Either role can say
 it in the round it reached — the developer as a landing outcome, the reviewer as
