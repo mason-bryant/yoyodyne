@@ -186,6 +186,15 @@ const (
 	EventMemoryRequested EventType = "memory.requested"
 	EventMemoryRecorded  EventType = "memory.recorded"
 	EventMemoryFailed    EventType = "memory.failed"
+	// A management conversation's provider session left behind because its next
+	// turn would have taken it past the harness's byte budget, with the turn sent
+	// on a new session rebuilt from the record instead — and the same compaction
+	// when the rebuild could not be made, in which case the turn was not sent.
+	// They carry the session's measured size, the budget, and why it was
+	// compacted, so a reader can see how close the session came to the
+	// provider's request limit.
+	EventSessionCompacted        EventType = "session.compacted"
+	EventSessionCompactionFailed EventType = "session.compaction_failed"
 )
 
 // MaxEventTextBytes bounds the text one recorded event carries — a message either

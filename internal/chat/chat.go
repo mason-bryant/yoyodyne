@@ -482,8 +482,12 @@ type Options struct {
 	// StopGrace bounds how long stopping waits for a cancelled run to give up
 	// before reporting that it is still winding down.
 	StopGrace time.Duration
-	Clock     execution.Clock
-	NewID     func() (string, error)
+	// SessionBudgetBytes is how large a provider session may grow, as the harness
+	// measures it, before its next turn is sent without it and the conversation
+	// rebuilt from the record instead. Zero takes SessionBudgetBytes.
+	SessionBudgetBytes int
+	Clock              execution.Clock
+	NewID              func() (string, error)
 	// Fresh starts a new conversation instead of resuming the recorded one.
 	Fresh bool
 }
@@ -603,6 +607,10 @@ type Session struct {
 	// read it back would hand the provider the question twice — once as history
 	// and once as the thing to answer.
 	turnBegan uint64
+	// compacting says the turn in flight is being sent without the session it
+	// would have resumed, because that session had grown past its budget. It is
+	// per-turn and cleared as each one starts; see compact.go.
+	compacting bool
 	// lastInvocationCostUSD is what the provider charged for the invocation just
 	// taken, kept apart from both totals because an exchange is charged per
 	// invocation rather than per message: the round that carried an answer back
@@ -734,7 +742,12 @@ type Evidence struct {
 	ServedModel   string `json:"served_model,omitempty"`
 	ResolvedModel string `json:"resolved_model,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
-	Turns         int    `json:"turns"`
+	// SessionBytes is how large that session has grown as the harness measures
+	// it, and SessionBudgetBytes the size past which its next turn compacts it.
+	// Both are zero on a conversation whose session was never measured.
+	SessionBytes       int `json:"session_bytes,omitempty"`
+	SessionBudgetBytes int `json:"session_budget_bytes,omitempty"`
+	Turns              int `json:"turns"`
 }
 
 // Reply is one answer from the product manager, with anything it proposed and
@@ -1043,10 +1056,12 @@ func (s *Session) Evidence() Evidence {
 		// a conversation whose last turn was moved off it says so here and one whose
 		// window has since reopened — or whose version the provider has since got —
 		// stops saying it.
-		ServedModel:   s.servedByAlternate(),
-		ResolvedModel: s.state.ProviderResolvedModel,
-		SessionID:     s.state.ProviderSessionID,
-		Turns:         s.state.Turns,
+		ServedModel:        s.servedByAlternate(),
+		ResolvedModel:      s.state.ProviderResolvedModel,
+		SessionID:          s.state.ProviderSessionID,
+		SessionBytes:       s.state.ProviderSessionBytes,
+		SessionBudgetBytes: s.state.ProviderSessionBudgetBytes,
+		Turns:              s.state.Turns,
 	}
 }
 
@@ -1442,6 +1457,19 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 			return "", err
 		}
 	}
+	// A session this turn would take past its budget is compacted before the turn
+	// is sent, while that can still be done; see compact.go. It is decided here,
+	// after the operator's side is on the record and before the invocation's
+	// events are numbered, because the compaction is recorded too.
+	s.compacting = false
+	defer func() { s.compacting = false }()
+	if due := s.compactionDue(systemPrompt, prompt); due != nil {
+		compacted, err := s.compact(systemPrompt, prompt, *due)
+		if err != nil {
+			return "", err
+		}
+		prompt = compacted
+	}
 
 	lastSequence := s.state.LastSequence
 	sink := func(event execution.Event) error {
@@ -1668,9 +1696,14 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	}
 	s.stream.endMessage()
 
+	// Whether this turn grew a session the record already held or started one is
+	// read before the record moves on to the endpoint that served it, because the
+	// question is about the session the record held until now.
+	resumed := s.resumedOn(s.servingEndpoint(served))
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
 	}
+	s.measureSession(resumed, request.Prompt, result.FinalText)
 	// The endpoint this turn was actually served on, which is the configured one
 	// unless a substitution moved it. Recording the configured one here would leave
 	// the record saying a conversation was held on an endpoint that refused every

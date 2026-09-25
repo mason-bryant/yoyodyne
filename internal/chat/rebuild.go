@@ -84,6 +84,11 @@ func (s *Session) servingEndpoint(served modelfailover.Served) backend.Endpoint 
 // this process remembers, because the process that took the crossing turn is
 // rarely the process that takes the next one.
 func (s *Session) resumableSession() string {
+	// A turn compacting the session is sent without it, whichever endpoint holds
+	// it; see compact.go.
+	if s.compacting {
+		return ""
+	}
 	if s.state.Backend != "" && s.state.Backend != s.options.Provider {
 		return ""
 	}
@@ -100,7 +105,7 @@ func (s *Session) resumableSession() string {
 // question resumableSession asks, asked about the other endpoint.
 func (s *Session) alternateSession() string {
 	alternate := s.options.FailoverEndpoint.Provider
-	if alternate == "" || s.state.Backend != alternate {
+	if s.compacting || alternate == "" || s.state.Backend != alternate {
 		return ""
 	}
 	return s.state.ProviderSessionID
@@ -150,16 +155,29 @@ func (s *Session) rebuildForAlternate(request backend.RunRequest) (backend.RunRe
 // — and the conversation told to itself twice is worse than either endpoint
 // getting it once.
 func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequest, error) {
-	if strings.HasPrefix(request.Prompt, rebuiltContextHeader) {
-		return request, nil
-	}
 	// A failure hands the request back as it came rather than as a zero value. The
 	// caller discards it either way, and nothing here is a provider invocation —
 	// this assembles what one will be asked, and the invocation itself is made by
 	// whoever called for the rebuild.
+	prompt, err := s.rebuiltPrompt(request.SystemPrompt, request.Prompt)
+	if err != nil {
+		return request, err
+	}
+	request.Prompt = prompt
+	return request, nil
+}
+
+// rebuiltPrompt is the turn's prompt with the conversation rebuilt from its
+// record in front of it, which is the whole of what rebuildFromRecord changes
+// about a request. The system prompt is read only to hold the two to the turn's
+// bound together.
+func (s *Session) rebuiltPrompt(systemPrompt, prompt string) (string, error) {
+	if strings.HasPrefix(prompt, rebuiltContextHeader) {
+		return prompt, nil
+	}
 	events, err := s.options.Store.LoadEvents(s.state.ConversationID)
 	if err != nil {
-		return request, fmt.Errorf("read what this conversation has recorded: %w", err)
+		return prompt, fmt.Errorf("read what this conversation has recorded: %w", err)
 	}
 	// What the turn in flight has recorded of itself is not history yet. Its
 	// operator message is already the prompt, and a refused attempt's events are
@@ -175,15 +193,14 @@ func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequ
 		// A conversation with nothing recorded is one whose first turn is being
 		// taken, and its prompt already carries the briefing. There is nothing to
 		// rebuild and nothing missing, so the request stands as it is.
-		return request, nil
+		return prompt, nil
 	}
-	if len(rebuilt)+len(request.SystemPrompt)+len(request.Prompt) > MaxTurnInputBytes {
-		return request, fmt.Errorf(
+	if len(rebuilt)+len(systemPrompt)+len(prompt) > MaxTurnInputBytes {
+		return prompt, fmt.Errorf(
 			"the rebuilt context and this turn are %d bytes together, limit is %d",
-			len(rebuilt)+len(request.SystemPrompt)+len(request.Prompt), MaxTurnInputBytes)
+			len(rebuilt)+len(systemPrompt)+len(prompt), MaxTurnInputBytes)
 	}
-	request.Prompt = rebuilt + request.Prompt
-	return request, nil
+	return rebuilt + prompt, nil
 }
 
 // rebuiltContext is what the second provider is told before the turn itself:
@@ -197,9 +214,15 @@ func (s *Session) rebuiltContext(events []execution.Event) string {
 	}
 	var rebuilt strings.Builder
 	rebuilt.WriteString(rebuiltContextHeader + "\n\n")
+	// Why there is no session to continue: a compaction chose to leave it behind,
+	// and a crossing never had it to offer.
+	why := "The provider that was holding it is not the one serving this turn, so none of its session reaches you."
+	if s.compacting {
+		why = "Its provider session had grown too large to keep sending, so the harness compacted it: none of that session reaches you."
+	}
 	rebuilt.WriteString(fmt.Sprintf(
-		"You are continuing conversation %s, which has taken %d turn(s) so far. The provider that was holding it is not the one serving this turn, so none of its session reaches you. What follows is assembled from the harness's own durable record of the conversation, and it is the whole of what you have.\n\n",
-		s.state.ConversationID, s.state.Turns))
+		"You are continuing conversation %s, which has taken %d turn(s) so far. %s What follows is assembled from the harness's own durable record of the conversation, and it is the whole of what you have.\n\n",
+		s.state.ConversationID, s.state.Turns, why))
 	if briefing != "" {
 		rebuilt.WriteString(briefing)
 		rebuilt.WriteString("\n")
