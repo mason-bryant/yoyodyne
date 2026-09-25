@@ -1013,7 +1013,13 @@ through when its listing failed, on the argument that the tracker was briefly
 unavailable. Now that the listing is retried, a listing that still fails refuses
 the creation with the reason, and puts a proposal the goals would have admitted
 unasked to the operator instead, rather than admitting work on the strength of a
-guard that never ran.
+guard that never ran. A creation is not asked again blindly, because a second
+`bd create` is a second item rather than the same write twice: on 2026-09-24 a
+`bd create` killed at its timeout had already made yoyodyne-ifd.428.21, and the
+retry made 428.22. Before a creation is asked for again, the tracker is listed
+for an item carrying the creation's title, parent, and notes — which name the
+conversation and the turn — and one it finds is the creation's answer. A listing
+that cannot be had leaves the creation failed rather than asked again.
 
 **One consequence is worth knowing before you raise
 `execution.max_concurrent_developers`, and it is not free.** Five of these
