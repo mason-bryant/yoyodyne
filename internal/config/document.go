@@ -243,6 +243,15 @@ type agentDocument struct {
 	// rather than an answer in two halves. Stating it empty removes an inherited
 	// choice and puts the agent back to queueing.
 	Conversations *ConversationMode `yaml:"conversations"`
+	// Lane, Remit, and Triggers are a program manager instance's, and are refused
+	// on an agent of any other role when the effective configuration is validated.
+	// The lane overrides on its own, as one value; the remit replaces an inherited
+	// one completely, for the reason the persona does; and the triggers replace
+	// the inherited block whole, for the reason the failover block does — the
+	// cadence and the events are one answer about when a pass is taken.
+	Lane     *string          `yaml:"lane"`
+	Remit    *personaDocument `yaml:"remit"`
+	Triggers *Triggers        `yaml:"triggers"`
 	// Disabled removes an inherited agent. It is explicit so a project never
 	// loses an agent by accidentally omitting it.
 	Disabled *bool `yaml:"disabled"`
@@ -253,7 +262,8 @@ type agentDocument struct {
 // entry is detected.
 func (d agentDocument) overridesFields() bool {
 	return d.Role != nil || d.Backend != nil || d.Model != nil || d.ModelVersion != nil || d.Account != nil ||
-		d.Instances != nil || d.Persona != nil || d.Failover != nil || d.Conversations != nil
+		d.Instances != nil || d.Persona != nil || d.Failover != nil || d.Conversations != nil ||
+		d.Lane != nil || d.Remit != nil || d.Triggers != nil
 }
 
 type personaDocument struct {

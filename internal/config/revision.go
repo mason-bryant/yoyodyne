@@ -44,6 +44,13 @@ func (c Config) Revision() string {
 	for _, name := range sortedNames(c.Agents) {
 		digest.Write([]byte(name))
 		digest.Write([]byte(c.Agents[name].Persona.Text))
+		// A remit is the same kind of guidance, excluded for the same reason. It is
+		// written only where one is configured, so an agent carrying none digests
+		// exactly as it did before remits existed.
+		if remit := c.Agents[name].Remit.Text; remit != "" {
+			digest.Write([]byte("remit"))
+			digest.Write([]byte(remit))
+		}
 	}
 	return RevisionPrefix + hex.EncodeToString(digest.Sum(nil))[:RevisionDigits]
 }

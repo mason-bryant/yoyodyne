@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -530,4 +532,68 @@ func TestAgentSaysWhatACrossingCoversAndWhatItCosts(t *testing.T) {
 	if strings.Contains(within, "rebuilding context") {
 		t.Fatalf("agent line = %q, which claims a rebuild for a substitution that resumes its own session", within)
 	}
+}
+
+// A program manager instance is told apart from another by its lane, so the
+// listing prints the lane beside the agent's name, and says where its remit is
+// and what wakes it.
+func TestAgentListNamesAProgramManagersLaneBesideItsName(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, twoArchitectsConfig+`  reliability-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    lane: reliability
+    remit:
+      version: r1
+      path: remits/reliability.md
+    triggers:
+      every: 2h
+      on: [landings, stoppages]
+`)
+	remits := filepath.Join(filepath.Dir(configPath), ".yoyodyne", "remits")
+	if err := os.MkdirAll(remits, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(remits, "reliability.md"), []byte("# Reliability\n\nWatch the line.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runCLI(t, "agent", "list", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("agent list code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"reliability-pm (program-manager, lane reliability) claude-code",
+		"  remit remits/reliability.md (r1)\n",
+		"  passes over its lane every 2h0m0s and on landings, stoppages\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("agent list = %q, want it to say %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "house-architect (architect, lane") {
+		t.Errorf("agent list = %q, which gives an architect a lane", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, "agent", "list", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("agent list --json code = %d, stderr = %q", code, stderr)
+	}
+	var decoded struct {
+		Agents []agentReport `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	for _, agent := range decoded.Agents {
+		if agent.Name == "reliability-pm" {
+			if agent.Lane != "reliability" || agent.RemitPath != "remits/reliability.md" || agent.Triggers == nil || len(agent.Triggers.On) != 2 {
+				t.Fatalf("reliability-pm = %#v, want its lane, remit, and triggers", agent)
+			}
+			return
+		}
+	}
+	t.Fatal("agent list --json did not report the program manager instance")
 }
