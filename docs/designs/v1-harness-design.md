@@ -90,6 +90,10 @@ revisions:
       by: architect
       at: 2026-09-25T04:00:00Z
       reason: approved amendment 449888ae from yoyodyne-ifd.429.2 - committing is every invocation's and precedes the decision about it; publishing is the push and the request on top of the commit
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: approved amendment 16e163f9 from yoyodyne-ifd.429.5 - a protected target lands through its pull request and the local branch follows; the stranded-main stalls of 2026-09-20 and 09-24 are why
 approvals:
     - revision: 0
       by: operator
@@ -488,7 +492,7 @@ The last row is the one worth stating plainly, because it is the combination who
 
 ### Which branch is authoritative
 
-The local target branch is authoritative. A project's work is where that branch says it is.
+The local target branch is authoritative, with one exception the forge decides: a target the forge protects, or one the forge cannot be asked about, is never moved locally first. On such a target the reviewed commit reaches the remote only by the forge's merge, and the local target follows by the same fast-forward catch-up under the promotion lease; a merge the forge refuses or drops leaves the change on its pull request and on no target, so the run stops with the item blocked rather than closing it as an outstanding publication. On an unprotected target a project's work is where the local branch says it is, and everything below describes that case, where the local branch moves first.
 
 Merging is not a second, differently shaped promotion on the remote. The harness fast-forwards the local target as it always has, and the forge then merges the pull request that carries exactly that commit. There is one promotion and one reviewed commit, and it is the same commit on both sides.
 
@@ -500,7 +504,7 @@ The merge commit belongs to the forge, so the two branches converge only after t
 
 Once the post-merge check has passed, the harness catches the local target up onto the forge's merge commit: an ordinary fast-forward, onto a commit verified to carry exactly the promoted content, taken under the target branch's promotion lease because it moves the target and could otherwise race the next run's promotion. So the two branches end each published run at the same commit, and the local branch has still only ever been fast-forwarded — first onto the promotion, then onto the verified merge of it — and is still never rewritten or reset, and never moves onto anything the check has not verified. A merge the check refused is reported, not imported: the local target stays where the promotion put it, which is what keeps the report readable against a branch that still shows what the harness did.
 
-Two consequences follow. A promotion whose publication fails — an unreachable forge, a remote target that moved, a merge the forge refused — is an *outstanding publication* rather than a failed run: the authoritative branch already moved, the item is closed, and what is left is a fact for an operator, in the same way an outstanding worktree cleanup is. And a remote branch that drifted from what the harness published is never forced back; it is reported, because a published branch nobody can explain needs a person. The merged run branch is deleted from the remote on the same compare-and-swap evidence the local branch is.
+Two consequences follow. A promotion whose publication fails on an unprotected target — an unreachable forge, a remote target that moved, a merge the forge refused — is an *outstanding publication* rather than a failed run: the authoritative branch already moved, the item is closed, and what is left is a fact for an operator, in the same way an outstanding worktree cleanup is. And a remote branch that drifted from what the harness published is never forced back; it is reported, because a published branch nobody can explain needs a person. The merged run branch is deleted from the remote on the same compare-and-swap evidence the local branch is.
 
 A branch protected against direct pushes — the ordinary reason to open pull requests at all — is therefore merged into normally: the merge is the forge's, made on the harness's request, and only the run branch is ever pushed. A repository that forbids merge commits refuses the merge instead, and the run reports that refusal rather than falling back to a method that would rewrite the promotion.
 
