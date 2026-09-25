@@ -36,6 +36,7 @@ const port = "45123"
 type stubReader struct {
 	standing   readmodel.Standing
 	throughput readmodel.Throughput
+	spend      readmodel.Spend
 	// items is what WorkItem answers by id; an id not in it is one the tracker
 	// holds nothing under.
 	items   map[string]readmodel.WorkItem
@@ -48,6 +49,10 @@ func (r stubReader) Standing(context.Context) (readmodel.Standing, error) {
 
 func (r stubReader) Throughput(context.Context) (readmodel.Throughput, error) {
 	return r.throughput, r.failure
+}
+
+func (r stubReader) Spend(context.Context) (readmodel.Spend, error) {
+	return r.spend, r.failure
 }
 
 func (r stubReader) WorkItem(_ context.Context, id string) (readmodel.WorkItem, error) {

@@ -1,5 +1,5 @@
 // The page's own script: hold the token, fetch the read model with it, and
-// draw the five sections from what comes back. It is served from this origin
+// draw the six sections from what comes back. It is served from this origin
 // because the policy allows script from nowhere else.
 //
 // The token lives in sessionStorage and nowhere else. Session storage is scoped
@@ -16,15 +16,17 @@
 // tag is shown as the characters it is. Nothing here sets a style either: the
 // policy allows no inline style, so every look is a class the stylesheet owns.
 //
-// Two readings feed the page, on two clocks. The standing — the four lines and
-// the capacity state — is asked for every ten seconds. The throughput — what
-// landed and what it cost over today and the last seven days — prices every
-// event log a week holds, so it is asked for once a minute. Each section says
-// which of its sources it is still waiting for, which one could not be read, and
-// what to do about it; none of them ever shows a zero in place of an answer the
-// model did not give. A third reading is taken only when asked for: one work
-// item whole, for the card a reader opens on it from Running now or from a
-// grouping of the pipeline.
+// Three readings feed the page, on three clocks. The standing — the four lines
+// and the capacity state — is asked for every ten seconds. The throughput —
+// what landed over today and the last seven days — and the spend — the last 24
+// hours, the last seven local days, and the month of days behind them — are
+// each asked for once a minute, the spend because pricing every event log a
+// month holds is seconds of work. Each section says which of its sources it is
+// still waiting for, which one could not be read, and what to do about it; none
+// of them ever shows a zero in place of an answer the model did not give. A
+// fourth reading is taken only when asked for: one work item whole, for the
+// card a reader opens on it from Running now or from a grouping of the
+// pipeline.
 //
 // The words are the terminal's. Where `yoyo status` has a way of saying a
 // thing — "no developer runs", "cost unknown", "12m", "approved, resuming
@@ -36,6 +38,7 @@
 
   var pollStanding = 10000;
   var pollThroughput = 60000;
+  var pollSpend = 60000;
   var storageKey = "yoyo-dashboard-token";
 
   var page = document.getElementById("page");
@@ -57,7 +60,9 @@
     standing: null,
     standingError: "",
     throughput: null,
-    throughputError: ""
+    throughputError: "",
+    spend: null,
+    spendError: ""
   };
   var timers = [];
 
@@ -212,14 +217,34 @@
     return parts.join(" · ");
   }
 
-  function windowNamed(throughput, label) {
+  function windowNamed(reading, label) {
     var found = null;
-    (throughput.windows || []).forEach(function (period) {
+    (reading.windows || []).forEach(function (period) {
       if (period.label === label) {
         found = period;
       }
     });
     return found;
+  }
+
+  // kindNouns is the spend report's own vocabulary for what was invoked, in the
+  // words the terminal prints it in, and splitOf is a window's or a day's cost
+  // laid out by them — the split the read model summed, never one added up here.
+  var kindNouns = { run: "run", conversation: "conversation", review: "branch review", side: "side thread", exchange: "exchange" };
+
+  function splitOf(kinds) {
+    var split = (kinds || []).map(function (kind) {
+      var noun = kindNouns[kind.kind] || kind.kind;
+      return money(kind.cost_usd) + " on " + kind.invocations + " " + plural(kind.invocations, noun);
+    });
+    return split.length ? split.join(", ") : "nothing priced";
+  }
+
+  function figureRow(label, value, className) {
+    var row = el("div", "figure-row" + (className ? " " + className : ""));
+    row.appendChild(el("dt", null, label));
+    row.appendChild(el("dd", null, value));
+    return row;
   }
 
   // ---- the header and the banners ----------------------------------------
@@ -348,6 +373,9 @@
     if (model.throughputError && model.throughput) {
       failed.push("the throughput — " + model.throughputError + " — so its figures are from " + clock(model.throughput.observed_at) + ", asked again every minute");
     }
+    if (model.spendError && model.spend) {
+      failed.push("the spend — " + model.spendError + " — so its figures are from " + clock(model.spend.observed_at) + ", asked again every minute");
+    }
     if (failed.length > 0) {
       freshness.textContent = "stale";
       freshness.className = "freshness freshness-stale";
@@ -465,7 +493,7 @@
   function landedTile() {
     var throughput = model.throughput;
     if (!throughput) {
-      return tile("Landed", model.throughputError ? "—" : "…", model.throughputError ? "could not be read" : "pricing the week", null, model.throughputError ? "tile-unreadable" : "tile-waiting");
+      return tile("Landed", model.throughputError ? "—" : "…", model.throughputError ? "could not be read" : "reading the week", null, model.throughputError ? "tile-unreadable" : "tile-waiting");
     }
     if (throughput.runs_problem) {
       return tile("Landed", "—", "could not be read", null, "tile-unreadable");
@@ -475,20 +503,89 @@
     return tile("Landed", String(today.landed), "today", count(week.landed, "run") + " in the last 7 days");
   }
 
+  // costTile is the spend box's figure said once more at the top of the page,
+  // from the same reading: the last twenty-four hours, with the last seven days
+  // beside it. Its label opens the month, as the box's own does.
   function costTile() {
-    var throughput = model.throughput;
-    if (!throughput) {
-      return tile("Cost", model.throughputError ? "—" : "…", model.throughputError ? "could not be read" : "pricing the week", null, model.throughputError ? "tile-unreadable" : "tile-waiting");
+    var spend = model.spend;
+    if (!spend) {
+      return tile("Cost", model.spendError ? "—" : "…", model.spendError ? "could not be read" : "pricing the month", null, model.spendError ? "tile-unreadable" : "tile-waiting", "spend:days");
     }
-    if (throughput.spend_problem) {
-      return tile("Cost", "—", "could not be read", null, "tile-unreadable");
+    if (spend.problem) {
+      return tile("Cost", "—", "could not be read", null, "tile-unreadable", "spend:days");
     }
-    var today = windowNamed(throughput, "today");
-    var week = windowNamed(throughput, "last 7 days");
-    return tile("Cost", (today.floor ? "≥ " : "") + money(today.cost_usd), "today", (week.floor ? "at least " : "") + money(week.cost_usd) + " in the last 7 days");
+    var day = windowNamed(spend, "last 24 hours");
+    var week = windowNamed(spend, "last 7 days");
+    return tile("Cost", (day.floor ? "≥ " : "") + money(day.cost_usd), "in the last 24 hours", (week.floor ? "at least " : "") + money(week.cost_usd) + " in the last 7 days", null, "spend:days");
   }
 
-  // ---- section 2: the runs and conversations in flight ---------------------
+  // ---- section 2: what the harness is spending ----------------------------
+
+  // The box at the top of the page: the last twenty-four hours, reckoned from
+  // this reading rather than from midnight, and the last seven local days,
+  // each split by kind, with the count of unpriced records beside a cost that
+  // is therefore a floor. Its label opens the listing of the month behind it.
+  // Every figure is the read model's; nothing is added up here.
+  function spendWindowColumn(period) {
+    var column = el("div", "window");
+    column.appendChild(el("h3", "window-label", period.label));
+    column.appendChild(el("p", "window-span", period.rolling ? "rolling, from " + dayAndClock(period.since) : "from " + period.since_day + ", local days"));
+    var figures = el("dl", "figures");
+    figures.appendChild(figureRow("Cost", (period.floor ? "at least " : "") + money(period.cost_usd) + " from " + count(period.invocations, "invocation"), "figure-cost"));
+    figures.appendChild(figureRow("Of which", splitOf(period.kinds)));
+    if (period.unpriced) {
+      figures.appendChild(figureRow("Not priced", count(period.unpriced, "exchange record") + " could not be read, so the cost is a floor", "figure-unreadable"));
+    }
+    column.appendChild(figures);
+    return column;
+  }
+
+  // Nothing spent is a sentence rather than a column of zeroes, and it says
+  // how far the log reaches, because nothing spent in a month and a log that
+  // does not go back a month are different answers. The box and the listing
+  // behind it both say it, so both read it from here.
+  function spentNothing(spend) {
+    return spend.unpriced === 0 && (!spend.undated || spend.undated.invocations === 0) &&
+      (spend.days || []).every(function (day) { return day.invocations === 0; });
+  }
+
+  function nothingSpent(spend) {
+    return spend.reaches
+      ? "Nothing was spent in the last 30 days; the oldest priced record here is from " + spend.reaches + "."
+      : "Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.";
+  }
+
+  function renderSpend() {
+    var spend = model.spend;
+    if (!spend) {
+      section("spend", model.spendError ? "error" : "loading", model.spendError, whatToDoAboutTheSpend());
+      return;
+    }
+    if (spend.problem) {
+      section("spend", "error", spend.problem, whatToDoAboutTheSpend());
+      return;
+    }
+    if (spentNothing(spend)) {
+      section("spend", "empty", nothingSpent(spend));
+      return;
+    }
+    var staleFigures = document.getElementById("spend-stale");
+    staleFigures.textContent = model.spendError
+      ? "The last reading failed — " + model.spendError + " — so these are the figures from " + clock(spend.observed_at) + ". The dashboard asks again every minute."
+      : "";
+    setHidden(staleFigures, !model.spendError);
+    var windows = document.getElementById("spend-windows");
+    clear(windows);
+    (spend.windows || []).forEach(function (period) {
+      windows.appendChild(spendWindowColumn(period));
+    });
+    var label = document.getElementById("spend-open");
+    clear(label);
+    label.appendChild(groupingOpener("spend:days", "spend-label", "Every day for the past 30 days"));
+    section("spend", "ready");
+  }
+
+  // ---- section 3: the runs and conversations in flight ---------------------
 
   function runCard(run) {
     var card = el("li", "card card-run");
@@ -572,7 +669,7 @@
     section("live", "ready");
   }
 
-  // ---- section 3: the pipeline --------------------------------------------
+  // ---- section 4: the pipeline --------------------------------------------
 
   // piles is the queue's own vocabulary for why an admitted item is not pulled,
   // in the order a reader wants them: the ones waiting on a person first, then
@@ -672,7 +769,7 @@
     } else if (throughput || model.throughputError) {
       stages.appendChild(stage("Landed", "—", "could not be read", "stage-unreadable", "landed:today"));
     } else {
-      stages.appendChild(stage("Landed", "…", "pricing the week", "stage-waiting", "landed:today"));
+      stages.appendChild(stage("Landed", "…", "reading the week", "stage-waiting", "landed:today"));
     }
 
     listProblems("pipeline-problems", [standing.not_startable_problem, standing.running_problem, throughput ? throughput.runs_problem : ""]);
@@ -754,47 +851,22 @@
     return found;
   }
 
-  // ---- section 4: throughput and cost ------------------------------------
+  // ---- section 5: throughput ---------------------------------------------
 
-  var kindNouns = { run: "runs", conversation: "conversations", review: "branch reviews", side: "side threads", exchange: "exchanges" };
-
-  function figureRow(label, value, className) {
-    var row = el("div", "figure-row" + (className ? " " + className : ""));
-    row.appendChild(el("dt", null, label));
-    row.appendChild(el("dd", null, value));
-    return row;
-  }
-
-  function windowColumn(period, throughput) {
+  function windowColumn(period) {
     var column = el("div", "window");
     column.appendChild(el("h3", "window-label", period.label));
     column.appendChild(el("p", "window-span", period.days === 1 ? "since midnight, local time" : "from " + period.since + ", local days"));
     var figures = el("dl", "figures");
-    if (throughput.runs_problem) {
-      figures.appendChild(figureRow("Landed", "could not be read", "figure-unreadable"));
-    } else {
-      figures.appendChild(figureRow("Landed", count(period.landed, "run") + " reached the target branch", period.landed > 0 ? "figure-landed" : null));
-      var endings = [];
-      if (period.succeeded) { endings.push(period.succeeded + " succeeded without promoting"); }
-      if (period.stopped) { endings.push(period.stopped + " stopped for a person"); }
-      if (period.cancelled) { endings.push(period.cancelled + " cancelled"); }
-      if (period.timed_out) { endings.push(period.timed_out + " timed out"); }
-      if (period.failed) { endings.push(period.failed + " failed"); }
-      figures.appendChild(figureRow("Other endings", endings.length ? endings.join(", ") : "none"));
-      figures.appendChild(figureRow("Started", count(period.started, "run")));
-    }
-    if (throughput.spend_problem) {
-      figures.appendChild(figureRow("Cost", "could not be read", "figure-unreadable"));
-    } else {
-      figures.appendChild(figureRow("Cost", (period.floor ? "at least " : "") + money(period.cost_usd) + " from " + count(period.invocations, "invocation"), "figure-cost"));
-      var split = (period.kinds || []).map(function (kind) {
-        return money(kind.cost_usd) + " on " + kind.invocations + " " + (kindNouns[kind.kind] || kind.kind);
-      });
-      figures.appendChild(figureRow("Of which", split.length ? split.join(", ") : "nothing priced"));
-      if (period.unpriced) {
-        figures.appendChild(figureRow("Not priced", count(period.unpriced, "exchange record") + " could not be read, so the cost is a floor", "figure-unreadable"));
-      }
-    }
+    figures.appendChild(figureRow("Landed", count(period.landed, "run") + " reached the target branch", period.landed > 0 ? "figure-landed" : null));
+    var endings = [];
+    if (period.succeeded) { endings.push(period.succeeded + " succeeded without promoting"); }
+    if (period.stopped) { endings.push(period.stopped + " stopped for a person"); }
+    if (period.cancelled) { endings.push(period.cancelled + " cancelled"); }
+    if (period.timed_out) { endings.push(period.timed_out + " timed out"); }
+    if (period.failed) { endings.push(period.failed + " failed"); }
+    figures.appendChild(figureRow("Other endings", endings.length ? endings.join(", ") : "none"));
+    figures.appendChild(figureRow("Started", count(period.started, "run")));
     column.appendChild(figures);
     return column;
   }
@@ -805,31 +877,30 @@
       section("throughput", model.throughputError ? "error" : "loading", model.throughputError, whatToDoAboutTheThroughput());
       return;
     }
-    if (throughput.runs_problem && throughput.spend_problem) {
-      section("throughput", "error", throughput.runs_problem + "; " + throughput.spend_problem, whatToDoAboutTheThroughput());
+    if (throughput.runs_problem) {
+      section("throughput", "error", throughput.runs_problem, whatToDoAboutTheThroughput());
       return;
     }
     var week = windowNamed(throughput, "last 7 days");
-    var quiet = week && !throughput.runs_problem && !throughput.spend_problem &&
-      week.started === 0 && week.landed === 0 && week.succeeded === 0 && week.stopped === 0 && week.cancelled === 0 && week.timed_out === 0 && week.failed === 0 &&
-      week.invocations === 0 && week.unpriced === 0;
+    var quiet = week &&
+      week.started === 0 && week.landed === 0 && week.succeeded === 0 && week.stopped === 0 && week.cancelled === 0 && week.timed_out === 0 && week.failed === 0;
     if (quiet) {
-      section("throughput", "empty", "Nothing ran and nothing was spent in the last 7 days, from " + week.since + ".");
+      section("throughput", "empty", "Nothing ran in the last 7 days, from " + week.since + ".");
       return;
     }
-    listProblems("throughput-problems", [throughput.runs_problem, throughput.spend_problem]);
+    listProblems("throughput-problems", [throughput.runs_problem]);
     var staleFigures = document.getElementById("throughput-stale");
     staleFigures.textContent = model.throughputError ? "The last reading failed — " + model.throughputError + " — so these are the figures from " + clock(throughput.observed_at) + ". The dashboard asks again every minute." : "";
     setHidden(staleFigures, !model.throughputError);
     var windows = document.getElementById("windows");
     clear(windows);
     (throughput.windows || []).forEach(function (period) {
-      windows.appendChild(windowColumn(period, throughput));
+      windows.appendChild(windowColumn(period));
     });
     section("throughput", "ready");
   }
 
-  // ---- section 5: provider capacity --------------------------------------
+  // ---- section 6: provider capacity --------------------------------------
 
   function heldEntry(kind, title, state, facts, remedyText) {
     var entry = el("li", "held held-" + state);
@@ -1030,6 +1101,9 @@
     if (kind === "landed") {
       return landedGrouping(which);
     }
+    if (kind === "spend") {
+      return spendGrouping();
+    }
     if (!standing) {
       return { title: kind === "attention" ? "Needs a human" : "Where the work stands", note: "", state: model.standingError ? "error" : "loading", problem: model.standingError, remedy: whatToDoAboutTheStanding() };
     }
@@ -1074,12 +1148,60 @@
     var label = which === "week" ? "last 7 days" : "today";
     var title = "Landed " + label;
     if (!throughput) {
-      return { title: title, note: "", state: model.throughputError ? "error" : "loading", problem: model.throughputError, remedy: whatToDoAboutTheThroughput() };
+      return { title: title, note: "", state: model.throughputError ? "error" : "loading", waiting: "Reading what the runs came to…", problem: model.throughputError, remedy: whatToDoAboutTheThroughput() };
     }
     var period = windowNamed(throughput, label);
     return listing(title, period ? (which === "week" ? "runs whose work reached the target branch from " + period.since + ", local days, newest first" : "runs whose work reached the target branch since midnight, local time, newest first") : "",
       throughput.runs_problem, whatToDoAboutTheThroughput(), "No run landed its work " + label + ".",
       (period && period.landed_items ? period.landed_items : []).map(function (run) { return { id: run.work_item_id, title: run.title, detail: "landed " + dayAndClock(run.landed_at) }; }));
+  }
+
+  // spendGrouping lists what each of the last thirty local days cost, newest
+  // first, with the by-kind split the read model summed beside each. A day no
+  // priced record goes back to says so rather than reading as a day nothing was
+  // spent on, because only one of those is zero. Two lines follow
+  // the days where there is anything to say: the spend whose moment could not
+  // be read, which is counted in every window of the box and on no day here,
+  // and the records that could not be priced at all, which make every figure
+  // above a floor. Nothing in the list opens anything — a day is not a record
+  // this page can show more of.
+  function spendGrouping() {
+    var spend = model.spend;
+    var title = "Spend by day";
+    var note = "one line per local day for the past 30 days, newest first, priced from the spend log";
+    if (!spend) {
+      return { title: title, note: note, state: model.spendError ? "error" : "loading", waiting: "Pricing the last thirty days…", problem: model.spendError, remedy: whatToDoAboutTheSpend() };
+    }
+    if (!spend.problem && spentNothing(spend)) {
+      return listing(title, note, "", "", nothingSpent(spend), []);
+    }
+    var lines = (spend.days || []).map(function (day) {
+      var detail = "no priced record reaches this far back";
+      if (day.reached) {
+        detail = day.invocations === 0
+          ? "nothing spent"
+          : money(day.cost_usd) + " from " + count(day.invocations, "invocation") + " — " + splitOf(day.kinds);
+      }
+      return { day: day.day, title: day.day, detail: detail, className: day.reached ? null : "grouping-day-unreached" };
+    });
+    if (spend.undated && spend.undated.invocations > 0) {
+      lines.push({
+        day: spend.undated.day,
+        title: "undated",
+        detail: money(spend.undated.cost_usd) + " from " + count(spend.undated.invocations, "invocation") + " whose moment could not be read, counted in every window above and on no day here"
+      });
+    }
+    if (spend.unpriced) {
+      lines.push({
+        day: "unpriced",
+        title: "not priced",
+        detail: count(spend.unpriced, "exchange record") + " could not be read, so every figure here and above is a floor",
+        className: "grouping-day-unreached"
+      });
+    }
+    // The heading counts lines rather than days, because the two at the foot
+    // are not days and a count that called them days would be wrong by two.
+    return listing(title, note, spend.problem, whatToDoAboutTheSpend(), "The spend log holds no days.", lines, "line");
   }
 
   // attentionGrouping lists what waits on a person: each entry of the
@@ -1121,15 +1243,20 @@
     var described = groupingOf(openGrouping);
     document.getElementById("grouping-heading").textContent = described.title + (described.state === "ready" ? " (" + count(described.items.length, described.noun) + ")" : "");
     document.getElementById("grouping-note").textContent = described.note || "";
+    // What a grouping is waiting for is its own source's: the runs, the month
+    // of spend, or where the harness stands.
+    document.getElementById("grouping-waiting").textContent = described.waiting || "Reading…";
     section("grouping", described.state, described.state === "error" ? described.problem : described.empty, described.remedy);
     var list = document.getElementById("grouping-items");
     clear(list);
     (described.items || []).forEach(function (item) {
-      var entry = el("li", "grouping-item");
+      var entry = el("li", "grouping-item" + (item.className ? " " + item.className : ""));
       // A row is a work item, opening its card by id, or an entry of the
       // attention line, opening its card by key with its kind where the id
-      // would stand.
-      if (item.entry) {
+      // would stand, or one day of the spend, which opens nothing.
+      if (item.day) {
+        entry.appendChild(el("span", "grouping-title grouping-day", item.title));
+      } else if (item.entry) {
         entry.appendChild(entryOpener(item.entry, item.title, "grouping-title"));
         entry.appendChild(el("span", "item-id", item.kind));
       } else {
@@ -1529,7 +1656,11 @@
   }
 
   function whatToDoAboutTheThroughput() {
-    return "The dashboard asks again every minute. yoyo status --spend 7 prices the same records at the terminal and names what could not be read.";
+    return "The dashboard asks again every minute. yoyo status reads the same run records at the terminal and names what could not be read.";
+  }
+
+  function whatToDoAboutTheSpend() {
+    return "The dashboard asks again every minute. yoyo status --spend 30 prices the same records at the terminal and names what could not be read.";
   }
 
   // ---- the page -------------------------------------------------------------
@@ -1551,6 +1682,7 @@
     show("ready");
     renderHeader();
     renderBand();
+    renderSpend();
     renderLive();
     renderPipeline();
     renderThroughput();
@@ -1662,8 +1794,19 @@
     });
   }
 
+  function refreshSpend(current) {
+    read("/api/spend", current, function (spend) {
+      model.spend = spend;
+      model.spendError = "";
+      render();
+    }, function (reason) {
+      model.spendError = reason;
+      render();
+    });
+  }
+
   function start(current) {
-    model = { standing: null, standingError: "", throughput: null, throughputError: "" };
+    model = { standing: null, standingError: "", throughput: null, throughputError: "", spend: null, spendError: "" };
     // A page starting over — a token just entered — opens with nothing over it.
     openGrouping = null;
     openCard = null;
@@ -1675,8 +1818,10 @@
     render();
     refreshStanding(current);
     refreshThroughput(current);
+    refreshSpend(current);
     timers.push(window.setInterval(function () { refreshStanding(current); }, pollStanding));
     timers.push(window.setInterval(function () { refreshThroughput(current); }, pollThroughput));
+    timers.push(window.setInterval(function () { refreshSpend(current); }, pollSpend));
   }
 
   signin.addEventListener("submit", function (event) {

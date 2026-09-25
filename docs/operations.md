@@ -2670,9 +2670,9 @@ against the answer.
 ## Watching from a browser: the dashboard
 
 `yoyo dashboard` serves what `yoyo status` reads — the four lines, the
-capacity state carried under them, and what landed and what it cost — to a
-browser on this machine, as one page of five sections, and keeps serving it
-until you stop it:
+capacity state carried under them, what the harness is spending, and what
+landed — to a browser on this machine, as one page of six sections, and keeps
+serving it until you stop it:
 
 ```sh
 ./bin/yoyo dashboard              # a port the operating system chooses
@@ -2696,7 +2696,7 @@ when it starts, and the second of them once:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
 token: 9f2c41ab7e05…
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
 
@@ -2711,7 +2711,7 @@ the value:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:8765/
 the token was read from the keychain item yoyo-dashboard.yoyodyne under the account yoyo, as services.dashboard.token names, and is not printed
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, and /api/items/<work-item-id>
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>
 it outlives a restart: a restarted dashboard reads the same one; stop with ctrl-c
 ```
 
@@ -2729,12 +2729,17 @@ Open the URL, paste the token into the page, and the page shows where the
 harness stands and asks again every ten seconds. The same answers are served as
 JSON to anything that sends the token as a bearer header: at `/api/standing`,
 the `standing` object `yoyo status --json` carries, from the same derivation,
-so the page and the terminal cannot disagree about a number; and at
-`/api/throughput`, what landed and what it cost over today and the last seven
-days, counted from the run records `yoyo status` derives each run's outcome
-from and priced by the same reading `yoyo status --spend 7` prints. The second
-reading prices every event log a week holds, which is seconds of work, so the
-page asks for it once a minute rather than every ten seconds. A third answer is
+so the page and the terminal cannot disagree about a number; at
+`/api/throughput`, what landed over today and the last seven days, counted from
+the run records `yoyo status` derives each run's outcome from; and at
+`/api/spend`, what the harness spent over the last twenty-four hours and the
+last seven local days, with a line for each of the last thirty local days,
+priced by the same reading `yoyo status --spend 30` prints. That third reading
+prices every event log a month holds, which is seconds of work, so the page asks
+for it once a minute rather than every ten seconds — and it is one read of the
+logs rather than two, because pricing a stream reads the whole of its log
+whatever window is asked for, so the rolling day and the days around it come
+off the same pass. A fourth answer is
 served one item at a time, at `/api/items/<work-item-id>`: the work item whole
 — the tracker's own fields, and the run the harness last made for it as
 `yoyo status <item>` lists it — which is what the page's
@@ -2746,16 +2751,16 @@ shape is refused before anything is asked.
 
 ### What the page presents
 
-Five sections, top to bottom, each drawn from the read model and from nothing
+Six sections, top to bottom, each drawn from the read model and from nothing
 else. Above them, one banner and only one, while it stands: the same sentence
 the terminal prints above the four lines when the harness is paused on the
 provider's usage window, when every role is held by one, or when the provider
 is answering nobody. Beside the product's name the page says when the reading
 was taken and that it asks again; a poll that fails after one that succeeded —
-of either reading, the standing or the throughput — marks the page **stale**,
-says which reading failed and which it is still showing, and the throughput
-section says the same under its own figures, rather than going blank on one
-dropped request.
+of any of the three readings, the standing, the throughput, or the spend —
+marks the page **stale**, says which reading failed and which it is still
+showing, and the throughput and spend sections say the same under their own
+figures, rather than going blank on one dropped request.
 
 1. **Where the harness stands** — a tile for each of the four lines: running
    developer runs, conversations with a turn in flight, admitted items nothing
@@ -2770,10 +2775,25 @@ dropped request.
    something waits on the operator, not when sixty things wait on a role. Its
    label is a button that opens [the list of what is waiting](#opening-what-waits-on-a-person),
    each entry of which opens a card. Two
-   more tiles carry what landed today and in the last seven days, and what it
-   cost, the latter prefixed `≥` or `at least` where a record that should be
-   in it could not be read.
-2. **Running now** — a card for each developer run and each conversation with a
+   more tiles carry what landed today and in the last seven days, and what was
+   spent in the last twenty-four hours and the last seven days, the latter
+   prefixed `≥` or `at least` where a record that should be in it could not be
+   read and its label opening the same listing the spend box's does.
+2. **What the harness is spending** — the box above Running now, and the answer
+   to what the machine is costing right now: two columns, the last twenty-four
+   hours and the last seven local days, each with what every priced invocation
+   in it cost, how many there were, and the split by kind — runs, conversations,
+   branch reviews, side threads, and exchanges — with the count of records that could not be
+   priced named beside the figure whenever there is one, because a cost with a
+   hole in it is a floor rather than a total. The first window is **rolling**:
+   it is reckoned from the moment the reading was taken rather than from
+   midnight, so a figure read at ten past midnight is a figure about the day
+   behind you and not about ten minutes; the column says which moment. The
+   second is whole local days, today counting as the first, so it is exactly the
+   sum of the seven newest lines of the listing behind it. Under the two, a
+   label — *Every day for the past 30 days* — opens
+   [that listing](#opening-the-month-of-spend).
+3. **Running now** — a card for each developer run and each conversation with a
    turn in flight: the work item's title and id, the phase (or `approved,
    resuming integration` where that is what the run is doing), how long it has
    been going, what it has spent so far or `cost unknown` and why, and the
@@ -2781,7 +2801,7 @@ dropped request.
    each open [the item's card](#opening-a-work-item). A conversation card says
    the agent, its role, how long the turn has been in flight, and how many turns
    are recorded before it.
-3. **Where the work stands** — the pipeline, read left to right: admitted items;
+4. **Where the work stands** — the pipeline, read left to right: admitted items;
    how many are held back, split into the piles the queue itself names — held
    for a person (awaiting a decision or awaiting carry-out), paused by a
    directive, pullable with nothing choosing, parked, waiting on other work,
@@ -2794,16 +2814,16 @@ dropped request.
    Under it, in words, how many things wait on a person, and then how many of
    them wait on each mover, the operator's first. Every stage's label
    and every pile's label is a button that opens [the list of the items in it](#opening-a-work-item).
-4. **Throughput and cost** — two columns, today and the last seven days, each
-   labeled with the local days it covers: how many runs landed their work on
-   the target branch; the other endings, in the run history's own words
-   (stopped for a person, cancelled, timed out, failed, and succeeded without
-   promoting anything); how many runs started; and what every priced invocation
-   cost, split into runs, conversations, branch reviews, and exchanges, with the
-   count of records that could not be priced named beside the figure whenever
-   there is one, because a cost with a hole in it is a floor rather than a
-   total.
-5. **Provider capacity** — the capacity-blocked state under
+5. **Throughput** — two columns, today and the last seven days, each labeled
+   with the local days it covers: how many runs landed their work on the target
+   branch; the other endings, in the run history's own words (stopped for a
+   person, cancelled, timed out, failed, and succeeded without promoting
+   anything); and how many runs started. What those days cost is in the spend
+   box above rather than here: a page carrying "today" in one section and "the
+   last 24 hours" in another is a page with two cost figures a reader has to
+   reconcile, and with the money moved out this section needs no pricing at all,
+   which is what keeps the page at one read of the event logs rather than two.
+6. **Provider capacity** — the capacity-blocked state under
    `standing.capacity_blocked`: each run parked or held on provider capacity,
    with what refused it, since when, the reset it is waiting out or that none
    was named, how much of its pause budget it has spent, whether its change is
@@ -2814,10 +2834,12 @@ dropped request.
    models, the alternates or the lack of them, the refusals, and the reset.
 
 Every section has four states and shows exactly one. **Loading** says it is
-reading, and for the throughput section that it is pricing the week, with one
+reading, and for the spend box that it is pricing the last thirty days, with one
 slow pulse that stops for a reader who asked for reduced motion. **Empty** says
 in a sentence that there is nothing — the harness is idle, nothing is running,
-the backlog is empty, nothing ran and nothing was spent in the last seven days,
+the backlog is empty, nothing ran in the last seven days, nothing was spent in
+the last thirty days (and, where anything has ever been priced, how far back the
+oldest priced record goes),
 no run or conversation is waiting on capacity — because a panel with nothing in
 it and a panel nobody filled look the same. **Error** says what could not be
 read, in the read model's own words, and what to do: which command says the
@@ -2844,6 +2866,31 @@ the refusal each item carries, the remedy each parked run carries — because th
 page and `yoyo status` are two projections of one model and a reader moving
 between them should not have to translate.
 
+### Opening the month of spend
+
+The spend box's label — *Every day for the past 30 days* — and the band's
+**Cost** tile each open one listing, in the same pop-up the groupings below
+open in and with the same four states: one line per local day, newest first,
+with what that day cost, how many invocations it was, and the split by kind.
+Its empty state is a month in which nothing was spent, said in the box's own
+sentence rather than as thirty lines of `nothing spent`; its error state is the
+reason the spend could not be read; and it is loading while the month is still
+being priced.
+
+Three things it says rather than leaving to be read off a zero. **A day no
+priced record goes back to says so** — `no priced record reaches this far back`
+— because a day nobody measured and a day nothing was spent on are different
+answers and only one of them is zero; a day inside the reach with nothing on it
+reads `nothing spent`. **Spend whose moment could not be read** is on a line of
+its own at the foot, saying it is counted in every window of the box above and
+on no day here, which is the only reason the days and the windows can differ.
+And **records that could not be priced at all** are counted on a last line
+saying every figure here and above is a floor.
+
+Nothing in the listing opens anything: a day is not a record this page can show
+more of. It is drawn again on every poll while it is open, from the reading the
+page already holds, so it stays as live as the box it was opened from.
+
 ### Opening a work item
 
 The sections show counts and names; the items behind them open in two pop-ups,
@@ -2863,7 +2910,7 @@ readings the page already holds — the standing names the admitted, startable,
 and refused items and the throughput names the landed runs, so it is what the
 figure counted rather than a list assembled on the page — and is drawn again
 on every poll while it is open. It has the four states a section has:
-**loading** while the landed figure is still being priced, **empty** saying in
+**loading** while the landed figure is still being read, **empty** saying in
 a sentence that no item is in the grouping, **error** with the reason the
 grouping's source could not be read — a stage showing a dash still opens, so
 the reason is readable in full — and **ready**. Each title in it opens the
@@ -2955,8 +3002,11 @@ holds the page as its own script renders it from the fixtures under
 keeping the one page state and the one state per section a browser would show
 and dropping the hidden ones — one file per scenario — `quiet`, `busy`,
 `held`, `degraded`, `unreadable`, `loading`, `throughput-pending`,
-`throughput-refused`, `throughput-stale`, `refused`, `unreachable`,
-`wrong-token`, `stale`, and `signin` for the page, and `card`, `card-loading`,
+`throughput-refused`, `throughput-stale`, `spend-pending`, `spend-stale`,
+`refused`, `unreachable`,
+`wrong-token`, `stale`, and `signin` for the page, `spend-days`,
+`spend-days-empty`, `spend-days-error`, and `spend-days-loading` for the month
+behind the spend box, and `card`, `card-loading`,
 `card-missing`, `card-refused`, `grouping`, `grouping-landed`,
 `grouping-empty`, `grouping-error`, `grouping-loading`, `grouping-card`,
 `closed`, and `closed-after-poll` for the pop-ups on work items, and

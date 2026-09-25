@@ -1,31 +1,26 @@
 package readmodel
 
-// What the harness got done over a day and a week, and what it cost.
+// What the harness got done over a day and a week.
 //
 // The standing status answers "where does the harness stand right now"; this
 // answers the other question an operator glancing at a page asks, which is
-// whether anything is getting done and what it is costing. It derives nothing
-// of its own about either. The money is (*runstate.StreamStore).Spend's — the
-// one call internal/cli/statusstream.go's reportSpend makes to price
-// `yoyo status --spend` — asked once over the widest window and split here by
-// the local day each row already carries; the endings are runstate.State.Outcome,
-// the word `yoyo status` prints for each run, with a `succeeded` run counted as
-// landed exactly where it carries a promotion; and the days are
-// runstate.LocalDay, the spend report's own. So a day's cost here is the day's
-// total the spend report prints, and a run counts as landed here exactly when
-// the terminal says its work landed, because two surfaces disagreeing about what
-// today cost is a disagreement only the operator can settle.
-// TestThroughputPricesTheSameRecordsTheSpendReportPrices holds the first of
-// those over a real state directory.
+// whether anything is getting done. It derives nothing of its own about it: the
+// endings are runstate.State.Outcome, the word `yoyo status` prints for each
+// run, with a `succeeded` run counted as landed exactly where it carries a
+// promotion, and the days are runstate.LocalDay, the spend report's own. So a
+// run counts as landed here exactly when the terminal says its work landed.
 //
-// Every figure names its window, and every total says what it does not cover.
-// A window is local calendar days, today counting as the first of them, because
-// that is the day an operator's own clock is keeping and the day the spend
-// report already groups by; the two windows here are today, and today with the
-// six days before it. A cost is a floor wherever a record that should be in it
-// could not be read, and the count of what could not be read rides beside the
-// figure rather than being dropped from it — the rule every cost surface in the
-// harness holds, held here too.
+// What it cost is the spend reading beside this one and is not repeated here.
+// The money moved out when the page grew a spend box of its own, because a page
+// carrying "today" in one section and "the last 24 hours" in another is a page
+// with two cost figures a reader has to reconcile — and because the throughput
+// then needs no ledger at all, which is what keeps the page at one read of the
+// event logs rather than two.
+//
+// Every figure names its window. A window is local calendar days, today
+// counting as the first of them, because that is the day an operator's own
+// clock is keeping and the day the spend report already groups by; the two
+// windows here are today, and today with the six days before it.
 
 import (
 	"context"
@@ -36,17 +31,10 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// Ledger is the recorded spend as `yoyo status --spend` prices it: every run,
-// conversation, branch review, and exchange, by the local day the money was
-// spent on. It is satisfied by *runstate.StreamStore.
-type Ledger interface {
-	Spend(runstate.SpendQuery) (runstate.SpendReport, error)
-}
-
 // ThroughputSources are the records one throughput reading is assembled from.
-// Both are interfaces so the derivation can be exercised without a state
-// directory, which is the only way a figure nobody may recompute per surface
-// gets a fixture that holds it.
+// The run state is an interface so the derivation can be exercised without a
+// state directory, which is the only way a figure nobody may recompute per
+// surface gets a fixture that holds it.
 type ThroughputSources struct {
 	// Runs is the durable run state, read for what each recorded run became and
 	// when. A reading without one says so rather than reporting nothing landed,
@@ -55,11 +43,6 @@ type ThroughputSources struct {
 	// wired" is not it.
 	Runs        Runs
 	RunsProblem string
-	// Ledger is the spend, and LedgerProblem the reason it could not be opened
-	// where the caller has one. A reading without one says so rather than
-	// reporting nothing spent.
-	Ledger        Ledger
-	LedgerProblem string
 	// Now stamps the reading and anchors the windows. It defaults to the wall
 	// clock and is injected so a test can pin a day.
 	Now func() time.Time
@@ -120,20 +103,6 @@ type Window struct {
 	// It is nil where the runs could not be read, as the endings are nothing
 	// then, and empty rather than absent otherwise.
 	LandedItems []LandedRun `json:"landed_items"`
-
-	// CostUSD is what every priced invocation in the window cost, across runs,
-	// conversations, branch reviews, and exchanges alike, and Invocations how
-	// many there were. Kinds splits both by what was invoked, in the order the
-	// spend report prices them.
-	CostUSD     float64     `json:"cost_usd"`
-	Invocations int         `json:"invocations"`
-	Kinds       []KindSpend `json:"kinds"`
-	// Unpriced counts the records the window should cover and could not read,
-	// which is the exchange records the spend report names as unreadable. While
-	// it is non-zero the cost is a floor, and Floor says so in one word so a page
-	// does not have to know why.
-	Unpriced int  `json:"unpriced"`
-	Floor    bool `json:"floor"`
 }
 
 // LandedRun is one run whose work reached the target branch inside a window:
@@ -146,27 +115,17 @@ type LandedRun struct {
 	LandedAt   time.Time `json:"landed_at"`
 }
 
-// KindSpend is one kind's share of a window's cost.
-type KindSpend struct {
-	Kind        runstate.StreamKind `json:"kind"`
-	Invocations int                 `json:"invocations"`
-	CostUSD     float64             `json:"cost_usd"`
-}
-
 // Throughput is the reading: the two windows, and what could not be read. It is
 // carried whole for the surfaces that project the model — the dashboard's
 // throughput section and the tiles above it — and it never fails as a whole: a
-// source that cannot be read costs its own figures and leaves the other's,
-// saying so in its problem rather than reporting zero.
+// source that cannot be read costs its own figures, saying so in its problem
+// rather than reporting zero.
 type Throughput struct {
 	ObservedAt time.Time `json:"observed_at"`
 	Windows    []Window  `json:"windows"`
 	// RunsProblem is set where the run records could not be read; the endings
 	// in every window are then nothing rather than zero, and this says why.
 	RunsProblem string `json:"runs_problem,omitempty"`
-	// SpendProblem is set where the spend could not be read; the costs in every
-	// window are then nothing rather than zero, and this says why.
-	SpendProblem string `json:"spend_problem,omitempty"`
 }
 
 // ReadThroughput assembles the two windows from the durable records.
@@ -178,7 +137,6 @@ func ReadThroughput(ctx context.Context, sources ThroughputSources) Throughput {
 			Label: window.label,
 			Days:  window.days,
 			Since: firstLocalDay(now, window.days),
-			Kinds: []KindSpend{},
 		})
 	}
 
@@ -195,37 +153,11 @@ func ReadThroughput(ctx context.Context, sources ThroughputSources) Throughput {
 		}
 	}
 
-	// The spend is read once, over the widest window, and each window takes the
-	// rows that fall inside it: every row carries the local day it was spent on,
-	// and pricing the streams costs a read of every event log, which is not a
-	// thing to do once per window on a page that asks every minute.
-	var report runstate.SpendReport
-	switch {
-	case ctx.Err() != nil:
-		reading.SpendProblem = fmt.Sprintf("the spend was not read: %v", ctx.Err())
-	case sources.Ledger == nil:
-		reading.SpendProblem = absent("the spend", sources.LedgerProblem)
-	default:
-		widest := 0
-		for _, window := range windows {
-			widest = max(widest, window.days)
-		}
-		priced, err := sources.Ledger.Spend(runstate.SpendQuery{Days: widest, Now: now})
-		if err != nil {
-			reading.SpendProblem = fmt.Sprintf("the spend could not be read: %v", err)
-		} else {
-			report = priced
-		}
+	if reading.RunsProblem != "" {
+		return reading
 	}
-
 	for index := range reading.Windows {
-		window := &reading.Windows[index]
-		if reading.RunsProblem == "" {
-			countEndings(window, recorded, now)
-		}
-		if reading.SpendProblem == "" {
-			sumSpend(window, report)
-		}
+		countEndings(&reading.Windows[index], recorded, now)
 	}
 	return reading
 }
@@ -297,22 +229,6 @@ func endedAt(state runstate.State) time.Time {
 		return state.UpdatedAt
 	}
 	return state.StartedAt
-}
-
-// sumSpend takes the window's figures off the spend report: the rows from the
-// window's first day on, by the report's own rule for which rows a window
-// holds, added up by the report's own summation — the one `yoyo status --spend`
-// prints its total and split from, so the split reads the same here as there.
-func sumSpend(window *Window, report runstate.SpendReport) {
-	inside := report.Since(window.Since)
-	totals := inside.Totals()
-	window.CostUSD = totals.CostUSD
-	window.Invocations = totals.Calls
-	for _, share := range totals.ByKind {
-		window.Kinds = append(window.Kinds, KindSpend{Kind: share.Kind, Invocations: share.Calls, CostUSD: share.CostUSD})
-	}
-	window.Unpriced = len(inside.UnreadableExchanges)
-	window.Floor = inside.Floor()
 }
 
 // startOfLocalDay is the first instant of the window: local midnight at the

@@ -34,6 +34,7 @@ import (
 type scenario struct {
 	standing   string
 	throughput string
+	spend      string
 	// pending is a dashboard whose readings never answer, which is what the
 	// loading states are looked at under.
 	pending bool
@@ -44,11 +45,11 @@ type scenario struct {
 // scenarios are the same pairings testdata/render.js renders, so a capture and
 // a render of one name show one state.
 var scenarios = map[string]scenario{
-	"quiet":      {standing: "standing-quiet", throughput: "throughput-quiet"},
-	"busy":       {standing: "standing-busy", throughput: "throughput-busy"},
-	"held":       {standing: "standing-held", throughput: "throughput-busy"},
-	"degraded":   {standing: "standing-degraded", throughput: "throughput-degraded"},
-	"unreadable": {standing: "standing-unreadable", throughput: "throughput-unreadable"},
+	"quiet":      {standing: "standing-quiet", throughput: "throughput-quiet", spend: "spend-quiet"},
+	"busy":       {standing: "standing-busy", throughput: "throughput-busy", spend: "spend-busy"},
+	"held":       {standing: "standing-held", throughput: "throughput-busy", spend: "spend-busy"},
+	"degraded":   {standing: "standing-degraded", throughput: "throughput-degraded", spend: "spend-busy"},
+	"unreadable": {standing: "standing-unreadable", throughput: "throughput-unreadable", spend: "spend-unreadable"},
 	"loading":    {pending: true},
 	"refused":    {refused: "the state root could not be resolved: open /Users/somebody/Library/Application Support/Yoyodyne/state: permission denied"},
 }
@@ -61,6 +62,7 @@ type fixtureReader struct {
 	dir        string
 	standing   readmodel.Standing
 	throughput readmodel.Throughput
+	spend      readmodel.Spend
 	pending    bool
 	refused    error
 }
@@ -99,6 +101,14 @@ func (r fixtureReader) Throughput(ctx context.Context) (readmodel.Throughput, er
 	return r.throughput, r.refused
 }
 
+func (r fixtureReader) Spend(ctx context.Context) (readmodel.Spend, error) {
+	if r.pending {
+		<-ctx.Done()
+		return readmodel.Spend{}, ctx.Err()
+	}
+	return r.spend, r.refused
+}
+
 func load(dir, name string, into any) error {
 	body, err := os.ReadFile(filepath.Join(dir, name+".json"))
 	if err != nil {
@@ -119,6 +129,11 @@ func reader(dir string, s scenario) (dashboard.Reader, error) {
 	}
 	if s.throughput != "" {
 		if err := load(dir, s.throughput, &r.throughput); err != nil {
+			return nil, err
+		}
+	}
+	if s.spend != "" {
+		if err := load(dir, s.spend, &r.spend); err != nil {
 			return nil, err
 		}
 	}

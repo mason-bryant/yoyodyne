@@ -1,0 +1,248 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "windows": [
+    {
+      "label": "last 24 hours",
+      "rolling": true,
+      "since": "2026-09-18T14:05:09Z",
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    },
+    {
+      "label": "last 7 days",
+      "rolling": false,
+      "since": "2026-09-13T00:00:00Z",
+      "since_day": "2026-09-13",
+      "days": 7,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": [],
+      "unpriced": 0,
+      "floor": false
+    }
+  ],
+  "days": [
+    {
+      "day": "2026-09-19",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-18",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-17",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-16",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-15",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-14",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-13",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-12",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-11",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-10",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-09",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-08",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-07",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-06",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-05",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-04",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-03",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-02",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-09-01",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-31",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-30",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-29",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-28",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-27",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-26",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-25",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-24",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-23",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-22",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    },
+    {
+      "day": "2026-08-21",
+      "reached": false,
+      "cost_usd": 0,
+      "invocations": 0,
+      "kinds": []
+    }
+  ],
+  "undated": {
+    "day": "undated",
+    "reached": true,
+    "cost_usd": 0,
+    "invocations": 0,
+    "kinds": []
+  },
+  "unpriced": 0,
+  "floor": false
+}

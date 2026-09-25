@@ -51,6 +51,21 @@
       </div>
     </section>
 
+    <section id="spend" class="panel spend" data-state="loading" aria-labelledby="spend-heading">
+      <div class="panel-head">
+        <h2 id="spend-heading">What the harness is spending</h2>
+        <p class="panel-note">the last 24 hours, rolling from this reading, and the last 7 local days, each split by kind</p>
+      </div>
+      <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Pricing the last thirty days…</p></div>
+      <div class="section-error" role="alert"><p id="spend-problem" class="problem"></p><p id="spend-remedy" class="remedy"></p></div>
+      <div class="section-empty"><p id="spend-empty" class="empty"></p></div>
+      <div class="section-ready">
+        <p id="spend-stale" class="stale" role="status" hidden></p>
+        <div id="spend-windows" class="windows"></div>
+        <p id="spend-open" class="spend-open"></p>
+      </div>
+    </section>
+
     <section id="live" class="panel live" data-state="loading" aria-labelledby="live-heading">
       <div class="panel-head">
         <h2 id="live-heading">Running now</h2>
@@ -83,10 +98,10 @@
 
     <section id="throughput" class="panel throughput" data-state="loading" aria-labelledby="throughput-heading">
       <div class="panel-head">
-        <h2 id="throughput-heading">Throughput and cost</h2>
-        <p class="panel-note">local calendar days, today counting as the first; the figures <code>yoyo status --spend</code> prints</p>
+        <h2 id="throughput-heading">Throughput</h2>
+        <p class="panel-note">local calendar days, today counting as the first; the endings <code>yoyo status</code> prints, and what each cost is in the spend box above</p>
       </div>
-      <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Pricing the last seven days…</p></div>
+      <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Reading what the runs came to…</p></div>
       <div class="section-error" role="alert"><p id="throughput-problem" class="problem"></p><p id="throughput-remedy" class="remedy"></p></div>
       <div class="section-empty"><p id="throughput-empty" class="empty"></p></div>
       <div class="section-ready">
@@ -122,7 +137,7 @@
           </div>
           <button type="button" id="grouping-close" class="popup-close">Close</button>
         </div>
-        <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Pricing the week…</p></div>
+        <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span><span id="grouping-waiting">Reading…</span></p></div>
         <div class="section-error" role="alert"><p id="grouping-problem" class="problem"></p><p id="grouping-remedy" class="remedy"></p></div>
         <div class="section-empty"><p id="grouping-empty" class="empty"></p></div>
         <div class="section-ready"><ol id="grouping-items" class="grouping-items"></ol></div>
