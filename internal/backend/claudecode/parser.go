@@ -56,6 +56,13 @@ type streamParser struct {
 	// its own answer. Result decides between them when there is nothing left to
 	// arrive.
 	duplicateTerminal string
+	// reportedCostUSD is the last figure a terminal of this invocation reported,
+	// and duplicateCostUSD what every terminal after the first added to it by the
+	// session-increment rule. They are kept beside the result rather than in it
+	// because nothing off a duplicate is written into the decided result; Result
+	// adds the increments on, since the provider charged for them either way.
+	reportedCostUSD  float64
+	duplicateCostUSD float64
 }
 
 type streamEnvelope struct {
@@ -554,6 +561,7 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	p.result.FinalText = envelope.Result
 	p.result.IsError = envelope.IsError
 	p.result.CostUSD = envelope.TotalCostUSD
+	p.reportedCostUSD = envelope.TotalCostUSD
 	// The terminal is where Claude Code prices the invocation, so reaching one is
 	// exactly what makes the cost known. An invocation that never reaches one --
 	// a killed process, a connection that went away mid-reply -- leaves this
@@ -601,7 +609,7 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 // terminal makes unanswerable, so the recorded reason says that rather than
 // picking one. Both of the provider's own reasons are kept beside it in the
 // anomaly event, whichever answer the invocation ends up carrying.
-const duplicateTerminalReason = "duplicate_terminal_result"
+const duplicateTerminalReason = execution.DuplicateTerminalAnomaly
 
 // recordDuplicateTerminal records a second terminal result and what it makes of
 // the invocation. The answer it leads to is a relaunch against the run's own
@@ -612,7 +620,8 @@ const duplicateTerminalReason = "duplicate_terminal_result"
 //
 // The decided result still stands — nothing off the second envelope is written
 // into it, so the guarded invariant that a duplicate cannot replace the first
-// terminal holds — but it stops being trusted as the invocation's outcome. The
+// terminal holds — but it stops being trusted as the invocation's outcome, and
+// what the duplicate cost is added to what the invocation cost. The
 // nested-agent case above is why: a subagent completion that carries a
 // terminal's marks is read as this invocation's terminal, and the real terminal
 // then arrives as the duplicate, so the result already recorded may be a
@@ -633,10 +642,17 @@ func (p *streamParser) recordDuplicateTerminal(envelope streamEnvelope) error {
 	// The whole of the duplicate goes into the event stream, like every other
 	// envelope arriving after the terminal, because what a dialect drifted into
 	// cannot be diagnosed from a record that kept only the fact that it drifted.
+	//
+	// The role and the session are recorded on it for the reason they are on a
+	// terminal: the pricing in internal/runstate reads the cost here as more of
+	// this invocation's, and the session is what says which running total the
+	// figure is an increment over.
 	if err := p.emit(execution.EventProcessOutput, map[string]any{
 		"provider_type":    envelope.Type,
 		"provider_subtype": envelope.Subtype,
 		"anomaly":          duplicateTerminalReason,
+		"role":             string(p.role),
+		"session_id":       envelope.SessionID,
 		"is_error":         envelope.IsError,
 		"result":           truncate(envelope.Result),
 		"terminal_reason":  envelope.TerminalReason,
@@ -645,6 +661,19 @@ func (p *streamParser) recordDuplicateTerminal(envelope streamEnvelope) error {
 	}); err != nil {
 		return err
 	}
+	// The turn that produced the duplicate was charged for, so its cost is this
+	// invocation's too. It is priced by the rule every terminal is priced by
+	// (runstate.OwnCostUSD): Claude Code reports the session's running total, so
+	// what the turn cost is what the total moved by since this invocation's last
+	// terminal, and a figure below that one is a total that restarted and counts
+	// whole. On run-f3755e3f that was $0.40 to $0.88 a time that no cost surface
+	// counted, because only the anomaly event carried it.
+	if envelope.TotalCostUSD < p.reportedCostUSD {
+		p.duplicateCostUSD += envelope.TotalCostUSD
+	} else {
+		p.duplicateCostUSD += envelope.TotalCostUSD - p.reportedCostUSD
+	}
+	p.reportedCostUSD = envelope.TotalCostUSD
 	// The decided terminal's own reason is read off the result rather than kept
 	// beside it, which it can be because nothing here writes to the result: a
 	// third terminal names the ending the first one gave, not the anomaly the
@@ -703,6 +732,12 @@ func (p *streamParser) Result() backend.RunResult {
 	}
 	result.IsError = true
 	result.StopReason = duplicateTerminalReason
+	// The figure the meter prices against the session's last one is the first
+	// terminal's plus what every later terminal added. Where the provider's total
+	// only rose, which is every duplicate recorded so far, that is exactly the
+	// last terminal's figure, so the session's next invocation is priced against
+	// the total the provider last reported.
+	result.CostUSD += p.duplicateCostUSD
 	if result.UsageLimit == nil && result.ServerOverload == nil {
 		result.TransientFailure = &backend.TransientFailure{Detail: p.duplicateTerminal}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"
@@ -2314,4 +2316,195 @@ func hasEnvironmentName(environment []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// run-f3755e3f's developer was ended twice: a terminal at $44.4602215, and after
+// a watcher woke the session for one more turn, a second at $44.8557805. The
+// invocation's cost is every ending's increment -- the first terminal's figure
+// plus the $0.40 the second moved the session's total by -- so the meter prices
+// the whole of it against the session's last figure rather than losing the turn
+// to the anomaly event. A total that fell is one that restarted, and the figure
+// after a restart counts whole, as it does for any terminal.
+func TestRunCostsEveryTerminalAnInvocationEndedWith(t *testing.T) {
+	t.Parallel()
+
+	terminal := func(cost float64) string {
+		encoded, err := json.Marshal(map[string]any{
+			"type":            "result",
+			"subtype":         "success",
+			"session_id":      "session-1",
+			"is_error":        false,
+			"result":          "done",
+			"terminal_reason": "completed",
+			"total_cost_usd":  cost,
+			"usage":           map[string]any{"input_tokens": 1},
+		})
+		if err != nil {
+			t.Fatalf("Marshal() terminal error = %v", err)
+		}
+		return string(encoded)
+	}
+	for _, testCase := range []struct {
+		name    string
+		endings []float64
+		want    float64
+	}{
+		{name: "one ending", endings: []float64{44.4602215}, want: 44.4602215},
+		{name: "run-f3755e3f's two endings", endings: []float64{44.4602215, 44.8557805}, want: 44.4602215 + (44.8557805 - 44.4602215)},
+		{name: "three endings", endings: []float64{1, 1.5, 2.25}, want: 2.25},
+		{name: "a total that restarted", endings: []float64{3, 0.5}, want: 3.5},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := []string{`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-opus-5"}`}
+			for _, cost := range testCase.endings {
+				lines = append(lines, terminal(cost))
+			}
+			var events []execution.Event
+			result, err := (Backend{
+				Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: strings.Join(lines, "\n") + "\n"}}},
+				Clock:  fixedClock{},
+			}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             domain.RoleDeveloper,
+				WorkingDirectory: "/worktree",
+				Prompt:           "finish the work",
+				EventSink: func(event execution.Event) error {
+					events = append(events, event)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if !result.CostReported || math.Abs(result.CostUSD-testCase.want) > 1e-9 {
+				t.Fatalf("CostUSD = %v (reported %v), want %v", result.CostUSD, result.CostReported, testCase.want)
+			}
+			// The anomaly still names the duplicate, and now says whose invocation
+			// and which session its figure belongs to.
+			anomalies := 0
+			for _, event := range events {
+				if !strings.Contains(string(event.Payload), `"anomaly":"duplicate_terminal_result"`) {
+					continue
+				}
+				anomalies++
+				for _, want := range []string{`"session_id":"session-1"`, `"role":"developer"`} {
+					if !strings.Contains(string(event.Payload), want) {
+						t.Fatalf("duplicate terminal payload is missing %s: %s", want, event.Payload)
+					}
+				}
+			}
+			if anomalies != len(testCase.endings)-1 {
+				t.Fatalf("recorded %d duplicate terminal(s), want %d", anomalies, len(testCase.endings)-1)
+			}
+		})
+	}
+}
+
+// The two readers take a duplicate's money off the anomaly event and hand it to
+// the invocation whose terminal came before it, so they are right only while the
+// backend records the terminal first. This drives the backend's own events into
+// a run's log rather than a sequence a test wrote by hand: run-f3755e3f's first
+// attempt ending twice, then the attempt that resumed its session, priced by the
+// ledger behind `yoyo cost` and by the listing behind `yoyo status --spend`.
+func TestRecordedDuplicateTerminalIsPricedOnTheInvocationItFollowed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, err := runstate.NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatalf("NewRunID() error = %v", err)
+	}
+	now := fixedClock{}.Now()
+	if err := runs.Create(runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    "yoyodyne-ifd.435.2",
+		Backend:       domain.BackendClaudeCode,
+		Status:        runstate.StatusSucceeded,
+		StartedAt:     now,
+		UpdatedAt:     now,
+		CompletedAt:   &now,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	terminal := func(cost float64) string {
+		encoded, err := json.Marshal(map[string]any{
+			"type":            "result",
+			"subtype":         "success",
+			"session_id":      "session-1",
+			"is_error":        false,
+			"result":          "done",
+			"terminal_reason": "completed",
+			"total_cost_usd":  cost,
+			"usage":           map[string]any{"input_tokens": 1},
+		})
+		if err != nil {
+			t.Fatalf("Marshal() terminal error = %v", err)
+		}
+		return string(encoded)
+	}
+	var sequence uint64
+	for _, endings := range [][]float64{{44.4602215, 44.8557805}, {45.694919}} {
+		lines := []string{`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-opus-5"}`}
+		for _, cost := range endings {
+			lines = append(lines, terminal(cost))
+		}
+		if _, err := (Backend{
+			Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: strings.Join(lines, "\n") + "\n"}}},
+			Clock:  fixedClock{},
+		}).Run(context.Background(), backendapi.RunRequest{
+			RunID:            runID,
+			Role:             domain.RoleDeveloper,
+			WorkingDirectory: "/worktree",
+			Prompt:           "finish the work",
+			EventSink: func(event execution.Event) error {
+				sequence++
+				event.Sequence = sequence
+				return runs.AppendEvent(event)
+			},
+		}); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	}
+
+	// Every ending's increment in the one session: $44.46, the duplicate's $0.40,
+	// and the resumed attempt's $0.84 -- which is the session's last figure.
+	const want = 45.694919
+	price, err := runs.Price("yoyodyne-ifd.435.2")
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	run := price.Runs[0]
+	if math.Abs(run.CostUSD-want) > 1e-9 {
+		t.Fatalf("ledger prices the run at %v, want %v", run.CostUSD, want)
+	}
+	// The duplicate lands on the first attempt, which is the order the backend
+	// records it in, and adds no invocation of its own.
+	if math.Abs(run.Phases.Development.CostUSD-44.8557805) > 1e-9 || run.Phases.Development.Invocations != 1 {
+		t.Fatalf("development = %#v, want the first terminal and its duplicate as one invocation", run.Phases.Development)
+	}
+	if run.Phases.Repair.Invocations != 1 || math.Abs(run.Phases.Repair.CostUSD-(45.694919-44.8557805)) > 1e-9 {
+		t.Fatalf("repair = %#v, want the resumed attempt priced against the duplicate's figure", run.Phases.Repair)
+	}
+
+	streams, err := runstate.NewStreamStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStreamStore() error = %v", err)
+	}
+	report, err := streams.Spend(runstate.SpendQuery{Now: now})
+	if err != nil {
+		t.Fatalf("Spend() error = %v", err)
+	}
+	if totals := report.Totals(); totals.Calls != 2 || math.Abs(totals.CostUSD-want) > 1e-9 {
+		t.Fatalf("listing reads %d invocation(s) at %v, want 2 at %v", totals.Calls, totals.CostUSD, want)
+	}
 }

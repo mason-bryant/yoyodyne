@@ -28,6 +28,17 @@ const (
 // added does not silently move it.
 const TerminalRoleSchemaVersion = 2
 
+// DuplicateTerminalAnomaly is the value of the "anomaly" key on the
+// process.output event a backend records when the provider ends one invocation
+// twice. The second terminal is not a second invocation, so it is never recorded
+// as run.completed or run.failed, but it still carries what the provider charged
+// for the turn that produced it: the pricing in internal/runstate reads this
+// event as more cost for the invocation whose terminal it followed, by the same
+// session-increment rule every terminal is priced by. It is named here, beside
+// the event types, because the backend that writes it and the pricing that reads
+// it share nothing else.
+const DuplicateTerminalAnomaly = "duplicate_terminal_result"
+
 type EventType string
 
 const (
