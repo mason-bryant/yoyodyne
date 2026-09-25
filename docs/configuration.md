@@ -257,9 +257,9 @@ The sixth is the [program manager](designs/program-manager.md): an agent filling
 it watches one outcome across the others and may change work only inside its own
 lane. `yoyo init` configures none — an instance is a lane and a remit somebody
 chose, written in three keys only that role's agents carry
-([a program manager instance](#a-program-manager-instance)) — and until the lane
-is enforced every tracker write the role holds is refused, so an instance
-configured today reads, asks, remembers, and reports, and nothing more.
+([a program manager instance](#a-program-manager-instance)) — and every tracker
+write the role holds is confined to that lane, read off each item as the action
+runs ([a program manager's lane](conversation.md#a-program-managers-lane)).
 [Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 
@@ -328,12 +328,15 @@ agents:
   when the file loads; leaving `every` out is no scheduled pass. A later layer's
   block replaces an inherited one whole, as the failover block does.
 
-**What this builds is the configuration, not the behaviour behind it.** The keys
-load, are validated, are reported by `yoyo agent list` and `yoyo config show`,
-and the remit is delivered; nothing yet reads the triggers to take a pass, and the
-lane is not yet what admits the role's tracker writes, which stay refused as
-above. Configuration selects which lane and what wakes it, and never widens what
-the role may do.
+**The lane is enforced; the triggers are not yet read.** The keys load, are
+validated, are reported by `yoyo agent list` and `yoyo config show`, and the
+remit is delivered. The lane is what confines the instance's tracker writes: a
+creation carries the lane label in the write that admits it, and every other
+write is refused on an item not carrying it at the moment of the act — the rules
+are [a program manager's lane](conversation.md#a-program-managers-lane). An
+instance configured with no `lane` has nothing inside one, so all of its tracker
+writes are refused. Nothing yet reads the triggers to take a pass. Configuration
+selects which lane and what wakes it, and never widens what the role may do.
 
 ## Discovery
 

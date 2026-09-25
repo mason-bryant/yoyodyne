@@ -431,6 +431,12 @@ type Options struct {
 	// can never replace or weaken the contract ahead of it. It is empty for every
 	// other agent.
 	Remit string
+	// Lane is a program manager instance's lane from configuration: the one
+	// tracker label its writes are confined to. It narrows what the role holds
+	// rather than widening it, and it is empty for every other agent — and for an
+	// instance configured with none, whose lane-scoped writes are then all
+	// refused, since no item is inside a lane nobody named.
+	Lane string
 	// Agent is the configured agent filling the role. It is required, because it
 	// is the conversation's identity: the durable record, the provider session,
 	// and the lease are all keyed on it, so two agents configured for one role
@@ -518,6 +524,11 @@ type Session struct {
 	// is durable in the conversation's event log; this is the pending set a
 	// decision can still name.
 	proposals []*proposalRecord
+	// laneProposals is what this round's tracker actions put to the operator as
+	// proposals: a program manager's lane creations the admission gate would not
+	// admit directly. They are recorded like every proposal and handed to the
+	// reply beside it.
+	laneProposals []PendingProposal
 	// deliveredAmendments is the proposals against this role's documents that
 	// this conversation has already carried into a turn. A pending proposal stays
 	// pending until somebody decides it, so without this the same list would be
@@ -1345,6 +1356,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 			s.activity.doing(phaseTracker)
 			outcomes, err := s.performTrackerActions(ctx, parsed.Actions)
 			reply.Actions = append(reply.Actions, outcomes...)
+			reply.Proposals = append(reply.Proposals, s.takeLaneProposals()...)
 			if err != nil {
 				return reply, err
 			}
@@ -2215,8 +2227,11 @@ func (s *Session) createFromProposal(ctx context.Context, record *proposalRecord
 		Title:       strings.TrimSpace(proposal.Title),
 		Description: strings.TrimSpace(proposal.Description),
 		Type:        proposedIssueType,
-		Notes:       record.pending.provenanceNotes(authority, s.options.Goals),
+		Notes:       record.pending.provenanceNotes(authority, s.options.Goals, s.state.Role, s.options.Agent),
 		Parent:      strings.TrimSpace(proposal.Parent),
+		// A proposal made in a lane is created in it, in the same write, as a lane
+		// admission is.
+		Labels: proposalLabels(record.pending.Lane),
 	})
 	if err != nil {
 		// Nothing was created, so the proposal is still awaiting a decision:

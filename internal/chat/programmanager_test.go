@@ -106,50 +106,6 @@ func TestTheProgramManagerIsRefusedWhatItsDesignExcludes(t *testing.T) {
 	}
 }
 
-// Every write the program manager holds is scoped to its lane, and no lane is
-// enforced yet, so every one of them is refused whole — which is the design's
-// exclusion of every action on an item outside the lane, made while no item is
-// inside one.
-func TestTheProgramManagersLaneWritesAreRefusedUntilALaneIsEnforced(t *testing.T) {
-	t.Parallel()
-
-	authority, _ := AuthorityFor(domain.RoleProgramManager)
-	want := []string{
-		actionCreate, actionAttribute, actionUpdate, actionLabel, actionReparent,
-		actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink,
-	}
-	if !slices.Equal(authority.LaneActions, want) {
-		t.Fatalf("the program manager's lane-scoped actions = %v, want %v", authority.LaneActions, want)
-	}
-	session := &Session{}
-	session.state.Role = domain.RoleProgramManager
-	for _, action := range want {
-		if !authority.MayAct(action) {
-			t.Errorf("the program manager may not ask for %q at all; it holds it inside its lane", action)
-		}
-		err := session.authorize(parsedReply{Actions: []TrackerAction{{Action: action, ID: "yoyodyne-ifd.1", Reason: "why"}}})
-		var refusal *AuthorityError
-		if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "lane") {
-			t.Errorf("authorize() of %q = %v, want it refused for want of a lane", action, err)
-		}
-	}
-	// No other role holds an action through the lane, so nothing about theirs
-	// changed.
-	for _, role := range ConversationalRoles() {
-		if role == domain.RoleProgramManager {
-			continue
-		}
-		other, _ := AuthorityFor(role)
-		if len(other.LaneActions) > 0 {
-			t.Errorf("the %s holds lane-scoped actions %v", role.Title(), other.LaneActions)
-		}
-	}
-	// And it is told nothing about admission it cannot make.
-	if clause := admissionClause(authority, Admission{}); clause != "" {
-		t.Errorf("the program manager is sent an admission clause while its creations are refused: %q", clause)
-	}
-}
-
 // The program manager is on the ask channel at both ends: it may open an
 // exchange, and another role may put one to it.
 func TestAnExchangeRunsToAndFromTheProgramManager(t *testing.T) {
@@ -218,7 +174,9 @@ func TestTheProgramManagerNeitherDirectsNorCausesRuns(t *testing.T) {
 	}
 
 	authority, _ := AuthorityFor(domain.RoleProgramManager)
-	session := &Session{}
+	// The instance has a lane, so what refuses the creation below is the
+	// directive it names rather than the want of a lane.
+	session := &Session{options: Options{Lane: "reliability"}}
 	session.state.Role = domain.RoleProgramManager
 	for _, name := range []string{"directive", "resolve", "withdraw", "carry-out", "cause", "rerun", "repair", "escalate"} {
 		if authority.MayAct(name) {

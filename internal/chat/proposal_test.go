@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -196,7 +197,7 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 
 	// A created item has to trace back to the turn that produced it, and to what
 	// authorized it rather than to whichever of the two is more flattering.
-	notes := pending.provenanceNotes("approved by the operator", goal.Set{})
+	notes := pending.provenanceNotes("approved by the operator", goal.Set{}, domain.RoleProductManager, "product-manager")
 	for _, required := range []string{
 		"chat-0123456789abcdef0123456789abcdef", "turn 3", "proposal 3.1",
 		"approved by the operator",
@@ -213,7 +214,7 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 	admittedNotes := pending.provenanceNotes(approvedGoalNote(goal.Attribution{
 		State: goal.StateAttributed,
 		Goal:  goal.Goal{ArtifactID: "v1-goals"},
-	}), goal.Set{})
+	}), goal.Set{}, domain.RoleProductManager, "product-manager")
 	if strings.Contains(admittedNotes, "approved by the operator") {
 		t.Fatalf("an admitted item claims an approval nobody gave: %q", admittedNotes)
 	}

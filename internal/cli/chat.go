@@ -964,13 +964,16 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		UsageLimitPause: usageLimitPause(cfg, attended),
 		Persona:         agent.Persona.Text,
 		Remit:           agent.Remit.Text,
-		Agent:           name,
-		Provider:        agent.Backend,
-		Providers:       providerRegistry(cfg),
-		Repository:      repository,
-		ProductID:       cfg.Product.ID,
-		RepositoryID:    string(cfg.Product.RepositoryID),
-		Briefing:        briefing,
+		// The lane the instance's tracker writes are confined to, enforced at the
+		// act in the conversation's authority table.
+		Lane:         agent.Lane,
+		Agent:        name,
+		Provider:     agent.Backend,
+		Providers:    providerRegistry(cfg),
+		Repository:   repository,
+		ProductID:    cfg.Product.ID,
+		RepositoryID: string(cfg.Product.RepositoryID),
+		Briefing:     briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,

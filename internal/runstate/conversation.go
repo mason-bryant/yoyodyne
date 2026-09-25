@@ -408,6 +408,10 @@ type PendingProposal struct {
 	// Asking is what kept this proposal out of a queue it would otherwise have
 	// gone into, worked out when it was proposed rather than when it is decided.
 	Asking string `json:"asking,omitempty"`
+	// Lane is the lane label a program manager's creation was proposed in, kept
+	// because an approval creates the item in that lane and a proposal that came
+	// back without it would be admitted outside the lane it was made for.
+	Lane string `json:"lane,omitempty"`
 }
 
 // MaxPendingProposals bounds the undecided proposals one conversation carries.

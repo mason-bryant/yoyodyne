@@ -968,14 +968,6 @@ func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 		offered := SystemPrompt(role, Admission{}, "")
 		for _, action := range trackerActionNames {
 			shown := strings.Contains(offered, `{"action":"`+action+`"`)
-			// A lane-scoped action is refused whole while no lane is enforced, so a
-			// role holding it only there is shown it no more than a refused one.
-			if authority.LaneScoped(action) {
-				if shown {
-					t.Fatalf("the %s contract offers the %q action, which is refused until its lane is enforced", role, action)
-				}
-				continue
-			}
 			if authority.MayAct(action) && !shown {
 				t.Fatalf("the %s contract does not offer the %q action that role can carry out", role, action)
 			}
