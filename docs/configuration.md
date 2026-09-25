@@ -3525,6 +3525,31 @@ are not covered by this and still wait their window out on the settings above;
 what this covers is the turns an agent takes — the conversations, where a
 decision nobody can make stops everything downstream of it.
 
+### A conversation too long for its provider session
+
+A conversation's provider session grows with every turn, and a long-held one can
+outgrow what the provider will take: it refuses the turn as too long (Claude
+Code's `Prompt is too long`, its API's `request_too_large`, Codex's
+`context_length_exceeded`), or the compaction that would have shrunk the session
+fails. That turn is not failed and the conversation is not replaced. The session
+is set aside and the same turn is asked once more in a fresh provider session,
+under the same conversation identifier, with its recent context rebuilt from the
+record exactly as [a crossing](#serving-a-turn-from-a-permitted-alternate-model)
+rebuilds it: the picture the conversation is working from, and the most recent
+80 messages of the exchange. The reconstruction tells the role why it has no
+session, so it knows the earliest of what it said is gone. Nothing else about the
+conversation changes — its agent's memory, its report position, and its picture
+carry over as they are.
+
+The conversation's event log records a `session.replaced` event naming the
+session set aside, the endpoint that refused it — the alternate's, where failover
+had moved the turn — and what the provider said. A reply the provider did not flag
+as a failure is read as this refusal only when the provider's notice is the whole
+of it, so a role that merely mentions one of these errors is never mistaken for
+one. The session is cleared on the record before the fresh attempt, so a fresh attempt that is refused too fails
+that turn only, and the next turn rebuilds again rather than resuming the session
+that was refused. A turn is given one fresh session, not a loop of them.
+
 ### Pinning an agent to a model version
 
 A model selector is a family alias by default — `opus`, `fable` — and an alias

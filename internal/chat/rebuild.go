@@ -31,6 +31,7 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
@@ -118,8 +119,21 @@ const rebuiltContextHeader = "# This conversation, rebuilt from its record"
 // the turn after a crossing, once the window it was waiting out has lifted. The
 // alternate's session is no answer there: it belongs to the provider not being
 // asked.
+//
+// It is also the turn after one whose fresh session failed: the session the
+// provider refused was set aside before that attempt, so there is nothing to
+// resume here either. Which of the two it is comes from the record — a set-aside
+// session is recorded as one — and a conversation with no session for any other
+// reason is told only that there is none.
 func (s *Session) rebuildForOwnEndpoint(request backend.RunRequest) (backend.RunRequest, error) {
-	return s.rebuildFromRecord(request)
+	switch {
+	case s.state.SessionSetAside != "":
+		return s.rebuildFromRecord(request, sessionSetAside)
+	case s.state.Backend != "" && s.state.Backend != s.options.Provider:
+		return s.rebuildFromRecord(request, crossedProviders)
+	default:
+		return s.rebuildFromRecord(request, noSessionHeld)
+	}
 }
 
 // rebuildForAlternate prepares a turn the failover is moving onto the alternate,
@@ -133,7 +147,7 @@ func (s *Session) rebuildForAlternate(request backend.RunRequest) (backend.RunRe
 	if s.alternateSession() != "" {
 		return request, nil
 	}
-	return s.rebuildFromRecord(request)
+	return s.rebuildFromRecord(request, crossedProviders)
 }
 
 // rebuildFromRecord assembles the request a provider that holds no session for
@@ -149,7 +163,9 @@ func (s *Session) rebuildForAlternate(request backend.RunRequest) (backend.RunRe
 // moved onto the other one by a refusal nobody could have known about in advance
 // — and the conversation told to itself twice is worse than either endpoint
 // getting it once.
-func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequest, error) {
+// why is the sentence telling the provider why it holds no session, which is
+// either a crossing or a session the provider refused to continue.
+func (s *Session) rebuildFromRecord(request backend.RunRequest, why string) (backend.RunRequest, error) {
 	if strings.HasPrefix(request.Prompt, rebuiltContextHeader) {
 		return request, nil
 	}
@@ -170,7 +186,7 @@ func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequ
 	// here rather than inheriting a pass it was not part of. Anything recognizably
 	// sensitive leaves the harness once per invocation, and a crossing is one more
 	// invocation to a provider that has never seen any of it.
-	rebuilt := execution.NewRedactor(s.options.RedactValues...).Redact(s.rebuiltContext(events))
+	rebuilt := execution.NewRedactor(s.options.RedactValues...).Redact(s.rebuiltContext(events, why))
 	if rebuilt == "" {
 		// A conversation with nothing recorded is one whose first turn is being
 		// taken, and its prompt already carries the briefing. There is nothing to
@@ -186,10 +202,20 @@ func (s *Session) rebuildFromRecord(request backend.RunRequest) (backend.RunRequ
 	return request, nil
 }
 
-// rebuiltContext is what the second provider is told before the turn itself:
-// which conversation this is and why it is being handed this at all, the picture
-// the conversation is working from, and the account of what has been said.
-func (s *Session) rebuiltContext(events []execution.Event) string {
+// Why a provider is being handed a reconstruction rather than a session, as the
+// reconstruction tells it. A role that knows its session was set aside for length
+// knows the earliest of what it said is gone for good, which is different from
+// knowing another provider was holding it.
+const (
+	crossedProviders = "The provider that was holding it is not the one serving this turn, so none of its session reaches you."
+	sessionSetAside  = "The provider session that was holding it was refused as too long to continue, or could not be compacted, so this turn is served in a fresh session and none of the old one reaches you."
+	noSessionHeld    = "No provider session is held for it, so none of an earlier one reaches you."
+)
+
+// rebuiltContext is what the provider is told before the turn itself: which
+// conversation this is and why it is being handed this at all, the picture the
+// conversation is working from, and the account of what has been said.
+func (s *Session) rebuiltContext(events []execution.Event, why string) string {
 	said := recordedMessages(events)
 	briefing := s.workingBriefing()
 	if said == "" && briefing == "" {
@@ -198,8 +224,8 @@ func (s *Session) rebuiltContext(events []execution.Event) string {
 	var rebuilt strings.Builder
 	rebuilt.WriteString(rebuiltContextHeader + "\n\n")
 	rebuilt.WriteString(fmt.Sprintf(
-		"You are continuing conversation %s, which has taken %d turn(s) so far. The provider that was holding it is not the one serving this turn, so none of its session reaches you. What follows is assembled from the harness's own durable record of the conversation, and it is the whole of what you have.\n\n",
-		s.state.ConversationID, s.state.Turns))
+		"You are continuing conversation %s, which has taken %d turn(s) so far. %s What follows is assembled from the harness's own durable record of the conversation, and it is the whole of what you have.\n\n",
+		s.state.ConversationID, s.state.Turns, why))
 	if briefing != "" {
 		rebuilt.WriteString(briefing)
 		rebuilt.WriteString("\n")
@@ -342,4 +368,85 @@ func messageText(event execution.Event) string {
 		return ""
 	}
 	return strings.TrimSpace(payload.Text)
+}
+
+// sessionTooLong is how a provider says the session a turn resumed can no longer
+// be continued: the conversation has grown past what one request may carry, or
+// past the context window, and the compaction that would have shrunk it failed or
+// could not be attempted. The words are the providers' own — Claude Code's "Prompt
+// is too long" and its API's request_too_large, the compaction that errored,
+// Codex's context_length_exceeded — because none of them is a status a dialect
+// reads into an answer of its own: every one arrives as a refusal like any other.
+var sessionTooLong = regexp.MustCompile(`(?i)prompt is too long|conversation (is )?too long|request_too_large|request exceeds the maximum size|context_length_exceeded|exceeds (the|its) context window|context window (is )?(exceeded|full)|error during compaction|compaction failed|failed to compact`)
+
+// unflaggedTooLong is the same refusal where the provider ended the turn without
+// flagging it as a failure, which it has been seen to do with its notice as the
+// whole of the result. Only the notice on its own is read that way: a served
+// reply that mentions one of these phrases is a role talking about length, and
+// reading it as a refusal would throw away a healthy session and a finished turn.
+var unflaggedTooLong = regexp.MustCompile(`(?i)^(prompt is too long|conversation (is )?too long|request_too_large|context_length_exceeded)[.!]?$`)
+
+// refusedAsTooLong is what the provider said where it refused this turn's session
+// as too long to continue, and empty where it did anything else.
+func refusedAsTooLong(result backend.RunResult, err error) string {
+	switch {
+	case err != nil:
+		if sessionTooLong.MatchString(err.Error()) {
+			return err.Error()
+		}
+		if described := result.DescribeFailure(); result.IsError && sessionTooLong.MatchString(described) {
+			return described
+		}
+	case result.IsError:
+		if described := result.DescribeFailure(); sessionTooLong.MatchString(described) {
+			return described
+		}
+	default:
+		if text := strings.TrimSpace(result.FinalText); unflaggedTooLong.MatchString(text) {
+			return text
+		}
+	}
+	return ""
+}
+
+// replaceSession sets aside the provider session a turn was refused on as too
+// long, records that it did and why, and hands back the turn rebuilt from the
+// record for a fresh session under the same conversation. refusedOn and replaced
+// are the endpoint the refused attempt actually went to and the session it
+// resumed there, which is the alternate's where the failover had moved the turn.
+//
+// Nothing about the conversation but the session changes. The identifier, the
+// memory store keyed to the role, the report position, and the picture are all
+// the harness's own and carry over as they are; the only thing lost is a session
+// that was already unusable, and what stands in for it is the same rebuild a
+// crossing makes. The session is cleared on the record before the fresh attempt is
+// made, so a fresh attempt that fails leaves the next turn rebuilding again rather
+// than resuming the session that was refused — which is what keeps this from
+// dead-ending into a conversation somebody has to replace by hand.
+//
+// A replacement that could not be written down, or a rebuild that could not be
+// made, does not stop the fresh attempt: an answer with less context than it
+// should have, or one the log does not explain, is worth more to the operator
+// than none, and what is missing is named on the reply.
+func (s *Session) replaceSession(request backend.RunRequest, refusedOn backend.Endpoint, replaced, why string) backend.RunRequest {
+	s.state.ProviderSessionID = ""
+	s.state.SessionSetAside = singleLine(why, maxTrackerFailureBytes)
+	if err := s.emit(execution.EventSessionReplaced, map[string]any{
+		"replaced_session": replaced,
+		"provider":         refusedOn.Provider,
+		"account":          refusedOn.AccountAlias,
+		"model":            refusedOn.Model,
+		"reason":           s.state.SessionSetAside,
+	}); err != nil {
+		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(
+			"the provider session set aside as too long was not recorded: "+err.Error(), maxTrackerFailureBytes))
+	}
+	request.SessionID = ""
+	request.LastSequence = s.state.LastSequence
+	rebuilt, err := s.rebuildFromRecord(request, sessionSetAside)
+	if err != nil {
+		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(err.Error(), maxTrackerFailureBytes))
+		return request
+	}
+	return rebuilt
 }
