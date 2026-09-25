@@ -162,7 +162,10 @@ recurring_tasks:
       authority allows, batching classes rather than going item by item; ask
       the architect where a ruling is needed; check findings against work
       already admitted before filing; and file root-cause work with the
-      product manager for every fix you make. End with a durable report; when
+      product manager for every fix you make. If a problem you reported
+      before comes back after it was handled, that is evidence the handling
+      missed: raise it again, citing the earlier report and the recurrence,
+      rather than treating "already admitted" as settled. End with a durable report; when
       the system is healthy say NO FINDINGS and stop.
 
   product-manager-sweep:

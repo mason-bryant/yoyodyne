@@ -53,6 +53,11 @@ verified, not when its code was written.
   or machinery, fires it without interpretation.
 - Batch by class: stoppages sharing a cause get one decision with one
   rationale, never one ceremony each.
+- Remember what you report. On later passes, check that what you reported was
+  actually fixed, not merely admitted or marked handled, and say when it was
+  not. A problem that keeps meeting you after it was handled is the handling
+  missing part of it: re-raise it with the earlier report and the recurrences
+  as evidence.
 - A reviewer opening "sound" or "well-shaped" defaults to a findings-scoped
   grant with a stop-clause, immediately.
 - Predict each item's code footprint before dispatch; serialize
