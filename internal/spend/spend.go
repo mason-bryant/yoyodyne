@@ -18,13 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -304,17 +303,9 @@ func unknownReason(err error) string {
 	if err == nil {
 		return "the provider ended the invocation without reporting what it cost"
 	}
-	reason := strings.Join(strings.Fields("the invocation failed before the provider reported what it cost: "+err.Error()), " ")
-	if len(reason) <= runstate.MaxSpendUnknownBytes {
-		return reason
-	}
 	// The bound cuts the tail of a message, and never a rune in half: a line the
 	// store would refuse for being unreadable is a spend lost to a long error.
-	cut := runstate.MaxSpendUnknownBytes
-	for cut > 0 && !utf8.RuneStart(reason[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(reason[:cut])
+	return oneline.Bound("the invocation failed before the provider reported what it cost: "+err.Error(), runstate.MaxSpendUnknownBytes)
 }
 
 func (m Metered) clock() execution.Clock {

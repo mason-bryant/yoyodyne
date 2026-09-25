@@ -84,12 +84,12 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/capability"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 )
 
@@ -650,13 +650,5 @@ func continues(text string, at int) bool {
 // fold turns a clause into one bounded line, cut on a rune boundary, so what is
 // quoted back is text whatever the clause carried.
 func fold(value string, limit int) string {
-	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + "..."
+	return oneline.Fold(value, limit)
 }

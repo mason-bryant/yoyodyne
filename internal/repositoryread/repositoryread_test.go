@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // The block is the whole of the protocol: what it accepts is exactly what the
@@ -193,5 +196,20 @@ func TestExtract(t *testing.T) {
 	var request Request
 	if err := request.Validate(); err == nil {
 		t.Fatal("Validate() accepted an empty request")
+	}
+}
+
+// A problem long enough to be cut, with an em dash straddling the cut, is shown
+// as whole text with the cut declared rather than as half a rune.
+func TestDescribeCutsAProblemOnACharacterBoundary(t *testing.T) {
+	t.Parallel()
+
+	problem := strings.Repeat("x", maxDescribeBytes-1) + "— and then some"
+	line := Result{Action: ActionRead, Path: "CLAUDE.md", Commit: "0123456789abcdef", Problem: problem}.Describe()
+	if !utf8.ValidString(line) {
+		t.Fatalf("Describe() cut mid-rune: %q", line)
+	}
+	if want := " — nothing returned: " + strings.Repeat("x", maxDescribeBytes-1) + oneline.Marker; !strings.HasSuffix(line, want) {
+		t.Fatalf("Describe() = %q, want it to end %q", line, want)
 	}
 }

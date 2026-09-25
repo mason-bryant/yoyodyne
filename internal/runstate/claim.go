@@ -33,9 +33,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
@@ -267,13 +267,5 @@ func (s *ClaimStore) validate(released ReleasedClaim) error {
 // be written. It cuts on a rune boundary: a sentence truncated mid-rune is not
 // text.
 func boundedClaimDetail(text string, limit int) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= limit {
-		return folded
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(folded[cut]) {
-		cut--
-	}
-	return strings.TrimRight(folded[:cut], " ")
+	return oneline.Bound(text, limit)
 }

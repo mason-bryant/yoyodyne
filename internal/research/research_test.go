@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 func TestExtractSeparatesProseFromWhatWasAsked(t *testing.T) {
@@ -257,5 +260,20 @@ func TestTheContractStatesTheBoundItIsHeldTo(t *testing.T) {
 	// and it says so rather than leaving it to the delivery alone.
 	if !strings.Contains(Contract, "no network") {
 		t.Fatalf("the contract does not say the role has no network: %q", Contract)
+	}
+}
+
+// A problem long enough to be cut, with an em dash straddling the cut, is shown
+// as whole text with the cut declared rather than as half a rune.
+func TestDescribeCutsAProblemOnACharacterBoundary(t *testing.T) {
+	t.Parallel()
+
+	problem := strings.Repeat("x", maxDescribeBytes-1) + "— and then some"
+	line := Finding{Source: "web", Question: "q", Problem: problem}.Describe()
+	if !utf8.ValidString(line) {
+		t.Fatalf("Describe() cut mid-rune: %q", line)
+	}
+	if want := " — no evidence: " + strings.Repeat("x", maxDescribeBytes-1) + oneline.Marker; !strings.HasSuffix(line, want) {
+		t.Fatalf("Describe() = %q, want it to end %q", line, want)
 	}
 }
