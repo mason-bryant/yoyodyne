@@ -419,6 +419,15 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// publication fields taken here: it is the same derivation the attention line
 	// of `yoyo status` lists, so a count said here is a count that line names.
 	inFlight, awaitingForge := 0, len(readmodel.AwaitingForge(states))
+	// Whether an approved change the environment stopped can still be resumed is
+	// asked of the repository the standing reading already holds, by the look the
+	// docket and the pull's hold take, so the line a stop ends on names the verb
+	// they name. A feed without one answers from the run's record and says so.
+	var remains readmodel.Remains
+	if f.Standing != nil {
+		remains = f.Standing.Remains
+	}
+	look := readmodel.Looking(ctx, remains, f.Now)
 	for _, state := range states {
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
@@ -428,7 +437,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		}
 		stream := runStream(state.RunID)
 		batch.Streams[stream] = struct{}{}
-		deliveries, err := f.runDeliveries(state, cursors.Streams[stream], since)
+		deliveries, err := f.runDeliveries(state, cursors.Streams[stream], since, look)
 		if err != nil {
 			return Batch{}, err
 		}
@@ -957,7 +966,7 @@ func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]st
 // posted. A crash halfway therefore repeats what it had already said rather than
 // losing what it had not, which is the trade the design takes deliberately: the
 // durable record is authoritative and this is a view of it.
-func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since time.Time) ([]Delivery, error) {
+func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since time.Time, look readmodel.Look) ([]Delivery, error) {
 	if cursor.Closed {
 		return nil, nil
 	}
@@ -978,7 +987,7 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since t
 		return []Delivery{{Stream: stream, Cursor: Cursor{Closed: true}}}, nil
 	}
 
-	crossed, err := notify.FromRun(before, state)
+	crossed, err := notify.FromRun(before, state, look)
 	if err != nil {
 		// A run nothing can be addressed to is one nothing about it will ever be
 		// postable to, whatever it goes on to do. Failing the pass would hold up
