@@ -1013,7 +1013,13 @@ through when its listing failed, on the argument that the tracker was briefly
 unavailable. Now that the listing is retried, a listing that still fails refuses
 the creation with the reason, and puts a proposal the goals would have admitted
 unasked to the operator instead, rather than admitting work on the strength of a
-guard that never ran.
+guard that never ran. A creation is not asked again blindly, because a second
+`bd create` is a second item rather than the same write twice: on 2026-09-24 a
+`bd create` killed at its timeout had already made yoyodyne-ifd.428.21, and the
+retry made 428.22. Before a creation is asked for again, the tracker is listed
+for an item carrying the creation's title, parent, and notes — which name the
+conversation and the turn — and one it finds is the creation's answer. A listing
+that cannot be had leaves the creation failed rather than asked again.
 
 **One consequence is worth knowing before you raise
 `execution.max_concurrent_developers`, and it is not free.** Five of these
@@ -1702,8 +1708,11 @@ What the lease cannot cover, the harness runs *any* Git command again over: a
 second harness on an older binary, a Git command somebody ran by hand, and a
 platform with no advisory lock to take at all. The instant passes in the time
 Git takes to write a handful of small files, so running the command again is
-usually enough. Only that one refusal is run again: every other answer Git gives
-is believed the first time.
+usually enough. The same instant has a second face at the other end, when the
+add finishes: Git sees the entry's `locked` file, the add removes it, and Git
+dies reading it — `failed to read '.git/worktrees/<entry>/locked': No such file
+or directory` — so that is run again too. Only those two refusals are run again:
+every other answer Git gives is believed the first time.
 
 What neither can cover is the entry that stays that way. An add whose
 process was killed leaves the entry exactly as it stood, and nothing Git has

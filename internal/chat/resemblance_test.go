@@ -3,8 +3,10 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -431,5 +433,166 @@ func TestAProposalThatLooksLikeNothingIsStillAdmitted(t *testing.T) {
 	}
 	if len(reply.Admitted) != 1 || len(tracker.created) != 1 {
 		t.Fatalf("admitted = %#v, created = %#v, want the ordinary admission unchanged", reply.Admitted, tracker.created)
+	}
+}
+
+// landingTracker holds what it creates, as the store does, so a later listing in
+// the same turn reads it back — which the plain fake does not. Its first few
+// creations can be made to fail the way a bd killed at its timeout does, either
+// after the store took the write or before it did.
+type landingTracker struct {
+	*fakeTracker
+	// timeouts is how many creations fail as a killed bd, and landed is whether
+	// each of those reached the store before it was killed.
+	timeouts int
+	landed   bool
+	creates  int
+	// edgeOnly stores the parent as a parent-child edge and leaves the field
+	// empty, as a listing that states parentage only as the edge would.
+	edgeOnly bool
+}
+
+func (l *landingTracker) Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
+	l.creates++
+	failing := l.creates <= l.timeouts
+	if failing && !l.landed {
+		return beads.WorkItem{}, errors.New("bd create failed with status timed_out and exit code -1:")
+	}
+	if _, err := l.fakeTracker.Create(ctx, item); err != nil {
+		return beads.WorkItem{}, err
+	}
+	stored := beads.WorkItem{
+		ID:     fmt.Sprintf("yoyodyne-ifd.428.%d", 20+len(l.created)),
+		Title:  item.Title,
+		Parent: item.Parent,
+		Notes:  item.Notes,
+		Status: "open",
+	}
+	if l.edgeOnly && stored.Parent != "" {
+		stored.Dependencies = []beads.Dependency{{IssueID: stored.ID, ID: stored.Parent, Type: "parent-child"}}
+		stored.Parent = ""
+	}
+	l.all = append(l.all, stored)
+	if failing {
+		return beads.WorkItem{}, errors.New("bd create failed with status timed_out and exit code -1: " + `{"id":"` + stored.ID + `"`)
+	}
+	return stored, nil
+}
+
+// landingOptions is the product manager admitting one item under
+// yoyodyne-ifd.428 from report-0d79ada8, as it did on 2026-09-24.
+func landingOptions(t *testing.T, tracker Tracker, actions ...string) Options {
+	t.Helper()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting it.", actions...)},
+		{SessionID: "session-1", FinalText: "Done."},
+	}}
+	var sleeps []time.Duration
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.Goals = recordedGoals(theGoal)
+	options.Reports = &fakeReports{appended: []report.Report{filedReport(reported428, "two surfaces still name a resume that refuses")}}
+	options.Sleep = recordingSleep(&sleeps)
+	return options
+}
+
+const reported428 = "report-0d79ada8c4d92d9561f1d4a6ee81186e"
+
+func admission428(title string) string {
+	return `{"action":"create","parent":"yoyodyne-ifd.428","title":"` + title + `","description":"d","goal":"` +
+		theGoal + `","report":"` + reported428 + `","reason":"the developer reported it"}`
+}
+
+func tracker428() *fakeTracker {
+	return &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.428": {ID: "yoyodyne-ifd.428", Title: "Integration stops name one next mover", Status: "open"},
+	}}
+}
+
+// The 428.21/428.22 shape, replayed: one creation, citing one report, whose bd
+// was killed at its timeout after the store had taken the write. The retry made
+// the second item. What the retry does instead is find the first, so the store
+// holds one item and the admission reports it.
+func TestACreationThatTimedOutAfterLandingIsNotMadeTwice(t *testing.T) {
+	t.Parallel()
+
+	for _, edgeOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent stated only as an edge=%t", edgeOnly), func(t *testing.T) {
+			t.Parallel()
+			replayTimedOutLandedCreation(t, edgeOnly)
+		})
+	}
+}
+
+func replayTimedOutLandedCreation(t *testing.T, edgeOnly bool) {
+	t.Helper()
+
+	tracker := &landingTracker{fakeTracker: tracker428(), timeouts: 1, landed: true, edgeOnly: edgeOnly}
+	options := landingOptions(t, tracker, admission428("The repair refusal and the channel line name the next mover the docket does"))
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Admit what the developer reported.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.all) != 1 || tracker.creates != 1 {
+		t.Fatalf("items held = %#v after %d creation(s), want the one the timed-out creation left", tracker.all, tracker.creates)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied || reply.Actions[0].WorkItemID != "yoyodyne-ifd.428.21" {
+		t.Fatalf("actions = %#v, want the admission reported as the item that landed", reply.Actions)
+	}
+}
+
+// A timed-out creation the store never took is still asked for again, and an
+// item that only shares its title — admitted earlier, by another turn — is not
+// taken for it.
+func TestACreationThatTimedOutBeforeLandingIsAskedForAgain(t *testing.T) {
+	t.Parallel()
+
+	const title = "The repair refusal and the channel line name the next mover the docket does"
+	base := tracker428()
+	base.all = []beads.WorkItem{{ID: "yoyodyne-ifd.7", Title: title, Status: "closed",
+		Notes: "Admitted to the backlog by the product manager in conversation chat-other, after turn 3."}}
+	tracker := &landingTracker{fakeTracker: base, timeouts: 1}
+	options := landingOptions(t, tracker, `{"action":"create","title":"`+title+`","description":"d","goal":"`+theGoal+`","reason":"r"}`)
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Admit it.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if tracker.creates != 2 || len(tracker.created) != 1 {
+		t.Fatalf("creations asked = %d, landed = %d, want the creation asked for again and landing once", tracker.creates, len(tracker.created))
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied || reply.Actions[0].WorkItemID == "yoyodyne-ifd.7" {
+		t.Fatalf("actions = %#v, want a new item rather than the earlier one sharing its title", reply.Actions)
+	}
+}
+
+// Two creations in one block citing one report: the second is checked against a
+// listing taken after the first landed, so it is refused and names the first.
+func TestTwoAdmissionsInOneBlockFromOneReportAdmitOne(t *testing.T) {
+	t.Parallel()
+
+	tracker := &landingTracker{fakeTracker: tracker428()}
+	options := landingOptions(t, tracker,
+		admission428("The repair refusal names the next mover the docket does"),
+		admission428("The channel line for an integration stop names a re-run where the branch is gone"))
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Admit what the developer reported.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.all) != 1 {
+		t.Fatalf("items held = %#v, want one admission from one report", tracker.all)
+	}
+	if len(reply.Actions) != 2 || !reply.Actions[0].Applied || reply.Actions[1].Applied {
+		t.Fatalf("actions = %#v, want the first admitted and the second refused", reply.Actions)
+	}
+	for _, want := range []string{"yoyodyne-ifd.428.21", reported428} {
+		if !strings.Contains(reply.Actions[1].Failure, want) {
+			t.Fatalf("failure = %q, want it to name %q", reply.Actions[1].Failure, want)
+		}
 	}
 }
