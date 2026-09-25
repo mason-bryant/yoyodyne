@@ -425,6 +425,11 @@ func TestTheContractTellsTheProductManagerWhatToDoWithReports(t *testing.T) {
 			t.Fatalf("the product-manager contract is missing %q", required)
 		}
 	}
+	// A handling that maps requests notes on each item that answers one, so the
+	// contract must not tell the role that handling changes nothing in the backlog.
+	if strings.Contains(prompt, "nothing in the backlog changes") {
+		t.Fatalf("the product-manager contract still says handling a report changes nothing in the backlog")
+	}
 }
 
 // collectedReport is one report in the pile, distinguished only by what a test

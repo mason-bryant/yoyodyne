@@ -919,7 +919,7 @@ func (a TrackerAction) validateSubject() error {
 		// The one action whose subject is not a work item at all. It names a
 		// report, so an id would be an item nothing was going to be done to.
 		if id != "" {
-			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item")
+			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item's state — it only notes on each item a mapped request names which requests that item answers")
 		}
 		return nil
 	case a.Action == actionBrake:
