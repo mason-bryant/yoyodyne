@@ -110,6 +110,62 @@ func TestEverySurfaceReportsTheBranchARunsFlagsSayIsRemoved(t *testing.T) {
 	}
 }
 
+// The other side of the same look. An approved change the environment stopped
+// short of its promotion, whose branch and checkout are both gone from the
+// repository, has nothing left for `yoyo triage resume` to finish — the resume
+// refuses once the branch is gone. The claim audit gives its claim back for that
+// reason, so the hold the pull reads has to let the item go as well rather than
+// hold it out of the pull naming a verb that cannot act.
+func TestAnIntegrationStopWhoseChangeIsGoneIsNeitherHeldNorKeptClaimed(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFlaggedFixture(t)
+	ctx := context.Background()
+	state := fixture.flaggedRun(t, "yoyodyne-flagged.4", 4, runstate.StatusFailed)
+	runPipelineGit(t, fixture.repository, "branch", "-D", state.Branch)
+	state.ReviewDecision = runstate.ReviewApprove
+	state.ReviewSessionID = "f4c1a0de-review"
+	state.IntegrationStop = &runstate.IntegrationStop{
+		Cause:      runstate.CauseTransportFailure,
+		Detail:     state.Failure,
+		Phase:      runstate.PhaseIntegrating,
+		RecordedAt: state.UpdatedAt,
+	}
+	if err := fixture.store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	held, err := readmodel.HeldForAPerson(ctx, fixture.store, fixture.store.Triage(), fixture.worktrees)
+	if err != nil {
+		t.Fatalf("HeldForAPerson() error = %v", err)
+	}
+	reason, isHeld := held.Reason(state.WorkItemID)
+
+	tracker := &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Stopped and swept", Status: "in_progress"}}
+	auditor := ClaimAuditor{
+		Tracker:   tracker,
+		Runs:      fixture.store,
+		Releases:  fixture.releases,
+		ProductID: "yoyodyne",
+		Remains:   fixture.worktrees,
+		Clock:     fixedClock{at: fixture.now},
+	}
+	sweep, err := auditor.Audit(ctx, []beads.WorkItem{tracker.item})
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	released := len(sweep.Released) == 1
+	if isHeld == released {
+		t.Fatalf("the hold says held = %t (%q) and the claim audit says released = %t: one run, two answers", isHeld, reason, released)
+	}
+	if isHeld {
+		t.Fatalf("the item is held for %q, want nothing holding a stop with nothing left to resume", reason)
+	}
+	if strings.Contains(tracker.releaseReason, "triage resume") {
+		t.Fatalf("release note = %q, want no resume named for a change that is gone", tracker.releaseReason)
+	}
+}
+
 // A release the audit does make says what the run left, and where the run's
 // branch is standing it says so: the release that said only "nothing was
 // working on it" is what was read as run-838ffc48 having preserved nothing.

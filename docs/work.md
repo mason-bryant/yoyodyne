@@ -950,7 +950,12 @@ is — held while its worktree survives or a decision about it stands, and let g
 otherwise — and the hold and the docket both say the branch is gone and that a
 re-run is the way on, naming the development manager, the harness where her
 decision is waiting to be carried out, or — where the hold has let the item go —
-the next pull.
+the next pull. The
+[claim audit](operations.md#claims-with-nothing-working-on-them) reads the same
+look and gives such a run's claim back once branch and checkout are both gone, so
+where nothing is decided the pull and the audit both let the item go; where a
+re-run is decided the hold is the harness's carry-out, which takes a claim of its
+own, and neither names a resume.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its
