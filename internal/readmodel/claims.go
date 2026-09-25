@@ -251,7 +251,8 @@ func holdsItsClaim(run runstate.State, now time.Time, within time.Duration) bool
 // It is the half of a claim's liveness that cannot be read from a clock at all. A
 // run that stopped for a provider that refused it, for the operator's pause, for
 // an unresolved directive, for work its item depends on, or for a tracker that
-// would not answer the read a gate boundary makes does not just go quiet
+// would not answer the read a gate boundary makes — or that the reconciling
+// sweep put back at its promotion to bring a queued head up to date — does not just go quiet
 // — it returns, and its process exits, leaving a record nothing writes to again
 // until somebody continues it. Its item stays claimed on purpose, with the
 // worktree and the developer session that continuation needs, so a record that
@@ -280,7 +281,8 @@ func AwaitingContinuation(run runstate.State) bool {
 		run.DirectivePause != nil ||
 		run.DependencyPause != nil ||
 		run.TrackerPause != nil ||
-		run.OperatorHeldSince != nil
+		run.OperatorHeldSince != nil ||
+		run.UpdatingQueuedHead()
 }
 
 // laterRun reports the more recent of two runs on one item, in the order

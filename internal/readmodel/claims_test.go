@@ -391,3 +391,32 @@ func because(dead []DeadClaim) string {
 	}
 	return dead[0].Because
 }
+
+// A run the reconciling sweep put back at its promotion to bring a queued head
+// up to date is owed that continuation however still its record has gone, so
+// its claim is not one nothing is working on; once it is promoted again, or
+// ended, it is no longer that wait.
+func TestAQueuedHeadPutBackAtItsPromotionAwaitsContinuation(t *testing.T) {
+	t.Parallel()
+	updating := runstate.State{
+		Status: runstate.StatusRunning,
+		Phase:  runstate.PhaseIntegrating,
+		IntegrationResumptions: []runstate.IntegrationResumption{
+			{Cause: runstate.CauseQueuedHeadBehind, Reason: "brought up to date", ResumedAt: time.Now()},
+		},
+	}
+	if !AwaitingContinuation(updating) {
+		t.Fatal("a queued head put back at its promotion was not read as awaiting its continuation")
+	}
+	promoted := updating
+	promoted.Integration = &runstate.Integration{TargetBranch: "main"}
+	ended := updating
+	ended.Status = runstate.StatusSucceeded
+	other := updating
+	other.IntegrationResumptions = []runstate.IntegrationResumption{{Cause: runstate.CauseDirtyPrimary, Reason: "resumed", ResumedAt: time.Now()}}
+	for name, run := range map[string]runstate.State{"promoted again": promoted, "ended": ended, "resumed for another cause": other} {
+		if AwaitingContinuation(run) {
+			t.Errorf("%s: read as awaiting the queued-head continuation", name)
+		}
+	}
+}

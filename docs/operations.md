@@ -2301,9 +2301,11 @@ loop, and it catches the session that is alive and has stopped starting anything
 a queue whose ready items are all claimed by runs that died, say. A session that
 died itself writes nothing at all, so [`yoyo reconcile`](#recovering-interrupted-runs)
 takes the same reading as the last reading of the sweep that settles what a dead
-process left behind — after every settlement, and before the one step that
-follows it, [continuing a usage-limit wait](#waiting-out-a-provider-usage-limit)
-whose deadline has passed. That ordering is why it is that sweep and not another: a
+process left behind — after every settlement, and before the two steps that
+follow it and host runs: [continuing a usage-limit wait](#waiting-out-a-provider-usage-limit)
+whose deadline has passed, and carrying a queued merge the settlement
+[put back at its promotion](#recovering-interrupted-runs) through its update.
+That ordering is why it is that sweep and not another: a
 killed run goes on saying it is in flight until the settling, and a phantom run
 counted as activity would silence this for exactly the crash it exists to catch.
 The two readings can land at the same moment. Each one reads the stall log and
@@ -2405,7 +2407,9 @@ is serving the wait, one waiting out
 [`yoyo pause`](#pausing-everything-and-resuming-it), one held up by an
 unresolved directive or by work its item depends on, one parked because
 [the tracker would not answer](#waiting-out-a-network-that-dropped) the read a
-gate boundary makes, and one whose provider
+gate boundary makes, one [put back at its promotion](#recovering-interrupted-runs)
+to bring a queued head up to date, which the reconciling sweep hosts as its last
+step, and one whose provider
 [the harness stopped on time](#when-a-provider-stalls-or-runs-out-of-budget) —
 which the audit leaves as a wait and the reconciling sweep, not the audit,
 settles once nothing has continued it for half an hour. Each of those returns and

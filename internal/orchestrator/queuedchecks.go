@@ -324,11 +324,7 @@ func renderQueuedUpdateNotes(state runstate.State, reason string) string {
 // updatingQueuedHead reports a run the sweep put back at its promotion to bring
 // its queued head up to date, and that nothing has taken up yet.
 func updatingQueuedHead(state runstate.State) bool {
-	if !resumableIntegration(state) {
-		return false
-	}
-	last := state.IntegrationResumptions[len(state.IntegrationResumptions)-1]
-	return last.Cause == runstate.CauseQueuedHeadBehind
+	return resumableIntegration(state) && state.UpdatingQueuedHead()
 }
 
 // UpdateContinuation is what the sweep did about one run it put back at its
