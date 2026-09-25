@@ -30,6 +30,10 @@ revisions:
       by: architect
       at: 2026-09-07T05:30:00Z
       reason: yoyodyne-ifd.330 - side conversations designed, judgment-and-read side streams with their own leases that never take the main thread's, the merge as a budgeted redacted audited memory write the main thread's next turn ratifies, best-effort commitments per the operator's product decision, and the per-agent queue-versus-side-threads knob beside persona and memory selecting behavior never authority
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:00:00Z
+      reason: yoyodyne-ifd.430.6 companion - the program manager joins the ask channel, and the supervisor takes its bounded restart request as the one role request it executes, under its own bounds and never from a noticing surface
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -42,7 +46,7 @@ The management roles need enough autonomy to inspect upcoming work, flag implica
 
 Roles communicate through persisted, typed requests. A request carries a stable id, its conversation or topic id, requesting and target roles, authority-relevant intent, durable references, the expected revision of what it refers to, urgency, budget, cycle limit, causation, and reply state. An inbox transition makes it eligible; **the harness acquires a lease and invokes the target role itself** — delivery is retryable and deduplicated, and a request is complete only when durable state records its outcome, never merely because a message was emitted.
 
-The inter-role ask channel is one request type under this contract, keeping the three properties already decided for it: judgment-only, decisionless, durable-and-visible, with its configurable round cap, unresolved-escalation, and per-exchange cost reporting. The ask design and this one share the machinery; there is exactly one dispatcher, and the Slack echo of exchanges remains a notifier consumer.
+The inter-role ask channel is one request type under this contract, keeping the three properties already decided for it: judgment-only, decisionless, durable-and-visible, with its configurable round cap, unresolved-escalation, and per-exchange cost reporting. The program manager is a member of the ask channel, asking and answering under the same three properties. The ask design and this one share the machinery; there is exactly one dispatcher, and the Slack echo of exchanges remains a notifier consumer.
 
 The request kinds, readiness vocabulary, outcome summaries, execution profiles, and demonstration scenarios are specified in [management-loop-protocol](management-loop-protocol.md), which runs under this contract.
 
@@ -81,6 +85,8 @@ The long-term shape is **one durable interaction and state service**, with local
 A watch session takes up a build installed over it by itself: between runs, never interrupting one. The takeover happens only at a boundary where the process has nothing in flight; the new process reattaches through the normal lease machinery; and pinned workflow instances continue on their pinned definitions and authority — a new binary changes the executor, never in-flight work's contract. This is settled here rather than deferred: a later headless supervisor inherits this behavior rather than re-deciding it.
 
 **The supervision tree.** One supervisor per product: the product-manager service (interim: the chat process). Its children: the Slack reporter, the scheduler/watch loop, the triage dispatcher, the management-loop dispatcher, and — where started — the dashboard command. The supervisor owns start, stop, restart, and the health/readiness of children; each child owns its own domain and none owns workflow truth, per the standing invariants. **Children survive supervisor death**: they are independent processes with recorded presence, and a returning supervisor reattaches through those records and the lease machinery rather than killing and respawning — the same rule a returning chat client already follows. A child that crashes is restarted with backoff; a child that fails repeatedly is not restarted indefinitely — it is left down and reported as **degraded**, reaching the operator through the standing ladder rather than a restart loop. **The escalation ladder is the governed one and the supervisor invents no new verb**: report, then status banners, then a direct message in the degraded class. Operator stopping remains the three existing verbs — hold intake, pause spending, stop everything — and the supervisor is their executor, never a fourth path.
+
+The supervisor also takes one request from a role: a program manager's bounded restart request, per [program-manager](program-manager.md), executed by the periodic pass as it executes a restart after a death, under the same backoff, the same degraded bound, and the provider-outage guard, and never by the requesting role or by any surface that noticed. The instance itself is a conversation and is never restarted; its staleness is a non-model derivation the supervisor reads once yoyodyne-ifd.413 lands.
 
 Detection of nothing-running lives in non-model machinery that keeps running through a provider usage window. A watchdog that asks a model anything pauses with the provider's window and sleeps through exactly the silence it exists to notice — the operator was paged an hour late by precisely this. And restarting a stuck or dead resident belongs to that resident's own bounded exit and to the supervisor that starts it, never to a surface that happens to notice: a noticing surface that restarts things is a second invoker, which this design already rules out for roles and rules out here for processes.
 
