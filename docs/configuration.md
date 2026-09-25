@@ -259,7 +259,9 @@ lane. `yoyo init` configures none — an instance is a lane and a remit somebody
 chose, written in three keys only that role's agents carry
 ([a program manager instance](#a-program-manager-instance)) — and every tracker
 write the role holds is confined to that lane, read off each item as the action
-runs ([a program manager's lane](conversation.md#a-program-managers-lane)).
+runs ([a program manager's lane](conversation.md#a-program-managers-lane)). It
+may also record [a request that a part be restarted](operations.md#starting-the-product-and-stopping-it),
+which nothing acts on yet.
 [Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 
