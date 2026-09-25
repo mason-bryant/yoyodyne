@@ -126,8 +126,12 @@ type RecurringForge interface {
 // task could name one. It is this turn's alone — nothing about the conversation
 // the role keeps changes, so the next message the operator sends into it asks
 // for the role's model again.
+//
+// The pass names the firing the turn belongs to — the task and which of its
+// firings this is — so what the turn records on the pass's behalf, a program
+// manager's lane report first among it, says which pass wrote it.
 type RecurringRole interface {
-	Wake(ctx context.Context, role domain.AgentRole, model, message string) (Turn, error)
+	Wake(ctx context.Context, role domain.AgentRole, pass, model, message string) (Turn, error)
 }
 
 // Turn is what one turn of a firing came to.
@@ -287,7 +291,8 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 		// The claim is the due check. Asking first and claiming after would be two
 		// reads and a write with a window between them, which is exactly the window
 		// two concurrent sessions land in.
-		if _, err := t.Claims.Claim(ctx, name, task.Every.Duration(), t.now()); err != nil {
+		claimed, err := t.Claims.Claim(ctx, name, task.Every.Duration(), t.now())
+		if err != nil {
 			// A task that is not due is the ordinary answer on almost every pull, and
 			// so is one another process claimed a moment ago. Neither is this pass's
 			// to report.
@@ -301,10 +306,18 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 			fired := t.refuse(ctx, name, task, outage)
 			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 		}
-		fired := t.run(ctx, name, task, wakeMessage(name, task), "")
+		fired := t.run(ctx, name, passName(claimed), task, wakeMessage(name, task), "")
 		return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 	}
 	return RecurringSweep{}, errors.Join(problems...)
+}
+
+// passName is how a firing is named where a turn records it wrote something on
+// the firing's behalf: the task, and which of its firings this is. The count is
+// the claim's own, so two sessions polling one schedule cannot name two firings
+// alike.
+func passName(claimed runstate.SweepClaim) string {
+	return fmt.Sprintf("%s#%d", claimed.Task, claimed.Firings)
 }
 
 // BrakeSummons is what the intake brake puts in front of the development
@@ -358,11 +371,12 @@ func (t Trigger) Summon(ctx context.Context, summons BrakeSummons) (Fired, error
 	if away {
 		return Fired{}, fmt.Errorf("the provider is answering nobody, so the development manager was not summoned: %s", outage.Says())
 	}
-	if _, err := t.Claims.Summon(ctx, name, t.now()); err != nil {
+	claimed, err := t.Claims.Summon(ctx, name, t.now())
+	if err != nil {
 		return Fired{}, fmt.Errorf("claim the summoned firing of the recurring task %s: %w", name, err)
 	}
 	summoned := summonedBy(summons.Hold)
-	fired := t.run(ctx, name, task, summonsMessage(name, task, summons.Hold), summoned)
+	fired := t.run(ctx, name, passName(claimed), task, summonsMessage(name, task, summons.Hold), summoned)
 	return fired, nil
 }
 
@@ -441,7 +455,7 @@ func (t Trigger) refuse(ctx context.Context, name string, task config.RecurringT
 // run takes one firing's turns and records what they came to. It never returns
 // an error: a firing that failed is a fact about the schedule that belongs in the
 // record and beside the pass, rather than something that stops the pull.
-func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask, message, summoned string) Fired {
+func (t Trigger) run(ctx context.Context, name, pass string, task config.RecurringTask, message, summoned string) Fired {
 	fired := Fired{Task: name, Role: task.Role, Summoned: summoned}
 	recorded := runstate.Sweep{
 		Task:      name,
@@ -452,7 +466,7 @@ func (t Trigger) run(ctx context.Context, name string, task config.RecurringTask
 	var merged *sweep.Result
 	var problems []string
 	for turn := 0; turn < task.Turns(); turn++ {
-		answered, err := t.Roles.Wake(ctx, task.Role, task.ModelSelector(), message)
+		answered, err := t.Roles.Wake(ctx, task.Role, pass, task.ModelSelector(), message)
 		// What the turn cost is carried whichever way it went, because the provider
 		// charges for a turn that failed exactly as for one that answered — and so
 		// is the model it cost that on, which is what the spend is attributed to.

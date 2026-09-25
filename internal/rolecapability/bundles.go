@@ -221,10 +221,6 @@ func declaredAhead() []Ahead {
 			Reason:     "the read-model block a pass opens with and the one named query a reply may ask for are their own child of yoyodyne-ifd.430.13; until it lands the program manager is handed no read-model query",
 		},
 		{
-			Capability: capability.LaneReportWrite,
-			Reason:     "the lane report and the one typed block that rewrites it are their own child of yoyodyne-ifd.430.13; until it lands no reply writes a lane report",
-		},
-		{
 			Capability: capability.ServiceRequestRestart,
 			Reason:     "the durable restart request is its own child of yoyodyne-ifd.430.13, and what executes one is the supervisor's pass under yoyodyne-ifd.413; until the first lands no request can be written",
 		},

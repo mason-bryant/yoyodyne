@@ -2134,7 +2134,8 @@ sentence about it: its `kind`, from a closed set — `amendment`,
 item's, a service's name, or which switch a hold is: `operator`, `intake`, or
 `capacity`), the `mover` whose move it is, in the same closed vocabulary the
 page counts by (`operator`, a role such as `architect` or
-`development-manager`, `harness`, `forge`, `nobody`, or `unnamed-role`), and
+`development-manager`, `harness`, `forge`, `provider`, `nobody`, or
+`unnamed-role`), and
 the record itself, whole, under a field named for the kind — `amendment`,
 `directive`, `outage`, `stall`, `reports`, `service`, `owed_step`,
 `publication`, `held_work`, and for a hold `operator_hold`, `intake_hold`, or

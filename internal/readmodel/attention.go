@@ -129,6 +129,12 @@ const (
 	MoverHarness Mover = "harness"
 	// MoverForge is the forge merging a request it has queued.
 	MoverForge Mover = "forge"
+	// MoverProvider is the model provider answering again. No attention entry is
+	// attributed to it — a usage window lifts on the provider's clock, which is
+	// nobody's move — and it is here because a program manager's lane report may
+	// name it as what a blocker is waiting on, and that report's movers are this
+	// vocabulary's.
+	MoverProvider Mover = "provider"
 	// MoverNobody is a wait nobody ends: a provider's usage window lifts on the
 	// provider's clock.
 	MoverNobody Mover = "nobody"
@@ -167,6 +173,7 @@ func Movers() []Mover {
 		Mover(domain.RoleReviewer),
 		MoverHarness,
 		MoverForge,
+		MoverProvider,
 		MoverNobody,
 		MoverUnnamed,
 	}
@@ -182,6 +189,41 @@ func (m Mover) Valid() bool {
 	return false
 }
 
+// LaneReportMovers is the part of this vocabulary a program manager's lane
+// report may name as what a blocker is waiting on: the people and parts of the
+// line a lane can be held up by. It is declared here, beside the vocabulary it
+// narrows, so the lane report and the attention line cannot come to disagree
+// about what a mover is called.
+func LaneReportMovers() []Mover {
+	return []Mover{
+		MoverOperator,
+		MoverProductManager,
+		MoverDevelopmentManager,
+		MoverArchitect,
+		MoverHarness,
+		MoverForge,
+		MoverProvider,
+	}
+}
+
+// CheckLaneReportMover refuses a token that is not one of LaneReportMovers. It
+// is the one conversion from a lane report's stored token to this vocabulary,
+// and it is what the lane report store and the lane report block are checked
+// with.
+func CheckLaneReportMover(token string) error {
+	allowed := LaneReportMovers()
+	for _, mover := range allowed {
+		if Mover(token) == mover {
+			return nil
+		}
+	}
+	names := make([]string, 0, len(allowed))
+	for _, mover := range allowed {
+		names = append(names, string(mover))
+	}
+	return fmt.Errorf("waiting_on %q is not a mover a blocker may wait on; the movers are %s", token, strings.Join(names, ", "))
+}
+
 // Possessive is the mover as every sentence on the attention line opens: "the
 // operator's", "the development manager's", "nobody's". It is worded once here
 // so a surface grouping the line by mover and a terminal printing it name the
@@ -194,6 +236,8 @@ func (m Mover) Possessive() string {
 		return "the harness's"
 	case MoverForge:
 		return "the forge's"
+	case MoverProvider:
+		return "the provider's"
 	case MoverNobody:
 		return "nobody's"
 	case MoverUnnamed:

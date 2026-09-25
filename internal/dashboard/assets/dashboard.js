@@ -276,6 +276,7 @@
     { mover: "reviewer", label: "the reviewer's" },
     { mover: "harness", label: "the harness's" },
     { mover: "forge", label: "the forge's" },
+    { mover: "provider", label: "the provider's" },
     { mover: "nobody", label: "nobody's" },
     { mover: "unnamed-role", label: "the role it names" }
   ];

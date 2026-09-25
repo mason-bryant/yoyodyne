@@ -367,3 +367,23 @@ func TestEveryMoverHasAPossessive(t *testing.T) {
 		t.Fatal("a bare conversation marker does not name the unnamed role")
 	}
 }
+
+// A lane report's blocker names what it waits on in this vocabulary, narrowed:
+// every mover it may name is one the vocabulary has, the check admits exactly
+// those, and it refuses the movers a lane cannot wait on.
+func TestEveryMoverALaneReportMayNameIsAMover(t *testing.T) {
+	t.Parallel()
+	for _, mover := range LaneReportMovers() {
+		if !mover.Valid() {
+			t.Errorf("a lane report may wait on %q, which is not a mover the read model has", mover)
+		}
+		if err := CheckLaneReportMover(string(mover)); err != nil {
+			t.Errorf("CheckLaneReportMover(%q) = %v, want it admitted", mover, err)
+		}
+	}
+	for _, refused := range []string{string(MoverNobody), string(MoverUnnamed), "developer", "reviewer", "the-weather", ""} {
+		if err := CheckLaneReportMover(refused); err == nil {
+			t.Errorf("CheckLaneReportMover(%q) admitted it", refused)
+		}
+	}
+}
