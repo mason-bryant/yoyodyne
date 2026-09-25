@@ -18,10 +18,21 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
-// conformanceTimeout is generous because the first bd call in a project starts
-// its database engine. Nothing here reaches a network: both remotes are bare
-// repositories on this machine.
-const conformanceTimeout = 90 * time.Second
+// conformanceTimeout bounds one bd command in these checks. Nothing here reaches
+// a network -- both remotes are bare repositories on this machine -- so the only
+// thing the bound has to catch is a bd that has hung, and any figure catches
+// that. What it must not catch is a bd that is merely slow: the first call in a
+// project starts its database engine, every check here starts its own, and the
+// suite runs them in parallel beside whatever else the machine is doing. At
+// ninety seconds that is what it caught -- `bd create` in
+// TestParentFieldConformance ran past it under -race with two check passes on
+// the machine, where the whole test takes about a minute on its own.
+//
+// So it is sized for the loaded machine rather than the idle one, as the
+// Makefile's TEST_TIMEOUT is, and kept under that figure so a hung bd is still
+// ended here and reported as the command it was rather than by the test
+// binary's own timeout.
+const conformanceTimeout = 10 * time.Minute
 
 // TestSyncRemoteConformance checks the two things about bd this adapter assumes
 // and a scripted runner can only restate: that `dolt remote list --json`

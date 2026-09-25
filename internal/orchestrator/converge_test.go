@@ -667,6 +667,7 @@ func newSweepManager(t *testing.T, repository, worktreeRoot string) *gitworktree
 		RepositoryRoot:        repository,
 		WorktreeRoot:          worktreeRoot,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

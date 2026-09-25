@@ -295,6 +295,7 @@ func nonGoFixturePipeline(t *testing.T, repository string, tracker *fakeTracker,
 		Runner:         processRunner,
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

@@ -84,6 +84,7 @@ func TestAGitCommandTalkingToTheRemoteCarriesTheForgeCredentialAndNoOther(t *tes
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Remote:         "origin",
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

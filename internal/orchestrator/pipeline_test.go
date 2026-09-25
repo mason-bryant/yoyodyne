@@ -3570,6 +3570,31 @@ func newPipeline(t *testing.T, repository string, tracker *fakeTracker, provider
 	return newSharedPipeline(t, repository, filepath.Join(t.TempDir(), "worktrees"), store, tracker, provider, commands), store
 }
 
+// testGitBudget is the budget every worktree manager this package's tests build
+// gives one local Git command, in place of the manager's load-scaled default.
+//
+// The default is sized for a run, and under a full suite it has been reached by
+// Git that was working: a replay in
+// TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn killed at
+// the idle thirty seconds with the one-minute load at 11 to 13 on sixteen
+// cores, which the scaling reads as an idle machine; a one-file checkout in
+// TestPipelineMergesIntoATargetThatRefusesDirectPushes killed at 31 seconds with
+// the load near 50; `git status` in
+// TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent and the replay in
+// TestPipelineBlocksOnAReplayConflictWithoutResolvingIt killed the same way. Each
+// passed in seconds on its own. A lagging one-minute average is not what a
+// suite's own race binaries do to a Git command started beside them, so no
+// scaling of it is a figure these tests can rely on.
+//
+// These tests are about what a run does with what Git answered, never about how
+// long Git took to answer, so the only thing their budget has to catch is a Git
+// command that has hung — and any figure catches that. Ten minutes sits under
+// the Makefile's TEST_TIMEOUT, so a hung command is still ended by the runner
+// and reported as the command it was rather than by the binary's own timeout.
+// The production budget is held to its own behaviour in internal/gitworktree,
+// which is where it is the thing under test.
+const testGitBudget = 10 * time.Minute
+
 // newSharedPipeline builds a pipeline over an explicit worktree root and run
 // state store, so two pipelines can be built over the same durable artifacts:
 // that is what a restarted or a concurrent process sees.
@@ -3585,6 +3610,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		// refuses exactly what a real one does. A repository that carries no such
 		// file is unaffected: there is nothing to copy across and nothing to hold.
 		CurrentExports: []string{".beads/issues.jsonl"},
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

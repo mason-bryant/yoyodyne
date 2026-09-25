@@ -908,6 +908,7 @@ func newObserver(t *testing.T, repository, worktreeRoot string) ReconcileWorktre
 		RepositoryRoot:        repository,
 		WorktreeRoot:          worktreeRoot,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
@@ -1306,7 +1307,7 @@ func TestARepairContinueCarriesOutOnARunTheSweepSettledForAVanishedProcess(t *te
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -1438,7 +1439,7 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -1593,7 +1594,7 @@ func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -1738,7 +1739,7 @@ func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T
 		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
