@@ -859,6 +859,81 @@ func TestManagerRunsAnyGitCommandAgainWhenItCrossesACreation(t *testing.T) {
 	}
 }
 
+// A removal crosses a walk as surely as a creation does, and Git says so in
+// words of its own: the entry's lock marker gone between being seen and being
+// read, or the entry itself gone between its commondir being read and the
+// common directory being resolved through it. The second is what failed
+// TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn over its own
+// creation loop's removals. Both pass with the instant, so both are run again.
+func TestManagerRunsAnyGitCommandAgainWhenItCrossesARemoval(t *testing.T) {
+	t.Parallel()
+
+	for name, stderr := range map[string]string{
+		"the lock marker":  "fatal: failed to read '.git/worktrees/creation-loop-27/locked': No such file or directory\n",
+		"the entry itself": "fatal: Invalid path '/private/var/folders/tmp/repository/.git/worktrees/creation-loop-27': No such file or directory\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := newRepository(t)
+			runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: 1, command: []string{"rev-parse", "--verify"}, stderr: stderr}
+			manager, err := New(Options{
+				Runner:         runner,
+				RepositoryRoot: repository,
+				WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+				Timeout:        testGitBudget,
+			})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if _, err := manager.Create(context.Background(), CreateRequest{
+				RunID:      testRunID,
+				WorkItemID: "yoyodyne-crossed-removal",
+				BaseRef:    "HEAD",
+			}); err != nil {
+				t.Fatalf("Create() error = %v, want the command that crossed a removal to have been run again", err)
+			}
+			if runs, refused := runner.observed(); refused != 1 || runs < 2 {
+				t.Fatalf("runs = %d after %d refusal(s), want the refusal to have been followed by another run", runs, refused)
+			}
+		})
+	}
+}
+
+// The pattern is Git's wording and nothing wider: a refusal naming a file or a
+// path that is not one entry of the registrations is Git's answer about
+// something else, and running it again would only make it slower.
+func TestACrossedRegistrationIsGitsWordingForAnEntryAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		stderr  string
+		crossed bool
+	}{
+		{"fatal: failed to read .git/worktrees/yoyodyne-other-2113a23c/commondir: Result too large", true},
+		{"fatal: failed to read '.git/worktrees/loop-3/locked': No such file or directory", true},
+		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27': No such file or directory", true},
+		{`fatal: Invalid path 'C:\repository\.git\worktrees\creation-loop-27': No such file or directory`, true},
+		{"fatal: Invalid path '/srv/repository.git/worktrees/creation-loop-27': No such file or directory", true},
+		// A repository's own path can hold spaces, and none of the three forms
+		// may stop matching over one.
+		{"fatal: failed to read /Users/me/Application Support/My Repos/x/.git/worktrees/loop-3/commondir: Result too large", true},
+		{"fatal: failed to read '/Users/me/Application Support/My Repos/x/.git/worktrees/loop-3/locked': No such file or directory", true},
+		{"fatal: Invalid path '/Users/me/Application Support/My Repos/x/.git/worktrees/loop-3': No such file or directory", true},
+		{"fatal: failed to read .git/worktrees/loop-3/gitdir: Is a directory", false},
+		{"fatal: Invalid path '/tmp/repository/src': No such file or directory", false},
+		// A directory that happens to be called worktrees is not the
+		// registrations unless it is a Git directory's.
+		{"fatal: Invalid path '/tmp/repository/src/worktrees/creation-loop-27': No such file or directory", false},
+		{"fatal: Invalid path '/tmp/repository/.git/worktrees/creation-loop-27/nested': No such file or directory", false},
+		{"fatal: Needed a single revision", false},
+	} {
+		if got := crossedRegistration.MatchString(tc.stderr); got != tc.crossed {
+			t.Errorf("crossedRegistration(%q) = %t, want %t", tc.stderr, got, tc.crossed)
+		}
+	}
+}
+
 // Only the crossing is run again. Every other refusal is Git's answer, and
 // asking the same question three times would turn each of those into a slower
 // version of itself — and a command with an effect into one made twice.

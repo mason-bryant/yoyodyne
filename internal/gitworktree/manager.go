@@ -81,13 +81,15 @@ const (
 	// open indefinitely.
 	pushTimeout = 5 * time.Minute
 	// registrationWalkAttempts and registrationWalkRetryWait bound running a Git
-	// command again when it crossed a creation. `git worktree add` registers the
-	// new entry under worktrees/ before it fills the entry in, and any command
-	// that walks the registrations in between — the listing, but equally a
-	// rebase, a checkout, or a branch deletion checking that a branch is not
-	// checked out elsewhere — reads a file that has been created and not yet
-	// written and fails the whole command rather than skipping the one entry, so
-	// a run can be lost to nothing but another run starting beside it.
+	// command again when it crossed a creation or a removal. `git worktree add`
+	// registers the new entry under worktrees/ before it fills the entry in, and
+	// any command that walks the registrations in between — the listing, but
+	// equally a rebase, a checkout, or a branch deletion checking that a branch
+	// is not checked out elsewhere — reads a file that has been created and not
+	// yet written and fails the whole command rather than skipping the one entry,
+	// so a run can be lost to nothing but another run starting beside it. A
+	// removal, and the end of an add, delete files out from under the same walk
+	// and fail it the same way; crossedRegistration names all three.
 	//
 	// The creation lease is not what a reader can take here. A creation holds it
 	// while it verifies what it just made, which is itself a listing, so a
@@ -114,19 +116,22 @@ const (
 )
 
 // crossedRegistration is the one refusal a Git command is run again over: Git
-// walking the worktree registrations and dying on the entry it could not read.
-// It is Git's own wording, from the one place Git reads a registration's
-// commondir, and it names the entry, which is what lets a listing that keeps
-// failing be checked against the bookkeeping rather than believed.
+// walking the worktree registrations and dying on an entry that changed under
+// it. It is Git's own wording, and it names the entry, which is what lets a
+// listing that keeps failing be checked against the bookkeeping rather than
+// believed. Git has three ways of saying it, one for an entry being written and
+// two for an entry going away.
 //
-// Matching one file rather than any of the entry's is not a narrowing: an empty
-// commondir is the only half-written shape Git refuses a walk over at all.
-// Every other file of a registration — gitdir, HEAD, index, locked — is walked
-// over in silence whether it is empty or absent, and so is a commondir that is
-// missing rather than empty, which is why the walk survives an add killed a
-// moment earlier and dies on one killed a moment later. That is a claim about
-// the Git on this machine rather than about Git in general, so it is asked of
-// Git rather than asserted here — see
+// An entry being written: `failed to read .git/worktrees/<id>/commondir`, from
+// the one place Git reads a registration's commondir, over a file an add has
+// created and not yet filled in. Matching that one file rather than any of the
+// entry's is not a narrowing: an empty commondir is the only half-written shape
+// Git refuses a walk over at all. Every other file of a registration — gitdir,
+// HEAD, index, locked — is walked over in silence whether it is empty or
+// absent, and so is a commondir that is missing rather than empty, which is why
+// the walk survives an add killed a moment earlier and dies on one killed a
+// moment later. That is a claim about the Git on this machine rather than about
+// Git in general, so it is asked of Git rather than asserted here — see
 // TestOnlyAnEmptyCommondirMakesGitRefuseARegistrationWalk, which fails if a
 // future Git starts refusing over some other file and this pattern therefore
 // stops covering it.
@@ -141,7 +146,21 @@ const (
 // lock Git could not read for any other reason is not an instant that passes.
 // TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand met it on
 // 2026-09-25 against its own creation loop.
-var crossedRegistration = regexp.MustCompile(`failed to read '?(?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\](?:commondir|locked'?: No such file or directory)`)
+//
+// The other refusal of an entry going away is the entry itself: Git reads an
+// entry's commondir and then resolves the common directory through the entry,
+// and a `git worktree remove` beside it that deletes the entry in between is
+// what Git dies over as "Invalid path '<common>/worktrees/<id>'". That is what
+// failed TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn once,
+// over its own creation loop's removals (yoyodyne-ifd.429.3), and it too is
+// gone once the command beside it returns, so it is run again on the same
+// terms. It is matched only under a Git directory's worktrees/ — a path ending
+// in .git, which a primary checkout's and a bare repository's both do — because
+// Git names every other path it cannot resolve the same way, and a refusal over
+// /repo/src/worktrees/foo is Git's answer about something else.
+var crossedRegistration = regexp.MustCompile(
+	`failed to read '?(?:.*[/\\])?worktrees[/\\][^/\\\s]+[/\\](?:commondir|locked'?: No such file or directory)` +
+		`|Invalid path '[^']*\.git[/\\]worktrees[/\\][^/\\']+'`)
 
 // maintenanceOptions stop a Git command from handing this repository to Git's
 // automatic maintenance, and every command the harness runs carries them.

@@ -10,9 +10,10 @@ import (
 
 // What happens as soon as a goroutine is scheduled is waited for here and never
 // bounded: two seconds was the bound, and it is the kind a loaded machine under
-// the race detector reaches with the goroutine still to be scheduled. The one
-// wait below that keeps a clock is the negative one, which a slow machine can
-// only pass wrongly and never fail wrongly.
+// the race detector reaches with the goroutine still to be scheduled. The grace
+// is the test's own where the claim is about which of the grace and the work
+// came first: a twenty-millisecond timer asked not to have fired before the
+// test's next line is a question a loaded machine answers wrongly.
 
 // A stop signal cancels the work and puts the operating system's disposition
 // back in the same moment.
@@ -27,7 +28,7 @@ func TestAStopSignalCancelsTheWorkAndGivesTheSignalBack(t *testing.T) {
 
 	signals := make(chan os.Signal, 1)
 	restored := make(chan struct{})
-	ctx, stop := answering(context.Background(), signals, time.Hour,
+	ctx, stop := answering(context.Background(), signals, measured(time.Hour),
 		func() { close(restored) },
 		func() { t.Error("the process exited itself while it still had its grace") })
 	defer stop()
@@ -49,7 +50,7 @@ func TestAProcessThatDoesNotStopWithinItsGraceExits(t *testing.T) {
 
 	signals := make(chan os.Signal, 1)
 	exited := make(chan struct{})
-	_, stop := answering(context.Background(), signals, time.Millisecond,
+	_, stop := answering(context.Background(), signals, measured(time.Millisecond),
 		func() {},
 		func() { close(exited) })
 	defer stop()
@@ -66,10 +67,15 @@ func TestAProcessThatStopsIsNotExitedBehindIt(t *testing.T) {
 	t.Parallel()
 
 	signals := make(chan os.Signal, 1)
-	exited := make(chan struct{})
-	ctx, stop := answering(context.Background(), signals, 20*time.Millisecond,
+	// A grace only this test can end, and word of it being disarmed: the grace
+	// cannot run out behind the work however late the work returns, so what is
+	// asserted is that returning disarms it rather than that it returned in time.
+	expired := make(chan time.Time)
+	disarmed := make(chan struct{})
+	ctx, stop := answering(context.Background(), signals,
+		func() (<-chan time.Time, func()) { return expired, func() { close(disarmed) } },
 		func() {},
-		func() { close(exited) })
+		func() { t.Error("a process that stopped when it was asked to was exited by the grace behind it") })
 
 	signals <- syscall.SIGTERM
 	<-ctx.Done()
@@ -77,10 +83,13 @@ func TestAProcessThatStopsIsNotExitedBehindIt(t *testing.T) {
 	// expected to do.
 	stop()
 
+	// Disarmed is the grace given up on the way out, which only the work
+	// returning does; the grace running out would have exited instead.
+	<-disarmed
 	select {
-	case <-exited:
-		t.Fatal("a process that stopped when it was asked to was exited by the grace behind it")
-	case <-time.After(200 * time.Millisecond):
+	case expired <- time.Now():
+		t.Fatal("the grace was still being waited on after the work returned")
+	default:
 	}
 }
 
@@ -90,7 +99,7 @@ func TestAProcessThatStopsIsNotExitedBehindIt(t *testing.T) {
 func TestStoppingTwiceIsNotAFailure(t *testing.T) {
 	t.Parallel()
 
-	_, stop := answering(context.Background(), make(chan os.Signal, 1), time.Hour, func() {}, func() {})
+	_, stop := answering(context.Background(), make(chan os.Signal, 1), measured(time.Hour), func() {}, func() {})
 	stop()
 	stop()
 }

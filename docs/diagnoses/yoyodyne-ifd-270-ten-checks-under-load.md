@@ -165,7 +165,8 @@ twenty-millisecond grace not to have fired before the test's next line; and
 `TestDashboardPrintsItsURLAndTokenAndStopsWhenAsked` in `internal/cli`, which
 allows five seconds for a listener to print its token and ten for the command to
 stop. Each is named in this run's summary as work to admit rather than converted
-here.
+here. All three were converted since, by
+[yoyodyne-ifd.429.3](yoyodyne-ifd-429-3-second-tranche-under-load.md).
 
 One thing about repeating this is worth knowing in advance. The sequence took
 three hours and ten minutes, and a developer run's provider invocation is

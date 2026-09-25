@@ -1352,14 +1352,25 @@ func TestAdoptWaitsOutALeaseNobodyHoldsAnyMore(t *testing.T) {
 	if err != nil || !held {
 		t.Fatalf("tryLockStateFile() = %t, %v", held, err)
 	}
-	go func() {
-		time.Sleep(leaseGrace / 5)
-		inherited.Close()
-	}()
+	// The phantom goes away the first time adoption finds it held, which is a
+	// moment the store names rather than one a sleep hopes lands inside the
+	// grace. The grace is widened past anything the test could reach, so what
+	// is asserted is that adoption retries, not that it retried in time.
+	store.leaseWait = time.Hour
+	waits := 0
+	store.leaseHeld = func() {
+		waits++
+		if waits == 1 {
+			inherited.Close()
+		}
+	}
 
 	adopted, lease, err := store.Adopt(ctx, state.WorkItemID)
 	if err != nil {
 		t.Fatalf("Adopt() error = %v, want the run adopted once the phantom lock went away", err)
+	}
+	if waits != 1 {
+		t.Fatalf("Adopt() found the lock held %d times, want once: the phantom it waited out", waits)
 	}
 	if adopted.RunID != state.RunID {
 		t.Fatalf("Adopt() = %q, want %q", adopted.RunID, state.RunID)
