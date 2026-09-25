@@ -1123,6 +1123,22 @@ is not is that the worktree hold a change already: a first attempt stopped early
 may never have written anything, and an empty worktree is exactly what the
 attempt it is owed starts from.
 
+**A stall at the review is owed the review, not another attempt.** A run whose
+developer attempt finished and whose reviewer the harness then stopped — or
+whose process went at its checks — with nothing yet handed back to its
+developer is settled and docketed the same way, and its entry says the repair
+continues it at that step rather than in the developer session. `yoyo triage repair` then puts the run back at the step it
+stalled in: the review is asked again (or the checks re-run) on the change the
+attempt left, on the same branch and in the same worktree, with no developer
+invoked. That continuation counts no repair attempt either, and it is held to
+the checks a repair is — the worktree has to be as the harness left it and has
+to still hold the change, because that change is what the step judges. Before
+2026-09-24 only a stall in the developing phase was continuable, so a stalled
+review left a re-run as the only decision, and a re-run discards the branch the
+finished attempt produced.
+A run already in its repair loop that stalls at its review or checks is not
+this: a failure was returned to it, so it is re-entered as a repair.
+
 Until 2026-09-23 the repair was refused for a stoppage like that, for want of a
 repair input, which left a re-run as the only decision that could be carried
 out — and a re-run starts the item over from the target branch, discarding the
@@ -1591,7 +1607,9 @@ shapes of stoppage are carried out: a run stopped inside its repair loop, with a
 failing check or the reviewer's findings handed back to it, is continued on that
 failure; one stopped in its first attempt, with nothing handed back, is
 continued at the attempt it was stopped in, and counts no review round and no
-repair attempt because a stall judges nothing — the entry says so, and
+repair attempt because a stall judges nothing; one stopped at its review or its
+checks after the attempt finished is continued at that step, with no developer
+invoked — the entry says which, and
 [what a stall is owed](#when-a-provider-stalls-or-runs-out-of-budget) is the
 whole of it. The
 slot the run was holding and the in-flight guard's hold over the items beside it

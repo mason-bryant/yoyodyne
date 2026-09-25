@@ -1512,6 +1512,370 @@ func TestARepairContinuesAFirstAttemptStallInItsOwnSession(t *testing.T) {
 	}
 }
 
+// The same stall one step later: a first attempt that completed, passed its
+// checks, and whose reviewer the harness then stopped on time. The sweep settles
+// and dockets it with nothing handed back, exactly as it does a stall in the
+// attempt — and before this the repair was refused, because only a stall in the
+// developing phase was continuable, so a re-run discarding the finished branch
+// was the only decision left. The entry now names the review as where the
+// repair continues it, and the carry-out asks the review again on the change the
+// run already has: no developer is invoked, and the branch the attempt produced
+// is the one that lands.
+func TestARepairContinuesAFirstAttemptStalledInItsReviewAtTheReview(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stalling := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	stalling.run = stoppingReviewer(stalling.run, stalling.reviewerSession)
+	checks := []string{"test -f feature.txt"}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
+	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
+		t.Fatalf("Run() error = %v, outcome = %#v, want the review stopped on time", err, paused)
+	}
+	stopped, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if stopped.Phase != runstate.PhaseReviewing || stopped.RepairAttempts != 0 || handedBackRepair(stopped) {
+		t.Fatalf("stopped run = %#v, want a first attempt stopped at its review with nothing handed back", stopped)
+	}
+	tracker.item.Status = "in_progress"
+
+	docket := &memoryDocket{}
+	reconciler := Reconciler{
+		Tracker:   tracker,
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Docket:    docketerOverStore(docket, store, pipeline.Config),
+		Clock:     &pausingClock{now: stopped.UpdatedAt.Add(DefaultVanishedGrace)},
+	}
+	results, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the stalled review settled after the grace", results)
+	}
+	settled, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Environmental == nil || settled.Environmental.Cause != runstate.CauseProcessVanished || settled.Phase != runstate.PhaseReviewing {
+		t.Fatalf("settled run = %#v, want a vanished-process stoppage at the review", settled)
+	}
+
+	// The entry says the repair continues the run at its review, and names that
+	// as the next mover's verb.
+	if len(docket.entries) != 1 {
+		t.Fatalf("docket = %#v, want the stalled review docketed once", docket.entries)
+	}
+	entry := docket.entries[0]
+	if !entry.SessionResumable || entry.ResumesAt != string(runstate.PhaseReviewing) {
+		t.Fatalf("entry = %#v, want the stall reported resumable at the review", entry)
+	}
+	rendered := entry.Render()
+	for _, want := range []string{
+		"`yoyo triage repair " + paused.RunID + "` continues the run at the reviewing phase",
+		"with no developer attempt",
+		"Next mover: you",
+		"a repair (`yoyo triage repair " + paused.RunID + "`) continues it at the reviewing phase it stalled in",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("entry does not say %q:\n%s", want, rendered)
+		}
+	}
+
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	// What the reviewer is shown is asked where it is handed over: a run that
+	// lands removes its worktree, so the moment the review is asked again is the
+	// only moment the attempt's change can be proved to be what it judges.
+	reviewedTheAttempt := false
+	continuing := roleBackend(func(request backend.RunRequest) error {
+		return errors.New("a stall at the review is owed no developer attempt")
+	}, approveVerdict)
+	reviewing := continuing.run
+	continuing.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer && request.WorkingDirectory == stopped.WorktreePath {
+			if content, err := os.ReadFile(filepath.Join(request.WorkingDirectory, "feature.txt")); err == nil && string(content) == "implemented\n" {
+				reviewedTheAttempt = true
+			}
+		}
+		return reviewing(request)
+	}
+	continuer := RepairContinuer{
+		Docket:             docket,
+		Runs:               store,
+		Intake:             intake,
+		Decisions:          store.Triage(),
+		Items:              tracker,
+		Worktrees:          worktrees,
+		ConfiguredAttempts: pipeline.Config.Execution.RepairAttemptsBeforeReplan,
+		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, continuing, checks), continuing).
+				Continue(ctx, workItemID, runID)
+		},
+	}
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID})
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || !result.Stall || result.ResumesAt != runstate.PhaseReviewing {
+		t.Fatalf("result = %#v, want the stall continued at the review", result)
+	}
+	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.closed)
+	}
+	if !strings.Contains(result.Reason, "continued at the reviewing phase") || !strings.Contains(result.Render(), "at the reviewing phase, the step it stalled in") {
+		t.Fatalf("result does not say it was continued at the review:\nreason: %s\n%s", result.Reason, result.Render())
+	}
+
+	// No developer attempt, and the review asked again on the attempt's change in
+	// the preserved worktree.
+	if developers := continuing.requestsForRole(domain.RoleDeveloper); len(developers) != 0 {
+		t.Fatalf("developer invocations = %#v, want none for a stall at the review", developers)
+	}
+	if reviews := continuing.requestsForRole(domain.RoleReviewer); len(reviews) != 1 {
+		t.Fatalf("review invocations = %d, want the review asked again once", len(reviews))
+	}
+	if !reviewedTheAttempt {
+		t.Fatal("the review was not asked again on the completed attempt's change in the preserved worktree")
+	}
+
+	// The branch kept is the one that landed, and the continuation counted no
+	// attempt.
+	landed, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if landed.Branch != stopped.Branch || landed.WorktreePath != stopped.WorktreePath || landed.BaseCommit != stopped.BaseCommit {
+		t.Fatalf("landed run = %#v, want the stalled run's own branch and worktree carried through", landed)
+	}
+	if landed.RepairAttempts != 0 || len(landed.RepairContinuations) != 1 || !landed.RepairContinuations[0].Stall {
+		t.Fatalf("landed run = %#v, want one stall continuation and no repair attempt", landed)
+	}
+	if landed.Environmental != nil || landed.Blocker != "" {
+		t.Fatalf("landed run = %#v, want the settled stoppage superseded", landed)
+	}
+}
+
+// The checks-phase companion: a first attempt stopped at its checks with
+// nothing handed back is continued at the checks, which run again on the
+// change the attempt left in the preserved worktree before the review is asked,
+// with no developer invoked. The sweep settles a provider stop only from the
+// developing or reviewing phase, because nothing else invokes a provider, so the
+// settled record is moved to the checking phase by hand; what is under test is
+// what the docket says of it and what the carry-out does with it.
+func TestARepairContinuesAFirstAttemptStalledAtItsChecksAtTheChecks(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stalling := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	stalling.run = stoppingReviewer(stalling.run, stalling.reviewerSession)
+	checksLog := filepath.Join(t.TempDir(), "checks.log")
+	checks := []string{"test -f feature.txt && echo ran >> " + checksLog}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, stalling, checks), stalling)
+	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
+		t.Fatalf("Run() error = %v, outcome = %#v, want the run stopped on time", err, paused)
+	}
+	stopped, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tracker.item.Status = "in_progress"
+
+	docket := &memoryDocket{}
+	reconciler := Reconciler{
+		Tracker:   tracker,
+		Worktrees: newObserver(t, repository, worktreeRoot),
+		Store:     store,
+		Docket:    docketerOverStore(docket, store, pipeline.Config),
+		Clock:     &pausingClock{now: stopped.UpdatedAt.Add(DefaultVanishedGrace)},
+	}
+	if results, err := reconciler.Reconcile(context.Background()); err != nil || len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("Reconcile() = %#v, %v, want the stall settled", results, err)
+	}
+	settled, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	settled.Phase = runstate.PhaseChecking
+	if err := store.Save(settled); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if len(docket.entries) != 1 {
+		t.Fatalf("docket = %#v, want the stall docketed once", docket.entries)
+	}
+	entry := docket.entries[0]
+	entry.ResumesAt = resumesAtOf(settled)
+	if !entry.SessionResumable || entry.ResumesAt != string(runstate.PhaseChecking) {
+		t.Fatalf("entry = %#v, want the stall reported resumable at the checks", entry)
+	}
+	if rendered := entry.Render(); !strings.Contains(rendered, "continues it at the checking phase it stalled in") {
+		t.Fatalf("entry does not name the checks as where the repair continues it:\n%s", rendered)
+	}
+
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, paused.RunID),
+		TriageRepairGrantRounds(pipeline.Config.Triage), time.Now(), TriageCaps(pipeline.Config.Execution, pipeline.Config.Triage)); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	continuing := roleBackend(func(request backend.RunRequest) error {
+		return errors.New("a stall at the checks is owed no developer attempt")
+	}, approveVerdict)
+	continuer := RepairContinuer{
+		Docket:             docket,
+		Runs:               store,
+		Intake:             intake,
+		Decisions:          store.Triage(),
+		Items:              tracker,
+		Worktrees:          worktrees,
+		ConfiguredAttempts: pipeline.Config.Execution.RepairAttemptsBeforeReplan,
+		Capacity:           pipeline.Config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (Outcome, error) {
+			return automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, continuing, checks), continuing).
+				Continue(ctx, workItemID, runID)
+		},
+	}
+	result, err := continuer.Continue(context.Background(), RepairContinueRequest{Run: paused.RunID})
+	if err != nil {
+		t.Fatalf("Continue() error = %v", err)
+	}
+	if !result.Continued || !result.Stall || result.ResumesAt != runstate.PhaseChecking {
+		t.Fatalf("result = %#v, want the stall continued at the checks", result)
+	}
+	if result.Outcome.RunID != paused.RunID || result.Outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("result = %#v, closed = %t, want the same run's change landed", result, tracker.closed)
+	}
+	if developers := continuing.requestsForRole(domain.RoleDeveloper); len(developers) != 0 {
+		t.Fatalf("developer invocations = %#v, want none for a stall at the checks", developers)
+	}
+	if reviews := continuing.requestsForRole(domain.RoleReviewer); len(reviews) != 1 {
+		t.Fatalf("review invocations = %d, want the review asked once after the checks", len(reviews))
+	}
+	// Once in the first attempt, and once more on the continuation over the
+	// attempt's change — the check only passes where feature.txt is.
+	ran, err := os.ReadFile(checksLog)
+	if err != nil {
+		t.Fatalf("ReadFile(checks log) error = %v", err)
+	}
+	if runs := strings.Count(string(ran), "ran\n"); runs != 2 {
+		t.Fatalf("checks ran %d time(s), want the continuation to run them again on the attempt's change", runs)
+	}
+	landed, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if landed.Branch != stopped.Branch || landed.BaseCommit != stopped.BaseCommit || landed.RepairAttempts != 0 {
+		t.Fatalf("landed run = %#v, want the stalled run's own branch carried through with no repair attempt", landed)
+	}
+}
+
+// A stall at the review is continued only on the change it was stopped over:
+// the continuation asks for it before the grant is spent, exactly as a repair
+// does, rather than taking the exemption a stall mid-attempt has.
+func TestAStallAtTheReviewIsHeldToTheRepairsContentCheck(t *testing.T) {
+	t.Parallel()
+
+	state := runstate.State{
+		RunID:             "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:        "yoyodyne-task",
+		Status:            runstate.StatusFailed,
+		Phase:             runstate.PhaseReviewing,
+		Blocker:           "settled",
+		WorktreePath:      "/worktrees/yoyodyne-task",
+		Branch:            "yoyodyne/yoyodyne-task/01234567",
+		BaseCommit:        "base",
+		TargetBranch:      "main",
+		ProviderSessionID: "developer-session",
+		Environmental:     &runstate.EnvironmentalRefusal{Cause: runstate.CauseProcessVanished, Settled: true},
+	}
+	if !continuableStall(state) || !stallResumesPastTheAttempt(state) || !resumesAnExistingChange(state) {
+		t.Fatalf("a review-phase stall is continuable = %t, past the attempt = %t, owes a change = %t; want all three",
+			continuableStall(state), stallResumesPastTheAttempt(state), resumesAnExistingChange(state))
+	}
+	// What the docket carries for either step is a well-formed entry, and reads
+	// back through the run state's conversion as the phase it stalled in.
+	for _, phase := range []runstate.Phase{runstate.PhaseChecking, runstate.PhaseReviewing} {
+		at := state
+		at.Phase = phase
+		entry := triage.Entry{
+			SchemaVersion:    triage.SchemaVersion,
+			Key:              triage.Key(triage.ClassStoppedRun, at.RunID),
+			Class:            triage.ClassStoppedRun,
+			ProductID:        "yoyodyne",
+			RunID:            at.RunID,
+			WorkItemID:       at.WorkItemID,
+			RecordedAt:       time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC),
+			Blocker:          at.Blocker,
+			Artifacts:        triage.Artifacts{Branch: at.Branch, WorktreePath: at.WorktreePath, DeveloperSession: at.ProviderSessionID},
+			SessionResumable: true,
+			ResumesAt:        resumesAtOf(at),
+		}
+		if back, ok := runstate.StallResumeStep(entry.ResumesAt); entry.Validate() != nil || !ok || back != phase {
+			t.Fatalf("entry resumed at %q: Validate() = %v, read back as %q, want the %s phase", entry.ResumesAt, entry.Validate(), back, phase)
+		}
+	}
+	if phase := continuedPhase(state, true); phase != runstate.PhaseReviewing {
+		t.Fatalf("continued phase = %q, want the review it stalled in", phase)
+	}
+	state.Phase = runstate.PhaseChecking
+	if !continuableStall(state) || continuedPhase(state, true) != runstate.PhaseChecking {
+		t.Fatalf("a checks-phase stall is not continued at its checks")
+	}
+	// A run in its repair loop that stalls at its review or its checks had its
+	// work judged before, and a failure returned: it is a repair's, not a stall's,
+	// so nothing on its entry or its continuation says nothing was judged.
+	for _, phase := range []runstate.Phase{runstate.PhaseReviewing, runstate.PhaseChecking} {
+		repairing := state
+		repairing.Phase = phase
+		repairing.RepairAttempts = 1
+		repairing.ReviewFindingDetails = []runstate.Finding{{Severity: "major", Message: "fix it"}}
+		if continuableStall(repairing) || stallResumesPastTheAttempt(repairing) || continuedPhase(repairing, continuableStall(repairing)) != runstate.PhaseDeveloping {
+			t.Fatalf("a %s-phase run carrying the reviewer's findings was admitted as a stall rather than a repair", phase)
+		}
+		if err := continuableRepair(repairing, triage.Found{}); err != nil {
+			t.Fatalf("continuableRepair() = %v, want a repair-loop run still carried out as a repair", err)
+		}
+	}
+	// A stall mid-attempt is still continued at the attempt, and still only where
+	// nothing was handed back.
+	state.Phase = runstate.PhaseDeveloping
+	if !continuableStall(state) || stallResumesPastTheAttempt(state) || continuedPhase(state, true) != runstate.PhaseDeveloping {
+		t.Fatalf("a developing-phase stall is not continued at its attempt")
+	}
+	state.CheckFailure = &runstate.CheckFailure{Command: "exit 1", ExitCode: 1}
+	if continuableStall(state) {
+		t.Fatal("a developing-phase run carrying a failing check was admitted as a stall rather than a repair")
+	}
+}
+
 // A vanished process that left nothing behind is a round the item must not have
 // paid for, and the repair grant that bought it is given back — which is the
 // environmental class's own rule, applied to the one round nothing else will

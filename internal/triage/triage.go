@@ -984,6 +984,19 @@ type Entry struct {
 	// from the target branch with the session gone and the uncommitted work in
 	// that worktree gone with it.
 	SessionResumable bool `json:"session_resumable,omitempty"`
+	// ResumesAt is the phase a resumable stall is continued at, where that is not
+	// a developer attempt: the checks or the review, which a run reaches only once
+	// its developer attempt is complete. It is empty for a stall mid-attempt,
+	// which is continued in the developer session it stalled in. It is on the
+	// entry because the verb is the same and what it does is not — a reviewer that
+	// stalled is owed the review asked again on the change it has, with no
+	// developer invoked, and an entry that said the session is carried on would
+	// describe an attempt that never happens.
+	// It carries a run phase as a plain string, as IntegrationStop.Phase does,
+	// because this package sits beneath the run state that owns phases; the
+	// docket store holds it to the checks or the review, through
+	// runstate.StallResumeStep, wherever an entry is written or read back.
+	ResumesAt string `json:"resumes_at,omitempty"`
 	// Unready is why dispatch declined to start this item, on the one class that
 	// describes work which never ran. It carries the whole of what a development
 	// manager has to decide about: what the item asks for, what the read found,
@@ -1241,6 +1254,9 @@ func (e Entry) Validate() error {
 		if strings.TrimSpace(e.Artifacts.WorktreePath) == "" || e.Artifacts.WorktreeRemoved {
 			problems = append(problems, errors.New("session_resumable: a preserved worktree is required, because it is what a continued developer carries on in"))
 		}
+	}
+	if e.ResumesAt != "" && !e.SessionResumable {
+		problems = append(problems, errors.New("resumes_at: only a resumable stall is continued at a step, so it requires session_resumable"))
 	}
 	if e.Artifacts.Found != nil {
 		if err := e.Artifacts.Found.Validate(); err != nil {
@@ -1587,9 +1603,20 @@ func (e Entry) renderAttempt() string {
 // It is said under the environmental account rather than over it, because the
 // account is what happened and this is what to do about it. It is silent on
 // every other stoppage, which is nearly all of them.
+//
+// A stall at the checks or the review names that step instead of the session,
+// because that is what the verb does there: the developer attempt is complete,
+// so the step is asked again on the change it left, with no developer invoked.
+// It says the branch is kept for the reason it names the session otherwise — it
+// is the half a re-run discards.
 func (e Entry) renderResumableSession() string {
 	if !e.SessionResumable {
 		return ""
+	}
+	if e.ResumesAt != "" {
+		return fmt.Sprintf(
+			"      Nothing was judged: the harness stopped this run's provider at the %s phase, after its developer attempt was complete, and no failure was ever returned to its developer. `yoyo triage repair %s` continues the run at the %s phase, asking that step again on the change the attempt left, on the branch and in the worktree above, with no developer attempt; the continuation spends no review round and no repair attempt, because a stall judges nothing. A re-run starts over from the target branch instead, discarding the branch the completed attempt produced.\n",
+			e.ResumesAt, e.RunID, e.ResumesAt)
 	}
 	return fmt.Sprintf(
 		"      Nothing was judged: the harness stopped this run's provider and no failure was ever returned to its developer, and the session it stopped in is preserved along with whatever that attempt had written. `yoyo triage repair %s` continues that session at the point it stalled, in the worktree above; it spends no review round and no repair attempt, because a stall judges nothing. A re-run starts over from the target branch instead, with the session and whatever that worktree holds uncommitted both discarded.\n",
@@ -1678,6 +1705,18 @@ func (e Entry) renderNextMover() string {
 	// and what starts it over is the next pull, which is what this says.
 	if gone != "" && !e.changeHeld() {
 		return "      Next mover: the next pull — this approved change's branch and worktree are both gone and nothing about this stoppage is decided, so nothing holds the item and the next pull starts it over from the target branch; nothing here needs your decision unless you want it held back.\n"
+	}
+	// A resumable stall names the verb that continues it, and at which step,
+	// because it is the one undecided stoppage whose cheapest answer is not the
+	// one every other entry's evidence points at: nothing was judged, so the
+	// evidence a reader would weigh a repair against is absent.
+	if e.SessionResumable {
+		step := "the developer attempt it stalled in, in the same session"
+		if e.ResumesAt != "" {
+			step = fmt.Sprintf("the %s phase it stalled in, on the change it has, with no developer attempt", e.ResumesAt)
+		}
+		return fmt.Sprintf("      Next mover: you — nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision; a repair (`yoyo triage repair %s`) continues it at %s, keeping its branch.\n",
+			e.RunID, step)
 	}
 	return "      Next mover: you — " + gone + "nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
 }

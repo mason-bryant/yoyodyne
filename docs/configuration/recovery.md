@@ -766,7 +766,11 @@ record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, whose replay conflicted, or that died before anything judged its work,
 never had a failure returned to its developer, so there is no repair loop to
-re-enter; a re-run is what those need. The preserved worktree has
+re-enter; a re-run is what those need. The one exception is a stall — a provider
+the harness stopped on time, settled by the sweep with the developer session
+preserved — which is continued at the step it stalled in: the developer attempt
+in that session, or, for a run stopped at its checks or its review, that step
+asked again on the change it has with no developer invoked. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the

@@ -1740,7 +1740,11 @@ stall judges nothing; what it spends is the grant the decision spent when it was
 recorded, so one decision still buys one continuation. It is the one continuation
 the preserved worktree does not have to hold a change for — a first attempt
 stopped early may never have written anything, and an empty worktree is exactly
-what the attempt it is owed starts from.
+what the attempt it is owed starts from. A stall at the review or the checks,
+after the attempt finished, is continued at that step instead: the entry says
+so, the review is asked again on the change the run has with no developer
+invoked, and the branch is kept — so the worktree does have to hold that change,
+as it does for any repair.
 
 **It supersedes the blocker rather than needing you to remember to.** The run
 that stopped blocked its item and recorded the blocker on its own state, which
@@ -1783,10 +1787,13 @@ preserved-work ref the sweep recorded before it took the directory. And **the
 change has to still be in it**: a worktree the harness would call its own and that
 holds nothing passes the check above and fails this one, and a developer handed
 the reviewer's findings and an empty directory delivers an empty repair or
-reinvents the change from them. That last one is the one condition a stall is
-not held to, because nothing was handed back to be about a change — and the
-resumed run makes the same exception, so the two cannot disagree about which
-continuations may start on an empty worktree.
+reinvents the change from them. That last one is the one condition a stall in
+its developer attempt is not held to, because that attempt may never have
+written anything and an empty worktree is what it starts from — and the resumed
+run makes the same exception, so the two cannot disagree about which
+continuations may start on an empty worktree. A stall at the checks or the
+review is held to it like any repair: its attempt was complete, and the change
+that attempt left is the whole of what the step asked again has to judge.
 
 The run asks that last question again itself, on every resume whose worktree is
 supposed to hold a change already — one picked up inside its repair loop, and one

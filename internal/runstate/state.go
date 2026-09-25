@@ -104,6 +104,20 @@ const (
 	PhaseComplete    Phase = "complete"
 )
 
+// StallResumeStep reads a docket entry's resumes_at back as the phase it names,
+// and refuses anything but the two steps a stall is continued at once its
+// developer attempt is complete: the checks and the review. The docket carries
+// it as a plain string because the triage package sits beneath this one, so this
+// is the one conversion between the two spellings.
+func StallResumeStep(step string) (Phase, bool) {
+	switch phase := Phase(step); phase {
+	case PhaseChecking, PhaseReviewing:
+		return phase, true
+	default:
+		return "", false
+	}
+}
+
 // Review decisions and finding severities are duplicated here rather than
 // imported so the durable schema stays independent of the review implementation
 // that produces them.

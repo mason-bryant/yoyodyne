@@ -156,6 +156,32 @@ func TestAWellFormedEntryOfEitherClassIsAccepted(t *testing.T) {
 	}
 }
 
+// A step to continue at is only ever said of a resumable stall. Which steps are
+// accepted is the run state's to say, and the docket store asks it.
+func TestAStepToContinueAtRequiresAResumableStall(t *testing.T) {
+	t.Parallel()
+
+	stall := func(step string) Entry {
+		entry := stoppedRunEntry()
+		entry.SessionResumable = true
+		entry.ResumesAt = step
+		entry.Artifacts.DeveloperSession = "developer-session"
+		entry.Artifacts.WorktreePath = "/worktrees/yoyodyne-task"
+		entry.Artifacts.Branch = "yoyodyne/yoyodyne-task/01234567"
+		return entry
+	}
+	for _, step := range []string{"", "checking", "reviewing"} {
+		if err := stall(step).Validate(); err != nil {
+			t.Fatalf("Validate() error = %v for a stall resumed at %q", err, step)
+		}
+	}
+	notResumable := stall("reviewing")
+	notResumable.SessionResumable = false
+	if err := notResumable.Validate(); err == nil || !strings.Contains(err.Error(), "requires session_resumable") {
+		t.Fatalf("Validate() error = %v, want a step refused on a stoppage that is not a resumable stall", err)
+	}
+}
+
 // The key is derived from the event rather than generated, which is the whole
 // of what makes docketing idempotent: two processes that notice one stoppage
 // have to produce the same key without talking to each other.

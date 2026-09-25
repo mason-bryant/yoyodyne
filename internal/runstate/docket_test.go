@@ -158,6 +158,47 @@ func TestDocketEntriesAreRefusedWhenTheyDoNotBelongHereOrCannotBeReadBack(t *tes
 	}
 }
 
+// A resumable stall past its developer attempt says which step the repair
+// continues it at, and the renderers print that step verbatim, so the docket
+// accepts only the checks and the review there, spelled as the phases are.
+func TestADocketedStallIsContinuedOnlyAtTheChecksOrTheReview(t *testing.T) {
+	t.Parallel()
+
+	stall := func(step string) triage.Entry {
+		entry := testDocketEntry("run-0123456789abcdef0123456789abcdef", "yoyodyne-one")
+		entry.SessionResumable = true
+		entry.ResumesAt = step
+		entry.Artifacts.DeveloperSession = "developer-session"
+		entry.Artifacts.WorktreePath = "/worktrees/yoyodyne-one"
+		entry.Artifacts.Branch = "yoyodyne/yoyodyne-one/01234567"
+		return entry
+	}
+	for _, phase := range []Phase{PhaseChecking, PhaseReviewing} {
+		if got, ok := StallResumeStep(string(phase)); !ok || got != phase {
+			t.Fatalf("StallResumeStep(%q) = %q, %t, want the %s phase", phase, got, ok, phase)
+		}
+		store := newTestDocketStore(t, t.TempDir())
+		if _, err := store.RecordOnce(stall(string(phase))); err != nil {
+			t.Fatalf("RecordOnce() error = %v for a stall resumed at %s", err, phase)
+		}
+		if entries, err := store.List(); err != nil || len(entries) != 1 || entries[0].ResumesAt != string(phase) {
+			t.Fatalf("List() = %#v, error = %v, want the step read back", entries, err)
+		}
+	}
+	for _, step := range []string{string(PhaseDeveloping), string(PhaseIntegrating), "reveiwing"} {
+		if _, ok := StallResumeStep(step); ok {
+			t.Fatalf("StallResumeStep(%q) accepted a step a stall is not continued at", step)
+		}
+		store := newTestDocketStore(t, t.TempDir())
+		if _, err := store.RecordOnce(stall(step)); err == nil || !strings.Contains(err.Error(), "resumes_at: \""+step+"\" is not a step") {
+			t.Fatalf("RecordOnce() error = %v, want a stall resumed at %q refused", err, step)
+		}
+	}
+	if _, err := decodeDocketEntry([]byte(`{"resumes_at":"developing"}`)); err == nil {
+		t.Fatal("decodeDocketEntry() accepted an entry naming a step a stall is not continued at")
+	}
+}
+
 func testDocketClosure(entry triage.Entry, decision string) triage.Closure {
 	return triage.Closure{
 		SchemaVersion: triage.ClosureSchemaVersion,
