@@ -1013,13 +1013,20 @@ through when its listing failed, on the argument that the tracker was briefly
 unavailable. Now that the listing is retried, a listing that still fails refuses
 the creation with the reason, and puts a proposal the goals would have admitted
 unasked to the operator instead, rather than admitting work on the strength of a
-guard that never ran. A creation is not asked again blindly, because a second
-`bd create` is a second item rather than the same write twice: on 2026-09-24 a
-`bd create` killed at its timeout had already made yoyodyne-ifd.428.21, and the
-retry made 428.22. Before a creation is asked for again, the tracker is listed
-for an item carrying the creation's title, parent, and notes — which name the
-conversation and the turn — and one it finds is the creation's answer. A listing
-that cannot be had leaves the creation failed rather than asked again.
+guard that never ran. A write that is not safe to repeat is not asked again
+blindly, because repeating it is a second thing rather than the same write
+twice: on 2026-09-24 a `bd create` killed at its timeout had already made
+yoyodyne-ifd.428.21, and the retry made 428.22, and an append killed the same
+way was appended twice. Reads, and linking or unlinking a dependency, are asked
+again as they stand, as is an update that appends no note, since it only sets
+values. Everything else is checked for having landed first. Before a creation is
+asked for again, the tracker is listed for an item carrying the creation's
+title, parent, and notes — which name the conversation and the turn. Before an
+update, a block, or the clearing of a blocked status is asked for again, the
+item is read for the note it was appending at the end of its notes. Before a
+close, the item is read for being closed. What the check finds is the write's
+answer, reported as applied. A check that cannot be read leaves the write
+failed rather than asked again.
 
 **One consequence is worth knowing before you raise
 `execution.max_concurrent_developers`, and it is not free.** Five of these

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -200,11 +202,16 @@ func TestATrackerWriteThatSpendsTheWindowIsReportedWithTheAttemptsInFront(t *tes
 	t.Parallel()
 
 	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
-	tracker := &fakeTracker{
-		items: map[string]beads.WorkItem{
+	// The store never takes the write. One that took it would be found by the
+	// read that precedes the next attempt and reported as landed, which is the
+	// other half of this rule and has tests of its own below.
+	tracker := &contendedTracker{
+		fakeTracker: &fakeTracker{items: map[string]beads.WorkItem{
 			"yoyodyne-ifd.142": {ID: "yoyodyne-ifd.142", Title: "the item whose re-run was reported as unrecorded", Status: "open"},
-		},
-		durableErr: errors.New(killedWrite),
+		}},
+		verbs:    []string{"update"},
+		failures: 1 << 20,
+		failure:  errors.New(killedWrite),
 	}
 	var sleeps []time.Duration
 	options := triageOptions(t, tracker, budgets, trackerReply("Its ground moved, so it starts over.",
@@ -229,8 +236,8 @@ func TestATrackerWriteThatSpendsTheWindowIsReportedWithTheAttemptsInFront(t *tes
 	if waited > recovery.Window || waited+recovery.Interval(len(sleeps)+1) <= recovery.Window {
 		t.Fatalf("waited %s over %d waits, want the whole of the %s window and no more", waited, len(sleeps), recovery.Window)
 	}
-	if len(tracker.updates) != len(sleeps)+1 {
-		t.Fatalf("updates = %d, want one write per wait and one more", len(tracker.updates))
+	if tracker.calls["update"] != len(sleeps)+1 {
+		t.Fatalf("updates = %d, want one write per wait and one more", tracker.calls["update"])
 	}
 	// Then the report is 327's, with the retries in front of it: not applied, the
 	// spend named as standing, and the failure saying how long it was waited out.
@@ -249,7 +256,7 @@ func TestATrackerWriteThatSpendsTheWindowIsReportedWithTheAttemptsInFront(t *tes
 	for _, want := range []string{
 		"did not finish, and part of it stands",
 		"the re-run is spent against yoyodyne-ifd.142's durable budget",
-		"carries it, so the write landed",
+		"not known to have landed: the decision recorded on the item",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("the account is missing %q:\n%s", want, rendered)
@@ -469,4 +476,296 @@ func equalDurations(got, want []time.Duration) bool {
 		}
 	}
 	return true
+}
+
+// How each tracker operation is asked for again after a failure a later attempt
+// could survive. It is a listing rather than something derived, because which
+// class a write belongs in is a judgement about what repeating it does — and the
+// test below holds it against the Tracker interface, so an operation added there
+// fails here until somebody has made that judgement.
+var trackerRetryClasses = map[string]string{
+	// Reads change nothing, and are asked again as they stand.
+	"Show": "read",
+	"List": "read",
+	// Writes that set something to a value leave the tracker as the first attempt
+	// did, and are asked again as they stand.
+	"AddBlocker":    "safe to repeat",
+	"RemoveBlocker": "safe to repeat",
+	// Writes that add something are asked again only once the tracker says the
+	// failed attempt did not land: an item under the parent, a note at the end of
+	// the item's notes, a status of closed.
+	"Create":   "checked before it is asked again",
+	"Update":   "checked before it is asked again",
+	"Block":    "checked before it is asked again",
+	"Unblock":  "checked before it is asked again",
+	"Complete": "checked before it is asked again",
+}
+
+func TestEveryTrackerOperationIsClassifiedForRetry(t *testing.T) {
+	t.Parallel()
+
+	operations := reflect.TypeOf((*Tracker)(nil)).Elem()
+	declared := map[string]bool{}
+	for i := range operations.NumMethod() {
+		name := operations.Method(i).Name
+		declared[name] = true
+		if _, classified := trackerRetryClasses[name]; !classified {
+			t.Errorf("Tracker.%s is not classified: decide whether a retry of it is a read, safe to repeat, or checked for having landed first, "+
+				"and make recoveringTracker agree", name)
+		}
+	}
+	for name := range trackerRetryClasses {
+		if !declared[name] {
+			t.Errorf("%s is classified and Tracker declares no such operation", name)
+		}
+	}
+	// And every operation in a class is driven below as its class says, so the
+	// listing is what the wrapper does rather than what somebody said about it.
+	for name := range trackerRetryClasses {
+		if _, driven := killedOnceDrivers[name]; !driven {
+			t.Errorf("Tracker.%s has no driver in killedOnceDrivers, so nothing holds the wrapper to its class", name)
+		}
+	}
+}
+
+// killedOnceTracker takes the first call of one operation and then reports it
+// failed the way a bd killed at its timeout does, which is the shape the retry
+// has to survive without doubling anything: the store kept the write and the
+// caller was told the command failed. Every other call answers, the reads that
+// check whether it landed among them.
+type killedOnceTracker struct {
+	*fakeTracker
+	target string
+	calls  map[string]int
+	killed bool
+	reads  int
+}
+
+func newKilledOnceTracker(target string) *killedOnceTracker {
+	return &killedOnceTracker{
+		fakeTracker: &fakeTracker{items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.433": {ID: "yoyodyne-ifd.433", Title: "the parent", Status: "open"},
+			"yoyodyne-ifd.7":   {ID: "yoyodyne-ifd.7", Title: "the item written to", Status: "open", Notes: "Admitted long ago."},
+		}},
+		target: target,
+		calls:  map[string]int{},
+	}
+}
+
+func (k *killedOnceTracker) answer(operation string) error {
+	k.calls[operation]++
+	if operation != k.target || k.killed {
+		return nil
+	}
+	k.killed = true
+	return errors.New(killedWrite)
+}
+
+func (k *killedOnceTracker) Show(ctx context.Context, id string) (beads.WorkItem, error) {
+	k.reads++
+	if err := k.answer("Show"); err != nil {
+		return beads.WorkItem{}, err
+	}
+	return k.fakeTracker.Show(ctx, id)
+}
+
+func (k *killedOnceTracker) List(ctx context.Context, status string) ([]beads.WorkItem, error) {
+	k.reads++
+	if err := k.answer("List"); err != nil {
+		return nil, err
+	}
+	return k.fakeTracker.List(ctx, status)
+}
+
+func (k *killedOnceTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
+	created := beads.WorkItem{ID: fmt.Sprintf("yoyodyne-ifd.433.%d", len(k.all)+1), Title: item.Title, Parent: item.Parent, Notes: item.Notes, Status: "open"}
+	k.all = append(k.all, created)
+	return created, k.answer("Create")
+}
+
+func (k *killedOnceTracker) Update(_ context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error) {
+	k.append(id, change.AppendNotes)
+	return k.items[id], k.answer("Update")
+}
+
+func (k *killedOnceTracker) Block(_ context.Context, id, reason string) (beads.WorkItem, error) {
+	k.setStatus(id, "blocked")
+	k.append(id, reason)
+	return k.items[id], k.answer("Block")
+}
+
+func (k *killedOnceTracker) Unblock(_ context.Context, id, note string) (beads.WorkItem, error) {
+	k.setStatus(id, "open")
+	k.append(id, note)
+	return k.items[id], k.answer("Unblock")
+}
+
+func (k *killedOnceTracker) Complete(_ context.Context, id, _ string) (beads.WorkItem, error) {
+	k.setStatus(id, "closed")
+	return k.items[id], k.answer("Complete")
+}
+
+func (k *killedOnceTracker) AddBlocker(_ context.Context, id, blockerID string) error {
+	k.links = append(k.links, [2]string{id, blockerID})
+	return k.answer("AddBlocker")
+}
+
+func (k *killedOnceTracker) RemoveBlocker(_ context.Context, id, blockerID string) error {
+	k.unlinks = append(k.unlinks, [2]string{id, blockerID})
+	return k.answer("RemoveBlocker")
+}
+
+func (k *killedOnceTracker) setStatus(id, status string) {
+	item := k.items[id]
+	item.Status = status
+	k.items[id] = item
+}
+
+const killedOnceNote = "Noted by the product manager in conversation chat-433, after turn 3: the store was contended."
+
+// killedOnceDrivers asks for each operation once through the wrapper.
+var killedOnceDrivers = map[string]func(context.Context, Tracker) error{
+	"Show": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Show(ctx, "yoyodyne-ifd.7")
+		return err
+	},
+	"List": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.List(ctx, "")
+		return err
+	},
+	"Create": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Create(ctx, beads.NewWorkItem{Title: "a child", Parent: "yoyodyne-ifd.433", Notes: killedOnceNote})
+		return err
+	},
+	"Update": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Update(ctx, "yoyodyne-ifd.7", beads.WorkItemChange{AppendNotes: killedOnceNote})
+		return err
+	},
+	"Block": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Block(ctx, "yoyodyne-ifd.7", killedOnceNote)
+		return err
+	},
+	"Unblock": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Unblock(ctx, "yoyodyne-ifd.7", killedOnceNote)
+		return err
+	},
+	"Complete": func(ctx context.Context, tracker Tracker) error {
+		_, err := tracker.Complete(ctx, "yoyodyne-ifd.7", killedOnceNote)
+		return err
+	},
+	"AddBlocker": func(ctx context.Context, tracker Tracker) error {
+		return tracker.AddBlocker(ctx, "yoyodyne-ifd.7", "yoyodyne-ifd.433")
+	},
+	"RemoveBlocker": func(ctx context.Context, tracker Tracker) error {
+		return tracker.RemoveBlocker(ctx, "yoyodyne-ifd.7", "yoyodyne-ifd.433")
+	},
+}
+
+// Each operation, killed once after the store took it, is asked for again as its
+// class says. A read and a write that is safe to repeat are asked again as they
+// stand, and nothing is read first. A write that is not is asked again only
+// after the tracker has been read, and since this one landed it is never asked
+// again at all: the store holds it once, and the call answers as applied.
+func TestEachTrackerOperationIsRetriedAsItsClassSays(t *testing.T) {
+	t.Parallel()
+
+	for name, class := range trackerRetryClasses {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			drive, driven := killedOnceDrivers[name]
+			if !driven {
+				t.Skip("no driver; TestEveryTrackerOperationIsClassifiedForRetry reports it")
+			}
+			tracker := newKilledOnceTracker(name)
+			var sleeps []time.Duration
+			options := testOptions(t, &fakeBackend{})
+			options.Sleep = recordingSleep(&sleeps)
+			session := openTestSession(t, options)
+
+			if err := drive(context.Background(), session.recovering(tracker)); err != nil {
+				t.Fatalf("%s through the wrapper error = %v, want it answered once the store did", name, err)
+			}
+			if len(sleeps) != 1 {
+				t.Fatalf("waits = %v, want the one failure waited out once", sleeps)
+			}
+			switch class {
+			case "read", "safe to repeat":
+				if tracker.calls[name] != 2 {
+					t.Fatalf("%s asked %d time(s), want it asked again as it stands", name, tracker.calls[name])
+				}
+				if class == "safe to repeat" && tracker.reads != 0 {
+					t.Fatalf("%s read the tracker %d time(s) before asking again, want no read for a write safe to repeat", name, tracker.reads)
+				}
+			case "checked before it is asked again":
+				if tracker.calls[name] != 1 {
+					t.Fatalf("%s asked %d time(s), want the landed write found and not asked for again", name, tracker.calls[name])
+				}
+				if tracker.reads == 0 {
+					t.Fatalf("%s was not checked for having landed before it was settled", name)
+				}
+				if got := strings.Count(tracker.items["yoyodyne-ifd.7"].Notes, killedOnceNote); got > 1 {
+					t.Fatalf("the item carries the note %d times, want one", got)
+				}
+				if len(tracker.all) > 1 {
+					t.Fatalf("the tracker holds %d created items, want one", len(tracker.all))
+				}
+			default:
+				t.Fatalf("unknown class %q", class)
+			}
+		})
+	}
+}
+
+// An update that appends nothing sets values, so it is asked for again as it
+// stands, without a read — there is no note whose presence could say it landed.
+func TestAnUpdateThatAppendsNothingIsAskedAgainAsItStands(t *testing.T) {
+	t.Parallel()
+
+	tracker := newKilledOnceTracker("Update")
+	var sleeps []time.Duration
+	options := testOptions(t, &fakeBackend{})
+	options.Sleep = recordingSleep(&sleeps)
+	session := openTestSession(t, options)
+
+	priority := 1
+	if _, err := session.recovering(tracker).Update(context.Background(), "yoyodyne-ifd.7", beads.WorkItemChange{Priority: &priority}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if tracker.calls["Update"] != 2 || tracker.reads != 0 {
+		t.Fatalf("updates = %d, reads = %d, want the update asked again with nothing read", tracker.calls["Update"], tracker.reads)
+	}
+}
+
+// The case the item was admitted for, end to end: a `bd update --append-notes`
+// killed at its timeout after it wrote. The retry used to append the note a
+// second time. Now the item is read first, the note is found at the end of its
+// notes, and the action is reported as applied with one copy on the item.
+func TestAnAppendKilledAfterItWroteLeavesOneCopyOfTheNote(t *testing.T) {
+	t.Parallel()
+
+	tracker := newKilledOnceTracker("Update")
+	var sleeps []time.Duration
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Noting it.",
+			`{"action":"update","id":"yoyodyne-ifd.7","note":"the store was contended","reason":"so the item says so"}`)},
+		{SessionID: "session-1", FinalText: "The note is on it."},
+	}})
+	options.Tracker = tracker
+	options.Sleep = recordingSleep(&sleeps)
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "note it")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the landed note reported as applied", reply.Actions)
+	}
+	if tracker.calls["Update"] != 1 {
+		t.Fatalf("appends = %d, want the note appended once", tracker.calls["Update"])
+	}
+	if got := strings.Count(tracker.items["yoyodyne-ifd.7"].Notes, "the store was contended"); got != 1 {
+		t.Fatalf("the item carries the note %d times, want one:\n%s", got, tracker.items["yoyodyne-ifd.7"].Notes)
+	}
 }
