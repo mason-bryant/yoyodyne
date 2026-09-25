@@ -113,6 +113,10 @@ type Authority struct {
 	// their judgement is exercised inside runs that remember nothing between
 	// invocations, and accumulation and independence cannot live in one identity.
 	Memory bool
+	// LaneReport is whether this role keeps a lane report: whether its reply may
+	// carry the block that rewrites one. It is the program manager's alone, and a
+	// block from any other role is refused with nothing written.
+	LaneReport bool
 }
 
 // MayAct reports whether this role may ask for one tracker action.
@@ -210,9 +214,10 @@ func buildAuthorities() map[domain.AgentRole]Authority {
 			Evaluations:    registry.Holds(role, capability.EvaluationRecord),
 			RepositoryReads: registry.Holds(role, capability.RepositoryRead) &&
 				registry.Holds(role, capability.RepositoryList),
-			Asks:    registry.Holds(role, capability.ExchangeAsk),
-			Answers: registry.Holds(role, capability.ExchangeAnswer),
-			Memory:  registry.Holds(role, capability.AgentContextMutate),
+			Asks:       registry.Holds(role, capability.ExchangeAsk),
+			Answers:    registry.Holds(role, capability.ExchangeAnswer),
+			Memory:     registry.Holds(role, capability.AgentContextMutate),
+			LaneReport: registry.Holds(role, capability.LaneReportWrite),
 		}
 	}
 	return built
@@ -353,6 +358,13 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Role:    authority.Role,
 			Refused: "a memory to be recorded",
 			Reason:  "a memory of one's own is kept by the management roles — the product manager, the architect, and the development manager — and this role's judgement is exercised inside runs, which remember nothing between invocations",
+		}
+	}
+	if parsed.LaneReportCarried && !authority.LaneReport {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "a lane report to be written",
+			Reason:  "a lane report is a program manager's account of its own lane, and this role says where things stand in prose instead",
 		}
 	}
 	// An ask is refused above the tracker rather than beside it, because it is
@@ -697,8 +709,8 @@ A cap that refuses you is one you may cross yourself, ` + maxDelegatedCapCrossin
 // conversation carries. The role is registered before its lane, its read-model
 // block, its lane report, and its passes are built, and the contract says what is
 // true now rather than what the design will make true: the role reads, asks,
-// remembers, and reports, and every tracker write it holds is scoped to a lane
-// nothing enforces yet, so each is refused.
+// remembers, reports, and rewrites its lane report, and every tracker write it
+// holds is scoped to a lane nothing enforces yet, so each is refused.
 const programManagerContract = `You are a program manager for this product, in a direct conversation with the operator who owns it.
 
 You own one outcome that cuts across the other roles — the line not stalling, spend not being wasted, the writing staying clear, whichever this instance was configured for — and you watch it. What you may change is bounded by a lane: one tracker label this instance owns, under which you may admit and shape work, and outside which you change nothing and ask instead. The lane is written into the harness's authority table rather than into anything you are sent, and it does not exist yet: until it does, no item is inside it.
@@ -714,6 +726,8 @@ Your tracker writes — admitting, attributing, updating, labelling, reparenting
 ` + repositoryread.Contract + `
 
 ` + memoryContract + `
+
+` + laneReportContract + `
 
 ` + exchange.AskingContract + `
 

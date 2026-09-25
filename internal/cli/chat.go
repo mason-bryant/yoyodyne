@@ -543,7 +543,9 @@ type preparedChat struct {
 	provider chat.Backend
 	store    *runstate.ConversationStore
 	memories *runstate.MemoryStore
-	identity runstate.ConversationIdentity
+	// laneReports is where a program manager's lane report is kept.
+	laneReports *runstate.LaneReportStore
+	identity    runstate.ConversationIdentity
 	// model is the selector this session's turns ask for in place of the agent's
 	// own, and empty for every session but a recurring task's that named one.
 	model string
@@ -678,14 +680,21 @@ func prepareChat(ctx context.Context, role domain.AgentRole, agentName, configPa
 	if err != nil {
 		return preparedChat{}, err
 	}
+	// Where a program manager rewrites its lane report, redacted against the same
+	// values, so a report reaches the disk only as a durable record may.
+	laneReports, err := runstate.NewLaneReportStore(parts.stateRoot, cfg.Product.ID, parts.redactValues...)
+	if err != nil {
+		return preparedChat{}, err
+	}
 	return preparedChat{
-		parts:    parts,
-		name:     name,
-		agent:    agent,
-		account:  account,
-		provider: provider,
-		store:    store,
-		memories: memories,
+		parts:       parts,
+		name:        name,
+		agent:       agent,
+		account:     account,
+		provider:    provider,
+		store:       store,
+		memories:    memories,
+		laneReports: laneReports,
 		// The conversation is held, recorded, and resumed under the agent that
 		// holds it, so two agents configured for one role are two conversations
 		// rather than one they would take turns overwriting.
@@ -722,7 +731,7 @@ func (p preparedChat) claim(ctx context.Context, attended bool, stderr io.Writer
 func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold, fresh, attended bool, stderr io.Writer) (*chat.Session, error) {
 	parts, cfg, repository := p.parts, p.parts.config, p.parts.repository
 	name, agent, account, provider, processRunner := p.name, p.agent, p.account, p.provider, p.parts.runner
-	role, store, memories := p.identity.Role, p.store, p.memories
+	role, store, memories, laneReports := p.identity.Role, p.store, p.memories, p.laneReports
 
 	// The goals the repository records, which is what work admitted in this
 	// conversation has to name. A repository whose goals cannot be read still
@@ -854,6 +863,11 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// out arrives as a memory revision naming the stream it came from, and
 		// anything it promised stays tentative until this thread ratifies it.
 		Memories: memories,
+		// Where a program manager's lane report is rewritten, under the state root
+		// beside the memory store and never inside it. It is redacted with the
+		// values every durable record is, and wired for every role because the
+		// authority to write one is decided in the chat package's table.
+		LaneReports: laneReports,
 		// How evidence from outside the repository is gathered on the role's
 		// behalf, bounded by what the operator configured. It is the harness's own
 		// hand like the tracker is: the role names a question and a permitted

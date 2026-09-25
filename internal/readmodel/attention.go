@@ -129,6 +129,12 @@ const (
 	MoverHarness Mover = "harness"
 	// MoverForge is the forge merging a request it has queued.
 	MoverForge Mover = "forge"
+	// MoverProvider is the model provider answering again. No attention entry is
+	// attributed to it — a usage window lifts on the provider's clock, which is
+	// nobody's move — and it is here because a program manager's lane report may
+	// name it as what a blocker is waiting on, and that report's movers are this
+	// vocabulary's.
+	MoverProvider Mover = "provider"
 	// MoverNobody is a wait nobody ends: a provider's usage window lifts on the
 	// provider's clock.
 	MoverNobody Mover = "nobody"
@@ -167,6 +173,7 @@ func Movers() []Mover {
 		Mover(domain.RoleReviewer),
 		MoverHarness,
 		MoverForge,
+		MoverProvider,
 		MoverNobody,
 		MoverUnnamed,
 	}
@@ -194,6 +201,8 @@ func (m Mover) Possessive() string {
 		return "the harness's"
 	case MoverForge:
 		return "the forge's"
+	case MoverProvider:
+		return "the provider's"
 	case MoverNobody:
 		return "nobody's"
 	case MoverUnnamed:

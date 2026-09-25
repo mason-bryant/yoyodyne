@@ -317,6 +317,12 @@ type Options struct {
 	// memory and no merges rather than reporting that there were none, and
 	// refuses a memory write as having nowhere to go.
 	Memories Memories
+	// LaneReports is where a program manager's lane report is kept. It is wired
+	// for every role because the authority to write one is decided in the
+	// authority table rather than here, and a store nobody may write to is never
+	// written to. A conversation without one refuses the block as having nowhere
+	// to go.
+	LaneReports LaneReports
 	// Evaluations is where a durable recommendation about an operator's idea is
 	// kept. It is optional like the rest: a conversation without one still
 	// discusses the idea and still says what it thinks, and an evaluation then
@@ -503,6 +509,10 @@ type Session struct {
 	options Options
 	state   runstate.Conversation
 	resumed bool
+	// pass names the recurring-task firing whose turns this session is taking,
+	// where one is, so a lane report it writes is stamped with it. It is empty on
+	// an operator's own conversation.
+	pass string
 	// proposals is what this process has seen the product manager propose and
 	// what the operator has decided about it. Every proposal and every decision
 	// is durable in the conversation's event log; this is the pending set a
@@ -850,7 +860,11 @@ type Reply struct {
 	// order it asked, with the revision each became or why it was refused. They
 	// already happened, so they are reported rather than put to anybody.
 	Memories []MemoryOutcome `json:"memories,omitempty"`
-	Evidence Evidence        `json:"evidence"`
+	// LaneReport is what became of the lane report this reply carried: the
+	// version it became, or why it was refused and the report before it stands.
+	// A reply that carried none has none.
+	LaneReport *LaneReportOutcome `json:"lane_report,omitempty"`
+	Evidence   Evidence           `json:"evidence"`
 }
 
 // Open loads or starts a role's conversation. A recorded conversation with a
@@ -1375,6 +1389,22 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 				return reply, err
 			}
 		}
+		// What the program manager said about its lane, rewriting its report whole
+		// or refused whole. Like a memory it never starts another round: what
+		// became of it travels with whatever this round hands back, or waits for
+		// the next turn.
+		if parsed.LaneReportCarried {
+			outcome, err := s.writeLaneReport(ctx, parsed.LaneReport, parsed.LaneReportProblem)
+			reply.LaneReport = &outcome
+			if err != nil {
+				return reply, err
+			}
+			if undelivered != "" {
+				undelivered += renderLaneReportResult(outcome)
+			} else if err := s.carryResults(renderLaneReportResult(outcome)); err != nil {
+				return reply, err
+			}
+		}
 		if undelivered != "" {
 			continuation = undelivered + continueAfterResults
 		}
@@ -1872,9 +1902,17 @@ type parsedReply struct {
 	Ask *exchange.Ask
 	// Memories are what this reply asked to be remembered, revised, or retired
 	// in the agent's own memory. Most replies ask for none.
-	Memories      []MemoryWrite
-	Reports       []report.Entry
-	ReportProblem error
+	Memories []MemoryWrite
+	// LaneReport is the lane report this reply rewrote, where it carried a
+	// readable one. LaneReportCarried says it carried the block at all, readable
+	// or not — which is what a role without the authority is refused for — and
+	// LaneReportProblem why one it carried cannot be written. An unreadable report
+	// never fails the turn: it is refused whole and the report before it stands.
+	LaneReport        *runstate.LaneReportContent
+	LaneReportCarried bool
+	LaneReportProblem error
+	Reports           []report.Entry
+	ReportProblem     error
 }
 
 // splitReply separates one answer into the prose the operator reads, the tracker
@@ -1888,6 +1926,10 @@ type parsedReply struct {
 func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	rest, reports, reportErr := report.Extract(answer)
 	parsed := parsedReply{Reports: reports, ReportProblem: reportErr}
+	// The lane report is taken out next and, like the report block, a lane report
+	// the harness cannot read is carried as its own problem rather than as the
+	// turn's: it is refused whole and everything else is taken apart as before.
+	rest, parsed.LaneReport, parsed.LaneReportCarried, parsed.LaneReportProblem = extractLaneReport(rest)
 	prose, actions, requested, err := extractTrackerActions(rest)
 	if err != nil {
 		parsed.Prose = rest
@@ -2578,6 +2620,9 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// What it put into its own memory, because a memory enters every later turn
 		// and one the operator was never told about is agent state they cannot see.
 		s.reportMemories(out, reply)
+		// What became of its lane report, because a refused one leaves the report
+		// before it standing and the operator reading this has to know which.
+		s.reportLaneReport(out, reply)
 		// How old the picture the reply rests on was and what the harness did
 		// about it, where it did anything: a re-read the operator never asked for
 		// is a re-read they have to be told about, and a re-read that could not be

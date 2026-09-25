@@ -21,6 +21,8 @@ var recurringNow = time.Date(2026, 9, 5, 9, 0, 0, 0, time.UTC)
 // what it was told to answer.
 type wokenRole struct {
 	messages []string
+	// passes is the firing each turn was told it belonged to.
+	passes []string
 	// models is the model each turn was asked on, empty where the task named none.
 	models  []string
 	answers []scriptedTurn
@@ -40,8 +42,9 @@ type scriptedTurn struct {
 	model string
 }
 
-func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, model, message string) (Turn, error) {
+func (r *wokenRole) Wake(_ context.Context, _ domain.AgentRole, pass, model, message string) (Turn, error) {
 	r.messages = append(r.messages, message)
+	r.passes = append(r.passes, pass)
 	r.models = append(r.models, model)
 	if r.failure != nil {
 		return Turn{}, r.failure
@@ -1052,5 +1055,24 @@ func TestABoundedProblemIsCutOnARuneBoundary(t *testing.T) {
 	if !utf8.ValidString(problem) || len(problem) > runstate.MaxSweepTextBytes || !strings.HasSuffix(problem, " […]") {
 		t.Fatalf("boundedProblem() is %d bytes, valid UTF-8 %t; want valid text within %d bytes marked as cut",
 			len(problem), utf8.ValidString(problem), runstate.MaxSweepTextBytes)
+	}
+}
+
+// Every turn of a firing is told which pass it belongs to — the task and which of
+// its firings this is — so what it writes on the pass's behalf can say so.
+func TestEveryTurnOfAFiringIsToldItsPass(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{
+		{result: &sweep.Result{Status: sweep.StatusMore, Summary: "half"}},
+		{result: complete("the rest")},
+	}}
+	trigger := Trigger{Tasks: hourlyTask("look"), Claims: store, Reports: store, Roles: role, Clock: recurringClock{}}
+	if _, err := trigger.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(role.passes) != 2 || role.passes[0] != "a-sweep#1" || role.passes[1] != "a-sweep#1" {
+		t.Fatalf("the turns were told passes %v, want a-sweep#1 on both", role.passes)
 	}
 }

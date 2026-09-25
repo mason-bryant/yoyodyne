@@ -89,6 +89,7 @@ var strictSites = map[string]strictSite{
 	"internal/runstate/conversation.go:(*ConversationStore).readHolder":   {strictValidator, "who is mid-turn with an agent is refused rather than guessed at from part of a record"},
 	"internal/runstate/stop.go:(*Store).StopRequested":                    {strictValidator, "a run acts on a stop request, and one it cannot read fails its step rather than being ignored"},
 	"internal/runstate/release.go:(*Store).ReleasedWait":                  {strictValidator, "a run acts on the operator's release of a wait, and one it cannot read fails its step rather than being ignored"},
+	"internal/runstate/lanereport.go:(*LaneReportStore).decode":           {strictWriter, "the writer numbers the next version from the history and writes it back; Current and History read through the tolerant door"},
 	"internal/runstate/memory.go:decodeMemoryRevision":                    {strictValidator, "a revision that will not decode is reported as a problem against its line, and the lines beside it are read"},
 	"internal/readmodel/attention.go:(*Attention).UnmarshalJSON":          {strictValidator, "no stored record is read through it; it holds the dashboard's fixtures and scripted readers to the shape"},
 
@@ -97,6 +98,7 @@ var strictSites = map[string]strictSite{
 	// reaches the turn as an error naming the block.
 	"internal/amendment/amendment.go:Decode":           {strictValidator, "an amendment block in an agent's reply"},
 	"internal/chat/concern.go:decodeConcerns":          {strictValidator, "a concern block in a conversation reply"},
+	"internal/chat/lanereport.go:decodeLaneReport":     {strictValidator, "a lane report block in a program manager's reply"},
 	"internal/chat/memory.go:decodeMemoryWrites":       {strictValidator, "a memory block in a conversation reply"},
 	"internal/chat/proposal.go:decodeProposals":        {strictValidator, "a proposal block in a conversation reply"},
 	"internal/chat/tracker.go:decodeTrackerActions":    {strictValidator, "a tracker-action block in a conversation reply"},

@@ -125,12 +125,18 @@ type roleConversation struct {
 // A task that names its own model has this turn ask for it, and only this turn:
 // the conversation, its account, and its failover are the role's, and the next
 // message anybody else sends into it asks for the role's model again.
-func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, model, message string) (orchestrator.Turn, error) {
+//
+// The turn is marked as the pass's, so what it writes on the pass's behalf — a
+// program manager's lane report — is stamped with the pass as well as the turn,
+// and a report it carried that was refused is on the pass's record beside
+// whatever else the pass has to say about itself.
+func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, pass, model, message string) (orchestrator.Turn, error) {
 	session, lease, err := r.opener()(ctx, role, model)
 	if err != nil {
 		return orchestrator.Turn{}, fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
 	defer lease.Release()
+	session.ForPass(pass)
 
 	reply, err := session.Send(ctx, message)
 	// The conversation and what the turn cost are carried whichever way it went: a
@@ -146,6 +152,13 @@ func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, model
 		return turn, notWoken(err)
 	}
 	turn.Result, turn.ResultProblem = readSweep(role, reply.Text)
+	if refusal := reply.LaneReport.Refusal(); refusal != "" {
+		if turn.ResultProblem == "" {
+			turn.ResultProblem = refusal
+		} else {
+			turn.ResultProblem += "; " + refusal
+		}
+	}
 	return turn, nil
 }
 

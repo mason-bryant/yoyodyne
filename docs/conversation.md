@@ -1073,7 +1073,7 @@ project rewrites any persona it likes and the boundaries do not move:
 | architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
 | developer, reviewer | yes | nothing | no | none |
-| [program manager](designs/program-manager.md) | yes | nothing yet: admits, attributes, updates, labels, reparents, orders, parks, and links **only inside its own lane**, and no lane is enforced yet, so every one of those is refused; never closes, retires, or records triage | yes | none |
+| [program manager](designs/program-manager.md) | yes | nothing yet: admits, attributes, updates, labels, reparents, orders, parks, and links **only inside its own lane**, and no lane is enforced yet, so every one of those is refused; never closes, retires, or records triage | yes | none; it rewrites [its lane report](#a-program-managers-lane-report), which is kept under the state root rather than in the repository |
 
 The product manager's admitting is the one row a setting moves, and it moves in
 one direction only. `approvals.work_items` decides what may reach the queue
@@ -1272,6 +1272,56 @@ unreadable rather than shown as empty.
 turns carry no memory briefing, their contracts do not describe the block, and a
 reply from either that carries one is refused whole, with nothing recorded. Asked
 what either remembers, `yoyo agent memory` says it keeps none.
+
+### A program manager's lane report
+
+A [program manager](designs/program-manager.md) keeps one report on its lane: a
+short summary of how the lane is going, what remains, and what is blocking it.
+Nobody is sent it. The operator and the other roles read it when they choose.
+
+**It is rewritten whole by one block.** A program manager's reply ends with a
+`yoyodyne-lane-report` block, which carries three fields and nothing else:
+
+```text
+{"summary":"where the lane stands","remaining":["what is still to do"],
+ "blockers":[{"what":"what is blocked","waiting_on":"product-manager","cites":"report-7"}]}
+```
+
+`remaining` is a list, and so is `blockers`. An empty list says nothing
+remains, or nothing is blocking. Each blocker names `what` is blocked,
+`waiting_on` (the mover it waits for), and `cites` (the identifier of the
+request, report, amendment, or exchange the instance raised about it). The
+mover comes from the read model's own vocabulary, narrowed to the movers a lane
+can wait on: `operator`, `product-manager`, `development-manager`, `architect`,
+`harness`, `forge`, or `provider`.
+
+The report is kept under the state root at
+`products/<product>/program-managers/<agent>/report.json`. Beside it,
+`history.jsonl` holds the last fifty versions, oldest first. Each version is
+numbered, and each is stamped with the conversation and turn that wrote it.
+Where a recurring task's pass woke that turn, the stamp also names the pass, as
+the task and its firing number (`factory-watch#12`). A fifty-first version drops
+the oldest. The numbering keeps counting. The report is never in the repository,
+which is public, and never in the memory store. The report is bounded at 16 KiB
+and redacted before it is written, with the same values every durable record is
+redacted against.
+
+**A malformed block is refused whole, and the turn goes on.** A block over the
+bound, a block missing a field, a block with a field the report does not have,
+and a blocker waiting on anybody outside those seven movers are all refused.
+Nothing is written, so the report before it still stands. The refusal is
+recorded in the conversation's log as `lane_report.refused`. The operator is
+told on the transcript, and `--json` carries it under `lane_report`. The program
+manager is told why on its next turn. Where a recurring task's pass woke the
+turn, the refusal is written onto the pass's record, which is what
+[`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found) reads. A block that lands is recorded as `lane_report.recorded`, with
+its version number. Neither event copies the report's text.
+
+**Only the program manager may write one.** Writing a lane report is
+`lane-report.write`, which only the program manager's bundle holds. The block
+in any other role's reply is refused like any block a role has no authority
+for: the turn fails, and nothing is written. No other contract describes the
+block.
 
 ### Roles asking each other things
 

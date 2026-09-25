@@ -367,3 +367,16 @@ func TestEveryMoverHasAPossessive(t *testing.T) {
 		t.Fatal("a bare conversation marker does not name the unnamed role")
 	}
 }
+
+// A lane report's blocker names what it waits on in this vocabulary. The durable
+// schema keeps its own copy of the tokens a blocker may name, because this
+// package reads that record rather than the other way round, so every one of
+// them is held here to being a mover this vocabulary has.
+func TestEveryMoverALaneReportMayNameIsAMover(t *testing.T) {
+	t.Parallel()
+	for _, token := range runstate.LaneReportMovers() {
+		if !Mover(token).Valid() {
+			t.Errorf("a lane report may wait on %q, which is not a mover the read model has", token)
+		}
+	}
+}

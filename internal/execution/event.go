@@ -193,6 +193,13 @@ const (
 	EventMemoryRequested EventType = "memory.requested"
 	EventMemoryRecorded  EventType = "memory.recorded"
 	EventMemoryFailed    EventType = "memory.failed"
+	// A program manager's lane report, rewritten whole or refused whole. They
+	// carry the turn, the pass that woke it where one did, the version the store
+	// numbered it, and why one was refused, and never the report's text: the lane
+	// report store holds what the report says, and a copy of it here would be a
+	// second one nothing rewrites.
+	EventLaneReportRecorded EventType = "lane_report.recorded"
+	EventLaneReportRefused  EventType = "lane_report.refused"
 	// A management conversation's provider session left behind because its next
 	// turn would have taken it past the harness's byte budget, with the turn sent
 	// on a new session rebuilt from the record instead — and the same compaction
