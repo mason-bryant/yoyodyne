@@ -111,6 +111,12 @@ type Store interface {
 	SavePendingPictureText(identity runstate.ConversationIdentity, text string) error
 	PendingPictureText(identity runstate.ConversationIdentity) (string, error)
 	ClearPendingPictureText(identity runstate.ConversationIdentity) error
+	// The text of the picture the agent last received, which a later refresh is
+	// compared against so its turn carries what moved rather than the whole
+	// picture again.
+	SaveDeliveredPictureText(identity runstate.ConversationIdentity, text string) error
+	DeliveredPictureText(identity runstate.ConversationIdentity) (string, error)
+	ClearDeliveredPictureText(identity runstate.ConversationIdentity) error
 }
 
 // Hold is this process's claim on the conversation, which it can put down while
@@ -535,10 +541,15 @@ type Session struct {
 	// It waits rather than replacing anything: a conversation is refreshed by
 	// telling it what moved, not by editing what it believes.
 	refresh *pendingRefresh
-	// carried is the picture the turn being taken is delivering, adopted into
-	// the durable record once that turn succeeds. A picture that never reached
-	// the product manager is never recorded as the one it is working from.
+	// carried is the picture the turn being taken is delivering, kept as the
+	// picture the agent last received once that turn succeeds.
 	carried *Briefing
+	// carriedChanges says the turn being taken carries only what moved between
+	// the picture the agent last received and the one it is delivering, rather
+	// than the whole of it. A turn rebuilt for a provider holding no session has
+	// no earlier picture for those changes to apply to, so the rebuild carries the
+	// whole picture in front of them.
+	carriedChanges bool
 	// activity is what the operator is shown while a turn is being answered. It
 	// is nil outside an interactive conversation: a one-shot message has nobody
 	// watching, and its events are recorded exactly as they always were.
@@ -872,6 +883,11 @@ func Open(options Options) (*Session, error) {
 	// new record names none, so the text beside it goes rather than sitting there
 	// until some later refresh happens to overwrite it.
 	if err := options.Store.ClearPendingPictureText(options.identity()); err != nil {
+		return nil, err
+	}
+	// Nor has it received the picture the one it replaces last delivered, so no
+	// refresh of it may be told only what moved since that one.
+	if err := options.Store.ClearDeliveredPictureText(options.identity()); err != nil {
 		return nil, err
 	}
 	return session, nil
@@ -1480,8 +1496,9 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		Prompt:           prompt,
 		SystemPrompt:     systemPrompt,
 		// The session this turn may continue from, which is empty where the last
-		// turn was served by a different provider: that provider's session is not
-		// this one's to resume, and what stands in for it is the context rebuilt
+		// turn was served by a different provider — that provider's session is not
+		// this one's to resume — or where the provider refused the session as too
+		// long and it was set aside. What stands in for it is the context rebuilt
 		// from the record below.
 		SessionID:    s.resumableSession(),
 		Model:        s.options.Model,
@@ -1505,7 +1522,8 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	policy := s.failoverPolicy()
 	// A conversation that has taken turns and has no session to resume is one that
 	// crossed providers and is now being asked back on its own — the window it was
-	// waiting out has lifted. The turn's prompt carries no history, because every
+	// waiting out has lifted — or one whose session was set aside as too long and
+	// whose fresh one never got as far as the record. The turn's prompt carries no history, because every
 	// turn but the first is written for a session that already holds it, so the
 	// same rebuild the crossing made is made here for the crossing back. A rebuild
 	// that fails leaves the turn as it stands and says so: an answer with less
@@ -1542,6 +1560,10 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		// way the invocation ended.
 		refusal     error
 		notReissued error
+		// replaced says this turn has already set aside a session the provider
+		// refused as too long, so a fresh session refused the same way ends the
+		// turn rather than setting aside the one it just opened.
+		replaced bool
 	)
 	// What this invocation costs is counted across the attempts it took. An
 	// exchange is charged per invocation rather than per message, and an attempt
@@ -1561,6 +1583,31 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 			lastSequence = result.LastEvent
 		}
 		request.LastSequence = lastSequence
+		// A session the provider will no longer continue — too long to send, and
+		// not compacted in time — is set aside once, and the turn is asked again in a
+		// fresh session with the context rebuilt from the record, under the same
+		// conversation. Only a turn that resumed a session is answered this way: one
+		// that already carried the rebuild has nothing a fresh session would drop.
+		// Which session that was is read off where the attempt actually went: the
+		// alternate's own, where the failover moved the turn onto an endpoint that
+		// holds one.
+		refusedOn := s.servingEndpoint(served)
+		resumed := request.SessionID
+		if policy.AlternateSessionID != "" && refusedOn.Provider == policy.AlternateEndpoint.Provider {
+			resumed = policy.AlternateSessionID
+		}
+		if why := refusedAsTooLong(result, err); why != "" && resumed != "" && !replaced {
+			replaced = true
+			s.state.LastSequence = lastSequence
+			request = s.replaceSession(request, refusedOn, resumed, why)
+			lastSequence = s.state.LastSequence
+			// The alternate's session is the conversation's session, and it was set
+			// aside with it, so the failover is asked afresh rather than holding on to
+			// a session nothing will resume.
+			policy = s.failoverPolicy()
+			s.stream.interrupted()
+			continue
+		}
 		limit := refusedForUsageLimit(result, err)
 		if limit == nil {
 			break
@@ -1654,6 +1701,8 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
+		// A fresh session has served a turn, so nothing is set aside any more.
+		s.state.SessionSetAside = ""
 	}
 	// The endpoint this turn was actually served on, which is the configured one
 	// unless a substitution moved it. Recording the configured one here would leave
@@ -1686,16 +1735,24 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	s.notices = nil
 	s.noticesDropped = false
 	s.state.PendingTrackerResults = ""
-	// The same is true of the picture: the conversation is recorded as working
-	// from one only once the turn that delivered it succeeded, so a refresh
-	// nobody was told about never makes the record claim the conversation is
-	// current.
+	// The same is true of the picture: it stops being owed only once the turn that
+	// delivered it succeeded, and its text is kept as what the agent last received,
+	// which is what the next refresh's changes are measured against.
 	delivered := s.carried != nil
 	if delivered {
 		s.state.ContextGatheredAt = s.carried.GatheredAt
 		s.state.ContextCommit = s.carried.Commit
 		s.state.ContextShippedDocumentationBytes = s.carried.ShippedDocumentationBytes
+		// Kept before the record stops naming the picture as owed. A process
+		// interrupted between the two delivers it again, as changes against itself,
+		// which says nothing moved; the other order would leave the next refresh
+		// measured against a picture older than the one the agent holds, which says
+		// again what it was already told.
+		if err := s.options.Store.SaveDeliveredPictureText(s.options.identity(), s.carried.Text); err != nil {
+			return result.FinalText, errors.Join(fmt.Errorf("keep the picture this turn delivered: %w", err), s.record())
+		}
 		s.carried = nil
+		s.carriedChanges = false
 		s.refresh = nil
 	}
 	if err := s.record(); err != nil {
@@ -3314,11 +3371,13 @@ func (s *Session) pendingCards() []card {
 // fallen past the threshold — is the one thing that puts the product context
 // back into a later turn, and it goes in framed as what it is: a new picture,
 // with what moved since the old one, for the product manager to reconcile
-// against what it already believes. A picture the harness measured and could
-// not refresh goes in as its age instead, so the role can say which of its
-// advice rests on it.
+// against what it already believes. Where the harness kept the picture the
+// role last received, the refresh carries only what moved between the two; see
+// refreshPrompt. A picture the harness measured and could not refresh goes in
+// as its age instead, so the role can say which of its advice rests on it.
 func (s *Session) turnPrompt(message string, picture *PictureAge) string {
 	var prompt strings.Builder
+	s.carriedChanges = false
 	switch {
 	case s.refresh != nil && s.state.Turns == 0:
 		// Nothing has been said yet, so the refreshed picture is simply the
@@ -3328,7 +3387,7 @@ func (s *Session) turnPrompt(message string, picture *PictureAge) string {
 		prompt.WriteString("\n")
 	case s.refresh != nil:
 		s.carried = &s.refresh.briefing
-		prompt.WriteString(s.refresh.prompt())
+		prompt.WriteString(s.refreshPrompt())
 	case s.state.Turns == 0:
 		s.carried = &s.options.Briefing
 		prompt.WriteString(s.options.Briefing.Text)

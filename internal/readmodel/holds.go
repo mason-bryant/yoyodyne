@@ -231,20 +231,21 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 	// third is held with nothing of it surviving, because what the decision
 	// continues is the run itself — a repair grant re-enters its preserved
 	// session — and a fresh pull would start over beside it.
-	remaining := make(map[string]triage.Found)
+	looked := make(map[string]triage.Found)
 	for workItemID, run := range latestPerItem(runs, func(run runstate.State) bool {
 		if !stoppage(run) {
 			return false
 		}
 		found := look(run)
+		looked[run.RunID] = found
 		if found.Holds() {
-			remaining[run.RunID] = found
 			return true
 		}
 		carryOut, _ := decided(run.WorkItemID, run.RunID)
 		return carryOut
 	}) {
-		found, preserved := remaining[run.RunID]
+		found := looked[run.RunID]
+		preserved := found.Holds()
 		// An approved change the environment stopped is answered before the item's
 		// triage record is read at all, and without reading it: what such a stoppage
 		// waits on is the harness resuming the promotion, whatever has or has not
@@ -254,11 +255,22 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		// the docket (triage.Entry.renderNextMover) tells her she owes nothing
 		// about, and an item given two next movers is a disagreement only the
 		// operator can settle.
-		if run.IntegrationStop != nil {
+		//
+		// That holds while the branch is there, and triage.IntegrationResumable is
+		// the rule both readers ask it by. Once the branch is gone the resume has
+		// nothing to promote, so the stop is answered as any stoppage is — held
+		// where a worktree survives or a decision stands, closed by whose move
+		// that is — with the re-run named as the way on rather than a verb that
+		// would refuse.
+		if run.IntegrationStop != nil && triage.IntegrationResumable(&found, false) {
 			reasons[workItemID] = backlog.Hold{Reason: stoppedIntegration(run, found, preserved), Decided: true}
 			continue
 		}
 		carryOut, problem := decided(workItemID, run.RunID)
+		if run.IntegrationStop != nil {
+			reasons[workItemID] = heldFor(triage.IntegrationGoneSays(run.RunID, found.Describe()), carryOut, problem)
+			continue
+		}
 		if !preserved {
 			reasons[workItemID] = heldFor(continuedStoppage(run), carryOut, problem)
 			continue

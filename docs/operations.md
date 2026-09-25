@@ -1123,6 +1123,22 @@ is not is that the worktree hold a change already: a first attempt stopped early
 may never have written anything, and an empty worktree is exactly what the
 attempt it is owed starts from.
 
+**A stall at the review is owed the review, not another attempt.** A run whose
+developer attempt finished and whose reviewer the harness then stopped — or
+whose process went at its checks — with nothing yet handed back to its
+developer is settled and docketed the same way, and its entry says the repair
+continues it at that step rather than in the developer session. `yoyo triage repair` then puts the run back at the step it
+stalled in: the review is asked again (or the checks re-run) on the change the
+attempt left, on the same branch and in the same worktree, with no developer
+invoked. That continuation counts no repair attempt either, and it is held to
+the checks a repair is — the worktree has to be as the harness left it and has
+to still hold the change, because that change is what the step judges. Before
+2026-09-24 only a stall in the developing phase was continuable, so a stalled
+review left a re-run as the only decision, and a re-run discards the branch the
+finished attempt produced.
+A run already in its repair loop that stalls at its review or checks is not
+this: a failure was returned to it, so it is re-entered as a repair.
+
 Until 2026-09-23 the repair was refused for a stoppage like that, for want of a
 repair input, which left a re-run as the only decision that could be carried
 out — and a re-run starts the item over from the target branch, discarding the
@@ -1591,7 +1607,9 @@ shapes of stoppage are carried out: a run stopped inside its repair loop, with a
 failing check or the reviewer's findings handed back to it, is continued on that
 failure; one stopped in its first attempt, with nothing handed back, is
 continued at the attempt it was stopped in, and counts no review round and no
-repair attempt because a stall judges nothing — the entry says so, and
+repair attempt because a stall judges nothing; one stopped at its review or its
+checks after the attempt finished is continued at that step, with no developer
+invoked — the entry says which, and
 [what a stall is owed](#when-a-provider-stalls-or-runs-out-of-budget) is the
 whole of it. The
 slot the run was holding and the in-flight guard's hold over the items beside it
@@ -1848,6 +1866,18 @@ remote gained, which is by definition work this repository has never seen.
    promote again. That is the state this recovery is for: resolvable, and back
    under the harness.
 
+6. **Resume the approved changes the divergence stopped.** Each one is recorded
+   as an integration stop of cause `diverged-target`, and its docket entry and
+   blocker name the command:
+
+   ```sh
+   ./bin/yoyo triage resume <run-id>
+   ```
+
+   It carries the change on to its promotion with its approval standing and
+   spends no review round, repair grant, or re-run. Asked before the branches
+   are settled, it refuses, writes nothing, and names what is still diverged.
+
 6. **Decide what happens to the preserved branch.** Its commits carry work a
    reviewer approved and this repository integrated, which the shared remote never
    received; the work items behind them carry a `Publication outstanding` line
@@ -1910,12 +1940,17 @@ Needs a human (3):
   not one. That last one comes from a closed set of named reasons, each
   of which says who it is waiting on: the operator's hold, a held intake, every
   developer slot taken, a session waiting out the provider's usage window, a live
-  watch session that has found nothing it can start, no watch session running any
-  more, and a product no session has ever watched. An idle session and no session
-  are named apart on purpose — telling you to start a session you are already
-  running sends you to the wrong place. A provider window is named apart from
-  both for the same reason and says `Paused on the provider's usage window until
-  13:43Z`: nobody has a move, the window lifts on the provider's clock, and
+  watch session retrying a read of the harness's store that failed, a live watch
+  session that has found nothing it can start, no watch session running any more,
+  and a product no session has ever watched. A retried read is the harness's move
+  and is never said as idle: the queue was not read, so nothing is known about
+  it, and the session line above the runs says `retrying a failed read of the
+  harness's store` rather than `idle` for as long as the read goes on failing.
+  An idle session and no session are named apart on purpose — telling you to
+  start a session you are already running sends you to the wrong place. A
+  provider window is named apart from both for the same reason and says `Paused
+  on the provider's usage window until 13:43Z`: nobody has a move, the window
+  lifts on the provider's clock, and
   reporting it as a session finding nothing to start sends you to look at a queue
   that is fine.
   It never comes from a watch session's memory of what it has already tried,
@@ -2586,10 +2621,12 @@ one, so a promotion that [loses its race](configuration.md#losing-a-race-for-the
 and gets a fresh verdict on the replayed change is not charged for it, whichever
 way that verdict goes. Neither is a verdict that approved the change: the cap
 stops an item buying the same argument another round, and an approval ends the
-argument. Neither is a repair whose whole residue is one minor finding — the
-reviewer said the work is right and named one small thing beside it, which is the
-same ending with a note attached; the work still goes back to the developer and
-still spends one of the run's own repair attempts. An uncharged verdict is still
+argument. Neither is a repair whose whole residue is one finding the reviewer
+disposed of as `out_of_scope` — the reviewer said the work is right and named one
+thing beside it that is not this change's to do, which is the same ending with a
+note attached; the work still goes back to the developer and still spends one of
+the run's own repair attempts. The disposition decides this, not the severity: a
+single `minor` finding with no disposition is a round like any other. An uncharged verdict is still
 recorded rather than passed over, because the exclusions are one mechanism — an
 attempt already answered about is charged at most once — and a promotion only
 ever follows an approval. Rounds are what runs actually spend, and every run

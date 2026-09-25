@@ -965,7 +965,8 @@ event stream is stored beside it — including what the operator asked the harne
 to do, which is recorded in the conversation's own log beside the runs' logs. A
 re-read that has been taken and not yet delivered is recorded too, with the text
 of it kept in a file beside the record rather than inside it, because a picture
-is close to the whole of what one record may be.
+is close to the whole of what one record may be. So is the text of the picture
+the agent last received, which is what a later refresh is compared against.
 
 ## Talking to the other agents
 
@@ -975,6 +976,7 @@ comes from. Every other configured agent is reachable the same way:
 ```text
 ./bin/yoyo agent list                      # who is configured, and what each is doing
 ./bin/yoyo agent show architect            # one agent in full
+./bin/yoyo agent memory architect          # what it remembers, with each memory's history
 ./bin/yoyo agent chat architect            # talk to it
 ./bin/yoyo agent chat development-manager --message "Decompose ifd.4." --json
 ```
@@ -1230,12 +1232,27 @@ write is one `memory.requested` event and then one `memory.recorded` or
 `memory.failed`, carrying the memory's name and revision number; the text lives
 only in the memory store, under the state root at
 `products/<product>/memory/<agent>.memory.jsonl`, because a copy in the
-conversation record would be a second store. A command that reads that history
-as text is `yoyodyne-ifd.298`, which is not yet built.
+conversation record would be a second store.
+
+**`yoyo agent memory <name>` reads that history as text.** Every memory the
+agent holds is listed with all of its revisions, newest first, each quoted as it
+was written and followed by the invocation that wrote it — the conversation or
+run and its turn, the provider, the model asked for and the one that answered,
+the account, and the configuration — with the records it cites and, for a
+compaction, the revisions it folded together. A retired memory says `(retired)`
+beside its name and the revision that retired it says so, so nothing about its
+state rests on colour or position. On a terminal the listing is dressed as
+Markdown by the same renderer a reply is; under `NO_COLOR`, on a `dumb`
+terminal, or into a pipe it is the same text undressed. `--json` carries the
+store's records themselves. An agent with none gets one sentence saying so, a
+line of the store that would not decode is listed under its own heading beside
+what could be read, and a store that cannot be read at all is named as
+unreadable rather than shown as empty.
 
 **The developer and the reviewer are unchanged.** Neither keeps a memory: their
 turns carry no memory briefing, their contracts do not describe the block, and a
-reply from either that carries one is refused whole, with nothing recorded.
+reply from either that carries one is refused whole, with nothing recorded. Asked
+what either remembers, `yoyo agent memory` says it keeps none.
 
 ### Roles asking each other things
 
@@ -1723,7 +1740,11 @@ stall judges nothing; what it spends is the grant the decision spent when it was
 recorded, so one decision still buys one continuation. It is the one continuation
 the preserved worktree does not have to hold a change for — a first attempt
 stopped early may never have written anything, and an empty worktree is exactly
-what the attempt it is owed starts from.
+what the attempt it is owed starts from. A stall at the review or the checks,
+after the attempt finished, is continued at that step instead: the entry says
+so, the review is asked again on the change the run has with no developer
+invoked, and the branch is kept — so the worktree does have to hold that change,
+as it does for any repair.
 
 **It supersedes the blocker rather than needing you to remember to.** The run
 that stopped blocked its item and recorded the blocker on its own state, which
@@ -1743,7 +1764,12 @@ repaired — and the refusal is one sentence saying the change is approved, what
 stopped it and at which step, and that `yoyo triage resume <run-id>` is what it
 needs once the cause has cleared. That is the same sentence the docket entry
 carries and the channel line ends on, so wherever you read about the stop, you
-are sent to the same command. It has to have recorded a failure that was actually
+are sent to the same command — while the run's branch is there, which the
+resume needs. The refusal asks the repository for it by the look and the rule
+the docket asks, and once the branch is gone it says so, with what was found of
+the worktree, and that a re-run is the way on, which is what the docket entry
+and `yoyo status` then say too. The channel line is said once, as the run
+stops, when the branch is still the run's own. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — or be
 the stall above, which returned none because the harness stopped it; a run whose
 provider kept refusing, or whose replay conflicted, is neither, and has no
@@ -1761,10 +1787,13 @@ preserved-work ref the sweep recorded before it took the directory. And **the
 change has to still be in it**: a worktree the harness would call its own and that
 holds nothing passes the check above and fails this one, and a developer handed
 the reviewer's findings and an empty directory delivers an empty repair or
-reinvents the change from them. That last one is the one condition a stall is
-not held to, because nothing was handed back to be about a change — and the
-resumed run makes the same exception, so the two cannot disagree about which
-continuations may start on an empty worktree.
+reinvents the change from them. That last one is the one condition a stall in
+its developer attempt is not held to, because that attempt may never have
+written anything and an empty worktree is what it starts from — and the resumed
+run makes the same exception, so the two cannot disagree about which
+continuations may start on an empty worktree. A stall at the checks or the
+review is held to it like any repair: its attempt was complete, and the change
+that attempt left is the whole of what the step asked again has to judge.
 
 The run asks that last question again itself, on every resume whose worktree is
 supposed to hold a change already — one picked up inside its repair loop, and one
@@ -1877,7 +1906,16 @@ it too, names the harness as the next mover, and prints the command — in one
 sentence saying the change is approved, what stopped it, and that `yoyo triage
 resume` is what it needs. The channel line for the stop ends on that same
 sentence, and so does the refusal `yoyo triage repair` gives if it is asked for
-such a run instead. The
+such a run instead. The entry says so while the run's branch is there, which
+it asks the repository each time the docket is built, by the look and the rule
+the pull's hold and `yoyo status` ask too. A stop whose branch is gone is one
+the resume would refuse, so its entry names no resume: it says the branch is
+gone, what was found of the worktree, and that a re-run is the way on, and it
+names the development manager as the next mover — or the harness, where a
+decision of hers about the stoppage is recorded and not yet carried out. Where
+the worktree is gone as well and nothing is decided, the pull's hold lets the
+item go, so the entry names the next pull instead: that is what starts the item
+over, and nothing about it waits on her unless she wants it held back. The
 resume then makes the run live again at exactly that step, with the approval
 it already has, and the pipeline promotes — replay onto where the target now
 stands, push, merge request — without invoking anybody: no developer attempt,
@@ -2173,9 +2211,30 @@ conversation. It discards nothing: what has been said stays said, and the new
 picture reaches the product manager on your next message, framed as evidence
 with an account of what moved, so it reconciles what it believed rather than
 having it swapped underneath. The transcript says the refresh happened, the
-conversation's own log records it, and the durable record only says the
-conversation is working from the new picture once a turn has actually carried
-it — a refresh nobody was told about never reads as one that landed.
+conversation's own log records it, and the durable record moves to the new
+picture as it is read while also saying the picture is still owed, and which
+picture the agent last received, until a turn has actually carried it — a
+refresh nobody was told about never reads as one that landed.
+
+**A refresh carries what moved, not the whole picture.** The agent's session
+already holds the picture it was last given, and it keeps everything it is ever
+sent, so a refresh that sent the whole picture again added the whole picture to
+the session again. The development manager's conversation showed where that
+ends: about twenty re-reads of roughly a megabyte each went into one session
+from 2026-09-20, and on 2026-09-23 a turn that failed was asked again with the
+whole picture some twenty-five times, until the session passed the 32 MB the
+provider accepts in one request and no turn could be taken at all. So the text
+of the last delivered picture is kept beside the record, and a refresh is
+delivered as the sections that differ from it: the changed lines of a document
+or listing both pictures carry, with a line or two around them to show where
+they sit, a section that is new in full, and a section that is gone by name.
+Every section not named is as the agent was last given it, and the framing tells
+it so. The turn after a refresh is as large as what moved rather than as large
+as the product. A conversation that has nothing to compare against — one begun
+before the text was kept — gets the whole picture once, and changes after that;
+and a turn rebuilt for a provider holding no session is given the whole picture
+in front of the changes, since changes mean nothing to a provider that never
+held what they changed.
 
 **The harness refreshes on its own past a threshold.** The line above turned
 out not to be enough: on 2026-09-18 the product manager advised adding a
@@ -2226,9 +2285,15 @@ re-read that went down with the process holding it, so one stuck picture became
 of them measured from the same month-old commit. The backstop was corrected the
 next day, which removed that day's reason for the turns to fail; turns fail for
 other reasons, and this is what stops the next burst of them costing a re-read
-apiece. Only the delivery still moves the picture the conversation is working
-from: a refresh nobody was told about is a picture waiting, never one that
-landed.
+apiece. The record's picture moves when the re-read is taken, so the next
+measurement starts from it rather than from a picture a failing turn never
+replaced; the record also says the re-read is still waiting, and a refresh
+nobody was told about is still a picture waiting, never one that landed. A
+picture carried out of a failed turn is measured again before it is delivered,
+because it can be any age by then: on 2026-09-23 one was carried through thirty
+hours of failing turns. One that has itself fallen past the threshold is read
+again, and the agent is still told everything that moved since the picture it
+last received.
 
 Where the re-read cannot be made — the tracker is locked, the repository will
 not answer — the reply is still given, and it says in its own text, ahead of

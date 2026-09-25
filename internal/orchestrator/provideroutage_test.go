@@ -472,12 +472,29 @@ func TestWatchingWaitsOutAnExpiredLoginWithoutTrippingTheBrake(t *testing.T) {
 	probe := &loginProbe{}
 	harness.outages, harness.provider = outages, probe
 	sessions := &recordedSessions{}
+	// Both dispatches have read the login expired before either records the
+	// outage. The wait, and the login two polls into it, begin only once a
+	// refusal has recorded it, so without this a dispatch goroutine the machine
+	// was slow to schedule read the login after it was renewed and completed
+	// instead of being turned away.
+	var (
+		readMu      sync.Mutex
+		expiredRead int
+		bothRead    = make(chan struct{})
+	)
 	// Every dispatch is refused at the availability check while the login is
 	// expired, which is what the pipeline does: it records the outage on the
 	// product and reports the refusal typed. Once the operator logs in the runs
 	// complete.
 	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
 		if !probe.loggedIn() {
+			readMu.Lock()
+			expiredRead++
+			if expiredRead == 2 {
+				close(bothRead)
+			}
+			readMu.Unlock()
+			<-bothRead
 			if _, err := outages.Notice(runstate.ProviderOutageObservation{
 				Cause: domain.ProviderUnauthenticated, Detail: "the claude-code backend is not authenticated", Waiting: "the dispatch of " + id,
 			}); err != nil {

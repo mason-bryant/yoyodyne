@@ -1651,3 +1651,54 @@ func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
 		t.Fatalf("the docket kept the oldest entries rather than the newest:\n%s", bundle.Text)
 	}
 }
+
+// A caller comparing two assembled contexts section by section is told where
+// each section starts by the package that wrote it. Every section the assembly
+// opens is recognized, and a heading inside a document is not one.
+func TestSectionHeadingRecognizesEverySectionTheAssemblyOpens(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	writeProductFile(t, root, "docs/designs/harness.md", "# Harness\n\nHow it is built.\n\n## Goals\n\n- Built well.\n")
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nWhat the product ships.\n\n## Install\n\nRun it.\n")
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		ShippedDocumentation:    []string{"README.md"},
+		RoleDocuments:           []DocumentSet{{Label: "Design", Directory: "docs/designs"}},
+		CommandHelp:             "yoyo help",
+		WorkItems: []beads.WorkItem{
+			{ID: "yoyodyne-ifd.20", Title: "Carry what moved", Status: "open", Priority: 1, IssueType: "task"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	lines := strings.Split(bundle.Text, "\n")
+	recognized := map[string]bool{}
+	for _, line := range lines {
+		if SectionHeading(line) {
+			recognized[line] = true
+		}
+	}
+	for _, section := range []string{
+		"# Product context",
+		"## Recorded product intent",
+		"## Specification: docs/product/runs.md",
+		"## Design: docs/designs/harness.md",
+		"## What the product ships today",
+		"### Command help",
+		"### Shipped documentation: README.md",
+		"## Beads work items",
+	} {
+		if !recognized[section] {
+			t.Fatalf("SectionHeading(%q) = false, want the section recognized; recognized %v", section, recognized)
+		}
+	}
+	for _, inside := range []string{"# Bounded runs", "## Goals", "## Install", "# Harness", "## Note: this is prose"} {
+		if SectionHeading(inside) {
+			t.Fatalf("SectionHeading(%q) = true, want a heading inside a document left alone", inside)
+		}
+	}
+}

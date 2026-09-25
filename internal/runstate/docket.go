@@ -405,7 +405,24 @@ func decodeDocketEntry(data []byte) (triage.Entry, error) {
 	if err := decoded.Validate(); err != nil {
 		return triage.Entry{}, err
 	}
+	if err := validateResumesAt(decoded); err != nil {
+		return triage.Entry{}, err
+	}
 	return decoded, nil
+}
+
+// validateResumesAt holds the step a resumable stall is continued at to the
+// phases StallResumeStep accepts. It is asked here rather than by the entry,
+// because the entry cannot name a phase and this package owns them.
+func validateResumesAt(entry triage.Entry) error {
+	if entry.ResumesAt == "" {
+		return nil
+	}
+	if _, ok := StallResumeStep(entry.ResumesAt); !ok {
+		return fmt.Errorf("invalid triage docket entry: resumes_at: %q is not a step a stall is continued at past its developer attempt; only %q and %q are",
+			entry.ResumesAt, PhaseChecking, PhaseReviewing)
+	}
+	return nil
 }
 
 func encodeDocketEntry(entry triage.Entry) ([]byte, error) {
@@ -443,7 +460,10 @@ func (s *DocketStore) validate(entry triage.Entry) error {
 	if entry.ProductID != s.productID {
 		return fmt.Errorf("docket entry product %q does not match store product %q", entry.ProductID, s.productID)
 	}
-	return entry.Validate()
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	return validateResumesAt(entry)
 }
 
 func (s *DocketStore) validateClosure(closure triage.Closure) error {

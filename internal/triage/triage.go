@@ -383,6 +383,45 @@ func ResumeIntegrationSays(runID, phase, cause, title string) string {
 		runID, phase, cause, title, runID)
 }
 
+// IntegrationResumable reports whether an approved change the environment
+// stopped can still be resumed, from what the repository held of its run. The
+// resume restores the checkout from the branch and promotes the reviewed commit
+// on it, so the branch is the whole of the answer: a worktree without it is
+// nothing a resume can promote, and a branch without a worktree is one it puts
+// the checkout back from. A look that could not be made answers yes, for the
+// reason Found.Holds holds such a run — the other direction abandons a change
+// that may still be there.
+//
+// found is nil on an entry or a listing written before the look existed, which
+// answers from the run's own removal flag and nothing else.
+//
+// It is the one rule the docket's next mover, the hold the pull reads, and `yoyo
+// status` all ask. Before it the docket named the harness and the resume on
+// every integration stop while the hold had stopped doing so for a stop whose
+// branch was gone, and one stoppage with two next movers is a disagreement only
+// the operator can settle.
+func IntegrationResumable(found *Found, branchRemoved bool) bool {
+	if found == nil {
+		return !branchRemoved
+	}
+	return found.Unknown || found.BranchThere
+}
+
+// IntegrationGoneSays is the one sentence every surface says of an approved
+// change the environment stopped and whose branch is gone since: that there is
+// nothing left for a resume to promote, and that a re-run is the way on. what is
+// what was found of the run's change, in the words the surface already says it
+// in. The re-run is said before the reason for it, because a listing folds this
+// to a line and the way on is the part that must survive the fold. It names no
+// verb that would refuse, and it does not say whose move the
+// re-run is: that is the hold's and the docket's to close on, from whatever
+// triage has already decided about the stoppage.
+func IntegrationGoneSays(runID, what string) string {
+	return fmt.Sprintf(
+		"run %s's branch is gone (%s), so a re-run is the way on: its approved change has nothing left for a resume to promote",
+		runID, what)
+}
+
 // Prerequisite is one thing an item's own statement asks of the tree that the
 // tree does not have. It is declared here rather than imported from the package
 // that reads it for the reason Finding is: what reaches a development manager
@@ -945,6 +984,19 @@ type Entry struct {
 	// from the target branch with the session gone and the uncommitted work in
 	// that worktree gone with it.
 	SessionResumable bool `json:"session_resumable,omitempty"`
+	// ResumesAt is the phase a resumable stall is continued at, where that is not
+	// a developer attempt: the checks or the review, which a run reaches only once
+	// its developer attempt is complete. It is empty for a stall mid-attempt,
+	// which is continued in the developer session it stalled in. It is on the
+	// entry because the verb is the same and what it does is not — a reviewer that
+	// stalled is owed the review asked again on the change it has, with no
+	// developer invoked, and an entry that said the session is carried on would
+	// describe an attempt that never happens.
+	// It carries a run phase as a plain string, as IntegrationStop.Phase does,
+	// because this package sits beneath the run state that owns phases; the
+	// docket store holds it to the checks or the review, through
+	// runstate.StallResumeStep, wherever an entry is written or read back.
+	ResumesAt string `json:"resumes_at,omitempty"`
 	// Unready is why dispatch declined to start this item, on the one class that
 	// describes work which never ran. It carries the whole of what a development
 	// manager has to decide about: what the item asks for, what the read found,
@@ -1202,6 +1254,9 @@ func (e Entry) Validate() error {
 		if strings.TrimSpace(e.Artifacts.WorktreePath) == "" || e.Artifacts.WorktreeRemoved {
 			problems = append(problems, errors.New("session_resumable: a preserved worktree is required, because it is what a continued developer carries on in"))
 		}
+	}
+	if e.ResumesAt != "" && !e.SessionResumable {
+		problems = append(problems, errors.New("resumes_at: only a resumable stall is continued at a step, so it requires session_resumable"))
 	}
 	if e.Artifacts.Found != nil {
 		if err := e.Artifacts.Found.Validate(); err != nil {
@@ -1548,9 +1603,20 @@ func (e Entry) renderAttempt() string {
 // It is said under the environmental account rather than over it, because the
 // account is what happened and this is what to do about it. It is silent on
 // every other stoppage, which is nearly all of them.
+//
+// A stall at the checks or the review names that step instead of the session,
+// because that is what the verb does there: the developer attempt is complete,
+// so the step is asked again on the change it left, with no developer invoked.
+// It says the branch is kept for the reason it names the session otherwise — it
+// is the half a re-run discards.
 func (e Entry) renderResumableSession() string {
 	if !e.SessionResumable {
 		return ""
+	}
+	if e.ResumesAt != "" {
+		return fmt.Sprintf(
+			"      Nothing was judged: the harness stopped this run's provider at the %s phase, after its developer attempt was complete, and no failure was ever returned to its developer. `yoyo triage repair %s` continues the run at the %s phase, asking that step again on the change the attempt left, on the branch and in the worktree above, with no developer attempt; the continuation spends no review round and no repair attempt, because a stall judges nothing. A re-run starts over from the target branch instead, discarding the branch the completed attempt produced.\n",
+			e.ResumesAt, e.RunID, e.ResumesAt)
 	}
 	return fmt.Sprintf(
 		"      Nothing was judged: the harness stopped this run's provider and no failure was ever returned to its developer, and the session it stopped in is preserved along with whatever that attempt had written. `yoyo triage repair %s` continues that session at the point it stalled, in the worktree above; it spends no review round and no repair attempt, because a stall judges nothing. A re-run starts over from the target branch instead, with the session and whatever that worktree holds uncommitted both discarded.\n",
@@ -1575,8 +1641,14 @@ func (e Entry) renderIntegrationStop() string {
 		return ""
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      %s. Nothing here is a verdict on the change, and this item's counters stay where the review left them.\n",
-		ResumeIntegrationSays(e.RunID, stopped.Phase, stopped.Cause, nonEmpty(stopped.Title, "the environment rather than the work")))
+	title := nonEmpty(stopped.Title, "the environment rather than the work")
+	if e.integrationResumable() {
+		fmt.Fprintf(&rendered, "      %s. Nothing here is a verdict on the change, and this item's counters stay where the review left them.\n",
+			ResumeIntegrationSays(e.RunID, stopped.Phase, stopped.Cause, title))
+	} else {
+		fmt.Fprintf(&rendered, "      %s. It was stopped at the %s phase by %s (%s), which is no verdict on the change.\n",
+			IntegrationGoneSays(e.RunID, e.remains()), stopped.Phase, stopped.Cause, title)
+	}
 	if detail := strings.TrimSpace(stopped.Detail); detail != "" {
 		rendered.WriteString(indented("What the harness found", detail))
 	}
@@ -1608,18 +1680,74 @@ func (e Entry) renderIntegrationStop() string {
 //
 // An approved change the environment stopped is the one stoppage whose next
 // mover is neither: the harness resumes it, and what it waits on is the cause
-// clearing and somebody asking.
+// clearing and somebody asking — while its branch is there. Once the branch is
+// gone there is nothing for the resume to promote, and the stop is answered as
+// every other stoppage is, with the re-run named as the way on: that is what the
+// hold the pull reads says of the same run, by the same rule.
 func (e Entry) renderNextMover() string {
+	gone := ""
 	if e.IntegrationStop != nil {
-		return "      Next mover: the harness — this change is approved and the environment stopped it, so what it needs is `yoyo triage resume` once the cause has cleared, not a decision.\n"
+		if e.integrationResumable() {
+			return "      Next mover: the harness — this change is approved and the environment stopped it, so what it needs is `yoyo triage resume` once the cause has cleared, not a decision.\n"
+		}
+		gone = "this approved change's branch is gone, so a re-run is the way on; "
 	}
 	if e.CountersProblem != "" {
-		return "      Next mover: unknown — this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
+		return "      Next mover: unknown — " + gone + "this item's triage record could not be read, so whether anything is already decided about it cannot be said here.\n"
 	}
 	if e.Counters.AwaitingCarryOut() {
-		return "      Next mover: the harness — a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+		return "      Next mover: the harness — " + gone + "a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
 	}
-	return "      Next mover: you — nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
+	// Nothing of the change left and nothing decided is the one case the pull's
+	// hold lets go of: it holds a stop only while a worktree survives or a
+	// decision stands. So the item is not waiting on a triage decision — a re-run
+	// verb refuses a run that stands on neither a blocker nor a surviving change —
+	// and what starts it over is the next pull, which is what this says.
+	if gone != "" && !e.changeHeld() {
+		return "      Next mover: the next pull — this approved change's branch and worktree are both gone and nothing about this stoppage is decided, so nothing holds the item and the next pull starts it over from the target branch; nothing here needs your decision unless you want it held back.\n"
+	}
+	// A resumable stall names the verb that continues it, and at which step,
+	// because it is the one undecided stoppage whose cheapest answer is not the
+	// one every other entry's evidence points at: nothing was judged, so the
+	// evidence a reader would weigh a repair against is absent.
+	if e.SessionResumable {
+		step := "the developer attempt it stalled in, in the same session"
+		if e.ResumesAt != "" {
+			step = fmt.Sprintf("the %s phase it stalled in, on the change it has, with no developer attempt", e.ResumesAt)
+		}
+		return fmt.Sprintf("      Next mover: you — nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision; a repair (`yoyo triage repair %s`) continues it at %s, keeping its branch.\n",
+			e.RunID, step)
+	}
+	return "      Next mover: you — " + gone + "nothing the harness has still to carry out is recorded about this stoppage, so what happens to it next is your decision.\n"
+}
+
+// integrationResumable is IntegrationResumable over what this entry last found
+// of its run's change.
+func (e Entry) integrationResumable() bool {
+	return IntegrationResumable(e.Artifacts.Found, e.Artifacts.BranchRemoved)
+}
+
+// changeHeld is Found.Holds over what this entry last found of its run's
+// change: the branch or the worktree there, or a look that could not be made.
+// An entry written before the look existed answers from the run's own removal
+// flags.
+func (e Entry) changeHeld() bool {
+	if found := e.Artifacts.Found; found != nil {
+		return found.Holds()
+	}
+	return (e.Artifacts.Branch != "" && !e.Artifacts.BranchRemoved) ||
+		(e.Artifacts.WorktreePath != "" && !e.Artifacts.WorktreeRemoved)
+}
+
+// remains is what this entry last found of its run's change, as one clause.
+func (e Entry) remains() string {
+	if found := e.Artifacts.Found; found != nil {
+		return found.Describe()
+	}
+	if e.Artifacts.BranchRemoved {
+		return fmt.Sprintf("branch %s removed as the run's record says, not checked", e.Artifacts.Branch)
+	}
+	return fmt.Sprintf("branch %s preserved as the run's record says, not checked", e.Artifacts.Branch)
 }
 
 // renderDecisions says what triage has already decided about this item, in the

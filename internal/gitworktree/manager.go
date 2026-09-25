@@ -474,7 +474,16 @@ type ChangeDiff struct {
 	Patch          string        `json:"patch,omitempty"`
 	UntrackedFiles []string      `json:"untracked_files,omitempty"`
 	OmittedFiles   []OmittedFile `json:"omitted_files,omitempty"`
-	Truncated      bool          `json:"truncated"`
+	// DeletedFiles are the files whose diff is nothing but removed lines and
+	// that are described at the base commit rather than rendered as a removal
+	// diff: every file the change deletes whole, and every file it reduces by
+	// removal alone that did not fit in what the bound had left once every other
+	// file was placed. A removal carries no new content to judge, so what a
+	// reader needs of one is that it happened and what the file was, and none of
+	// them displaces another file from the bound or is omitted by it
+	// (yoyodyne-ifd.429.7).
+	DeletedFiles []DeletedFile `json:"deleted_files,omitempty"`
+	Truncated    bool          `json:"truncated"`
 	// Files is the tree listing of the change: every path it touches against
 	// the base, with the file's size at the tip, whether it is binary, and
 	// whether it is already committed on the branch. It is carried beside the
@@ -859,6 +868,111 @@ func (d ChangeDiff) UnreviewableOmissions() []string {
 		}
 	}
 	return problems
+}
+
+// DeletedFile is one file whose change is removal alone, described by what it
+// was at the base commit rather than rendered as the diff that removes it.
+//
+// It exists because a deletion diff is the file's whole content with a minus in
+// front of each line, and a large enough file outgrew the patch bound, was named
+// as omitted, and — being a document rather than test data — refused the
+// approval. yoyodyne-ifd.117.4's reduction of docs/configuration.md could never
+// pass review that way however sound it was. A removal adds nothing to judge:
+// what a reviewer needs is that the file is gone, what it was — its path, its
+// size and a digest at the base, where the whole of it can still be opened —
+// and the work's own account of why.
+type DeletedFile struct {
+	Path string `json:"path"`
+	// Whole reports that the change deletes the file outright. Otherwise the file
+	// is still there at the tip, reduced by removed lines alone, and the diff that
+	// removes them did not fit in what the patch bound had left once every other
+	// file was placed.
+	Whole bool `json:"whole"`
+	// BaseCommit is the commit the file is described at, which is where it can be
+	// opened whole as `git show <base>:<path>`.
+	BaseCommit string `json:"base_commit"`
+	// BaseBytes and BaseDigest are the file's size at the base commit and the
+	// object its content is there, as `git-blob:<object-id>`, which is what
+	// `git rev-parse <base>:<path>` answers.
+	BaseBytes  int64  `json:"base_bytes"`
+	BaseDigest string `json:"base_digest"`
+	// Bytes and Digest are the file at the tip, for a file reduced rather than
+	// deleted: zero and empty for a whole deletion, which leaves nothing there.
+	// The digest is the one an omission of the same scope would carry.
+	Bytes  int64  `json:"bytes,omitempty"`
+	Digest string `json:"digest,omitempty"`
+	// RemovedLines is how many lines the diff removes, and DiffBytes how big the
+	// diff that was not rendered is.
+	RemovedLines int       `json:"removed_lines,omitempty"`
+	DiffBytes    int64     `json:"diff_bytes,omitempty"`
+	Class        FileClass `json:"class,omitempty"`
+}
+
+// Describe is the one sentence a reader is given about a removal the patch
+// describes rather than renders: what the file was, where it can be opened, and
+// what is left of it.
+func (f DeletedFile) Describe() string {
+	base := fmt.Sprintf("%d bytes at base commit %s (%s), where the whole of it can be opened as `git show %s:%s`",
+		f.BaseBytes, f.BaseCommit, f.BaseDigest, f.BaseCommit, f.Path)
+	class := ""
+	if f.Class != "" && f.Class != FileClassSource {
+		class = " (" + f.Class.Describe() + ")"
+	}
+	if f.Whole {
+		return fmt.Sprintf("%s%s: deleted whole; it was %s, and the change leaves nothing at this path.", f.Path, class, base)
+	}
+	tip := fmt.Sprintf("%d bytes", f.Bytes)
+	if f.Digest != "" {
+		tip += " (" + f.Digest + ")"
+	}
+	return fmt.Sprintf("%s%s: reduced by removal alone — %d line(s) removed and none added, a %d-byte diff not rendered here; it was %s, and it is %s at the tip.",
+		f.Path, class, f.RemovedLines, f.DiffBytes, base, tip)
+}
+
+// removalOnly reads one file's rendered diff and reports whether it is nothing
+// but removed lines: whole when the file is deleted outright, and otherwise the
+// count of lines removed from a file that remains. A diff that adds a line, a
+// type change, a creation, and a binary change to a file that remains are not
+// removals, and neither is a diff with nothing removed at all, such as a mode
+// change. A binary file deleted outright is a whole deletion like any other.
+func removalOnly(patch string) (whole bool, removed int, ok bool) {
+	inHunks, binary, headers := false, false, 0
+	for _, line := range strings.Split(patch, "\n") {
+		// A content line is prefixed by a space, a plus, or a minus, so a header
+		// here is a second block: a type change renders as two.
+		if strings.HasPrefix(line, "diff --git ") {
+			if headers++; headers > 1 {
+				return false, 0, false
+			}
+			continue
+		}
+		if !inHunks {
+			switch {
+			case strings.HasPrefix(line, "deleted file mode "):
+				whole = true
+			case strings.HasPrefix(line, "new file mode "):
+				return false, 0, false
+			case strings.HasPrefix(line, "Binary files "), strings.HasPrefix(line, "GIT binary patch"):
+				binary = true
+			case strings.HasPrefix(line, "@@"):
+				inHunks = true
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "+"):
+			return false, 0, false
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	if whole {
+		return true, removed, true
+	}
+	if binary || removed == 0 {
+		return false, 0, false
+	}
+	return false, removed, true
 }
 
 // ChangedFile is one entry of a change's tree listing: a path the change
@@ -1337,6 +1451,7 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	// The file-count bound and the accounting below are over new files alone: a
 	// tracked file the bound names is not one the untracked half owes.
 	newFiles, omittedNew := 0, 0
+	var reductions []reduction
 	for _, candidate := range candidates {
 		size, regular, err := m.untrackedSize(path, candidate.path)
 		if err != nil {
@@ -1380,6 +1495,30 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 			return nil
 		}
 		if candidate.tracked {
+			// A file deleted whole is described at the base rather than rendered:
+			// its diff is its old content and nothing else. A file reduced by removal
+			// alone is set aside and placed after every other file, so it is spent
+			// only against what they leave and can never push one of them out.
+			if whole, removed, ok := removalOnly(candidate.patch); ok {
+				if !whole {
+					reductions = append(reductions, reduction{candidate: candidate, removed: removed})
+					continue
+				}
+				deleted, described, err := m.describeRemoval(ctx, worktree.BaseCommit, candidate, whole, removed, func() (int64, string, error) {
+					if !regular {
+						return size, "", nil
+					}
+					digest, err := m.fileDigest(path, candidate.path)
+					return size, digest, err
+				})
+				if err != nil {
+					return ChangeDiff{}, err
+				}
+				if described {
+					changes.DeletedFiles = append(changes.DeletedFiles, deleted)
+					continue
+				}
+			}
 			var err error
 			switch {
 			case containsBinaryDiff(candidate.patch):
@@ -1433,6 +1572,29 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 			return ChangeDiff{}, err
 		}
 	}
+	// The reductions set aside above are shown whole from what the bound has
+	// left, and described at the base where it has too little: which lines went
+	// is what a reviewer of a partial reduction reads when there is room, and
+	// where there is not the reduction spends nothing and refuses nothing.
+	for _, set := range reductions {
+		if len(set.candidate.patch) <= remaining {
+			patch.WriteString(set.candidate.patch)
+			remaining -= len(set.candidate.patch)
+			continue
+		}
+		deleted, err := m.describeReduction(ctx, worktree.BaseCommit, set, func() (int64, string, error) {
+			size, regular, err := m.untrackedSize(path, set.candidate.path)
+			if err != nil || !regular {
+				return size, "", err
+			}
+			digest, err := m.fileDigest(path, set.candidate.path)
+			return size, digest, err
+		})
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		changes.DeletedFiles = append(changes.DeletedFiles, deleted)
+	}
 	if accounted := len(changes.UntrackedFiles) + omittedNew; accounted != len(untracked) {
 		return ChangeDiff{}, fmt.Errorf("assembled change accounts for %d of %d new files; a file dropped without being named is not reviewable",
 			accounted, len(untracked))
@@ -1479,7 +1641,7 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	// A truncated change is left alone: a patch the bounds emptied is not a change
 	// that came to nothing, and the reviewer is already told which of those it has.
 	if head != worktree.BaseCommit && changes.Patch == "" && !changes.Truncated &&
-		len(changes.UntrackedFiles) == 0 && len(changes.OmittedFiles) == 0 {
+		len(changes.UntrackedFiles) == 0 && len(changes.OmittedFiles) == 0 && len(changes.DeletedFiles) == 0 {
 		changes.CommitsWithoutEffect = changes.Commits
 	}
 	return changes, nil
@@ -1772,6 +1934,55 @@ type patchCandidate struct {
 	class   FileClass
 	tracked bool
 	patch   string
+}
+
+// describeRemoval records a file whose change is removal alone as it was at the
+// base commit. The base is read from the object store rather than from any
+// checkout, so a worktree's change and a branch's are described the same way
+// and the digest is the one `git rev-parse <base>:<path>` answers. atTip
+// measures what is left of a file reduced rather than deleted, in the scope's
+// own terms, and is not asked about a file deleted whole.
+//
+// It describes nothing where the base holds no blob at the path — a submodule
+// is the case, which has no content to digest — and the caller then renders
+// or omits the diff as it would any other.
+func (m *Manager) describeRemoval(ctx context.Context, baseCommit string, candidate patchCandidate, whole bool, removed int, atTip func() (int64, string, error)) (DeletedFile, bool, error) {
+	baseBytes, baseDigest, err := m.blobEntry(ctx, baseCommit, candidate.path)
+	if err != nil || baseDigest == "" {
+		return DeletedFile{}, false, err
+	}
+	deleted := DeletedFile{
+		Path: candidate.path, Whole: whole, BaseCommit: baseCommit, BaseBytes: baseBytes, BaseDigest: baseDigest,
+		RemovedLines: removed, DiffBytes: int64(len(candidate.patch)), Class: candidate.class,
+	}
+	if !whole {
+		deleted.Bytes, deleted.Digest, err = atTip()
+		if err != nil {
+			return DeletedFile{}, false, err
+		}
+	}
+	return deleted, true, nil
+}
+
+// reduction is a tracked file whose diff is removed lines alone and that the
+// file remains after, held back until every other file has been placed.
+type reduction struct {
+	candidate patchCandidate
+	removed   int
+}
+
+// describeReduction describes a reduction the bound had no room left for. The
+// base always carries a blob for a file whose diff removes lines of text, so a
+// reduction that cannot be described is refused rather than dropped unnamed.
+func (m *Manager) describeReduction(ctx context.Context, baseCommit string, set reduction, atTip func() (int64, string, error)) (DeletedFile, error) {
+	deleted, described, err := m.describeRemoval(ctx, baseCommit, set.candidate, false, set.removed, atTip)
+	if err != nil {
+		return DeletedFile{}, err
+	}
+	if !described {
+		return DeletedFile{}, fmt.Errorf("%s is reduced from base commit %s, which holds no blob for it; a removal that cannot be described is not reviewable", set.candidate.path, baseCommit)
+	}
+	return deleted, nil
 }
 
 // orderForPresentation puts the candidates in the order the patch presents
@@ -3464,8 +3675,16 @@ func scaledTimeout(base time.Duration, load float64, cores int) time.Duration {
 // Reaching a remote is what needs one; a local ref update, a diff, and a
 // checkout do not, and handing every Git command a token so that the push has
 // one would put it in front of every hook the repository runs.
+//
+// A remote that refused that credential is an error here rather than a result
+// for each caller to word, so every remote command refused for a key ends on
+// ErrRemoteAuthRefused — see authRefusal.
 func (m *Manager) runRemote(ctx context.Context, args ...string) (execution.ProcessResult, error) {
-	return m.runBounded(ctx, execution.ForgeEnvironment(nil), m.remoteTimeout(), args...)
+	result, err := m.runBounded(ctx, execution.ForgeEnvironment(nil), m.remoteTimeout(), args...)
+	if err != nil {
+		return result, err
+	}
+	return result, authRefusal(args, result)
 }
 
 func (m *Manager) remoteTimeout() time.Duration {

@@ -156,6 +156,26 @@ there is nothing to measure. A reviewer that cannot tell a file the change deliv
 one it never wrote judges the delivery blind, and an absence it is told about is
 one it can hold the change to.
 
+**A removal is described rather than rendered, and is not held to the bound.**
+A file the change deletes whole is never shown as the diff removing it, which is
+the file's whole content with a minus on each line: it is named above the patch
+as deleted whole, with its size and its `git-blob:` digest at the base commit and
+where the whole of it can be opened there, as `git show <base>:<path>`. A file
+whose diff is nothing but removed lines is placed after every other file, whatever
+its class: it is shown whole where what the bound has left holds it, because which
+lines went is what a reviewer of a partial reduction reads, and described the same
+way as a deletion — with what is left of it at the tip beside it — where it does
+not. Neither ever displaces another file from the bound or is an omission, so
+neither can refuse the approval, directly or by pushing a source or test file out; the reviewer is told to judge each
+removal against the item's stated reason for it, and to raise a finding where the
+item names none. A file rewritten in part — any added line — is unchanged by
+this and still rendered, or omitted, under the bound. `yoyodyne-ifd.117.4` is why:
+it cut `docs/configuration.md` by 378,605 bytes, the removal outgrew the
+262,144-byte bound, and the document named as omitted refused an approval
+however sound the reduction was. The run's `review.started` event names the
+removed files with their base digests, as `deleted_files` and
+`deleted_digests`.
+
 The bound is spent in class order rather than in the order Git lists the files,
 which is alphabetical: source files first, then tests, then test data and
 generated or golden files — anything under a `testdata`, `fixtures`, `golden`,
@@ -363,13 +383,23 @@ under load on the way to it, a forge or a network that went away — each ends
 the run, and each is recorded on the run as an *integration stop*: which
 environmental cause it was, and which step the run was in. The cause is read
 from the error that ended the run rather than from the run's prose afterwards,
-in three ways: a dirty checkout by the sentinel the worktree manager declares,
+in five ways: a dirty checkout by the sentinel the worktree manager declares,
 a replay onto the moved target that the harness killed before it finished
-(`replay-killed`) by the one it declares for that, and a tracker, forge, or network that did not answer by the [recovery
+(`replay-killed`) by the one it declares for that, a target branch the harness
+would not catch up to the remote's before promoting (`diverged-target`) by the
+sentinel the run's stop carries, a remote that refused the harness's SSH key or
+forge login on the push or the fetch around it (`remote-auth-refused`, the
+"Permission denied (publickey)" three approved changes each spent a re-run on)
+by the one the worktree manager declares for that, and a tracker, forge, or network that did not answer by the [recovery
 rule](operations.md#waiting-out-a-network-that-dropped)'s closed reading of the
 error — the same reading that decides what the harness waits out at the
-boundaries that have a window, applied to a step that has none. Nothing about
-the change is in question, so nothing about it is anybody's to decide. `yoyo triage resume
+boundaries that have a window, applied to a step that has none. A refused
+credential is never waited out, even where SSH's closing "Connection closed"
+would read as a dropped network on its own. Nothing about
+the change is in question, so nothing about it is anybody's to decide. A
+diverged target and a refused credential do need a person — to settle the
+branches, or to load the key or renew the login — but what they settle is the
+environment and not the change, so the approval stands through it. `yoyo triage resume
 <run-id>` resumes the run at the promotion it stopped short of — replay onto
 where the target now stands, push, merge request — with its approval standing,
 and it charges the item nothing: no review round, no repair grant, no re-run.
@@ -392,7 +422,11 @@ target, none of them for a verdict.
 
 The resume asks everything that can refuse before it writes anything: the
 run's own record has to say it is one of these, the primary checkout has to
-be one a promotion can be made from again, the preserved worktree has to be
+be one a promotion can be made from again, the cause of a `diverged-target`
+stop has to be gone — the local target fast-forwards onto the remote's again —
+and so does the cause of a `remote-auth-refused` one — both remotes list the
+target branch with the harness's credential — each refused in words that say
+what clears it while it still stands, the preserved worktree has to be
 as the harness left it and still hold the approved change, the item must not
 be closed or waiting on other work, and the harness has to have a free slot —
 a full one waits rather than refusing, and so does a held intake. A refused
@@ -409,7 +443,17 @@ checkout would then promote is not what was reviewed; both refuse to a
 person, and only a deleted branch ends the change for good. The docket entry for such a stop says all of
 this itself: it names the harness as the next mover and the verb that resumes
 it, so the development manager is not asked to choose among decisions that
-each spend something for a stop that was never hers to decide.
+each spend something for a stop that was never hers to decide. That holds while
+the branch is there, and the docket asks the repository for it each time it is
+built for her, by the same look and the same rule the pull's hold and `yoyo
+status` ask. A stop whose branch is gone names no resume, because the resume
+would refuse: the entry says what was found — the branch checked and not there,
+and the worktree whichever way it was found — and that a re-run is the way on,
+and names her as the next mover, or the harness where a decision of hers about
+the stoppage is already recorded and not yet carried out — or, where the
+worktree is gone too and nothing is decided, the next pull, since nothing then
+holds the item. `yoyo status` says the same on the run's integration-stop line,
+and `yoyo triage repair` refuses such a run in the same words.
 
 ## What an item may ask of a run
 
@@ -897,7 +941,14 @@ resuming the promotion with `yoyo triage resume`. The hold names that verb, and
 it names it first, ahead of what was found of the change, so the part that says
 what to do survives a rendering that cuts the reason to a line. The development
 manager's docket says the same thing on the same stoppage, because an item given
-two next movers is a disagreement only you could settle.
+two next movers is a disagreement only you could settle. Both say it only while
+the run's branch is there, which the resume needs and which both ask the
+repository for: once it is gone the stop is held exactly as any other stoppage
+is — held while its worktree survives or a decision about it stands, and let go
+otherwise — and the hold and the docket both say the branch is gone and that a
+re-run is the way on, naming the development manager, the harness where her
+decision is waiting to be carried out, or — where the hold has let the item go —
+the next pull.
 Reporting both as a single class is what made thirty-three already-decided items
 read as a decision backlog for days on 2026-09-07. And an item **the tree is not ready
 for** — one that pinpoints code the repository no longer has, or that says in its

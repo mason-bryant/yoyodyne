@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/fenced"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // Fence opens the one block a reply may ask for a repository read in. It is a
@@ -375,11 +376,7 @@ func shortCommit(commit string) string {
 }
 
 func singleLine(text string) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= maxDescribeBytes {
-		return folded
-	}
-	return strings.TrimSpace(folded[:maxDescribeBytes]) + "..."
+	return oneline.Fold(text, maxDescribeBytes)
 }
 
 const maxDescribeBytes = 160

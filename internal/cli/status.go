@@ -58,6 +58,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 type statusOutput struct {
@@ -712,17 +713,14 @@ func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
 	if watched == nil {
 		return
 	}
-	// The one stop that is not an ending says so. It is the transition's own mark
-	// rather than a reading taken here, for the reason everything else on this
-	// line is: a reader told a session is stopped when it is on its way back
-	// looks for somebody to start it, which is exactly the move the session took
-	// off them.
-	state := string(watched.State)
-	if watched.Restarting {
-		state = "stopped to restart into the build deployed over it"
-	}
+	// The one stop that is not an ending says so, and so does the one idle poll
+	// that never read the queue. Both are the transition's own mark rather than a
+	// reading taken here, for the reason everything else on this line is: a reader
+	// told a session is stopped when it is on its way back looks for somebody to
+	// start it, and one told it is idle through a store outage looks for work to
+	// admit.
 	fmt.Fprintf(writer, "the session choosing work is %s as of %s",
-		state, watched.At.UTC().Format(time.RFC3339))
+		readmodel.SessionSays(*watched), watched.At.UTC().Format(time.RFC3339))
 	if reason := strings.TrimSpace(watched.Reason); reason != "" {
 		fmt.Fprintf(writer, ": %s", reason)
 	}
@@ -1030,10 +1028,20 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	// An approved change the environment stopped is said beside its reason,
 	// because the reason alone reads as a failed piece of work and sends an
 	// operator to the verbs that each spend something for it. This names the one
-	// that spends nothing.
+	// that spends nothing — while the branch is there, by the rule the docket and
+	// the pull's hold ask it by. Once it is gone the resume would refuse, so the
+	// line says what is gone and that a re-run is the way on instead.
 	if run.IntegrationStop != nil {
-		fmt.Fprintf(writer, "  integration stop: %s; `yoyo triage resume %s` resumes it at no cost once the cause has cleared\n",
-			singleLine(run.IntegrationStop.Describe()), run.RunID)
+		if triage.IntegrationResumable(run.Found, run.BranchRemoved) {
+			fmt.Fprintf(writer, "  integration stop: %s; `yoyo triage resume %s` resumes it at no cost once the cause has cleared\n",
+				singleLine(run.IntegrationStop.Describe()), run.RunID)
+		} else {
+			// Each half is folded on its own, so the re-run is never the part a
+			// fold cuts; the branch and worktree lines below say what was found
+			// in full, so the clause here is the listing's short one.
+			fmt.Fprintf(writer, "  integration stop: %s; %s\n",
+				singleLine(run.IntegrationStop.Describe()), singleLine(triage.IntegrationGoneSays(run.RunID, run.DescribeRemains())))
+		}
 		printed = true
 	}
 	if run.FailingCheck != nil {

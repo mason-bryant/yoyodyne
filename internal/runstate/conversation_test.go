@@ -97,6 +97,7 @@ func TestAPictureWaitingForDeliveryOutlivesTheProcessThatReadIt(t *testing.T) {
 		Commit:                    "b2b2b2b2b2b2",
 		ShippedDocumentationBytes: 912345,
 		Replaces:                  conversation.StartedAt,
+		ReplacesCommit:            "a1a1a1a1a1a1",
 		Commits:                   500,
 		TrackerChanges:            40,
 		Trigger:                   "harness",
@@ -1407,4 +1408,45 @@ func loadRefusal(t *testing.T, store *ConversationStore, identity ConversationId
 		t.Fatalf("the conversation records no refused block")
 	}
 	return *recorded.RefusedBlock
+}
+
+// The picture an agent last received is kept beside its record, bounded as the
+// waiting one is, so a later refresh can be delivered as what moved since it.
+func TestThePictureAnAgentLastReceivedIsKeptBesideItsRecord(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "development-manager", Role: domain.RoleDevelopmentManager}
+	store := newConversationStore(t, root)
+	if text, err := store.DeliveredPictureText(identity); err != nil || text != "" {
+		t.Fatalf("DeliveredPictureText() before anything was kept = %q, %v", text, err)
+	}
+	if err := store.SaveDeliveredPictureText(identity, "# Product context\n\nDelivered.\n"); err != nil {
+		t.Fatalf("SaveDeliveredPictureText() error = %v", err)
+	}
+	// Kept apart from the waiting picture: delivering one never loses the other.
+	if err := store.SavePendingPictureText(identity, "# Product context\n\nWaiting.\n"); err != nil {
+		t.Fatalf("SavePendingPictureText() error = %v", err)
+	}
+	text, err := newConversationStore(t, root).DeliveredPictureText(identity)
+	if err != nil || text != "# Product context\n\nDelivered.\n" {
+		t.Fatalf("DeliveredPictureText() = %q, %v", text, err)
+	}
+	// It is not a conversation record, so listing the conversations passes it by.
+	if _, unreadable, err := store.RecordedReadable(); err != nil || len(unreadable) != 0 {
+		t.Fatalf("RecordedReadable() = %v, %v", unreadable, err)
+	}
+	if err := store.ClearDeliveredPictureText(identity); err != nil {
+		t.Fatalf("ClearDeliveredPictureText() error = %v", err)
+	}
+	if err := store.ClearDeliveredPictureText(identity); err != nil {
+		t.Fatalf("second ClearDeliveredPictureText() error = %v", err)
+	}
+	if text, err := store.DeliveredPictureText(identity); err != nil || text != "" {
+		t.Fatalf("DeliveredPictureText() after clearing = %q, %v", text, err)
+	}
+	oversized := strings.Repeat("x", MaxPendingPictureBytes+1)
+	if err := store.SaveDeliveredPictureText(identity, oversized); err == nil || !strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("SaveDeliveredPictureText() oversized error = %v", err)
+	}
 }

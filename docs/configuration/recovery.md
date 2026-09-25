@@ -766,7 +766,11 @@ record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, whose replay conflicted, or that died before anything judged its work,
 never had a failure returned to its developer, so there is no repair loop to
-re-enter; a re-run is what those need. The preserved worktree has
+re-enter; a re-run is what those need. The one exception is a stall — a provider
+the harness stopped on time, settled by the sweep with the developer session
+preserved — which is continued at the step it stalled in: the developer attempt
+in that session, or, for a run stopped at its checks or its review, that step
+asked again on the change it has with no developer invoked. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
@@ -1029,14 +1033,20 @@ change disputing with its reviewer. Charging it walked items toward the cap on
 their own success, and one such item reached triage with every recorded decision
 about it refused.
 
-**Neither is a repair whose whole residue is one minor finding.** The reviewer
-said the work is right and named one small thing beside it, which is the same
-ending with a note attached rather than another turn of the argument. One finding
-and minor is the whole of the rule: two notes is a list and a list is the
-reviewer still arguing, and a blocker or a major among them is work the change
-actually needs. The work still goes back to the developer and the run still
-spends an attempt on it — what changes is the item's bill, not what happens to
-the change. This is the operator's direction of 2026-09-05, after four items in a
+**Neither is a repair whose whole residue is one out-of-scope finding.** The
+reviewer said the work is right and named one thing beside it that is not this
+change's to do — outside what the item asked for, or too trivial to hold the
+change for — which is the same ending with a note attached rather than another
+turn of the argument. The reviewer says so with the finding's `disposition`,
+`out_of_scope`, which is separate from its severity: `minor` says how serious a
+problem is, and the disposition says whether this change has to fix it. The
+budget reads the disposition and never the severity, so one minor finding with
+no disposition is charged like any repair; reading the severity made a real
+defect labelled minor a free round (yoyodyne-ifd.359). One out-of-scope finding
+is the whole of the rule: two notes is a list and a list is the reviewer still
+arguing. The work still goes back to the developer and the run still spends an
+attempt on it — what changes is the item's bill, not what happens to the
+change. This is the operator's direction of 2026-09-05, after four items in a
 week reached their caps on rounds of exactly these two shapes and each took a
 person to unstick.
 
@@ -1139,9 +1149,10 @@ it not holding: eleven approved overrides in five days, every one on an
 undisputed change. So yoyodyne-ifd.391 completed it: **the cap counts only
 rounds that ended in a verdict requiring repair against a change that was
 present.** The counter is charged at verdict time and by nothing else. A round
-spends when the reviewer sent the work back with more than one minor note,
-about a change that was in the worktree to be judged. A round spends nothing
-when it approved the change; when its whole residue was one minor finding; when
+spends when the reviewer sent the work back with anything but a single
+out-of-scope note, about a change that was in the worktree to be judged. A round
+spends nothing when it approved the change; when its whole residue was one
+finding the reviewer disposed of as out of scope; when
 the reviewer escalated the item instead of judging the change, which hands
 nothing back; when it judged an empty diff, whatever it said about it — a
 mis-selected run, a stale worktree, and a developer that delivered nothing all

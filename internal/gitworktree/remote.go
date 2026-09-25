@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/recovery"
 )
 
 // Publication is what publishing a run's branch produced: the commit the
@@ -34,6 +35,110 @@ var ErrRemoteTargetDrift = errors.New("remote integration target moved away from
 // reason not to merge, this is what a merge that already happened turned out to
 // be.
 var ErrRemoteTargetMismatch = errors.New("remote integration target does not carry the promoted commit")
+
+// ErrRemoteAuthRefused reports a remote that turned away the credential the
+// harness presented: an SSH key the server would not take, or a forge login over
+// HTTPS that was refused or missing. It is told apart from every other failed
+// remote command by recovery's closed reading of what Git printed, and it is a
+// sentinel because a caller has to tell it from a rejected push: this one is
+// the machine's credential and not the branch, and nothing about the change or
+// the remote moves it — somebody loading the key or renewing the login does.
+var ErrRemoteAuthRefused = errors.New("the remote refused the credential the harness presented")
+
+// authRefusal is the failure a remote command ends on when what refused it was
+// the credential, and nil for every other result. Every remote command reaches
+// it through runRemote, so a push, a fetch, and a listing refused for a key all
+// say so in one class rather than in whatever words their own failure used.
+func authRefusal(args []string, result execution.ProcessResult) error {
+	if result.Status == execution.ProcessSucceeded || !recovery.AuthenticationRefusedDetail(result.Stderr) {
+		return nil
+	}
+	return fmt.Errorf("%w: git %s exited %d: %s", ErrRemoteAuthRefused, remoteVerb(args), result.ExitCode, strings.TrimSpace(result.Stderr))
+}
+
+// remoteVerb names the Git subcommand a remote command ran, past the options
+// that precede it, so a refusal says which of push, fetch, and ls-remote it was.
+func remoteVerb(args []string) string {
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "-C", "-c":
+			index++
+		default:
+			return args[index]
+		}
+	}
+	return "command"
+}
+
+// VerifyRemoteAccess asks both remotes a run publishes through whether they
+// still accept the harness's credential, by listing the target branch on each.
+// It moves nothing and writes nothing, which is what lets the resumption of a
+// promotion refused for a key ask it before writing anything of its own.
+//
+// A listing is a read, and a forge can accept a key for reading that it will
+// not accept for a push. It is the question that is cheap to ask and the one
+// the field cases failed: an SSH key the server does not take is refused at the
+// connection, before anything is read or written.
+func (m *Manager) VerifyRemoteAccess(ctx context.Context, targetBranch string) error {
+	if err := validateTargetBranch(targetBranch); err != nil {
+		return err
+	}
+	remotes := []string{m.remote}
+	if m.pushRemote != m.remote {
+		remotes = append(remotes, m.pushRemote)
+	}
+	for _, remote := range remotes {
+		if _, _, err := m.remoteCommit(ctx, remote, targetBranch); err != nil {
+			return fmt.Errorf("list %s on %s: %w", targetBranch, remote, err)
+		}
+	}
+	return nil
+}
+
+// TargetDivergence answers the question CatchUpTarget answers before it moves
+// anything — whether the local target branch can be brought onto the remote's
+// by a fast-forward — and moves nothing. Held is empty when it can, or when the
+// remote has no such branch; otherwise it says why not, in the words the
+// catch-up itself would hold on.
+//
+// It is what the resumption of a promotion refused for a diverged target asks
+// before writing anything, so a person who has not settled the branches yet is
+// told so rather than having the run made live into the same refusal. The
+// resumed run's own catch-up is what then moves the branch, under the promotion
+// lease this does not hold. Uncommitted work in the primary checkout that would
+// hold the catch-up is not asked here: the resumption asks the checkout itself.
+func (m *Manager) TargetDivergence(ctx context.Context, targetBranch string) (Catchup, error) {
+	catchup := Catchup{TargetBranch: targetBranch}
+	if err := validateTargetBranch(targetBranch); err != nil {
+		return catchup, err
+	}
+	local, exists, err := m.optionalBranchCommit(ctx, targetBranch)
+	if err != nil {
+		return catchup, err
+	}
+	if !exists {
+		catchup.Held = fmt.Sprintf("%s is not a branch of this repository", targetBranch)
+		return catchup, nil
+	}
+	catchup.LocalCommit = local
+	published, onRemote, err := m.remoteCommit(ctx, m.remote, targetBranch)
+	if err != nil || !onRemote || published == local {
+		return catchup, err
+	}
+	catchup.RemoteCommit = published
+	if err := m.fetchRemoteBranch(ctx, targetBranch, published); err != nil {
+		return catchup, fmt.Errorf("fetch %s from %s: %w", targetBranch, m.remote, err)
+	}
+	carries, err := m.descendsFrom(ctx, local, published)
+	if err != nil {
+		return catchup, err
+	}
+	if !carries {
+		catchup.Held = fmt.Sprintf("%s on %s is at %s, which does not contain the local %s at %s; only a person can say which history is right",
+			targetBranch, m.remote, published, targetBranch, local)
+	}
+	return catchup, nil
+}
 
 // RemoteConfigured reports whether the repository has the remote publishing
 // would open pull requests against. A repository without one is not an error and

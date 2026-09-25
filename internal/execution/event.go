@@ -149,6 +149,12 @@ const (
 	// so only when the age was past a threshold would leave every other reply's
 	// unstated.
 	EventContextMeasured EventType = "context.measured"
+	// A conversation's provider session set aside because the provider refused
+	// it as too long to continue, or could not compact it, and the turn carried
+	// on in a fresh session with its context rebuilt from the record. It names the
+	// session that was set aside and what the provider said, because otherwise
+	// the log would show a conversation whose context quietly shrank.
+	EventSessionReplaced EventType = "session.replaced"
 	// A directive the operator gave is recorded for the whole product rather than
 	// for this conversation, and enforced from there. These say that it passed
 	// through here: what was directed, and what settled it afterwards. Neither is

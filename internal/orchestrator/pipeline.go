@@ -1774,15 +1774,32 @@ func resumesAnExistingChange(state runstate.State) bool {
 // was a re-run, which discards both the session and the uncommitted work.
 //
 // A stall judges nothing, which is why the continuation it authorizes is not a
-// repair round: what the run is owed is the attempt the harness stopped it in,
-// resumed in the same session at the point it stalled.
+// repair round: what the run is owed is the step the harness stopped it in,
+// resumed at the point it stalled.
 //
-// It is deliberately the exact complement of resumesAnExistingChange for a run
-// stopped mid-attempt, because the two have to agree: a continuation this
-// admitted and that gate then refused would spend the item's grant on a run the
-// pipeline stops at its first step. Every other phase is a run that completed a
-// developer attempt, and what the steps past it judge is the change that attempt
-// made.
+// That step is not always the developer's. A run whose provider stalled in its
+// review, or whose process went at its checks, has completed a developer
+// attempt, and what it is owed is that step asked again on the change the
+// attempt left — the review re-read, or the checks re-run — with no developer
+// attempt and nothing handed back. Before this only a stall in the developing
+// phase was admitted, so a first attempt whose reviewer stalled left a re-run as
+// the only decision, and a re-run discards the branch the finished attempt
+// produced.
+//
+// Which of the two a stall is decides what the resumed run is held to, and it
+// is read from the same phase resumesAnExistingChange reads, because the two
+// have to agree: a continuation this admitted and that gate then refused would
+// spend the item's grant on a run the pipeline stops at its first step. A stall
+// mid-attempt is owed that attempt, and its worktree need not hold anything yet;
+// a stall past the attempt is owed that step, and its worktree has to hold the
+// change exactly as a repair's does.
+//
+// Either way it is admitted only where nothing was ever handed back. A run
+// carrying a failure — findings, a failing check, refused paths — is in its
+// repair loop: something did judge the work, so it is a repair's to carry out,
+// and everything this admission makes the entry, the reason, and the
+// continuation say ("nothing was judged", no attempt counted) would be false of
+// it.
 func continuableStall(state runstate.State) bool {
 	if state.Environmental == nil || state.Environmental.Cause != runstate.CauseProcessVanished {
 		return false
@@ -1802,7 +1819,23 @@ func continuableStall(state runstate.State) bool {
 	if state.WorktreeRemoved || state.BranchRemoved {
 		return false
 	}
-	return state.Phase == runstate.PhaseDeveloping && !handedBackRepair(state)
+	if handedBackRepair(state) {
+		return false
+	}
+	switch state.Phase {
+	case runstate.PhaseDeveloping, runstate.PhaseChecking, runstate.PhaseReviewing:
+		return true
+	default:
+		return false
+	}
+}
+
+// stallResumesPastTheAttempt reports a continuable stall whose run had already
+// completed its developer attempt: one stopped at its checks or its review. What
+// it is continued at is that step, on the change it has, rather than at a
+// developer attempt it does not need.
+func stallResumesPastTheAttempt(state runstate.State) bool {
+	return continuableStall(state) && state.Phase != runstate.PhaseDeveloping
 }
 
 // owedARepair reports a stopped run a repair would continue rather than replace:
@@ -2389,6 +2422,13 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 	return cause
 }
 
+// ErrDivergedTarget is what a run stopped because its target branch could not
+// be brought onto the remote's before promoting unwraps to. It is declared here
+// rather than by the worktree manager because the manager holds such a catch-up
+// rather than failing it: the stop is this package's decision, made from what
+// the catch-up found.
+var ErrDivergedTarget = errors.New("the target branch would not catch up to the remote's")
+
 // blockOnDivergedTarget ends a run whose target branch and the remote's have
 // gone different ways, before anything is promoted. It is the remote-side twin
 // of the replay conflict: the local branch cannot be brought onto what the
@@ -2402,12 +2442,17 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 // brake reads it to count the stop as the environment's, and a refusal recorded
 // only when the item could be written would count toward the brake exactly
 // when nothing else had told anybody about it.
+//
+// It is found before anything is promoted, so an approved change stopped here
+// is an integration stop the harness resumes once the branches are settled: the
+// error carries ErrDivergedTarget for recordIntegrationStop to read, and the
+// blocker names the resume beside the recovery.
 func (a *activeRun) blockOnDivergedTarget(catchup gitworktree.Catchup) error {
 	remote := a.pipeline.Config.Execution.Remote
-	diverged := fmt.Errorf("%s cannot be brought onto %s before promoting: %s",
-		catchup.TargetBranch, remote, catchup.Held)
+	diverged := fmt.Errorf("%w: %s cannot be brought onto %s before promoting: %s",
+		ErrDivergedTarget, catchup.TargetBranch, remote, catchup.Held)
 	a.outcome.DivergedTarget = &catchup
-	if err := a.block(renderDivergedTargetNotes(a.outcome, catchup, remote, diverged.Error())); err != nil {
+	if err := a.block(renderDivergedTargetNotes(a.outcome, catchup, remote, diverged.Error(), a.state.ApprovedAwaitingIntegration())); err != nil {
 		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
 	}
 	return diverged
@@ -2866,18 +2911,30 @@ func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 // refusing package declares, and the transport class by the same closed reading
 // the recovery package applies to every boundary it retries — so a failure this
 // classifies is one the harness would have asked again somewhere else, and a
-// failure it does not is one somebody has to look at. A replay that conflicted,
-// a target that diverged, and an approval that could not be shown independent
-// are all the second kind, and none of them reaches here. A replay the harness
-// itself killed is the first kind, named by its own sentinel: it is never a
-// conflict, and it is returned only once the worktree is back on its branch
-// (yoyodyne-ifd.406).
+// failure it does not is one somebody has to look at. A replay that conflicted
+// and an approval that could not be shown independent are the second kind, and
+// neither reaches here. A replay the harness itself killed is the first kind,
+// named by its own sentinel: it is never a conflict, and it is returned only
+// once the worktree is back on its branch (yoyodyne-ifd.406).
+//
+// Two more are the first kind although a person clears them, because what they
+// clear is the branches or the credential and never the change: a target the
+// harness would not catch up before promoting, named by ErrDivergedTarget, and a
+// remote that refused the harness's key or login, named by the sentinel the
+// worktree manager declares for it. Three approved changes stopped on those
+// cost a re-run each before they were here (yoyodyne-ifd.429.9). The credential
+// is asked before the transport class, because an SSH refusal is followed by a
+// closed connection and the refusal is what it was.
 func integrationStopCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
 	switch {
 	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
 		return runstate.CauseDirtyPrimary, true
 	case errors.Is(failure, gitworktree.ErrReplayKilled):
 		return runstate.CauseReplayKilled, true
+	case errors.Is(failure, ErrDivergedTarget):
+		return runstate.CauseDivergedTarget, true
+	case errors.Is(failure, gitworktree.ErrRemoteAuthRefused):
+		return runstate.CauseRemoteAuthRefused, true
 	case recovery.Recoverable(failure):
 		return runstate.CauseTransportFailure, true
 	default:
@@ -5965,13 +6022,15 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // with a decision every recorded path refused; it took an operator override and a
 // fresh work item to move.
 //
-// A repair whose whole residue is one trivial finding is the other, by the
-// operator's own direction of 2026-09-05 after four such escalations in a week.
-// It is the same ending with a note attached: the reviewer said the work is right
-// and named one small thing beside it, and an item that reaches its cap on that
-// is an item the semantics stuck rather than the work. What counts as trivial is
-// the reviewer's vocabulary rather than this pipeline's — review.TrivialResidue
-// is where the line is drawn.
+// A repair whose whole residue is one finding the reviewer disposed of as out of
+// scope is the other, by the operator's own direction of 2026-09-05 after four
+// such escalations in a week. It is the same ending with a note attached: the
+// reviewer said the work is right and named one thing beside it that is not this
+// change's to do, and an item that reaches its cap on that is an item the
+// semantics stuck rather than the work. It is the finding's disposition that
+// decides, never its severity — a single minor finding is charged like any
+// other — and what counts is the reviewer's vocabulary rather than this
+// pipeline's: review.TrivialResidue is where the line is drawn.
 //
 // It unbounds nothing, which is what makes both exclusions safe rather than
 // generous, and what holds that is other budgets rather than the rounds. An
@@ -6314,7 +6373,7 @@ func durableFindings(findings []review.Finding) []runstate.Finding {
 	}
 	durable := make([]runstate.Finding, 0, len(findings))
 	for _, finding := range findings {
-		recorded := runstate.Finding{Severity: string(finding.Severity), Message: finding.Message}
+		recorded := runstate.Finding{Severity: string(finding.Severity), Disposition: string(finding.Disposition), Message: finding.Message}
 		if finding.Location != nil {
 			recorded.File = finding.Location.File
 			recorded.Line = finding.Location.Line
@@ -6424,7 +6483,7 @@ func reportedFindings(findings []runstate.Finding) []review.Finding {
 	}
 	reported := make([]review.Finding, 0, len(findings))
 	for _, finding := range findings {
-		restored := review.Finding{Severity: review.Severity(finding.Severity), Message: finding.Message}
+		restored := review.Finding{Severity: review.Severity(finding.Severity), Disposition: review.Disposition(finding.Disposition), Message: finding.Message}
 		if finding.File != "" {
 			restored.Location = &review.Location{File: finding.File, Line: finding.Line}
 		}
@@ -7093,7 +7152,11 @@ func renderRebaseConflictNotes(outcome Outcome, failure string) string {
 // conflict it says explicitly that nothing was resolved, and it names where each
 // branch stands: what a person settles here is which of the two histories the
 // project's target branch is, and neither commit can be found from the other.
-func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, remote, failure string) string {
+//
+// An approved change stopped here is resumable, and the note says so after the
+// recovery: settling the branches is the person's, and carrying the approved
+// change the rest of the way afterwards is the harness's, at no cost to the item.
+func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, remote, failure string, resumable bool) string {
 	lines := []string{
 		"Yoyodyne stopped this item: its target branch and the one on the remote have diverged, so the change was never promoted.",
 		"Nothing was force-merged, reset, or auto-resolved; which history is right is a decision for a person.",
@@ -7106,6 +7169,9 @@ func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, rem
 		fmt.Sprintf("%s %s: %s", remote, catchup.TargetBranch, nonEmpty(catchup.RemoteCommit, "no such branch")),
 		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and reconciling the two target branches is what this needs before the change can be promoted.",
 		divergedTargetRecovery,
+	}
+	if resumable {
+		lines = append(lines, fmt.Sprintf("Once the branches are settled, `yoyo triage resume %s` resumes the promotion with the approval standing and charges no review round, repair grant, or re-run; asked before then, it refuses and says what is still diverged.", outcome.RunID))
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
@@ -7674,7 +7740,11 @@ func renderReviewNotes(outcome Outcome) []string {
 		if finding.Location != nil {
 			location = fmt.Sprintf(" (%s:%d)", finding.Location.File, finding.Location.Line)
 		}
-		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", finding.Severity, location, finding.Message))
+		label := string(finding.Severity)
+		if finding.Disposition != "" {
+			label += ", " + string(finding.Disposition)
+		}
+		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", label, location, finding.Message))
 	}
 	if outcome.Integration != nil {
 		lines = append(lines,

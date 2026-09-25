@@ -200,15 +200,19 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 		}
 	}
 
-	// Nothing has reached the product manager yet, so the record still says the
-	// conversation is working from the old picture. A refresh nobody was told
-	// about must never read as one that landed.
+	// The re-read advances the conversation's picture as it is taken, so the next
+	// measurement is made from it. Nothing has reached the product manager yet,
+	// and the record says so beside it: the picture is owed, and the one the
+	// product manager last received is named.
 	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !recorded.ContextGatheredAt.Equal(gatheredAt) {
-		t.Fatalf("the record adopted a picture nobody was given: %s", recorded.ContextGatheredAt)
+	if !recorded.ContextGatheredAt.Equal(refreshedAt) || recorded.ContextCommit != "b2b2b2b2" {
+		t.Fatalf("the re-read did not advance the recorded picture: %#v", recorded)
+	}
+	if recorded.PendingPicture == nil || !recorded.PendingPicture.Replaces.Equal(gatheredAt) {
+		t.Fatalf("the recorded re-read = %#v, want it owed and the picture it replaces named", recorded.PendingPicture)
 	}
 
 	if _, err := session.Send(context.Background(), "And now?"); err != nil {
@@ -984,15 +988,15 @@ func TestAReReadSurvivesTheTurnThatFailedToDeliverIt(t *testing.T) {
 		t.Fatalf("the stale picture was re-read %d time(s), want once", ground.gathers)
 	}
 
-	// The failed turn delivered nothing, so the conversation is still recorded as
-	// working from the old picture — and the re-read it completed is on the record
-	// beside it, with the commit it read against.
+	// The re-read advanced the conversation's picture although the turn that was
+	// to deliver it failed, and the record says it is still owed, with the commit
+	// it read against and the picture the role last received.
 	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !recorded.ContextGatheredAt.Equal(gatheredAt) || recorded.ContextCommit != "a1a1a1a1a1a1a1a1" {
-		t.Fatalf("a turn that failed moved the delivered picture: %#v", recorded)
+	if !recorded.ContextGatheredAt.Equal(refreshedAt) || recorded.ContextCommit != "b2b2b2b2b2b2b2b2" {
+		t.Fatalf("the re-read did not advance the recorded picture: %#v", recorded)
 	}
 	if recorded.PendingPicture == nil {
 		t.Fatal("the completed re-read was discarded with the turn that failed")
@@ -1000,16 +1004,20 @@ func TestAReReadSurvivesTheTurnThatFailedToDeliverIt(t *testing.T) {
 	if recorded.PendingPicture.Commit != "b2b2b2b2b2b2b2b2" || !recorded.PendingPicture.GatheredAt.Equal(refreshedAt) {
 		t.Fatalf("the recorded re-read = %#v, want the picture and the commit it read against", recorded.PendingPicture)
 	}
+	if !recorded.PendingPicture.Replaces.Equal(gatheredAt) || recorded.PendingPicture.ReplacesCommit != "a1a1a1a1a1a1a1a1" {
+		t.Fatalf("the recorded re-read = %#v, want the picture the role last received named", recorded.PendingPicture)
+	}
 	if recorded.PendingPicture.Commits != 500 || recorded.PendingPicture.Trigger != "harness" || recorded.PendingPicture.Threshold != DefaultRefreshAfterLandings {
 		t.Fatalf("the recorded re-read = %#v, want what moved and what took it", recorded.PendingPicture)
 	}
 
 	// A second process, which was never here. It reads nothing: the picture it
-	// hands the role is the one the failed turn left.
+	// hands the role is the one the failed turn left, which it measures and finds
+	// still within the threshold.
 	resumedProvider := &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-25", ResolvedModel: "claude-opus-5", FinalText: "From the picture the last turn read."},
 	}}
-	resumedGround := &fakeGround{movement: Movement{Commits: 500, TrackerChanges: 40}}
+	resumedGround := &fakeGround{movement: Movement{Commits: 3}}
 	resumedOptions := testOptions(t, resumedProvider)
 	resumedOptions.Store = newTestStore(t, root)
 	resumedOptions.Ground = resumedGround
@@ -1029,8 +1037,10 @@ func TestAReReadSurvivesTheTurnThatFailedToDeliverIt(t *testing.T) {
 	if resumedGround.gathers != 0 {
 		t.Fatalf("the next process re-read the repository %d time(s), want the completed re-read carried", resumedGround.gathers)
 	}
-	if len(resumedGround.compared) != 0 {
-		t.Fatalf("the next process measured a picture it was about to replace: %#v", resumedGround.compared)
+	// A carried picture can be any age, so it is measured — against itself, not
+	// against the picture it is about to replace.
+	if len(resumedGround.compared) != 1 || resumedGround.compared[0].Commit != "b2b2b2b2b2b2b2b2" {
+		t.Fatalf("the next process measured %#v, want the carried picture once", resumedGround.compared)
 	}
 	prompt := resumedProvider.requests[0].Prompt
 	for _, required := range []string{

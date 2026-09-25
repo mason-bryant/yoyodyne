@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/oneline"
 )
 
 // ProviderOutageSchemaVersion is 1 and has never changed.
@@ -390,14 +391,5 @@ func (s *ProviderOutageStore) path() string {
 
 // boundOutageText folds one piece of prose to a line inside the record's bound.
 func boundOutageText(text string) string {
-	folded := strings.Join(strings.Fields(text), " ")
-	if len(folded) <= MaxProviderOutageTextBytes {
-		return folded
-	}
-	const ellipsis = "..."
-	cut := MaxProviderOutageTextBytes - len(ellipsis)
-	for cut > 0 && folded[cut]&0xC0 == 0x80 {
-		cut--
-	}
-	return strings.TrimSpace(folded[:cut]) + ellipsis
+	return oneline.Fold(text, MaxProviderOutageTextBytes-len(oneline.Marker))
 }

@@ -110,8 +110,12 @@ type conversationReport struct {
 	// that picture added up to on disk, recorded on every pass so the set's
 	// growth toward its ceiling is readable here rather than only from the
 	// test that fails once it is reached.
-	ContextShippedDocumentationBytes int    `json:"context_shipped_documentation_bytes,omitempty"`
-	LastRunWorkItemID                string `json:"last_run_work_item_id,omitempty"`
+	ContextShippedDocumentationBytes int `json:"context_shipped_documentation_bytes,omitempty"`
+	// ContextWaiting says that picture was read and has not reached the agent
+	// yet: the record moves to a re-read as it is taken, and the agent is told
+	// what moved with the next thing said to it.
+	ContextWaiting    bool   `json:"context_waiting,omitempty"`
+	LastRunWorkItemID string `json:"last_run_work_item_id,omitempty"`
 	// Resumable says whether a later process can continue this conversation. A
 	// record whose first turn never completed has no provider session, and
 	// speaking to it starts again rather than carrying on.
@@ -143,6 +147,8 @@ func runAgentCommand(ctx context.Context, args []string, stdin io.Reader, stdout
 		return showAgent(args[1:], stdout, stderr)
 	case "chat":
 		return chatWithAgent(ctx, args[1:], stdin, stdout, stderr)
+	case "memory":
+		return showAgentMemory(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown agent command %q\n\n", args[0])
 		printAgentUsage(stderr)
@@ -380,6 +386,7 @@ func readAgents(parts components) ([]agentReport, error) {
 				ContextGatheredAt:                recorded.ContextGatheredAt,
 				ContextCommit:                    recorded.ContextCommit,
 				ContextShippedDocumentationBytes: recorded.ContextShippedDocumentationBytes,
+				ContextWaiting:                   recorded.PendingPicture != nil,
 				LastRunWorkItemID:                recorded.LastRunWorkItemID,
 				Resumable:                        recorded.ProviderSessionID != "",
 			}
@@ -523,7 +530,11 @@ func renderAgent(report agentReport) string {
 			fmt.Fprintln(&rendered, "  no provider session recorded, so saying something starts it again")
 		}
 		if !conversation.ContextGatheredAt.IsZero() {
-			fmt.Fprintf(&rendered, "  working from a picture taken %s", conversation.ContextGatheredAt.UTC().Format(time.RFC3339))
+			verb := "working from"
+			if conversation.ContextWaiting {
+				verb = "about to be given"
+			}
+			fmt.Fprintf(&rendered, "  %s a picture taken %s", verb, conversation.ContextGatheredAt.UTC().Format(time.RFC3339))
 			if conversation.ContextCommit != "" {
 				fmt.Fprintf(&rendered, " at %s", conversation.ContextCommit)
 			}
@@ -555,10 +566,11 @@ func appendProblem(existing, addition string) string {
 }
 
 func printAgentUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo agent <list|show|chat> [options] [<name>]
+	fmt.Fprintln(writer, `Usage: yoyo agent <list|show|memory|chat> [options] [<name>]
 
   list                       the configured agents, and what each is in the middle of
   show [options] <name>      one agent in full, with the work its role is executing
+  memory [options] <name>    what one agent remembers, each memory with its history
   chat [options] <name>      talk to one agent; <name> is its name or its role
 
 Options:

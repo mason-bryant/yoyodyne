@@ -363,6 +363,16 @@ type WatchTransition struct {
 	DispatchWait *DispatchWait `json:"dispatch_wait,omitempty"`
 }
 
+// RetryingRead reports a poll that chose nothing because the harness's store
+// could not be read, and that is being read again. It is the one condition every
+// surface recognizes a retried read on — the status line, the stall reason, and
+// the channel's kind — so the three cannot disagree about one transition. Only
+// an idle poll is a read being retried: a session that gave up on the store
+// records a stop, and a stop said as a retry is a session nobody starts again.
+func (t WatchTransition) RetryingRead() bool {
+	return t.Unreadable && t.State == WatchIdle
+}
+
 // Note reports an entry that says something about a dispatch this session
 // started rather than about the session itself, which is what every fold of the
 // log into a session's state reads past. A pre-claim wait is written from the

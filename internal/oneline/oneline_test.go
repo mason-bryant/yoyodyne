@@ -39,3 +39,16 @@ func TestFoldAtAZeroBoundIsTheMarkerAlone(t *testing.T) {
 		t.Fatalf("Fold of nothing = %q", got)
 	}
 }
+
+func TestBoundCutsOnARuneBoundaryAndLeavesNoMarker(t *testing.T) {
+	got := Bound("ab "+strings.Repeat("—", 10), 10)
+	if !utf8.ValidString(got) {
+		t.Fatalf("Bound cut mid-rune: %q", got)
+	}
+	if got != "ab ——" {
+		t.Fatalf("Bound = %q, want two whole dashes and no marker", got)
+	}
+	if got := Bound("  fits\n", 10); got != "fits" {
+		t.Fatalf("Bound of a fitting line = %q", got)
+	}
+}

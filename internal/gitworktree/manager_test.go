@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"
@@ -340,6 +341,7 @@ func TestConcurrentCreationSurvivesAGitCommandTheHarnessDidNotCompose(t *testing
 				result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 					Name:    "git",
 					Args:    args,
+					Env:     unfencedEnvironment(),
 					Timeout: loadScaledGitBudget(),
 				}, nil)
 				if err != nil || result.Status != execution.ProcessSucceeded {
@@ -372,12 +374,89 @@ func neighbourGitConfig(t *testing.T, repository, setting string) string {
 	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
 		Name:    "git",
 		Args:    []string{"-C", repository, "config", "--get", setting},
+		Env:     unfencedEnvironment(),
 		Timeout: loadScaledGitBudget(),
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {
 		t.Fatalf("git config --get %s = %v (%v): %s", setting, result.Status, err, result.Stderr)
 	}
 	return strings.TrimSpace(result.Stdout)
+}
+
+// The Git command that loses a run is not one the harness launched directly: it
+// is a grandchild, started by an agent or a check whose working directory is a
+// worktree this package cut, and it reads the repository's config through that
+// worktree's link to the common Git directory. So the child here is a shell the
+// runner starts inside a created worktree, and the Git command is the shell's own.
+func TestAGitCommandAChildRunsInsideAWorktreeSeesMaintenanceOff(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	t.Cleanup(func() { disableBackgroundMaintenance(t, repository) })
+	runGit(t, repository, "config", "gc.auto", "1")
+	runGit(t, repository, "config", "maintenance.auto", "true")
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      "run-" + strings.Repeat("7", 32),
+		WorkItemID: "yoyodyne-fenced-child",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	result, err := execution.OSProcessRunner{}.Run(context.Background(), execution.Command{
+		Name:    "/bin/sh",
+		Args:    []string{"-c", "git rev-parse --git-common-dir && git config --get gc.auto && git config --get maintenance.auto"},
+		Dir:     worktree.Path,
+		Env:     unfencedEnvironment(),
+		Timeout: loadScaledGitBudget(),
+	}, nil)
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		t.Fatalf("the child's git commands = %v (%v): %s", result.Status, err, result.Stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("the child printed %q, want the common directory and two settings", result.Stdout)
+	}
+	// Proof the child's Git was addressing the shared repository through the
+	// worktree rather than some repository of its own.
+	if common := lines[0]; !filepath.IsAbs(common) || !strings.HasPrefix(evalPath(t, common), evalPath(t, filepath.Join(repository, ".git"))) {
+		t.Fatalf("the child's common Git directory is %q, want the repository's own under %s", common, repository)
+	}
+	if lines[1] != "0" {
+		t.Errorf("gc.auto = %q inside the worktree, want the fence's %q rather than the repository's own", lines[1], "0")
+	}
+	if lines[2] != "false" {
+		t.Errorf("maintenance.auto = %q inside the worktree, want the fence's %q rather than the repository's own", lines[2], "false")
+	}
+}
+
+// unfencedEnvironment is this process's environment with no Git configuration in
+// it, for a child whose fence has to come from the runner. A test the harness
+// itself launched already carries the fence, and a child inheriting that would
+// pass these tests with the runner fencing nothing.
+func unfencedEnvironment() []string {
+	var environment []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_CONFIG_COUNT=") && !strings.HasPrefix(entry, "GIT_CONFIG_KEY_") && !strings.HasPrefix(entry, "GIT_CONFIG_VALUE_") {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
+}
+
+// evalPath resolves symlinks, so a temporary directory reached through
+// /var and through /private/var compares as the one directory it is.
+func evalPath(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", path, err)
+	}
+	return resolved
 }
 
 // What two runs race over is the repository's bookkeeping rather than the
@@ -2188,9 +2267,10 @@ func TestManagerUnifiedChangesClipsTrackedWorkWholeFileByFile(t *testing.T) {
 
 // A change that deletes a file the base tracks is the most ordinary change
 // there is, and the path it deletes is one the worktree no longer has. The
-// deletion is in the patch whole, it is listed with Git's own status at zero
-// bytes, and when the bound cannot show it the omission carries the size of
-// the deletion's diff rather than a size read from a path that is gone.
+// deletion is described at the base rather than rendered — its size and blob
+// there, measured from the base rather than from a path that is gone — it is
+// listed with Git's own status at zero bytes, and however small the bound it is
+// never omitted by it (yoyodyne-ifd.429.7).
 func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	t.Parallel()
 
@@ -2220,8 +2300,21 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	if changes.Truncated || len(changes.OmittedFiles) != 0 {
 		t.Fatalf("a deleting change was reported as cut: %#v", changes.OmittedFiles)
 	}
-	if strings.Count(changes.Patch, "\n-an obsolete line") != 50 || !strings.Contains(changes.Patch, "deleted file mode") || !strings.Contains(changes.Patch, "-test\n") {
-		t.Fatalf("patch does not carry both deletions whole:\n%s", changes.Patch)
+	if changes.Patch != "" {
+		t.Fatalf("a deletion is rendered as a removal diff:\n%s", changes.Patch)
+	}
+	obsolete := strings.Repeat("an obsolete line\n", 50)
+	wantDeleted := []DeletedFile{
+		{Path: "README.txt", Whole: true, BaseCommit: worktree.BaseCommit, BaseBytes: 5,
+			BaseDigest: "git-blob:" + gitLine(t, repository, "rev-parse", worktree.BaseCommit+":README.txt"), RemovedLines: 1, Class: FileClassSource},
+		{Path: "obsolete.txt", Whole: true, BaseCommit: worktree.BaseCommit, BaseBytes: int64(len(obsolete)),
+			BaseDigest: "git-blob:" + gitLine(t, repository, "rev-parse", worktree.BaseCommit+":obsolete.txt"), RemovedLines: 50, Class: FileClassSource},
+	}
+	for index := range changes.DeletedFiles {
+		changes.DeletedFiles[index].DiffBytes = 0
+	}
+	if !reflect.DeepEqual(changes.DeletedFiles, wantDeleted) {
+		t.Fatalf("deleted files = %#v, want %#v", changes.DeletedFiles, wantDeleted)
 	}
 	want := []ChangedFile{
 		{Path: "README.txt", Status: "D", Bytes: 0, Class: FileClassSource},
@@ -2235,12 +2328,9 @@ func TestManagerUnifiedChangesHandlesAFileTheChangeDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnifiedChanges() bounded error = %v", err)
 	}
-	if len(bounded.OmittedFiles) != 1 || bounded.OmittedFiles[0].Path != "obsolete.txt" ||
-		bounded.OmittedFiles[0].Bytes != 0 || bounded.OmittedFiles[0].DiffBytes == 0 {
-		t.Fatalf("omitted files = %#v, want the committed deletion named at zero bytes with its diff measured", bounded.OmittedFiles)
-	}
-	if !strings.Contains(bounded.Patch, "-test\n") {
-		t.Fatalf("the deletion that fits the bound is not shown:\n%s", bounded.Patch)
+	if bounded.Truncated || len(bounded.OmittedFiles) != 0 || len(bounded.DeletedFiles) != 2 {
+		t.Fatalf("under a small bound: truncated=%t omitted=%#v deleted=%#v, want both deletions described and nothing omitted",
+			bounded.Truncated, bounded.OmittedFiles, bounded.DeletedFiles)
 	}
 }
 
@@ -2585,6 +2675,7 @@ func removeLinkedWorktrees(t *testing.T, repository string) {
 	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
 		return
 	}
+	clearUnfinishedRegistrations(t, repository)
 	for _, path := range linkedWorktreePaths(t, repository) {
 		// A worktree whose directory a test deleted on purpose cannot be
 		// removed, only pruned. One that is still on disk must come off here —
@@ -2603,6 +2694,34 @@ func removeLinkedWorktrees(t *testing.T, repository string) {
 	}
 	if remaining := linkedWorktreePaths(t, repository); len(remaining) > 0 {
 		t.Errorf("cleanup left worktree registrations behind: %v", remaining)
+	}
+}
+
+// clearUnfinishedRegistrations takes out what a killed `git worktree add` left
+// half-written, before anything lists the registrations. Where the kill landed
+// while commondir was being written, `git worktree list` refuses the whole
+// listing over that entry ("failed to read .git/worktrees/<name>/commondir"),
+// so the tests that kill an add on purpose failed their own cleanup whenever
+// the kill landed there. The harness clears such an entry on its next creation,
+// once the grace for an add still in flight has passed; a test being torn down
+// has nothing in flight, so it clears them at once, through the same reading
+// and the same confined removal the harness uses.
+func clearUnfinishedRegistrations(t *testing.T, repository string) {
+	t.Helper()
+	root, err := repowrite.NewRoot(filepath.Join(repository, ".git"))
+	if err != nil {
+		t.Errorf("cleanup could not resolve the Git directory: %v", err)
+		return
+	}
+	unfinished, err := readUnfinishedRegistrations(root)
+	if err != nil {
+		t.Errorf("cleanup could not read the worktree registrations: %v", err)
+		return
+	}
+	for _, entry := range unfinished {
+		if err := clearRegistration(root, entry.Name); err != nil {
+			t.Errorf("cleanup could not clear the unfinished registration %s: %v", entry.Name, err)
+		}
 	}
 }
 
@@ -3140,4 +3259,35 @@ func (r *refusingCount) Run(ctx context.Context, command execution.Command, obse
 		}, nil
 	}
 	return r.delegate.Run(ctx, command, observer)
+}
+
+// The teardown every test here relies on survives the entry a killed add leaves
+// when the kill lands on commondir. That shape is what failed
+// TestAWorktreeCheckoutKilledByItsBudgetIsSaidInOneSentence's cleanup under
+// `make race`, and only when the timing put the kill there; this puts it there
+// every time.
+func TestTeardownClearsARegistrationAKilledAddLeftHalfWritten(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	entry := filepath.Join(repository, ".git", "worktrees", "killed-add")
+	if err := os.MkdirAll(entry, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for name, content := range map[string]string{"locked": "initializing", "gitdir": filepath.Join(t.TempDir(), "gone", ".git") + "\n", "commondir": ""} {
+		if err := os.WriteFile(filepath.Join(entry, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if _, err := attemptGit(repository, "worktree", "list", "--porcelain"); err == nil {
+		t.Fatal("git lists the registrations over a half-written commondir; the shape under test is not the one that fails")
+	}
+
+	removeLinkedWorktrees(t, repository)
+	if output, err := attemptGit(repository, "worktree", "list", "--porcelain"); err != nil {
+		t.Fatalf("the listing still fails after teardown: %v: %s", err, output)
+	}
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Errorf("the unfinished registration survived teardown: %v", err)
+	}
 }

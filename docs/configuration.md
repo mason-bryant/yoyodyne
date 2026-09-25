@@ -3525,6 +3525,31 @@ are not covered by this and still wait their window out on the settings above;
 what this covers is the turns an agent takes — the conversations, where a
 decision nobody can make stops everything downstream of it.
 
+### A conversation too long for its provider session
+
+A conversation's provider session grows with every turn, and a long-held one can
+outgrow what the provider will take: it refuses the turn as too long (Claude
+Code's `Prompt is too long`, its API's `request_too_large`, Codex's
+`context_length_exceeded`), or the compaction that would have shrunk the session
+fails. That turn is not failed and the conversation is not replaced. The session
+is set aside and the same turn is asked once more in a fresh provider session,
+under the same conversation identifier, with its recent context rebuilt from the
+record exactly as [a crossing](#serving-a-turn-from-a-permitted-alternate-model)
+rebuilds it: the picture the conversation is working from, and the most recent
+80 messages of the exchange. The reconstruction tells the role why it has no
+session, so it knows the earliest of what it said is gone. Nothing else about the
+conversation changes — its agent's memory, its report position, and its picture
+carry over as they are.
+
+The conversation's event log records a `session.replaced` event naming the
+session set aside, the endpoint that refused it — the alternate's, where failover
+had moved the turn — and what the provider said. A reply the provider did not flag
+as a failure is read as this refusal only when the provider's notice is the whole
+of it, so a role that merely mentions one of these errors is never mistaken for
+one. The session is cleared on the record before the fresh attempt, so a fresh attempt that is refused too fails
+that turn only, and the next turn rebuilds again rather than resuming the session
+that was refused. A turn is given one fresh session, not a loop of them.
+
 ### Pinning an agent to a model version
 
 A model selector is a family alias by default — `opus`, `fable` — and an alias
@@ -3794,6 +3819,19 @@ apart by how the rebase stopped, abandoned the same way so the worktree is back
 on its branch before anything is recorded, and reported as an environmental
 integration stop of cause `replay-killed` that
 `yoyo triage resume` picks up, rather than as a conflict for a person to settle.
+
+Two more stops of an approved change before its promotion are integration stops
+of the same kind, although a person clears them: a target branch the harness
+will not catch up to the remote's (`diverged-target`), and a remote that refused
+the harness's SSH key or forge login on a push or a fetch
+(`remote-auth-refused` — "Permission denied (publickey)" is the usual one). What
+the person settles is the branches or the credential, never the change, so
+`yoyo triage resume <run-id>` carries the approved change on afterwards at no
+cost to the item. Asked before then it refuses, writes nothing, and says what
+clears the cause: the diverged-target recovery in docs/operations.md, or
+loading the key (`ssh-add`) or renewing the login (`gh auth login`). A refused
+credential is never retried in the meantime, because asking again earns the
+same answer.
 
 A published run's pull request follows the replay: the run branch is replaced on
 the remote from exactly the commit the harness published there, so the request
@@ -4560,14 +4598,20 @@ change disputing with its reviewer. Charging it walked items toward the cap on
 their own success, and one such item reached triage with every recorded decision
 about it refused.
 
-**Neither is a repair whose whole residue is one minor finding.** The reviewer
-said the work is right and named one small thing beside it, which is the same
-ending with a note attached rather than another turn of the argument. One finding
-and minor is the whole of the rule: two notes is a list and a list is the
-reviewer still arguing, and a blocker or a major among them is work the change
-actually needs. The work still goes back to the developer and the run still
-spends an attempt on it — what changes is the item's bill, not what happens to
-the change. This is the operator's direction of 2026-09-05, after four items in a
+**Neither is a repair whose whole residue is one out-of-scope finding.** The
+reviewer said the work is right and named one thing beside it that is not this
+change's to do — outside what the item asked for, or too trivial to hold the
+change for — which is the same ending with a note attached rather than another
+turn of the argument. The reviewer says so with the finding's `disposition`,
+`out_of_scope`, which is separate from its severity: `minor` says how serious a
+problem is, and the disposition says whether this change has to fix it. The
+budget reads the disposition and never the severity, so one minor finding with
+no disposition is charged like any repair; reading the severity made a real
+defect labelled minor a free round (yoyodyne-ifd.359). One out-of-scope finding
+is the whole of the rule: two notes is a list and a list is the reviewer still
+arguing. The work still goes back to the developer and the run still spends an
+attempt on it — what changes is the item's bill, not what happens to the
+change. This is the operator's direction of 2026-09-05, after four items in a
 week reached their caps on rounds of exactly these two shapes and each took a
 person to unstick.
 
@@ -4670,9 +4714,10 @@ it not holding: eleven approved overrides in five days, every one on an
 undisputed change. So yoyodyne-ifd.391 completed it: **the cap counts only
 rounds that ended in a verdict requiring repair against a change that was
 present.** The counter is charged at verdict time and by nothing else. A round
-spends when the reviewer sent the work back with more than one minor note,
-about a change that was in the worktree to be judged. A round spends nothing
-when it approved the change; when its whole residue was one minor finding; when
+spends when the reviewer sent the work back with anything but a single
+out-of-scope note, about a change that was in the worktree to be judged. A round
+spends nothing when it approved the change; when its whole residue was one
+finding the reviewer disposed of as out of scope; when
 the reviewer escalated the item instead of judging the change, which hands
 nothing back; when it judged an empty diff, whatever it said about it — a
 mis-selected run, a stale worktree, and a developer that delivered nothing all

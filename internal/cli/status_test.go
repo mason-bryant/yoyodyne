@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // countingProcess is who a round these tests seed was charged by. A round is
@@ -704,6 +705,50 @@ func TestStatusNamesAnIntegrationStopAndARunResumingItsIntegration(t *testing.T)
 	}
 	if strings.Contains(rendered, "[running, integrating]") {
 		t.Fatalf("rendered = %q, want the bare phase replaced rather than repeated", rendered)
+	}
+}
+
+// The same stop once the repository says its branch is gone: the resume would
+// refuse, so the line names no verb that refuses and says what is gone and that
+// a re-run is the way on, by the rule the docket and the pull's hold ask.
+func TestStatusSendsNobodyToTheResumeOnceAnIntegrationStopsBranchIsGone(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+	stopped := runstate.RunSummary{
+		RunID:        "run-152784a8226c6b4d3601b858dd546acf",
+		WorkItemID:   "yoyodyne-ifd.309",
+		Status:       runstate.StatusFailed,
+		Outcome:      runstate.OutcomeFailed,
+		Phase:        runstate.PhaseIntegrating,
+		StartedAt:    completedAt,
+		CompletedAt:  &completedAt,
+		Branch:       "yoyodyne/yoyodyne-ifd-309/152784a8",
+		WorktreePath: "/state/worktrees/yoyodyne-ifd-309-152784a8",
+		Found: &triage.Found{
+			At:           completedAt.Add(time.Hour),
+			Branch:       "yoyodyne/yoyodyne-ifd-309/152784a8",
+			WorktreePath: "/state/worktrees/yoyodyne-ifd-309-152784a8",
+		},
+		IntegrationStop: &runstate.IntegrationStop{
+			Cause: runstate.CauseDirtyPrimary, Phase: runstate.PhaseIntegrating, RecordedAt: completedAt,
+		},
+	}
+
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{stopped}}, "", true)
+	rendered := out.String()
+	if strings.Contains(rendered, "triage resume") {
+		t.Fatalf("rendered = %q, want no resume named once the branch is gone", rendered)
+	}
+	for _, want := range []string{
+		"integration stop: approved, then stopped at the integrating phase by the environment",
+		"branch is gone (work gone, checked), so a re-run is the way on",
+		"a re-run is the way on",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
 	}
 }
 

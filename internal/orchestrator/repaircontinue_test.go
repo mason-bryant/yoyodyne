@@ -739,6 +739,34 @@ func TestARepairOfAnApprovedChangeTheEnvironmentStoppedNamesTheResumeVerb(t *tes
 	}
 }
 
+// The same stop once its branch is gone. The resume would refuse, so the
+// repair's refusal names no resume: it says the branch is gone and that a re-run
+// is the way on, which is what the docket entry for the same stoppage says, by
+// the same look and the same rule.
+func TestARepairOfAnApprovedChangeWhoseBranchIsGoneNamesNoResume(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, approvedStoppedState())
+	continuer := harness.continuer()
+	continuer.Remains = &looked{survival: gitworktree.Survival{WorktreePresent: true}}
+	_, err := continuer.Continue(context.Background(), continueRequest())
+	if err == nil {
+		t.Fatal("Continue() error = nil, want an approved change the environment stopped refused a repair")
+	}
+	refusal := err.Error()
+	if strings.Contains(refusal, "triage resume") {
+		t.Fatalf("refusal = %q, want no resume named once the branch is gone", refusal)
+	}
+	for _, want := range []string{"run " + docketedRunID + "'s branch is gone", "checked and NOT there", "a re-run is the way on"} {
+		if !strings.Contains(refusal, want) {
+			t.Fatalf("refusal = %q, want it to say %q", refusal, want)
+		}
+	}
+	if len(harness.started) != 0 || harness.carried(t) != 0 {
+		t.Fatalf("started = %#v, carried = %d, want nothing continued and nothing spent", harness.started, harness.carried(t))
+	}
+}
+
 // An approving verdict can carry minor findings, which read as a failure
 // returned to the developer. The stop is asked about ahead of them, because a
 // repair loop re-entered on them would spend a grant to have an approved change

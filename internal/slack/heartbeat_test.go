@@ -1181,6 +1181,46 @@ func TestTheHeartbeatSaysTheStateTheReadModelDerived(t *testing.T) {
 	}
 }
 
+// A live session whose last poll could not read the store is not one that found
+// nothing to start. The waiting line said it as idle for the whole of a store
+// outage, closing on somebody else's move; it now says the read is failing and
+// being retried, and closes on the harness's.
+func TestTheWaitingLineSaysAFailedReadIsBeingRetriedInTheHarnesssVoice(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(3)
+	outage := harness.now
+	if err := harness.watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         runstate.WatchIdle,
+		At:            outage,
+		Reason:        "the harness could not be read and is being read again for up to 2h0m0s before the session gives up on it: database is locked",
+		Unreadable:    true,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	cursors := harness.poll(t, harness.start())
+	harness.now = outage.Add(2 * time.Hour)
+	said := harness.say(t, cursors, notify.KindLineWaiting)
+
+	if !strings.Contains(said.Body, "could not read the harness's store and is reading it again") {
+		t.Fatalf("body %q does not say the store read is failing and being retried", said.Body)
+	}
+	if strings.Contains(said.Body, "found nothing") || strings.Contains(said.Body, "product manager") {
+		t.Fatalf("body %q says the session found nothing, or names the product manager", said.Body)
+	}
+	if strings.Contains(said.Body, "the operator's") {
+		t.Fatalf("body %q hands the operator a move over a read the harness is retrying", said.Body)
+	}
+	if !strings.Contains(said.Body, readmodel.ReasonStoreUnreadable.Whose()) {
+		t.Fatalf("body %q does not close on the harness's move, %q", said.Body, readmodel.ReasonStoreUnreadable.Whose())
+	}
+}
+
 // The mark a standing state is remembered by still renders exactly as this
 // package stamped it before the derivation moved to the read model.
 //

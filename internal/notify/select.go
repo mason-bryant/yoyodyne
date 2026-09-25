@@ -443,6 +443,12 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if transition.Restarting {
 		kind = KindWatchRedeploying
 	}
+	// An idle poll that could not read the store is said as a read being retried
+	// rather than as a session that found nothing, for the same reason: the idle
+	// line is for a queue that was read, and this one was not.
+	if transition.RetryingRead() {
+		kind = KindWatchReadRetrying
+	}
 	// A braked session is the one an operator has to do something about: the
 	// line has stopped and it stays stopped until intake is released.
 	severity := report.SeverityNote

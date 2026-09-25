@@ -352,6 +352,25 @@ func TestAPreBoundEraRecordLoadsWithItsOverlongFieldsCut(t *testing.T) {
 	}
 }
 
+// A finding's disposition is closed like its severity, because it is what the
+// review budget reads: the one word the schema knows is stored, no disposition at
+// all is the ordinary finding, and anything else is refused rather than read.
+func TestAFindingStoresOnlyADispositionTheSchemaKnows(t *testing.T) {
+	t.Parallel()
+
+	for _, disposition := range []string{"", DispositionOutOfScope} {
+		finding := Finding{Severity: SeverityMinor, Disposition: disposition, Message: "the comment above is stale"}
+		if err := finding.Validate(); err != nil {
+			t.Fatalf("Finding{Disposition: %q}.Validate() error = %v", disposition, err)
+		}
+	}
+	finding := Finding{Severity: SeverityMinor, Disposition: "trivial", Message: "the comment above is stale"}
+	want := `disposition "trivial" must be "out_of_scope" or omitted`
+	if err := finding.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Finding{Disposition: \"trivial\"}.Validate() error = %v, want %q", err, want)
+	}
+}
+
 // A save the durable schema refuses names the field it refused, and leaves the
 // record exactly as it was. Both halves are the contract a caller acts on: the
 // process now holds a state nothing durable carries, so it is the only thing that
