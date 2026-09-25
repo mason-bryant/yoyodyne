@@ -751,6 +751,7 @@ func newForkManager(t *testing.T, repository, worktreeRoot, remote, pushRemote s
 		WorktreeRoot:   worktreeRoot,
 		Remote:         remote,
 		PushRemote:     pushRemote,
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

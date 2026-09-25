@@ -234,18 +234,33 @@ and a suite in shell run from Go: the wait is for the process, and the working
 directory is one the suite owns rather than a package directory beside a census
 that will list what the shell leaves there.
 
-One bound the rule does not reach is the harness's own on a local Git command,
-which the tests that exercise Git — the orchestrator's, the worktree manager's
-— run under as production does. It was a flat thirty seconds, and at a load
-average near forty that flat figure killed `git worktree list` and `git status`
-in the middle of a suite that was passing, a class of failure no test could
-convert to a signal because the bound is the code's. So the figure is the idle
-machine's, and the manager scales it by how far the one-minute load average
-exceeds the cores, per command and capped at ten times
-(`internal/gitworktree`); a test that runs Git beside the manager gives it the
-same scaled budget rather than a constant of its own. What a suite is held to
-in total is still [`execution.check_timeout`](configuration.md#how-long-a-check-may-take),
-which is the operator's to set against the concurrency they run.
+One bound the rule does not reach is the harness's own on a local Git command.
+It was a flat thirty seconds, and at a load average near forty that flat figure
+killed `git worktree list` and `git status` in the middle of a suite that was
+passing. So the figure is the idle machine's, and the manager scales it by how
+far the one-minute load average exceeds the cores, per command and capped at
+ten times (`internal/gitworktree`). That is the right figure for a run, and the
+tests whose subject is it hold it there.
+
+It is not a figure the other tests can run under. Under a full suite the scaled
+budget has been reached by Git that was working — a replay killed at 66.8
+seconds with the load at 36, a one-file checkout at 31 seconds near 50, and a
+replay at the idle thirty seconds with the load at 11 to 13 on sixteen cores,
+which the scaling reads as an idle machine — each in a test that passed in
+seconds on its own. A lagging one-minute average does not measure what a
+suite's own race binaries do to a Git command started beside them. And those
+tests are about what Git and the harness do, never about how long Git took, so
+the tests in `internal/gitworktree` and `internal/orchestrator` give every
+manager they build a budget of their own, `testGitBudget`, ten minutes, and so
+does a Git command a test runs beside one. The tracker's conformance checks in
+`internal/beads` bound each `bd` command the same way, in
+`conformanceTimeout`. Ten minutes catches a command that has hung, which any
+figure does, and it sits under `TEST_TIMEOUT`, so the hang is reported as the
+command it was. [The record](diagnoses/yoyodyne-ifd-429-11-git-budget-under-load.md)
+has the reports this came from and the suite passing with the load between 34
+and 54 on sixteen cores. What a suite is held to in total is still
+[`execution.check_timeout`](configuration.md#how-long-a-check-may-take), which
+is the operator's to set against the concurrency they run.
 
 The rule was checked the way the failures arrived: `make race` ten times in a
 row with a second `make race` looping beside it on the same tree, at one-minute

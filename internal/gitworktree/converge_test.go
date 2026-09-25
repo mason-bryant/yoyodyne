@@ -377,6 +377,7 @@ func TestCatchUpTargetReportsARefusedFastForward(t *testing.T) {
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
 		Remote:         "origin",
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -399,6 +400,7 @@ func newConvergeManager(t *testing.T, repository string) *Manager {
 		WorktreeRoot:          filepath.Join(t.TempDir(), "worktrees"),
 		Remote:                "origin",
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+		Timeout:               testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

@@ -50,6 +50,7 @@ func newBranchReviewer(t *testing.T, repository string, provider *fakeBackend) (
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

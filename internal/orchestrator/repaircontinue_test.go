@@ -1067,6 +1067,7 @@ func TestARepairContinuationLandsTheChangeTheStoppedRunAlreadyHad(t *testing.T) 
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   worktreeRoot,
+		Timeout:        testGitBudget,
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)

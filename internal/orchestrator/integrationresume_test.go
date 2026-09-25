@@ -809,7 +809,7 @@ func TestAnApprovedChangeStoppedByTheEnvironmentResumesToAMergedPullRequestCharg
 	} else if rendered := entry.Render(); !strings.Contains(rendered, "Next mover: the harness") || !strings.Contains(rendered, "yoyo triage resume "+outcome.RunID) {
 		t.Fatalf("docket entry does not say the harness resumes it:\n%s", rendered)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -944,7 +944,7 @@ func TestAResumedPromotionWhoseReplayConflictsStopsForAPersonChargingNothing(t *
 	}
 	runPipelineGit(t, repository, "add", "feature.txt")
 	runPipelineGit(t, repository, "commit", "-m", "a conflicting edit on main")
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -1041,7 +1041,7 @@ func TestAnApprovedChangeWhoseWorktreeWasRetiredIsRestoredAndResumed(t *testing.
 	}
 	// The sweep takes the checkout, and records on the run that it did, exactly
 	// as the convergence sweep does: the directory is gone and the branch stands.
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
@@ -1248,7 +1248,7 @@ func TestAnIntegrationStoppedRunIsNeitherReleasedNorRestartedAndItsResumePromote
 	if _, err := docketerOverStore(docket, store, pipeline.Config).RecordStoppedRun(stopped); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
-	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+	worktrees, err := gitworktree.New(gitworktree.Options{Runner: execution.OSProcessRunner{}, RepositoryRoot: repository, WorktreeRoot: worktreeRoot, Timeout: testGitBudget})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
 	}
