@@ -175,12 +175,17 @@ const (
 	// stop is a different role from one that may do both.
 	ProposalRaise Capability = "proposal.raise"
 	ConcernRaise  Capability = "concern.raise"
-	// ExchangeAsk is being on the inter-role ask channel, at both ends of it. It
-	// carries no authority to decide anything — an ask is judgment-only and an
-	// answer resolves nothing — and it is still a capability, because whether the
-	// harness will carry a question to or from a role at all is a boundary the
-	// harness enforces.
-	ExchangeAsk Capability = "exchange.ask"
+	// ExchangeAsk is putting a question to another role on the inter-role ask
+	// channel, and ExchangeAnswer is being put one. Neither carries authority to
+	// decide anything — an ask is judgment-only and an answer resolves nothing —
+	// and both are still capabilities, because whether the harness will carry a
+	// question from a role, or to it, is a boundary the harness enforces.
+	//
+	// They are two names because the program manager's design names the two ends
+	// separately; every role on the channel today holds both, which is the same
+	// membership the one name used to state.
+	ExchangeAsk    Capability = "exchange.ask"
+	ExchangeAnswer Capability = "exchange.answer"
 	// ReviewVerdict is returning the judgement a change is gated on. It is the
 	// reviewer's alone, and naming it is what lets "no role but the reviewer decides
 	// a verdict" and "the development manager may not override one" be the same
@@ -199,6 +204,67 @@ const (
 	// stays runtime-internal; what an operator reads is the audit history, which the
 	// design settles as a CLI surface and never an agent one.
 	AgentContextMutate Capability = "agent-context.mutate"
+)
+
+// The names below are the program manager's, from the capability set its design
+// fixes (docs/designs/program-manager.md, "The fixed capability set"). They are
+// declared here because that design names them in the registry's vocabulary and
+// the vocabulary did not have them: a primitive a design names and nothing
+// declares is one no bundle can hold.
+//
+// The first ten are the tracker writes a program manager may ask for, one per
+// tracker action. They are deliberately not the product manager's and the
+// development manager's names — BacklogAdmit, BacklogOrder, WorkItemMutate,
+// WorkDecompose — because those are unscoped, and every one of these is scoped to
+// the instance's lane: a program manager holding BacklogAdmit would hold close
+// and retire with it, and one holding WorkItemMutate would hold every item in the
+// tracker. A name per action is what lets the lane be a scope over each of them
+// rather than a second list beside them.
+const (
+	// WorkItemAdmit is admitting new work to the backlog inside the lane, through
+	// the same approvals.work_items door the product manager's admissions pass.
+	// It is not BacklogAdmit: nothing under it closes or retires anything.
+	WorkItemAdmit Capability = "work-item.admit"
+	// WorkItemAttribute is recording which goal a lane item serves.
+	WorkItemAttribute Capability = "work-item.attribute"
+	// WorkItemUpdate is rewriting a lane item's own fields and appending to its
+	// notes.
+	WorkItemUpdate Capability = "work-item.update"
+	// WorkItemLabel is putting a label on a lane item or taking one off — never
+	// the lane's own label, which only the product manager or the development
+	// manager takes off.
+	WorkItemLabel Capability = "work-item.label"
+	// WorkItemReprioritize, WorkItemPark, and WorkItemUnpark are what is pulled
+	// next, inside the lane, at any priority.
+	WorkItemReprioritize Capability = "work-item.reprioritize"
+	WorkItemPark         Capability = "work-item.park"
+	WorkItemUnpark       Capability = "work-item.unpark"
+	// WorkItemLink and WorkItemUnlink are making a lane item wait on another item,
+	// and undoing it. The reverse — an outside item made to wait on the lane — is
+	// a mutation of the outside item and is not covered.
+	WorkItemLink   Capability = "work-item.link"
+	WorkItemUnlink Capability = "work-item.unlink"
+	// WorkItemReparent is moving a lane item under a lane parent.
+	WorkItemReparent Capability = "work-item.reparent"
+	// ReadModelRead is being handed the one read model's queries: the standing,
+	// the throughput windows, the capacity state, the docket and the reports pile
+	// as counts, and the other instances' status lines. It reads the record the
+	// operator's surfaces are projected from, and never a surface itself.
+	ReadModelRead Capability = "readmodel.read"
+	// LaneReportWrite is rewriting the instance's own lane report and nothing
+	// else: the brief, pulled summary of where its lane stands.
+	LaneReportWrite Capability = "lane-report.write"
+	// ReportFile is filing a report at one of the three severities, the pass's
+	// digest to the product manager included.
+	ReportFile Capability = "report.file"
+	// AmendmentPropose is proposing a change to a governed document its role does
+	// not own, to be decided under the owner's authority.
+	AmendmentPropose Capability = "amendment.propose"
+	// ServiceRequestRestart is writing one durable request that the supervisor
+	// restart a part the services section declares. It restarts nothing itself:
+	// the supervisor's pass is the only executor, and the harness the only
+	// invoker.
+	ServiceRequestRestart Capability = "service.request-restart"
 )
 
 // declared is every capability this repository has, in the order above. It is
@@ -230,8 +296,24 @@ var declared = []Capability{
 	ProposalRaise,
 	ConcernRaise,
 	ExchangeAsk,
+	ExchangeAnswer,
 	ReviewVerdict,
 	AgentContextMutate,
+	WorkItemAdmit,
+	WorkItemAttribute,
+	WorkItemUpdate,
+	WorkItemLabel,
+	WorkItemReprioritize,
+	WorkItemPark,
+	WorkItemUnpark,
+	WorkItemLink,
+	WorkItemUnlink,
+	WorkItemReparent,
+	ReadModelRead,
+	LaneReportWrite,
+	ReportFile,
+	AmendmentPropose,
+	ServiceRequestRestart,
 }
 
 // All is every capability this repository declares, in declaration order.

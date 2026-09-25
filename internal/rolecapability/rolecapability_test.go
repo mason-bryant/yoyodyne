@@ -93,10 +93,12 @@ func TestWhatTellsTheRolesApart(t *testing.T) {
 		{"the architectural invariants", capability.InvariantMutate, []domain.AgentRole{domain.RoleArchitect}},
 		{"the verdict a change is gated on", capability.ReviewVerdict, []domain.AgentRole{domain.RoleReviewer}},
 		{"writing inside a run's worktree", capability.WorktreeMutate, []domain.AgentRole{domain.RoleDeveloper}},
-		{"the inter-role ask channel", capability.ExchangeAsk, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager}},
+		{"asking on the inter-role channel", capability.ExchangeAsk, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager}},
+		{"being asked on the inter-role channel", capability.ExchangeAnswer, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager}},
 		{"reading the tracker", capability.WorkItemRead, domain.Roles()},
 		{"having repository content read on its behalf", capability.RepositoryRead, domain.Roles()},
-		{"naming a repository path to be read or listed", capability.RepositoryList, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager}},
+		{"naming a repository path to be read or listed", capability.RepositoryList, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager}},
+		{"keeping a memory of its own", capability.AgentContextMutate, []domain.AgentRole{domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager}},
 	}
 	for _, expected := range cases {
 		if holding := registry.RolesHolding(expected.who); !slices.Equal(holding, expected.holds) {
@@ -142,6 +144,63 @@ func TestTheRunGatedBundlesAreUnchangedByTheRepositoryRead(t *testing.T) {
 		if registry.Holds(role, capability.RepositoryList) {
 			t.Errorf("the %s holds %q, which the ruling reserved to the management roles", role.Title(), capability.RepositoryList)
 		}
+	}
+}
+
+// TestTheProgramManagerHoldsItsDesignsSetExactly pins the sixth bundle to the
+// capability set docs/designs/program-manager.md fixes, written out here rather
+// than read from the registry, so a capability arriving in it or leaving it is a
+// change somebody has to make to this list too. It holds no close, no retire, no
+// triage, no artifact or invariant write, no worktree, no checks, no verdict, and
+// no share of the promotion.
+func TestTheProgramManagerHoldsItsDesignsSetExactly(t *testing.T) {
+	t.Parallel()
+
+	registry := mustBuild(t)
+	bundle, described := registry.Bundle(domain.RoleProgramManager)
+	if !described {
+		t.Fatal("no bundle describes the program manager")
+	}
+	want := []capability.Capability{
+		"work-item.read", "repository.read", "repository.list", "readmodel.read",
+		"work-item.admit", "work-item.attribute", "work-item.update", "work-item.label",
+		"work-item.reprioritize", "work-item.park", "work-item.unpark", "work-item.link",
+		"work-item.unlink", "work-item.reparent",
+		"agent-context.mutate", "lane-report.write",
+		"report.file", "amendment.propose", "exchange.ask", "exchange.answer",
+		"service.request-restart",
+	}
+	got := slices.Clone(bundle.Holds)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the program manager holds %v, want exactly %v", got, want)
+	}
+}
+
+// TestWhatIsHeldAheadOfItsSiteIsNamed holds the list of capabilities no site
+// asks for yet to the registry: each is declared, held by a role, and carries
+// the reason, so a bundle holding authority nothing reads says so where it can
+// be read.
+func TestWhatIsHeldAheadOfItsSiteIsNamed(t *testing.T) {
+	t.Parallel()
+
+	registry := mustBuild(t)
+	seen := map[capability.Capability]bool{}
+	for _, ahead := range declaredAhead() {
+		if !ahead.Capability.Known() {
+			t.Errorf("%q is recorded as held ahead of its site and nothing declares it", ahead.Capability)
+		}
+		if len(registry.RolesHolding(ahead.Capability)) == 0 {
+			t.Errorf("%q is recorded as held ahead of its site and no role holds it", ahead.Capability)
+		}
+		if strings.TrimSpace(ahead.Reason) == "" {
+			t.Errorf("%q is held ahead of its site with no reason", ahead.Capability)
+		}
+		if seen[ahead.Capability] {
+			t.Errorf("%q is recorded twice", ahead.Capability)
+		}
+		seen[ahead.Capability] = true
 	}
 }
 

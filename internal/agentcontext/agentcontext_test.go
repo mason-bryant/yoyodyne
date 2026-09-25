@@ -23,6 +23,9 @@ func TestOnlyTheRolesThatHoldTheirOwnContextMayWriteIt(t *testing.T) {
 		domain.RoleDevelopmentManager: true,
 		domain.RoleDeveloper:          false,
 		domain.RoleReviewer:           false,
+		// The program manager keeps a store of its own per instance, as its design
+		// says: its judgement accumulates across passes, and no reviewer gates it.
+		domain.RoleProgramManager: true,
 	}
 	if len(remembering) != len(domain.Roles()) {
 		t.Fatalf("this table names %d roles and the harness has %d", len(remembering), len(domain.Roles()))

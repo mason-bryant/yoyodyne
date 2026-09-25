@@ -249,9 +249,16 @@ in the harness's own registry, there is no `capabilities` key to put in a
 configuration, and a file that writes one is refused like any other key that
 does not exist. The set of role names is fixed for the same reason —
 every posture the harness derives, a reviewer's absent tools included, is derived
-from the name — so `role` must be one of `product-manager`, `architect`,
-`development-manager`, `developer`, or `reviewer`, and anything else is
+from the name — so `role` must be one of the six: `product-manager`,
+`architect`, `development-manager`, `developer`, `reviewer`, or
+`program-manager`, and anything else is
 [refused when the configuration loads](#what-fails-closed).
+The sixth is the [program manager](designs/program-manager.md): an agent filling
+it watches one outcome across the others and may change work only inside its own
+lane. `yoyo init` configures none — an instance is a lane and a remit somebody
+chose — and until the lane is built every tracker write the role holds is
+refused, so an instance configured today reads, asks, remembers, and reports,
+and nothing more.
 [Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 
@@ -4065,7 +4072,7 @@ in [the conversation guide](conversation.md#bringing-it-an-idea-rather-than-a-wo
 ## Reading the repository from a conversation
 
 The three management roles — product manager, architect, development manager —
-can have the harness read one repository path for them, or list the names one
+and the program manager can have the harness read one repository path for them, or list the names one
 directory holds, at a recorded commit. It is here beside research because it is
 the same shape and the opposite arrangement: research is evidence from outside
 the repository, run by a command you wrote and off until you name one; this is
@@ -4076,7 +4083,8 @@ says how a role uses it; what belongs here is why the file you are reading has
 no say in it.
 
 **Which roles hold it is the role-capability registry's, in Go.** The three
-management bundles hold `repository.read` and `repository.list`; the developer's
+management bundles and the program manager's hold `repository.read` and
+`repository.list`; the developer's
 and the reviewer's hold `repository.read` alone, which is the harness reading a
 change or a context bundle on their behalf rather than a path they name. `yoyo
 config show` reports both under each agent's `capabilities`, and — as with every
@@ -4991,7 +4999,7 @@ These are all errors, reported before any work is claimed:
   product manager's context as a description of what the product ships;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
-- a `role` that is not one of the harness's five, which is how a typo in an
+- a `role` that is not one of the harness's six, which is how a typo in an
   agents block is caught: the message names what was written and lists what could
   have been meant. Adding a role is a change to the harness, not to this file;
 - a role and backend combination the backend does not support, such as an
@@ -5392,7 +5400,7 @@ slack:
 ```
 
 Keys are roles — `product-manager`, `architect`, `development-manager`,
-`developer`, `reviewer` — or `harness` for what no persona did. A value is
+`developer`, `reviewer`, `program-manager` — or `harness` for what no persona did. A value is
 either an **emoji shortcode**, including a custom emoji this workspace added
 itself, or the **https URL of an image** Slack fetches. Both shapes need the
 `chat:write.customize` scope the [app manifest](slack/manifest.yaml) already

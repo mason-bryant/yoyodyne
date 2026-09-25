@@ -57,8 +57,12 @@ var expresses = map[string]expression{
 			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
 			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
 			capability.ProposalRaise, capability.ConcernRaise, capability.ResearchCommission,
-			capability.EvaluationRecord, capability.ExchangeAsk, capability.RepositoryRead,
-			capability.RepositoryList, capability.AgentContextMutate,
+			capability.EvaluationRecord, capability.ExchangeAsk, capability.ExchangeAnswer,
+			capability.RepositoryRead, capability.RepositoryList, capability.AgentContextMutate,
+			capability.WorkItemAdmit, capability.WorkItemAttribute, capability.WorkItemUpdate,
+			capability.WorkItemLabel, capability.WorkItemReprioritize, capability.WorkItemPark,
+			capability.WorkItemUnpark, capability.WorkItemLink, capability.WorkItemUnlink,
+			capability.WorkItemReparent,
 		},
 		gap: "the contract and the title are still written beside the derivation: what a role is sent and what it is called are not authority anybody holds",
 	},
@@ -85,6 +89,10 @@ var expresses = map[string]expression{
 			capability.WorkItemRead, capability.WorkItemMutate, capability.BacklogAdmit,
 			capability.BacklogOrder, capability.WorkDecompose, capability.WorkTriage,
 			capability.WorkItemRepairState,
+			capability.WorkItemAdmit, capability.WorkItemAttribute, capability.WorkItemUpdate,
+			capability.WorkItemLabel, capability.WorkItemReprioritize, capability.WorkItemPark,
+			capability.WorkItemUnpark, capability.WorkItemLink, capability.WorkItemUnlink,
+			capability.WorkItemReparent,
 		},
 		gap: "which of the sixteen named tracker actions falls under which capability is a mapping this registry does not carry; the conversion wrote it down where the actions are, as `trackerCapabilities`",
 	},
@@ -128,6 +136,23 @@ var expresses = map[string]expression{
 	"conversation.contract.reviewer": {
 		question: "the reviewer holds the verdict and nothing that changes a document, a queue, or a worktree",
 		asks:     []capability.Capability{capability.ReviewVerdict, capability.WorktreeMutate, capability.BacklogAdmit},
+	},
+	"conversation.contract.program-manager": {
+		question: "the program manager holds lane-scoped tracker writes and nothing that admits outside a lane, triages, or changes a document; the contract's refusals are that absence",
+		asks: []capability.Capability{
+			capability.WorkItemAdmit, capability.BacklogAdmit, capability.WorkTriage,
+			capability.ArtifactProductMutate, capability.ArtifactDesignMutate, capability.InvariantMutate,
+		},
+	},
+	"conversation.lane-scope": {
+		question: "does the role hold this action only through its lane-scoped name?",
+		asks: []capability.Capability{
+			capability.WorkItemAdmit, capability.WorkItemAttribute, capability.WorkItemUpdate,
+			capability.WorkItemLabel, capability.WorkItemReprioritize, capability.WorkItemPark,
+			capability.WorkItemUnpark, capability.WorkItemLink, capability.WorkItemUnlink,
+			capability.WorkItemReparent,
+		},
+		gap: "which items are inside a lane is state — the label an instance is configured with, read off the item as the action runs — and no bundle carries state; until the lane is built nothing is inside one",
 	},
 	"conversation.admission-gate": {
 		question: "does the role hold admission?",
@@ -188,8 +213,8 @@ var expresses = map[string]expression{
 		gap:      "the same scope gap the crossing above has, made of the durable record rather than of the act",
 	},
 	"exchange.ask-authority": {
-		question: "are both ends of the ask on the channel?",
-		asks:     []capability.Capability{capability.ExchangeAsk},
+		question: "does the asking role hold the asking end, and the asked role the answering end?",
+		asks:     []capability.Capability{capability.ExchangeAsk, capability.ExchangeAnswer},
 		gap:      "that a role may not put an ask to itself is a separation rule between two parties rather than a capability either of them holds",
 	},
 	"exchange.asking-contract": {
@@ -198,8 +223,8 @@ var expresses = map[string]expression{
 		gap:      "an ask being judgment-only and decisionless is what an ask is; the capability says only that the harness will carry one",
 	},
 	"exchange.answering-contract": {
-		question: "is the answering role on the channel?",
-		asks:     []capability.Capability{capability.ExchangeAsk},
+		question: "does the answering role hold the answering end?",
+		asks:     []capability.Capability{capability.ExchangeAnswer},
 		gap:      "that an answer carries no authority is a property of the answer rather than of the answering role's bundle",
 	},
 	"exchange.answer-carries-no-authority": {
@@ -455,6 +480,14 @@ var expresses = map[string]expression{
 	"rolecapability.role-bundles": {
 		question: "this is the answer rather than a question: each role's bundle, in Go",
 		gap:      "what a bundle cannot yet carry is scope — the artifact kind, the evidence class, the tool permission set the design settles",
+	},
+	"rolecapability.declared-ahead": {
+		question: "which capabilities does a bundle hold that no site asks for yet?",
+		asks: []capability.Capability{
+			capability.ReadModelRead, capability.LaneReportWrite, capability.ServiceRequestRestart,
+			capability.ReportFile, capability.AmendmentPropose,
+		},
+		gap: "holding one of these grants nothing until the site that asks for it is built; each entry names what builds it",
 	},
 	"rolecapability.bundles-closed": {
 		question: "none: these refusals are about the table rather than about any role's authority",

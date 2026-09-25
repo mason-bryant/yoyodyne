@@ -42,7 +42,7 @@ func TestAgentRoleValid(t *testing.T) {
 func TestRolesIsTheWholeSet(t *testing.T) {
 	t.Parallel()
 
-	want := []AgentRole{RoleProductManager, RoleArchitect, RoleDevelopmentManager, RoleDeveloper, RoleReviewer}
+	want := []AgentRole{RoleProductManager, RoleArchitect, RoleDevelopmentManager, RoleDeveloper, RoleReviewer, RoleProgramManager}
 	got := Roles()
 	if len(got) != len(want) {
 		t.Fatalf("Roles() = %v, want %v", got, want)
@@ -116,14 +116,24 @@ func TestAnUnrecognizedExecutorIsStillNotADeveloperRun(t *testing.T) {
 	}
 }
 
-// The marker's whole point is that somebody can be named from it. Every role has
-// one, because which roles carry work in conversation is a product judgement
-// rather than a fact about the harness, and a role left out of the vocabulary is
-// work that would have to be marked with a lie or not marked at all.
+// The marker's whole point is that somebody can be named from it. Every role
+// that holds one conversation has one, because which roles carry work in
+// conversation is a product judgement rather than a fact about the harness, and a
+// role left out of the vocabulary is work that would have to be marked with a lie
+// or not marked at all. The program manager is the exception: its role is filled
+// by instances, one per lane, so the marker would name no conversation in
+// particular, and its design hands it work through its passes rather than
+// through items marked for it.
 func TestEveryRoleHasAnExecutorThatNamesIt(t *testing.T) {
 	t.Parallel()
 
+	if ConversationWith(RoleProgramManager).Valid() {
+		t.Fatal("an item may be marked for the program manager's conversation, which names no instance")
+	}
 	for _, role := range Roles() {
+		if role == RoleProgramManager {
+			continue
+		}
 		executor := ConversationWith(role)
 		if !executor.Valid() {
 			t.Fatalf("ConversationWith(%q) = %q, which is not an executor an item may be marked with", role, executor)
@@ -159,22 +169,24 @@ func TestAMarkerThatNamesNoRoleSaysSo(t *testing.T) {
 	}
 }
 
-// Every role is a name prose gives a role, and so is the program manager, which
-// is written about before any agent can be configured to it — and is still not
-// a role Valid() accepts.
-func TestRoleNamesAreTheRolesAndTheProgramManager(t *testing.T) {
+// Every role is a name prose gives a role, the program manager among them now
+// that its authority is written in code — and a name that is no role is not one.
+func TestRoleNamesAreTheRoles(t *testing.T) {
 	t.Parallel()
 
 	names := RoleNames()
+	if len(names) != len(Roles()) {
+		t.Errorf("RoleNames() = %v, want one name per role in %v", names, Roles())
+	}
 	for _, role := range Roles() {
 		if !slices.Contains(names, string(role)) {
 			t.Errorf("RoleNames() = %v, missing %q", names, role)
 		}
 	}
-	if !slices.Contains(names, "program-manager") {
-		t.Errorf("RoleNames() = %v, missing the program manager", names)
+	if !RoleProgramManager.Valid() {
+		t.Error("Valid() = false for the program manager, the sixth role")
 	}
-	if AgentRole("program-manager").Valid() {
-		t.Error("Valid() = true for the program manager, whose authority is not yet written in code")
+	if got := RoleProgramManager.Title(); got != "program manager" {
+		t.Errorf("Title() = %q, want the name written in full", got)
 	}
 }

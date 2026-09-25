@@ -207,6 +207,13 @@ func TestConversationAuthorityDecidesWhatItDecidedBeforeTheConversion(t *testing
 	t.Parallel()
 
 	for _, role := range domain.Roles() {
+		// The program manager arrived after the conversion, with its authority
+		// derived from its bundle from the start, so there is no pre-conversion
+		// answer to hold it to. What its row refuses is held in
+		// internal/chat/programmanager_test.go instead.
+		if role == domain.RoleProgramManager {
+			continue
+		}
 		want, recorded := conversationAuthorities[role]
 		if !recorded {
 			t.Errorf("the %s has no recorded pre-conversion conversation authority", role.Title())
@@ -282,6 +289,7 @@ func TestRepositoryReadsAreTheManagementRoles(t *testing.T) {
 		domain.RoleDevelopmentManager: true,
 		domain.RoleDeveloper:          false,
 		domain.RoleReviewer:           false,
+		domain.RoleProgramManager:     true,
 	} {
 		authority, known := chat.AuthorityFor(role)
 		if !known {

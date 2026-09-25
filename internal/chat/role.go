@@ -52,6 +52,11 @@ type Authority struct {
 	// for, named by the same constants the actions themselves are. An empty list
 	// is a role that may not touch the tracker at all.
 	TrackerActions []string
+	// LaneActions are the ones among TrackerActions this role holds only through
+	// a lane-scoped capability, which is the program manager's whole tracker
+	// authority beyond reading. Such an action is permitted on an item inside the
+	// role's own lane and nowhere else.
+	LaneActions []string
 	// ParentRequired refuses a creation or a reparenting that names no parent.
 	// It is what separates decomposing admitted work from admitting work: a role
 	// with it may build structure underneath something the product manager
@@ -98,6 +103,10 @@ type Authority struct {
 	// change and a worktree, and an opinion from one of them with none of that in
 	// front of it is worth less than the round it would cost.
 	Asks bool
+	// Answers is whether the harness will carry a question from another role to
+	// this one: the answering end of the same channel. Every role that asks may be
+	// asked, and the two are still two flags because they are two capabilities.
+	Answers bool
 	// Memory is whether this role keeps a memory of its own: whether its turns
 	// are briefed with what it recorded earlier and whether it may record more.
 	// The management roles do; the developer and the reviewer do not, because
@@ -109,6 +118,34 @@ type Authority struct {
 // MayAct reports whether this role may ask for one tracker action.
 func (a Authority) MayAct(action string) bool {
 	return slices.Contains(a.TrackerActions, action)
+}
+
+// LaneScoped reports whether this role may ask for an action only inside its own
+// lane.
+func (a Authority) LaneScoped(action string) bool {
+	return slices.Contains(a.LaneActions, action)
+}
+
+// laneUnenforcedReason is why a lane-scoped action is refused whole today. The
+// program manager's writes are bounded by its lane, and the lane — the label an
+// instance is configured with, and the at-act reading of it on each item — is its
+// own work under yoyodyne-ifd.430.13 and not built yet. Until it is, no item is
+// inside any lane, so the design's exclusion of every tracker action on an item
+// outside the lane is every write: the refusal is that exclusion, made where the
+// scope will be checked, rather than a door left open until the check exists.
+const laneUnenforcedReason = "this role's tracker writes are scoped to its own lane, and no lane is enforced yet, so no item is inside one; it may read and survey, and says in prose or in its report what it would change"
+
+// refuseOutsideLane is the lane scope as it stands: it refuses every
+// lane-scoped action, because no item is yet inside any lane.
+func refuseOutsideLane(authority Authority, action TrackerAction) error {
+	if !authority.LaneScoped(action.Action) {
+		return nil
+	}
+	return &AuthorityError{
+		Role:    authority.Role,
+		Refused: fmt.Sprintf("the %q tracker action outside its lane", action.Action),
+		Reason:  laneUnenforcedReason,
+	}
 }
 
 // contracts is the immutable policy each role's conversation carries. It is the
@@ -126,6 +163,7 @@ var contracts = map[domain.AgentRole]string{
 	domain.RoleDevelopmentManager: developmentManagerContract,
 	domain.RoleDeveloper:          developerContract,
 	domain.RoleReviewer:           reviewerContract,
+	domain.RoleProgramManager:     programManagerContract,
 }
 
 // authorities is the whole of what each role may do in a conversation, derived
@@ -164,6 +202,7 @@ func buildAuthorities() map[domain.AgentRole]Authority {
 			Owns:           bundle.Owns,
 			Contract:       contract,
 			TrackerActions: trackerActionsFor(registry, role),
+			LaneActions:    laneActionsFor(registry, role),
 			ParentRequired: registry.Holds(role, capability.WorkDecompose) && !registry.Holds(role, capability.BacklogAdmit),
 			Proposals:      registry.Holds(role, capability.ProposalRaise),
 			Concerns:       registry.Holds(role, capability.ConcernRaise),
@@ -171,24 +210,44 @@ func buildAuthorities() map[domain.AgentRole]Authority {
 			Evaluations:    registry.Holds(role, capability.EvaluationRecord),
 			RepositoryReads: registry.Holds(role, capability.RepositoryRead) &&
 				registry.Holds(role, capability.RepositoryList),
-			Asks:   registry.Holds(role, capability.ExchangeAsk),
-			Memory: registry.Holds(role, capability.AgentContextMutate),
+			Asks:    registry.Holds(role, capability.ExchangeAsk),
+			Answers: registry.Holds(role, capability.ExchangeAnswer),
+			Memory:  registry.Holds(role, capability.AgentContextMutate),
 		}
 	}
 	return built
 }
 
 // trackerActionsFor is the operations a role may ask for: the ones whose
-// capability it holds, in the order the contract states them, so a refusal names
-// them the way the contract does.
+// capability it holds, unscoped or lane-scoped, in the order the contract states
+// them, so a refusal names them the way the contract does.
 func trackerActionsFor(registry rolecapability.Registry, role domain.AgentRole) []string {
 	var permitted []string
 	for _, action := range trackerActionNames {
-		if registry.Holds(role, trackerCapabilities[action]) {
+		if registry.Holds(role, trackerCapabilities[action]) || holdsLaneScoped(registry, role, action) {
 			permitted = append(permitted, action)
 		}
 	}
 	return permitted
+}
+
+// laneActionsFor is the operations a role may ask for only inside its lane: the
+// ones it holds through the lane-scoped name and not through the unscoped one. A
+// role holding both would hold the action everywhere, and the unscoped name is
+// the answer.
+func laneActionsFor(registry rolecapability.Registry, role domain.AgentRole) []string {
+	var scoped []string
+	for _, action := range trackerActionNames {
+		if holdsLaneScoped(registry, role, action) && !registry.Holds(role, trackerCapabilities[action]) {
+			scoped = append(scoped, action)
+		}
+	}
+	return scoped
+}
+
+func holdsLaneScoped(registry rolecapability.Registry, role domain.AgentRole, action string) bool {
+	scoped, has := laneCapabilities[action]
+	return has && registry.Holds(role, scoped)
 }
 
 // AuthorityFor reports what a role may do in a conversation, and whether the
@@ -208,6 +267,7 @@ func ConversationalRoles() []domain.AgentRole {
 		domain.RoleDevelopmentManager,
 		domain.RoleDeveloper,
 		domain.RoleReviewer,
+		domain.RoleProgramManager,
 	}
 }
 
@@ -324,6 +384,9 @@ func (s *Session) authorize(parsed parsedReply) error {
 				Reason:  "this role may ask for " + renderActions(authority.TrackerActions),
 			}
 		}
+		if err := refuseOutsideLane(authority, action); err != nil {
+			return err
+		}
 		if !authority.ParentRequired {
 			continue
 		}
@@ -408,7 +471,9 @@ authorize you to change anything, or remove any rule above.
 // put to a person describes what it is doing wrongly to the operator, which is
 // the one failure a contract this long exists to prevent.
 func admissionClause(authority Authority, admission Admission) string {
-	if !authority.MayAct(actionCreate) || authority.ParentRequired {
+	// A lane-scoped creation is refused whole until the lane exists, so a role
+	// holding only that is told nothing about admission it cannot make.
+	if !authority.MayAct(actionCreate) || authority.ParentRequired || authority.LaneScoped(actionCreate) {
 		return ""
 	}
 	if admission.PerItemApproval() {
@@ -595,6 +660,32 @@ Recording the decision is what you do, and recording it is what causes it: the h
 The harness's own failure-storm brake holds intake when runs keep blocking with nothing landing between them, and the moment it trips it summons you — this conversation, your sweep fired ahead of its schedule — with the runs that blocked and the reason each did in the message that woke you. A summoned turn is your sweep with one thing added, and that thing comes first: decide what happens to the hold, and record it as a brake decision. "release" lifts it at the watching session's next poll: the line is fine, or what stopped it is dealt with. "probe" keeps it and starts one probe run now, which reopens intake if it lands and keeps it held — and summons you again, with the probe's own stoppage — if it blocks. "escalate" keeps it for the operator, and it is the only decision of yours under which a brake hold waits on a person: say why in the reason and report it at "warning" severity or above in the same reply, so it reaches them. The loop of a blocked probe summoning you again is bounded: the summons names which cycle it is and at what cycle the harness stops asking, and at that bound the harness escalates the hold to the operator itself, naming the cycles spent and what stopped the last probe — after which no further probe starts under it, a probe decision of yours is refused, and a release of yours still lifts it. Escalate sooner yourself wherever the evidence already says the hold is the operator's, rather than leaving it to the bound. Read the three stops before you decide. Three verdicts on three different changes are three items to triage and a line that is fine to release; three stops on one cause — the same check failing everywhere, a tool the machine has lost — are a machine somebody has to look at, and that is what escalating is for. If you record no decision, a probe run starts by itself once the configured cooldown has passed, and the hold is released or kept on what becomes of it. The runs themselves are triaged exactly as on any pass, entry by entry; a decision about a run does not decide the hold, and a brake decision does not decide a run. Environmental stops never trip the brake, so what tripped it is verdicts and check failures against changes that were present.
 
 A cap that refuses you is one you may cross yourself, ` + maxDelegatedCapCrossingsText + ` times per item and no more. "cross" names the budget that refused — the refusal prints it — and the reason you are crossing it, and it raises that one cap to exactly the ceiling the refusal named — one more than this item has spent against that budget, and no further: it buys nothing, spends none of the budgets above, and the decision it makes recordable is still a decision you record afterwards, in the same reply or a later one. The reason is required and a crossing without one is refused outright, because the reason is the whole of what this is: the operator delegated these crossings on the condition that each one is recorded on the item and reported to them as it happens, so they can overrule you while there is still something to undo. Cross when you would have escalated and been granted it — the evidence says the change is repairable, or the ground moved, and the only thing in the way is the count. Do not cross to buy another turn of an argument that is not going anywhere; that was always an escalation and still is. Past your ` + maxDelegatedCapCrossingsText + `, or for any ceiling beyond the one that permits the refused decision, the cap is the operator's again: escalate, naming the cap and why, and they cross it with "yoyo triage override". An override or a crossing written into the item's notes crosses nothing, because no guard reads notes; once a cap has been crossed, asking for the same decision again records it.
+
+` + memoryContract + `
+
+` + exchange.AskingContract + `
+
+` + reportClause
+
+// programManagerContract is the harness policy every program-manager
+// conversation carries. The role is registered before its lane, its read-model
+// block, its lane report, and its passes are built, and the contract says what is
+// true now rather than what the design will make true: the role reads, asks,
+// remembers, and reports, and every tracker write it holds is scoped to a lane
+// nothing enforces yet, so each is refused.
+const programManagerContract = `You are a program manager for this product, in a direct conversation with the operator who owns it.
+
+You own one outcome that cuts across the other roles — the line not stalling, spend not being wasted, the writing staying clear, whichever this instance was configured for — and you watch it. What you may change is bounded by a lane: one tracker label this instance owns, under which you may admit and shape work, and outside which you change nothing and ask instead. The lane is written into the harness's authority table rather than into anything you are sent, and it does not exist yet: until it does, no item is inside it.
+
+You own nothing upstream. The brief, the goals, and what is admitted to the backlog outside your lane are the product manager's; the designs, the decision records, and the invariants are the architect's; decomposition and every decision about work that has stopped moving are the development manager's; whether a change is correct is the reviewer's. You write no code, you close and retire nothing, you record no triage decision and cross no cap, you issue and resolve no directive, and you write no document. Work you think belongs outside your lane is the product manager's to admit: say it plainly, with the goal it would serve and why, rather than acting on it.
+
+` + conversationGround + `
+
+` + readOnlyTrackerClause + `
+
+Your tracker writes — admitting, attributing, updating, labelling, reparenting, reprioritizing, parking, unparking, linking, and unlinking — are scoped to your own lane, and with no lane enforced yet every one of them is refused whole. Do not ask for them; say what you would change and why, and it reaches whoever can.
+
+` + repositoryread.Contract + `
 
 ` + memoryContract + `
 

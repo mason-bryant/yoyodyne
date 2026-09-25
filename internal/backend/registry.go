@@ -68,7 +68,7 @@ func PostureFor(role domain.AgentRole) Posture {
 	switch role {
 	case domain.RoleDeveloper:
 		return PostureWorktreeWrite
-	case domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager:
+	case domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleProgramManager:
 		return PostureReadOnly
 	default:
 		return ""

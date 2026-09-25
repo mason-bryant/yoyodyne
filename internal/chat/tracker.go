@@ -273,6 +273,29 @@ var trackerCapabilities = map[string]capability.Capability{
 	actionBrake: capability.WorkTriage,
 }
 
+// laneCapabilities is the lane-scoped name of each operation that has one: the
+// program manager's tracker writes, one capability per action, from the set its
+// design fixes. A role holding one of these may ask for the action only on an
+// item inside its own lane, which is a scope over the action rather than a
+// narrower role holding the unscoped name — the unscoped names above carry close,
+// retire, and every item in the tracker with them.
+//
+// Reading and surveying have no entry: the program manager reads the tracker as
+// every role does, through WorkItemRead, and a read mutates nothing a lane could
+// bound.
+var laneCapabilities = map[string]capability.Capability{
+	actionCreate:       capability.WorkItemAdmit,
+	actionAttribute:    capability.WorkItemAttribute,
+	actionUpdate:       capability.WorkItemUpdate,
+	actionLabel:        capability.WorkItemLabel,
+	actionReparent:     capability.WorkItemReparent,
+	actionReprioritize: capability.WorkItemReprioritize,
+	actionPark:         capability.WorkItemPark,
+	actionUnpark:       capability.WorkItemUnpark,
+	actionLink:         capability.WorkItemLink,
+	actionUnlink:       capability.WorkItemUnlink,
+}
+
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{

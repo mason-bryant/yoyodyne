@@ -298,7 +298,7 @@ func refuseUnauthorizedAsk(authority Authority, parsed parsedReply) error {
 			Reason:  "an exchange is between two roles; ask the role that holds the judgement you are missing",
 		}
 	}
-	if asked, known := AuthorityFor(parsed.Ask.Role); !known || !asked.Asks {
+	if asked, known := AuthorityFor(parsed.Ask.Role); !known || !asked.Answers {
 		return &AuthorityError{
 			Role:    authority.Role,
 			Refused: fmt.Sprintf("a question put to the %s", RoleTitle(parsed.Ask.Role)),
@@ -348,7 +348,7 @@ exchange you have no authority to widen.
 func askableRoleNames() []string {
 	var names []string
 	for _, role := range ConversationalRoles() {
-		if authority, known := AuthorityFor(role); known && authority.Asks {
+		if authority, known := AuthorityFor(role); known && authority.Answers {
 			names = append(names, string(role))
 		}
 	}
