@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -130,8 +131,8 @@ func TestTheSweepContinuesARunThatExitedOnItsInProcessUsageLimitBound(t *testing
 	if continuation.Outcome.WorktreePath != exited.WorktreePath || continuation.Outcome.ProviderSessionID != exited.ProviderSessionID {
 		t.Fatalf("continued outcome = %#v, want the exited run's worktree %q and session %q", continuation.Outcome, exited.WorktreePath, exited.ProviderSessionID)
 	}
-	if len(serving.requests) == 0 || serving.requests[0].SessionID != exited.ProviderSessionID {
-		t.Fatalf("continued attempt requests = %#v, want the developer session the refused attempt established", serving.requests)
+	if len(serving.Requests) == 0 || serving.Requests[0].SessionID != exited.ProviderSessionID {
+		t.Fatalf("continued attempt requests = %#v, want the developer session the refused attempt established", serving.Requests)
 	}
 
 	// The record says the sweep continued it, and says what it saw.
@@ -352,7 +353,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 	// as two `yoyo run` invocations would; only the state root is shared.
 	exited := map[string]runstate.State{}
 	serving := map[string]Pipeline{}
-	providers := map[string]*fakeBackend{}
+	providers := map[string]*orchestratortest.Backend{}
 	for _, item := range items {
 		first := usageLimitBackend(1, limit, approveVerdict)
 		paused, err := exitedPipeline(t, repository, stateRoot, worktreeRoot, item, "open", first, &pausingClock{now: baseTime}).Run(context.Background(), item)
@@ -372,8 +373,8 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		// Each served attempt also writes a file of its own, so the change the
 		// second promotion replays onto the first's landing is not one the target
 		// already carries whole.
-		served, own := providers[item].run, item+".txt"
-		providers[item].run = func(request backend.RunRequest) (backend.RunResult, error) {
+		served, own := providers[item].Respond, item+".txt"
+		providers[item].Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 			result, err := served(request)
 			if err == nil && request.Role == domain.RoleDeveloper {
 				err = os.WriteFile(filepath.Join(request.WorkingDirectory, own), []byte("implemented\n"), 0o600)
@@ -447,7 +448,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 		if continuation.Outcome.WorktreePath != was.WorktreePath || continuation.Outcome.ProviderSessionID != was.ProviderSessionID {
 			t.Fatalf("continued outcome for %s = %#v, want its own worktree %q and session %q", continuation.WorkItemID, continuation.Outcome, was.WorktreePath, was.ProviderSessionID)
 		}
-		requests := providers[continuation.WorkItemID].requests
+		requests := providers[continuation.WorkItemID].Requests
 		if len(requests) == 0 || requests[0].SessionID != was.ProviderSessionID {
 			t.Fatalf("continued attempt requests for %s = %#v, want its own developer session resumed", continuation.WorkItemID, requests)
 		}
@@ -469,7 +470,7 @@ func TestTheSweepContinuesTwoExitedRunsAtOnce(t *testing.T) {
 // its own tracker over the item named in the status given, its own run state
 // store over the shared root, and room for two developers, so the second run
 // can be in flight beside the first exactly as two runs started by a pull are.
-func exitedPipeline(t *testing.T, repository, stateRoot, worktreeRoot, item, status string, provider *fakeBackend, clock *pausingClock) Pipeline {
+func exitedPipeline(t *testing.T, repository, stateRoot, worktreeRoot, item, status string, provider recordingBackend, clock *pausingClock) Pipeline {
 	t.Helper()
 	store, err := runstate.NewStore(stateRoot, "yoyodyne")
 	if err != nil {
