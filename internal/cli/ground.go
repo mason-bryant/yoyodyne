@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
@@ -69,10 +70,15 @@ type conversationGround struct {
 	// becomes of a stoppage, and gathering it is what puts the docket in front of
 	// that role without an operator carrying it there. Every other role leaves it
 	// nil and gathers no docket at all.
-	docket    *orchestrator.Docketer
-	gitBinary string
-	clock     execution.Clock
-	timeout   time.Duration
+	docket *orchestrator.Docketer
+	// docketWindow is where the docket window last stopped, so each picture
+	// resumes the walk past what the last one showed. It is wired beside the
+	// docket and for the same role; nil starts every window at the oldest
+	// stoppage.
+	docketWindow docketWindow
+	gitBinary    string
+	clock        execution.Clock
+	timeout      time.Duration
 }
 
 func newConversationGround(parts components, role domain.AgentRole) conversationGround {
@@ -83,6 +89,7 @@ func newConversationGround(parts components, role domain.AgentRole) conversation
 		shippedDocumentation: parts.config.Product.ShippedDocumentation,
 		roleDocuments:        roleDocumentSets(role, parts.config.Product),
 		docket:               conversationDocket(parts, role),
+		docketWindow:         conversationDocketWindow(parts, role),
 		gitBinary:            "git",
 		clock:                execution.RealClock{},
 		timeout:              chatTrackerTimeout,
@@ -98,6 +105,22 @@ func conversationDocket(parts components, role domain.AgentRole) *orchestrator.D
 		return nil
 	}
 	return docketerFrom(parts)
+}
+
+// docketWindow is where the development manager's docket window last stopped.
+// It is satisfied by runstate.DocketStore.
+type docketWindow interface {
+	WindowPosition() (triage.WindowPosition, error)
+	RecordWindowPosition(triage.WindowPosition) error
+}
+
+// conversationDocketWindow wires the docket window's position for the role the
+// docket is wired for, and for no other.
+func conversationDocketWindow(parts components, role domain.AgentRole) docketWindow {
+	if role != domain.RoleDevelopmentManager || parts.docket == nil {
+		return nil
+	}
+	return parts.docket
 }
 
 // conversationTriage wires the durable per-item triage budget for the role that
@@ -466,19 +489,33 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 	if docketProblem != "" {
 		briefing.Problems = append(briefing.Problems, docketProblem)
 	}
+	window := g.docketWindowFor(trackerCtx, docket, &briefing)
 	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
-		RepositoryRoot:          g.repository,
-		SpecificationsDirectory: g.specifications,
-		ShippedDocumentation:    g.shippedDocumentation,
-		RoleDocuments:           g.roleDocuments,
-		WorkItems:               items,
-		WorkItemsUnavailable:    unavailable,
-		TriageDocket:            docket,
-		TriageDocketUnavailable: docketUnavailable,
-		CommandHelp:             commandHelp(),
+		RepositoryRoot:               g.repository,
+		SpecificationsDirectory:      g.specifications,
+		ShippedDocumentation:         g.shippedDocumentation,
+		RoleDocuments:                g.roleDocuments,
+		WorkItems:                    items,
+		WorkItemsUnavailable:         unavailable,
+		TriageDocket:                 docket,
+		TriageDocketUnavailable:      docketUnavailable,
+		TriageDocketItems:            window.items,
+		TriageDocketItemsUnavailable: window.itemsUnavailable,
+		TriageDocketPosition:         window.position,
+		TriageDocketAt:               briefing.GatheredAt,
+		CommandHelp:                  commandHelp(),
 	})
 	if err != nil {
 		return chat.Briefing{}, fmt.Errorf("assemble product context: %w", err)
+	}
+	// The walk advances once the window it walked is in the picture. A picture
+	// that is then not delivered at once is carried until it is, so what this
+	// records as shown is what the role is shown.
+	if bundle.TriageDocketPosition != nil && g.docketWindow != nil {
+		if err := g.docketWindow.RecordWindowPosition(*bundle.TriageDocketPosition); err != nil {
+			briefing.Problems = append(briefing.Problems,
+				fmt.Sprintf("where the docket window stopped could not be recorded, so the next docket starts from the same place: %v", err))
+		}
 	}
 	for _, problem := range bundle.SpecificationProblems {
 		briefing.Problems = append(briefing.Problems, "specification "+problem.String())
@@ -505,6 +542,49 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 		briefing.Commit = commit
 	}
 	return briefing, nil
+}
+
+// docketWindowInputs is what the docket window is chosen from beside the docket
+// itself: every work item the tracker holds, which says whose work is closed, and
+// where the last window stopped.
+type docketWindowInputs struct {
+	items            []beads.WorkItem
+	itemsUnavailable string
+	position         triage.WindowPosition
+}
+
+// docketWindowFor gathers what the window needs, and only where there is a
+// docket to window. The listing is every item rather than the open slice the
+// conversation is briefed from, because a stopped run's item is usually blocked
+// rather than open, and one missing from an open listing is not thereby closed.
+//
+// Neither half can fail the picture. A listing that cannot be read leaves every
+// entry live and the window says so; a position that cannot be read starts the
+// walk at the oldest stoppage, which re-shows what the last window showed rather
+// than skipping anything.
+func (g conversationGround) docketWindowFor(ctx context.Context, docket []triage.Entry, briefing *chat.Briefing) docketWindowInputs {
+	var inputs docketWindowInputs
+	if len(docket) == 0 {
+		return inputs
+	}
+	items, err := chatTracker(g.runner, g.repository).List(ctx, "")
+	if err != nil {
+		inputs.itemsUnavailable = err.Error()
+		briefing.Problems = append(briefing.Problems,
+			fmt.Sprintf("which docket entries are on closed work could not be read, so the docket lists them all: %v", err))
+	} else {
+		inputs.items = items
+	}
+	if g.docketWindow != nil {
+		position, err := g.docketWindow.WindowPosition()
+		if err != nil {
+			briefing.Problems = append(briefing.Problems,
+				fmt.Sprintf("where the last docket window stopped could not be read, so this one starts at the oldest stoppage: %v", err))
+		} else {
+			inputs.position = position
+		}
+	}
+	return inputs
 }
 
 // triageDocket builds the docket and reports what it found: the entries, why

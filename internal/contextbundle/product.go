@@ -8,7 +8,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -311,11 +310,28 @@ type ProductRequest struct {
 	// way the backlog reaches the product manager's — carried by the harness
 	// rather than by an operator who noticed. Every other role supplies none and
 	// the section is simply absent.
+	//
+	// What is supplied is the docket as it was built, and what is shown of it is
+	// a window: the live entries, one per stopped run, oldest stoppage first with
+	// anything critical ahead, resuming past TriageDocketPosition. See
+	// renderTriageDocket.
 	TriageDocket []triage.Entry
 	// TriageDocketUnavailable explains why the docket is missing when it is. A
 	// docket that could not be read is stated rather than silently rendered as a
 	// product where nothing has stopped.
 	TriageDocketUnavailable string
+	// TriageDocketItems is the tracker's listing of every work item, closed ones
+	// included, which is what says whether the work a docket entry stopped is
+	// still open. TriageDocketItemsUnavailable is why it is missing when it is;
+	// then no entry is taken for dead, and the window says whether their items are
+	// open could not be read.
+	TriageDocketItems            []beads.WorkItem
+	TriageDocketItemsUnavailable string
+	// TriageDocketPosition is where the last window this role was given stopped,
+	// and TriageDocketAt the moment this one is taken, which decides whether a
+	// decision has lapsed and how old a stoppage is. A zero moment is now.
+	TriageDocketPosition triage.WindowPosition
+	TriageDocketAt       time.Time
 	// RoleDocuments are the directories of documents this role reads beyond the
 	// specifications: the architect's designs and decision records, and whatever
 	// else a role needs to answer for what it owns. The product manager supplies
@@ -402,7 +418,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// has stopped moving is current state of the work, and a large specifications
 	// directory must not be able to push it out. It is bounded by construction,
 	// so what it costs is what it renders.
-	triageDocket := renderTriageDocket(request.TriageDocket, request.TriageDocketUnavailable)
+	triageDocket, docketPosition := renderTriageDocket(request)
 	shipped := resolveShippedDocumentation(root, request.ShippedDocumentation)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
@@ -544,6 +560,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	}
 	bundle.Text = output.String()
 	bundle.Bytes = len(bundle.Text)
+	bundle.TriageDocketPosition = docketPosition
 	return bundle, nil
 }
 
@@ -1632,64 +1649,148 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 //
 // It is bounded twice over — by how many entries it lists and by what the
 // section may cost — because a docket grows with everything that ever stopped
-// and a conversation's budget does not. The oldest are listed first, in the
-// order the docket recorded them, because an undecided stoppage is the one that
-// has waited longest: listed newest first, the bound cut exactly the stoppages
-// that had aged for weeks behind the latest ones. How many were cut is stated:
-// a docket read as complete when it is not is worse than one that says what it
-// could not show.
-func renderTriageDocket(entries []triage.Entry, unavailable string) string {
+// and a conversation's budget does not. What the bound is spent on is the
+// window triage.Live and triage.Walk choose: live entries only, one per stopped
+// run, anything critical first and then the oldest stoppage the last window did
+// not reach. It used to be the newest entries on the log, which on 2026-09-25
+// was eleven entries mostly on closed items while stoppages up to thirty-six
+// days old sat unlisted behind them.
+//
+// What it could not show is stated — how many live entries, and how long the
+// oldest of them has waited — because a docket read as complete when it is not
+// is worse than one that says what it could not show. The position it hands
+// back is past the last entry the walk listed, so the next window starts with
+// what this one left out.
+func renderTriageDocket(request ProductRequest) (string, *triage.WindowPosition) {
+	entries, unavailable := request.TriageDocket, request.TriageDocketUnavailable
 	if len(entries) == 0 && strings.TrimSpace(unavailable) == "" {
-		return ""
+		return "", nil
 	}
 	var rendered strings.Builder
 	rendered.WriteString(triageDocketHeader)
 	if strings.TrimSpace(unavailable) != "" {
 		rendered.WriteString("The triage docket could not be read: " + singleLine(unavailable, 512) + "\n")
 		rendered.WriteString("Do not assume nothing has stopped; say that the docket could not be read.\n")
-		return rendered.String()
+		return rendered.String(), nil
 	}
-	if len(entries) == 0 {
-		rendered.WriteString("Nothing has stopped: no run ended on a blocker, no publication is unmerged, and no item was found unready to dispatch.\n")
-		return rendered.String()
+	now := request.TriageDocketAt
+	if now.IsZero() {
+		now = time.Now()
 	}
-	// A folded run stands where its latest docketing was recorded, and what it has
-	// waited is measured from its first, so the order is by that.
-	ordered := slices.Clone(entries)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return firstDocketed(ordered[i]).Before(firstDocketed(ordered[j]))
-	})
-	listed := 0
-	spent := rendered.Len()
-	for _, entry := range ordered {
-		if listed >= maxDocketEntries {
-			break
+	now = now.UTC()
+	itemsUnknown := strings.TrimSpace(request.TriageDocketItemsUnavailable)
+	var closed func(string) bool
+	if itemsUnknown == "" {
+		closedItems := make(map[string]bool, len(request.TriageDocketItems))
+		for _, item := range request.TriageDocketItems {
+			if strings.TrimSpace(item.Status) == "closed" {
+				closedItems[strings.TrimSpace(item.ID)] = true
+			}
 		}
-		section := entry.Render()
-		if spent+len(section) > maxTriageDocketBytes {
-			break
+		closed = func(workItemID string) bool { return closedItems[workItemID] }
+	}
+	live := triage.Live(entries, closed, now)
+	if len(live.Stoppages) == 0 {
+		rendered.WriteString("Nothing live has stopped: no run on open work ended on a blocker, no publication is unmerged, and no item was found unready to dispatch.\n")
+		rendered.WriteString(renderDocketLeftOut(live, itemsUnknown))
+		return rendered.String(), nil
+	}
+	window := triage.Walk(live.Stoppages, request.TriageDocketPosition)
+	listed := 0
+	shown := make(map[string]bool, maxDocketEntries)
+	var position *triage.WindowPosition
+	spent := rendered.Len()
+	fits := func(standing triage.Stoppage) bool {
+		if listed >= maxDocketEntries {
+			return false
+		}
+		section := standing.Entry.Render()
+		if standing.Since.Before(standing.Entry.RecordedAt) {
+			section += fmt.Sprintf("      This run has waited since %s, when it was first docketed.\n",
+				standing.Since.UTC().Format(time.RFC3339))
+		}
+		if spent+len(section) > maxTriageDocketBytes-maxDocketTrailerBytes {
+			return false
 		}
 		rendered.WriteString(section)
 		spent += len(section)
 		listed++
+		shown[standing.Entry.Key] = true
+		return true
 	}
-	if listed < len(ordered) {
-		fmt.Fprintf(&rendered, "\n%d further docket entry(s) are not listed here. Treat what you cannot see as unread rather than as absent.\n",
-			len(ordered)-listed)
-	}
-	return rendered.String()
-}
-
-// firstDocketed is when an entry's stopped run was first docketed: its own
-// recording, or the earliest of those folded beneath it.
-func firstDocketed(entry triage.Entry) time.Time {
-	first := entry.RecordedAt
-	for _, earlier := range entry.Earlier {
-		if earlier.RecordedAt.Before(first) {
-			first = earlier.RecordedAt
+	for _, standing := range window.Urgent {
+		if !fits(standing) {
+			break
 		}
 	}
-	return first
+	// The position advances only over what the walk itself listed. A critical
+	// jumped the walk to be here, and advancing to where it sits would skip
+	// everything between.
+	for _, standing := range window.Next {
+		if !fits(standing) {
+			break
+		}
+		at := standing.At()
+		position = &at
+	}
+	if remaining := len(live.Stoppages) - listed; remaining > 0 {
+		var oldest time.Time
+		for _, standing := range live.Stoppages {
+			if shown[standing.Entry.Key] {
+				continue
+			}
+			if oldest.IsZero() || standing.Since.Before(oldest) {
+				oldest = standing.Since
+			}
+		}
+		fmt.Fprintf(&rendered, "\n%d further live docket entry(s) are not listed here, the oldest of them stopped %s ago. The next docket you are given resumes past the last one listed here, so they come first then. Treat what you cannot see as unread rather than as absent.\n",
+			remaining, docketAge(now.Sub(oldest.UTC())))
+	}
+	rendered.WriteString(renderDocketLeftOut(live, itemsUnknown))
+	return rendered.String(), position
+}
+
+// maxDocketTrailerBytes is what the docket holds back from its entries for the
+// lines saying what it did not list and what it left out, so those lines always
+// fit.
+const maxDocketTrailerBytes = 1 << 10
+
+// renderDocketLeftOut says what the window left out of the docket on purpose,
+// and why. Entries on closed work and repeats of one run are not listed at all
+// rather than listed last, and a reader told nothing about them would take the
+// docket for smaller than the log is.
+func renderDocketLeftOut(live triage.LiveDocket, itemsUnknown string) string {
+	var rendered strings.Builder
+	if live.Dead > 0 {
+		fmt.Fprintf(&rendered, "%d docket entry(s) are not listed because the work item they stopped is closed.\n", live.Dead)
+	}
+	if live.Settled > 0 {
+		fmt.Fprintf(&rendered, "%d docket entry(s) are not listed because a decision still standing settled them.\n", live.Settled)
+	}
+	if itemsUnknown != "" {
+		rendered.WriteString("Whether each entry's work item is still open could not be read, so entries on closed work may be listed here: " +
+			singleLine(itemsUnknown, 256) + "\n")
+	}
+	if rendered.Len() == 0 {
+		return ""
+	}
+	return "\n" + rendered.String()
+}
+
+// docketAge is an elapsed time as somebody says one. It is coarse on purpose:
+// what it answers is whether a stoppage has waited an afternoon or a month.
+func docketAge(elapsed time.Duration) string {
+	switch {
+	case elapsed < time.Hour:
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		return fmt.Sprintf("%dm", int(elapsed.Minutes()))
+	case elapsed < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(elapsed.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(elapsed.Hours()/24))
+	}
 }
 
 // TriageDocket is the docket section exactly as a development manager's
@@ -1698,17 +1799,25 @@ func firstDocketed(entry triage.Entry) time.Time {
 // docket was rendered when the conversation opened, so the pass carries the
 // docket as it stands now, and through this rather than a rendering of its own,
 // so the two can never disagree about what the window holds or in what order.
-// It renders nothing where there is nothing and nothing could not be read,
-// exactly as the conversation's section does.
-func TriageDocket(entries []triage.Entry, unavailable string) string {
-	return renderTriageDocket(entries, unavailable)
+// Only the request's docket fields are read. It renders nothing where there is
+// nothing and nothing could not be read, exactly as the conversation's section
+// does, and it hands back the position the walk reached for the caller to keep,
+// as AssembleProduct does.
+func TriageDocket(request ProductRequest) (string, *triage.WindowPosition) {
+	return renderTriageDocket(request)
 }
 
 const triageDocketHeader = `
 ## Triage docket
 
-The work that has stopped moving, oldest first. A run that ended on a durable
-blocker is here, and so is an approved publication the forge has not merged.
+The work that has stopped moving and is still yours to decide: entries on work
+that is still open and that nobody has decided about, one per stopped run. What
+is critical comes first — an item a role raised as unmeetable, and a decision
+of yours the harness was stopped carrying out by a gate that will not clear on
+its own — and then the oldest stoppage this docket has not yet shown you,
+resuming past where the last docket you were given stopped. A run that ended on
+a durable blocker is here, and so is an approved publication the forge has not
+merged.
 So is an item dispatch would not start, because the tree does not meet a
 prerequisite the item states — that one has no run behind it, which is the point
 of it: it was caught by a read rather than by a run spending itself.

@@ -1647,27 +1647,30 @@ func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
 
 	root := t.TempDir()
 	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	entries := make([]triage.Entry, 0, maxDocketEntries+5)
 	for index := range maxDocketEntries + 5 {
 		entry := docketEntry(fmt.Sprintf("run-%032x", index), fmt.Sprintf("yoyodyne-%d", index))
-		entry.RecordedAt = entry.RecordedAt.Add(time.Duration(index) * time.Hour)
+		// yoyodyne-0 stopped first, forty days ago, and each after it a day later.
+		entry.RecordedAt = now.AddDate(0, 0, index-40)
 		entries = append(entries, entry)
 	}
 	bundle, err := AssembleProduct(ProductRequest{
 		RepositoryRoot:          root,
 		SpecificationsDirectory: "docs/product",
 		TriageDocket:            entries,
+		TriageDocketAt:          now,
 	})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}
-	if !strings.Contains(bundle.Text, "5 further docket entry(s) are not listed here") {
+	// The oldest are what is kept, because a stoppage waiting longest for a
+	// decision is the one that must not be pushed out by the latest; and what
+	// was left out is counted with how long the oldest of it has waited.
+	if !strings.Contains(bundle.Text, "5 further live docket entry(s) are not listed here, the oldest of them stopped 15d ago") {
 		t.Fatalf("a cut docket did not say what it cut:\n%s", bundle.Text)
 	}
-	// The oldest are what is kept, because an undecided stoppage is the one that
-	// has waited longest, and a bound that cut the oldest is how stoppages aged
-	// for weeks behind the latest ones.
-	if !strings.Contains(bundle.Text, "on yoyodyne-0 (") || strings.Contains(bundle.Text, "on yoyodyne-29 (") {
+	if !strings.Contains(bundle.Text, "on yoyodyne-0 ") || strings.Contains(bundle.Text, "on yoyodyne-29 ") {
 		t.Fatalf("the docket kept the newest entries rather than the oldest:\n%s", bundle.Text)
 	}
 }
@@ -1688,11 +1691,117 @@ func TestTheDocketListsAFoldedRunByWhenItFirstStopped(t *testing.T) {
 	folded.RecordedAt = earliest.RecordedAt.Add(2 * time.Hour)
 	folded.Earlier = []triage.Entry{earliest}
 
-	rendered := TriageDocket([]triage.Entry{later, folded}, "")
+	rendered, _ := TriageDocket(ProductRequest{TriageDocket: []triage.Entry{later, folded}})
 	first, second := strings.Index(rendered, "on yoyodyne-folded"), strings.Index(rendered, "on yoyodyne-later")
 	if first < 0 || second < 0 || first > second {
 		t.Fatalf("the run that stopped first is not listed first:\n%s", rendered)
 	}
+}
+
+// The window is the live docket and only that: an entry on a closed item and a
+// second entry about one run are not listed, the live ones are listed oldest
+// stoppage first, and what did not fit is counted. The position it hands back
+// is past the last entry it listed, so the next window opens with the first one
+// this window did not show.
+func TestTheDocketWindowIsTheLiveDeduplicatedDocketOldestFirstAndResumes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	stopped := func(index, daysAgo int, item string) triage.Entry {
+		entry := docketEntry(fmt.Sprintf("run-%032x", index), item)
+		entry.RecordedAt = now.AddDate(0, 0, -daysAgo)
+		return entry
+	}
+	var entries []triage.Entry
+	// Dead: stoppages on work that has since closed, newer than everything live,
+	// which is exactly what filled the window newest first.
+	for index := range 40 {
+		entries = append(entries, stopped(1000+index, 1, "yoyodyne-closed"))
+	}
+	// Live: maxDocketEntries+3 stoppages on open work, recorded newest first so
+	// the log's own order is the wrong one.
+	for index := maxDocketEntries + 2; index >= 0; index-- {
+		entries = append(entries, stopped(index, 10+index, fmt.Sprintf("yoyodyne-live-%d", index)))
+	}
+	// Repeated: the oldest live run left a second entry, a publication, later on.
+	repeatFirst := now.AddDate(0, 0, -(10 + maxDocketEntries + 2))
+	repeat := stopped(maxDocketEntries+2, 2, fmt.Sprintf("yoyodyne-live-%d", maxDocketEntries+2))
+	repeat.Class = triage.ClassPublication
+	repeat.Key = triage.Key(triage.ClassPublication, repeat.RunID)
+	entries = append(entries, repeat)
+
+	request := ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		TriageDocket:            entries,
+		TriageDocketAt:          now,
+		TriageDocketItems: []beads.WorkItem{
+			{ID: "yoyodyne-closed", Status: "closed"},
+			{ID: "yoyodyne-live-0", Status: "blocked"},
+		},
+	}
+	bundle, err := AssembleProduct(request)
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	listed := listedDocketItems(bundle.Text)
+	if strings.Contains(bundle.Text, "on yoyodyne-closed") {
+		t.Fatalf("an entry on a closed item was listed:\n%v", listed)
+	}
+	if len(listed) != maxDocketEntries {
+		t.Fatalf("listed %d entries, want %d: %v", len(listed), maxDocketEntries, listed)
+	}
+	// Oldest stoppage first: the repeated run waited longest, and is listed once.
+	for position, item := range listed {
+		want := fmt.Sprintf("yoyodyne-live-%d", maxDocketEntries+2-position)
+		if item != want {
+			t.Fatalf("entry %d is on %s, want %s; listed %v", position, item, want, listed)
+		}
+	}
+	for _, required := range []string{
+		"Docketed 1 time(s) before for this run",
+		"This run has waited since " + repeatFirst.Format(time.RFC3339) + ", when it was first docketed.",
+		"3 further live docket entry(s) are not listed here, the oldest of them stopped 12d ago",
+		"40 docket entry(s) are not listed because the work item they stopped is closed.",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("the docket window is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+	if bundle.TriageDocketPosition == nil {
+		t.Fatal("a window that walked past entries handed back no position")
+	}
+
+	// The next window resumes: what this one left out is listed first.
+	request.TriageDocketPosition = *bundle.TriageDocketPosition
+	next, err := AssembleProduct(request)
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	resumed := listedDocketItems(next.Text)
+	if got, want := resumed[:3], []string{"yoyodyne-live-2", "yoyodyne-live-1", "yoyodyne-live-0"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("the next window opened with %v, want %v", got, want)
+	}
+}
+
+// listedDocketItems is the work item each listed docket entry is on, in the
+// order the window lists them.
+func listedDocketItems(text string) []string {
+	var items []string
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "  [") {
+			continue
+		}
+		_, after, found := strings.Cut(line, " on ")
+		if !found {
+			continue
+		}
+		item, _, _ := strings.Cut(after, " ")
+		items = append(items, item)
+	}
+	return items
 }
 
 // A caller comparing two assembled contexts section by section is told where

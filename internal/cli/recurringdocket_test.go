@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // wakeCapture is a role's conversation as these tests reach it: every message a
@@ -176,5 +178,48 @@ func TestTheTriggerCarriesTheProductsDocketWhereThereIsOne(t *testing.T) {
 	}
 	if trigger := recurringTrigger(parts, "", io.Discard).(*orchestrator.Trigger); trigger.Docket == nil {
 		t.Error("the trigger carries no docket, so a scheduled pass of the development manager's would see none")
+	}
+}
+
+// fixedItems is a tracker listing every work item it was given.
+type fixedItems []beads.WorkItem
+
+func (f fixedItems) List(context.Context, string) ([]beads.WorkItem, error) { return f, nil }
+
+// A pass's docket is the same window as her conversation's: an entry on a closed
+// item is counted rather than listed, and the walk position the pass leaves is
+// the one the next window, in a pass or in her conversation, resumes past.
+func TestASweepsDocketIsTheLiveWindowAndAdvancesTheSharedWalk(t *testing.T) {
+	t.Parallel()
+
+	runs := threeStoppages(t)
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	pass := sweepDocket{
+		docketer: docketerOverDocket(runs, docket),
+		items:    fixedItems{{ID: "yoyodyne-ifd.430.13.4", Status: "closed"}},
+		window:   docket,
+	}
+	rendered := pass.Window()
+	if strings.Contains(rendered, "on yoyodyne-ifd.430.13.4 (") {
+		t.Errorf("an entry on a closed item was listed:\n%s", rendered)
+	}
+	for _, want := range []string{
+		"on yoyodyne-ifd.428.29 (",
+		"on yoyodyne-ifd.429.21 (",
+		"1 docket entry(s) are not listed because the work item they stopped is closed.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the pass's docket is missing %q:\n%s", want, rendered)
+		}
+	}
+	position, err := docket.WindowPosition()
+	if err != nil {
+		t.Fatalf("WindowPosition() error = %v", err)
+	}
+	if position.Key != triage.Key(triage.ClassStoppedRun, fmt.Sprintf("run-%032x", 3)) {
+		t.Errorf("the pass left the walk at %+v, want past the newest entry it listed", position)
 	}
 }

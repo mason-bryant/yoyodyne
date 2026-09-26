@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 const defaultMaxBytes = 256 << 10
@@ -131,6 +132,12 @@ type Bundle struct {
 	// stands against its ceiling — see ShippedDocumentationStanding — rather
 	// than leaving that to the test that fails once the ceiling is reached.
 	ShippedDocumentationBytes int
+	// TriageDocketPosition is set by AssembleProduct alone, and only where the
+	// docket window walked past something: the position the next window resumes
+	// past. It is handed back rather than kept, because where it is kept is the
+	// caller's, and a caller that does not keep it gets a window that starts from
+	// the oldest stoppage every time rather than one that skips anything.
+	TriageDocketPosition *triage.WindowPosition
 }
 
 var markdownReferencePattern = regexp.MustCompile(`[A-Za-z0-9._/-]+\.md`)

@@ -1529,9 +1529,9 @@ queues, or a lane, and the two that work inside a run are not on it.
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
-noticing something went quiet. It is listed oldest stoppage first, one entry per
-stopped run, and a docket longer than the listing says how many entries it left
-out.
+noticing something went quiet. What she is shown is a window onto it, described
+below: the live entries, one per stopped run, oldest stoppage first with
+anything critical ahead, and a count of what did not fit.
 
 **A scheduled sweep carries it too.** The context is built when her conversation
 opens, and a [recurring task](configuration.md#recurring-tasks)'s pass resumes
@@ -1543,6 +1543,31 @@ about it or the two that stopped after it. So every firing of a development
 manager's task — a summons from the intake brake included — builds the docket
 again and puts it in the message that wakes her, in the same listing her
 conversation carries, whether or not anything was delivered since her last turn.
+
+**What she is shown is a window onto the docket, not the docket.** The docket
+is a log that only grows, and a conversation has a budget. So each picture she
+is given, and each pass's message, lists at most 25 entries, within a fixed
+size, chosen like this. Only live entries are in it: entries whose work item is
+still open, and that nobody has decided about, whose decision has lapsed, or
+whose decision the harness was stopped carrying out. Whether an item is closed
+is read from the tracker as the window is built. If the tracker cannot be read,
+nothing is left out, and the window says so. A stopped run is listed once, with
+its other docketings beneath it, and says how long it has waited since it was
+first docketed. Critical entries come first: an item a role raised as
+unmeetable, and a decision of hers the harness was stopped carrying out by a
+gate that will not clear on its own. After them come the oldest stoppages. The
+window says how many live entries it did not list, how long the oldest of those
+has waited, and how many entries it left out because their work is closed. It
+walks the docket the way
+[the report pile](reporting.md#who-reads-them-and-what-became-of-each-one) is
+walked. Where the last window stopped is recorded per product, beside the
+docket, and the next window starts past it and goes back to the oldest when it
+reaches the end. Her conversation and her task's passes share that position, so
+an entry one window had no room for is the first thing the next one lists,
+whether it comes from a pass, a refresh, or a new conversation. On 2026-09-25
+the window listed the newest entries on the log instead: eleven of them, mostly
+on closed items. Twelve stopped runs waited behind them for between seven and
+thirty-six days.
 
 Four things put an item on it. A run stops with
 its change still there, an approved publication does not finish, dispatch
