@@ -41,7 +41,7 @@
 
 set -euo pipefail
 
-readme_clone_url="https://github.com/mason-bryant/yoyodyne"
+readme_clone_url="https://github.com/stigmergent/yoyodyne"
 readme_install_module="github.com/mason-bryant/yoyodyne"
 # The one home Beads has, which the README names and every other document here
 # agrees with (TestEveryBeadsHomeThisRepositoryNamesIsTheCanonicalOne holds
@@ -165,7 +165,7 @@ case "$go_directive" in (1.24*) pass "README's \"Go 1.24 or newer\" matches go.m
 step "1. install the binary"
 origin="$(git -C "$repository" remote get-url origin 2>/dev/null || echo "(none)")"
 printf 'origin: %s\n' "$origin"
-case "$origin" in (*mason-bryant/yoyodyne*) pass "README's clone URL names this checkout's origin (reachability not checked)" ;;
+case "$origin" in (*stigmergent/yoyodyne*) pass "README's clone URL names this checkout's origin (reachability not checked)" ;;
   (*) fail "README names $readme_clone_url, origin is $origin" ;; esac
 
 # The README leads its install section with `go install`, which needs the module
