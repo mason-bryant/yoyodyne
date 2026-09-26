@@ -191,6 +191,11 @@ type StateStore interface {
 	// and integration is serial, and this is what makes the second half true
 	// across processes rather than only within one.
 	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
+	// LeaseLanding admits this run's landing checks onto one target branch,
+	// waiting its turn behind whichever landing on it is running now, for at most
+	// wait, and telling queued once as the wait begins. It is what keeps two
+	// whole suites from running at once over one branch.
+	LeaseLanding(ctx context.Context, targetBranch string, wait time.Duration, queued func()) (*runstate.Lease, error)
 	// LeaseRotation admits this start to choose the account it will be served by
 	// and to record the run that spends it, waiting its turn behind whichever
 	// start is choosing now. The pool's cursor is the run records, so the choice
@@ -5132,12 +5137,16 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 		Commit:       commit,
 		StartedAt:    p.clock().Now(),
 		BoundSeconds: int64(budget / time.Second),
+		TargetBranch: a.outcome.Integration.TargetBranch,
 	}
 	a.state.LandingChecks = landed
 	a.outcome.LandingChecks = landed
 	a.saveLanding(landed)
 	var problems []string
-	if p.Landings == nil {
+	lease, err := a.leaseLanding(ctx, landed)
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("the landing checks never started: %v", err))
+	} else if p.Landings == nil {
 		problems = append(problems, "nothing is wired to cut a checkout of the integrated commit for them")
 	} else if path, err := p.Landings.CheckoutCommit(ctx, a.state.RunID, commit); err != nil {
 		problems = append(problems, fmt.Sprintf("no checkout of the integrated commit could be cut: %v", err))
@@ -5191,6 +5200,14 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 		landed.Ran = err == nil && len(results) > 0 && stopped == ""
 		landed.Green = landed.Ran && len(results) == len(p.Config.LandingChecks) && landed.AllPassed()
 	}
+	// The next landing on the branch is let in once this one's checkout is gone,
+	// and not before: the lease is what the queue is, so it is held for exactly
+	// as long as a suite is running or its checkout is standing.
+	if lease != nil {
+		if err := lease.Release(); err != nil {
+			problems = append(problems, fmt.Sprintf("the landing lease would not release: %v", err))
+		}
+	}
 	finished := p.clock().Now()
 	landed.FinishedAt = &finished
 	if landed.Red() {
@@ -5210,6 +5227,41 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 		landed.Problem = strings.Join(append(problems, fmt.Sprintf("the item could not be told: %v", err)), "; ")
 		a.saveLanding(landed)
 	}
+}
+
+// landingQueueSlack is what a landing's wait allows beyond the checks of the
+// landing ahead of it: that landing's checkout, its filing, and its note.
+const landingQueueSlack = 15 * time.Minute
+
+// leaseLanding waits this landing's turn on its target branch. At most one
+// landing per target branch runs its checks at a time, because the landing
+// checks are the whole suite and two of them at once, beside the next runs'
+// gates, is the load the suite was moved to the landing to escape.
+//
+// The wait is bounded by what the landing ahead may take — every landing check
+// at its whole budget, and the slack around them — rather than by the
+// promotion queue's fifteen minutes, which a two-hour suite would outlast every
+// time. A landing that waits the bound out, or whose process is stopped while
+// it waits, has run nothing and is unverified. The moment it begins waiting is
+// on the record before it waits, so `yoyo status` and the sweep can say it is
+// waiting rather than running.
+func (a *activeRun) leaseLanding(ctx context.Context, landed *runstate.LandingChecks) (*runstate.Lease, error) {
+	p := a.pipeline
+	wait := p.landingCheckTimeout()*time.Duration(len(p.Config.LandingChecks)) + landingQueueSlack
+	lease, err := p.Store.LeaseLanding(ctx, landed.TargetBranch, wait, func() {
+		since := p.clock().Now()
+		landed.WaitingSince = &since
+		a.saveLanding(landed)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if landed.WaitingSince != nil {
+		admitted := p.clock().Now()
+		landed.AdmittedAt = &admitted
+		a.saveLanding(landed)
+	}
+	return lease, nil
 }
 
 // saveLanding writes the landing as it stands onto the run's record. The run is

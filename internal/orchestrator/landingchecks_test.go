@@ -316,10 +316,12 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	filer := &recordingFiler{}
 	pipeline.Filer = filer
 	// The gate's bounds are far below what the landing check takes, and the
-	// landing's own budget is what stops it.
+	// landing's own budget is what stops it. They are still long enough for the
+	// gate's own `true` to finish on a machine loaded by the race suite: at 50ms
+	// the gate itself timed out under -race, before any landing ran.
 	runner := pipeline.Checks.(checks.Runner)
-	runner.Timeout = 50 * time.Millisecond
-	runner.StageTimeout = 50 * time.Millisecond
+	runner.Timeout = 10 * time.Second
+	runner.StageTimeout = 10 * time.Second
 	pipeline.Checks = runner
 	// One second of the code's own timer, which is the thing under test here;
 	// the budget is recorded in whole seconds, so it is not made shorter.
@@ -339,6 +341,10 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	}
 	if len(landed.Checks) != 1 || !landed.Checks[0].StoppedAtBound || landed.Checks[0].Passed {
 		t.Fatalf("landing checks = %#v, want the first stopped at its budget and the second never run", landed.Checks)
+	}
+	// Stopped by the landing's one-second budget rather than the gate's ten.
+	if elapsed := landed.Checks[0].ElapsedSeconds; elapsed >= 10 {
+		t.Fatalf("the landing check ran %ds, want it stopped at the landing's own budget rather than the gate's", elapsed)
 	}
 	if !strings.Contains(landed.Problem, "sleep 30 was stopped at its") || !strings.Contains(landed.Problem, "execution.landing_check_timeout budget") {
 		t.Fatalf("landing problem = %q, want the stopped check and the budget named", landed.Problem)

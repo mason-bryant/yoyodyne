@@ -97,10 +97,16 @@ func (s *Store) LeasePromotion(ctx context.Context, targetBranch string) (*Lease
 // different branches and must not share a lease — into a character
 // validLocalBranch already refuses, which is what keeps the encoding reversible.
 func promotionLockName(branch string) string {
+	return branchLockName(".promotion-", branch)
+}
+
+// branchLockName is the file a per-branch lease with the given prefix is taken
+// on, encoded as promotionLockName describes.
+func branchLockName(prefix, branch string) string {
 	encoded := strings.ReplaceAll(branch, "/", "+")
 	if len(encoded) > maxPromotionLockNameBytes {
 		sum := sha256.Sum256([]byte(branch))
 		encoded = hex.EncodeToString(sum[:])
 	}
-	return ".promotion-" + encoded + ".lock"
+	return prefix + encoded + ".lock"
 }

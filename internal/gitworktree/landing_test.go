@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // A landing checkout is the integrated commit and nothing else: detached at
@@ -131,4 +133,58 @@ func TestALandingCheckoutWhoseRefreshFailsIsRemovedWithTheError(t *testing.T) {
 	if listing := gitOutput(t, repository, "worktree", "list"); strings.Contains(listing, "landing-") {
 		t.Fatalf("worktree listing still names the failed landing checkout:\n%s", listing)
 	}
+}
+
+// The landing checks run through the same check runner as the per-run gate, and
+// that runner points every check's GOCACHE at the build cache the repository's
+// Git directory holds. A landing checkout is a worktree of the primary
+// repository, so its checks compile against that one shared cache — the one
+// every developer worktree uses — rather than a cold one of their own, even
+// where the environment they would have inherited named another.
+func TestALandingCheckoutCompilesAgainstTheRepositorysSharedBuildCache(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	commit := strings.TrimSpace(gitOutput(t, repository, "rev-parse", "HEAD"))
+	path, err := manager.CheckoutCommit(context.Background(), testRunID, commit)
+	if err != nil {
+		t.Fatalf("CheckoutCommit() error = %v", err)
+	}
+	defer manager.RemoveCheckout(context.Background(), path)
+
+	shared := goCacheIn(t, execution.WithGoBuildCache([]string{"PATH=/usr/bin"}, repository))
+	landing := goCacheIn(t, execution.WithGoBuildCache([]string{"GOCACHE=/a/cold/cache", "PATH=/usr/bin"}, path))
+	resolved, err := filepath.EvalSymlinks(repository)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if want := filepath.Join(resolved, ".git", "yoyodyne", "go-build"); canonicalCache(t, landing) != want || canonicalCache(t, shared) != want {
+		t.Fatalf("landing GOCACHE = %q and primary GOCACHE = %q, want both the repository's shared cache %q", landing, shared, want)
+	}
+}
+
+func goCacheIn(t *testing.T, environment []string) string {
+	t.Helper()
+	var found []string
+	for _, entry := range environment {
+		if value, ok := strings.CutPrefix(entry, "GOCACHE="); ok {
+			found = append(found, value)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("environment carries GOCACHE %d times, want once: %v", len(found), environment)
+	}
+	return found[0]
+}
+
+// canonicalCache resolves the part of a cache path that exists, since the cache
+// directory itself is created by the Go command rather than by the harness.
+func canonicalCache(t *testing.T, cache string) string {
+	t.Helper()
+	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cache)))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s) error = %v", cache, err)
+	}
+	return filepath.Join(parent, filepath.Base(filepath.Dir(cache)), filepath.Base(cache))
 }
