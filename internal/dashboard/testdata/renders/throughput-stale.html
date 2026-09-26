@@ -489,6 +489,105 @@
             </ul>
           </div>
         </section>
+        <section id="managers" class="panel managers" data-state="ready" aria-labelledby="managers-heading">
+          <div class="panel-head">
+            <h2 id="managers-heading">Program managers</h2>
+            <p class="panel-note">
+              each instance with its lane and its status, as
+              <code>yoyo status</code>
+              lists them under the four lines; each opens its current lane report
+            </p>
+          </div>
+          <div class="section-ready">
+            <ul id="managers-problems" class="degraded" hidden></ul>
+            <ul id="managers-list" class="held-list">
+              <li class="held manager manager-working">
+                <div class="held-head">
+                  <span class="held-kind">program manager</span>
+                  <span class="manager-status">working</span>
+                </div>
+                <h3 class="held-title">docs-pgm</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Lane</dt>
+                    <dd>docs</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Last pass</dt>
+                    <dd>completed 2026-09-19 13:30:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Report</dt>
+                    <dd>none written yet</dd>
+                  </div>
+                </dl>
+                <p class="manager-open">
+                  <button class="item-open manager-report" type="button" data-report="docs-pgm">Open docs-pgm's current report</button>
+                </p>
+              </li>
+              <li class="held manager manager-stale">
+                <div class="held-head">
+                  <span class="held-kind">program manager</span>
+                  <span class="manager-status">stale</span>
+                </div>
+                <h3 class="held-title">factory-pgm</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Lane</dt>
+                    <dd>reliability</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Why</dt>
+                    <dd>no pass has completed since 2026-09-19T08:00:00Z, and its schedule is every 1h0m0s; blocked on 1 open ask (restart-0123456789abcdef)</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Last pass</dt>
+                    <dd>completed 2026-09-19 08:00:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Report</dt>
+                    <dd>written 2026-09-19 07:58:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Restarts</dt>
+                    <dd>1 restart request open, which nothing acts on yet</dd>
+                  </div>
+                </dl>
+                <p class="manager-open">
+                  <button class="item-open manager-report" type="button" data-report="factory-pgm">Open factory-pgm's current report</button>
+                </p>
+              </li>
+              <li class="held manager manager-blocked">
+                <div class="held-head">
+                  <span class="held-kind">program manager</span>
+                  <span class="manager-status">blocked</span>
+                </div>
+                <h3 class="held-title">writing-pgm</h3>
+                <dl class="held-facts">
+                  <div class="figure-row">
+                    <dt>Lane</dt>
+                    <dd>writing</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Why</dt>
+                    <dd>blocked on 1 open ask (exchange-0123456789abcdef); 1 blocker its report names that the record does not bear out</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Last pass</dt>
+                    <dd>completed 2026-09-19 13:40:00</dd>
+                  </div>
+                  <div class="figure-row">
+                    <dt>Report</dt>
+                    <dd>written 2026-09-19 13:40:00</dd>
+                  </div>
+                </dl>
+                <p class="manager-open">
+                  <button class="item-open manager-report" type="button" data-report="writing-pgm">Open writing-pgm's current report</button>
+                </p>
+              </li>
+            </ul>
+          </div>
+        </section>
       </div>
     </main>
     <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>

@@ -127,6 +127,20 @@
       </div>
     </section>
 
+    <section id="managers" class="panel managers" data-state="loading" aria-labelledby="managers-heading">
+      <div class="panel-head">
+        <h2 id="managers-heading">Program managers</h2>
+        <p class="panel-note">each instance with its lane and its status, as <code>yoyo status</code> lists them under the four lines; each opens its current lane report</p>
+      </div>
+      <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Reading…</p></div>
+      <div class="section-error" role="alert"><p id="managers-problem" class="problem"></p><p id="managers-remedy" class="remedy"></p></div>
+      <div class="section-empty"><p id="managers-empty" class="empty"></p></div>
+      <div class="section-ready">
+        <ul id="managers-problems" class="degraded"></ul>
+        <ul id="managers-list" class="held-list"></ul>
+      </div>
+    </section>
+
     <div id="grouping" class="popup" role="dialog" aria-modal="true" aria-labelledby="grouping-heading" data-state="loading" hidden>
       <div id="grouping-backdrop" class="popup-backdrop"></div>
       <div class="popup-card">
@@ -158,6 +172,23 @@
         <div class="section-error" role="alert"><p id="card-problem" class="problem"></p><p id="card-remedy" class="remedy"></p></div>
         <div class="section-empty"><p id="card-empty" class="empty"></p></div>
         <div class="section-ready"><dl id="card-fields" class="card-fields"></dl></div>
+      </div>
+    </div>
+
+    <div id="report" class="popup" role="dialog" aria-modal="true" aria-labelledby="report-heading" data-state="loading" hidden>
+      <div id="report-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="report-heading" class="popup-title"></h2>
+            <p id="report-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="report-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-loading"><p class="waiting"><span class="pulse" aria-hidden="true"></span>Reading the lane report…</p></div>
+        <div class="section-error" role="alert"><p id="report-problem" class="problem"></p><p id="report-remedy" class="remedy"></p></div>
+        <div class="section-empty"><p id="report-empty" class="empty"></p></div>
+        <div class="section-ready"><dl id="report-fields" class="card-fields"></dl></div>
       </div>
     </div>
   </div>

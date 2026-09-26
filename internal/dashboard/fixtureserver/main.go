@@ -57,7 +57,8 @@ var scenarios = map[string]scenario{
 // fixtureReader is a read model that answers from fixtures. A work item is
 // answered from the item fixtures by id — `item-<id>.json` — so every card a
 // scenario's page can open has a fixture behind it, and an id with none is the
-// tracker holding nothing under it.
+// tracker holding nothing under it. A program manager's report is answered the
+// same way from `report-<agent>.json`.
 type fixtureReader struct {
 	dir        string
 	standing   readmodel.Standing
@@ -83,6 +84,27 @@ func (r fixtureReader) WorkItem(ctx context.Context, id string) (readmodel.WorkI
 		return readmodel.WorkItem{}, err
 	}
 	return item, nil
+}
+
+// ProgramManagerReport answers an instance's report from the report fixtures by
+// name — `report-<agent>.json` — and a name with none is the read model knowing
+// no such instance.
+func (r fixtureReader) ProgramManagerReport(ctx context.Context, agent string) (readmodel.ProgramManagerReport, error) {
+	if r.pending {
+		<-ctx.Done()
+		return readmodel.ProgramManagerReport{}, ctx.Err()
+	}
+	if r.refused != nil {
+		return readmodel.ProgramManagerReport{}, r.refused
+	}
+	var answer readmodel.ProgramManagerReport
+	if err := load(r.dir, "report-"+agent, &answer); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return readmodel.ProgramManagerReport{}, fmt.Errorf("%w: no fixture report-%s.json", readmodel.ErrNoSuchProgramManager, agent)
+		}
+		return readmodel.ProgramManagerReport{}, err
+	}
+	return answer, nil
 }
 
 func (r fixtureReader) Standing(ctx context.Context) (readmodel.Standing, error) {

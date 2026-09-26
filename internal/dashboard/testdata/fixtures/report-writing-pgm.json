@@ -1,0 +1,38 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "instance": {
+    "agent": "writing-pgm",
+    "lane": "writing",
+    "status": "blocked",
+    "stale": false,
+    "blocked": true,
+    "last_completed_pass_at": "2026-09-19T13:40:00Z",
+    "blockers": [
+      {
+        "what": "whether the terms register may name a role by its identifier form",
+        "waiting_on": "architect",
+        "cites": "exchange-0123456789abcdef",
+        "record": "exchange"
+      }
+    ],
+    "claims": [
+      {
+        "what": "the stale operations section on the dashboard",
+        "waiting_on": "product-manager",
+        "cites": "report-7d3e1f0a",
+        "reason": "it cites report report-7d3e1f0a, which the product-manager handled at 2026-09-19T12:10:00Z"
+      }
+    ],
+    "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/writing-pgm/report.json",
+    "report_written_at": "2026-09-19T13:40:00Z",
+    "restart_requests": []
+  },
+  "report": {
+    "summary": "The writing lane is on track; one question is with the architect.",
+    "remaining": [],
+    "version": 3,
+    "conversation_id": "chat-00000000000000000000000000000002",
+    "turn": 5,
+    "written_at": "2026-09-19T13:40:00Z"
+  }
+}

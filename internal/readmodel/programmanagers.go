@@ -30,12 +30,14 @@ package readmodel
 // in internal/watchdog holds both derivations to that.
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -202,6 +204,92 @@ func ProgramManagerOf(sources Sources, agent string) (ProgramManager, bool, stri
 		}
 	}
 	return ProgramManager{}, false, problem
+}
+
+// ErrNoSuchProgramManager is the read model knowing no instance by the name
+// asked for: none is configured under it, and none has a request open. A
+// surface tells it apart from a record that could not be read.
+var ErrNoSuchProgramManager = errors.New("no program manager instance is recorded under that name")
+
+// ValidProgramManagerName reports whether a name has the shape an agent's name
+// has. A surface checks it before it asks for an instance by a name it was
+// handed, and refuses one that does not without reflecting it.
+func ValidProgramManagerName(agent string) bool {
+	return domain.ValidateIdentifier("agent", agent) == nil
+}
+
+// LaneReportText is the part of an instance's current lane report that only
+// the report says: its summary, what remains, and which version wrote it. What
+// the report's blockers come to is the instance's own derivation, carried
+// beside it as Blockers and Claims, so it is not said twice here.
+type LaneReportText struct {
+	Summary   string   `json:"summary"`
+	Remaining []string `json:"remaining"`
+	Version   int      `json:"version"`
+	// Pass is the pass that wrote it, and empty where an operator's own turn in
+	// the instance's conversation did.
+	Pass           string    `json:"pass,omitempty"`
+	ConversationID string    `json:"conversation_id"`
+	Turn           int       `json:"turn"`
+	WrittenAt      time.Time `json:"written_at"`
+}
+
+// ProgramManagerReport is the per-instance query the dashboard opens a report
+// from: the instance as the standing carries it, and its current report whole.
+type ProgramManagerReport struct {
+	ObservedAt time.Time      `json:"observed_at"`
+	Instance   ProgramManager `json:"instance"`
+	// Report is absent where the instance has written none, or where its report
+	// could not be read, which Problem then says.
+	Report *LaneReportText `json:"report,omitempty"`
+	// Problem names every record behind the instance that could not be read. The
+	// instance is still carried; what could not be read is not reported as none.
+	Problem string `json:"problem,omitempty"`
+}
+
+// ReadProgramManagerReport is one instance's query: what the standing carries
+// for it, and the report its blockers were read from. The two are read from one
+// version: a report rewritten between the derivation and the read of its text
+// is read again, so the summary and the blockers beside it are one pass's.
+func ReadProgramManagerReport(sources Sources, agent string) (ProgramManagerReport, error) {
+	if !ValidProgramManagerName(agent) {
+		return ProgramManagerReport{}, ErrNoSuchProgramManager
+	}
+	var answer ProgramManagerReport
+	for attempt := 0; attempt < 2; attempt++ {
+		instance, known, problem := ProgramManagerOf(sources, agent)
+		if !known {
+			if problem != "" {
+				return ProgramManagerReport{}, fmt.Errorf("%w, and what could say so could not all be read: %s", ErrNoSuchProgramManager, problem)
+			}
+			return ProgramManagerReport{}, ErrNoSuchProgramManager
+		}
+		answer = ProgramManagerReport{ObservedAt: sources.now(), Instance: instance, Problem: problem}
+		if sources.LaneReports == nil || instance.ReportWrittenAt == nil {
+			return answer, nil
+		}
+		current, written, err := sources.LaneReports.Current(agent)
+		if err != nil || !written {
+			// The derivation has already said the report could not be read, or
+			// the report has gone since; either way there is no text to carry.
+			return answer, nil
+		}
+		if !current.RecordedAt.Equal(*instance.ReportWrittenAt) {
+			continue
+		}
+		answer.Report = &LaneReportText{
+			Summary:        current.Report.Summary,
+			Remaining:      append([]string{}, current.Report.Remaining...),
+			Version:        current.Version,
+			Pass:           current.Stamp.Pass,
+			ConversationID: current.Stamp.ConversationID,
+			Turn:           current.Stamp.Turn,
+			WrittenAt:      current.RecordedAt,
+		}
+		return answer, nil
+	}
+	answer.Problem = joinProblems(answer.Problem, fmt.Sprintf("the %s lane report was rewritten twice while it was being read, so its text is not shown beside blockers from another version; ask again", agent))
+	return answer, nil
 }
 
 func deriveProgramManager(sources Sources, instance ProgramManagerInstance, records citable, passes completedPasses, now time.Time) (ProgramManager, string) {

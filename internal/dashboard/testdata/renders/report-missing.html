@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="report" class="popup" role="dialog" aria-modal="true" aria-labelledby="report-heading" data-state="empty">
+      <div id="report-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="report-heading" class="popup-title">docs-pgm</h2>
+            <p id="report-note" class="popup-note"></p>
+          </div>
+          <button type="button" id="report-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-empty">
+          <p id="report-empty" class="empty">No program manager instance is recorded under docs-pgm: it may have been taken out of the configuration since the page last read where the harness stands.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

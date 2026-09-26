@@ -2341,7 +2341,9 @@ the line and in `program_managers_problem`, and never read as none: a pass log
 nobody could open calls nobody stale. The channel's hourly line counts the
 stale instances — `Program managers stale: 1 of 2 (factory-pgm)` — inside the
 message it already posts for a stopped line, and posts nothing for a stale
-instance alone.
+instance alone. The dashboard's
+[program managers section](#what-the-page-presents) lists the same instances
+from the same field, and opens each one's report.
 
 Naming an item leaves the four lines out. They are about the product, and a
 question about one piece of work is a different question. `--json` carries the
@@ -2925,7 +2927,7 @@ against the answer.
 
 `yoyo dashboard` serves what `yoyo status` reads — the four lines, the
 capacity state carried under them, what the harness is spending, and what
-landed — to a browser on this machine, as one page of six sections, and keeps
+landed — to a browser on this machine, as one page of seven sections, and keeps
 serving it until you stop it:
 
 ```sh
@@ -2950,7 +2952,7 @@ when it starts, and the second of them once:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:52341/
 token: 9f2c41ab7e05…
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, /api/items/<work-item-id>, and /api/program-managers/<agent>
 it is printed here and nowhere else, and a restarted dashboard prints a new one; stop with ctrl-c
 ```
 
@@ -2965,7 +2967,7 @@ the value:
 ```text
 dashboard for yoyodyne serving at http://127.0.0.1:8765/
 the token was read from the keychain item yoyo-dashboard.yoyodyne under the account yoyo, as services.dashboard.token names, and is not printed
-the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>
+the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, /api/items/<work-item-id>, and /api/program-managers/<agent>
 it outlives a restart: a restarted dashboard reads the same one; stop with ctrl-c
 ```
 
@@ -3001,11 +3003,18 @@ served one item at a time, at `/api/items/<work-item-id>`: the work item whole
 the page asks for it when a card is opened and not before, and never reads the
 tracker itself. An id the tracker holds nothing under is refused as not found,
 in fixed words that do not name the id back; an id that is not the tracker's
-shape is refused before anything is asked.
+shape is refused before anything is asked. A fifth is served the same way, one
+[program manager](designs/program-manager.md) instance at a time, at
+`/api/program-managers/<agent>`: the instance exactly as the standing carries it
+under `standing.program_managers`, and its current lane report whole beside it,
+which is what the page's [card on a report](#opening-a-program-managers-report)
+reads. A name the read model knows no instance under is refused as not found,
+in fixed words that do not name it back, and a name that is not an agent's
+shape is refused before anything is read.
 
 ### What the page presents
 
-Six sections, top to bottom, each drawn from the read model and from nothing
+Seven sections, top to bottom, each drawn from the read model and from nothing
 else. Above them, one banner and only one, while it stands: the same sentence
 the terminal prints above the four lines when the harness is paused on the
 provider's usage window, when every role is held by one, or when the provider
@@ -3086,6 +3095,16 @@ figures, rather than going blank on one dropped request.
    provider is still refusing, with its model, its refusals, and its reset; and,
    when every role is held at once, a line saying so with the agents, the
    models, the alternates or the lack of them, the refusals, and the reset.
+7. **Program managers** — each [program manager](designs/program-manager.md)
+   instance `standing.program_managers` carries, which is the list `yoyo
+   status` prints [under the four lines](#where-the-harness-stands-the-four-lines),
+   by name: its lane; its status as a word in a badge — **blocked**, **stale**,
+   or **working**, derived by the read model and never by the page — and,
+   where the word is not `working`, why, in the terminal's words, both halves
+   where an instance is stale and blocked at once; when its last pass
+   completed; when its report was written, or that it has written none; how
+   many restart requests it has open; and a button that
+   [opens its current report](#opening-a-program-managers-report).
 
 Every section has four states and shows exactly one. **Loading** says it is
 reading, and for the spend box that it is pricing the last thirty days, with one
@@ -3094,7 +3113,8 @@ in a sentence that there is nothing — the harness is idle, nothing is running,
 the backlog is empty, nothing ran in the last seven days, nothing was spent in
 the last thirty days (and, where anything has ever been priced, how far back the
 oldest priced record goes),
-no run or conversation is waiting on capacity — because a panel with nothing in
+no run or conversation is waiting on capacity, no instance of the program
+manager role is configured and none has a restart request open — because a panel with nothing in
 it and a panel nobody filled look the same. **Error** says what could not be
 read, in the read model's own words, and what to do: which command says the
 same thing with more room, and that the page keeps asking. **Ready** is the
@@ -3109,7 +3129,8 @@ answer.
 Every distinction survives without colour. A state is a word in a badge as
 well as a tint, a problem is `Could not be read` as well as a red rule, a
 waiting run and a blocked one differ in the word and in a solid against a
-dashed rule, the largest pile says `(most)` as well as being bold, and the
+dashed rule, a program manager that is working, blocked, or stale differs in
+the word and in a solid, a dashed, or a dotted rule, the largest pile says `(most)` as well as being bold, and the
 stages are joined by an arrow character rather than by a coloured bar. The page
 follows the reader's light or dark setting and their reduced-motion setting,
 and holds its badges' edges under forced colours.
@@ -3250,6 +3271,33 @@ written as text, and no button on it does anything but open or close a pop-up:
 acting on an entry from the page is its own item (`yoyodyne-ifd.432.8`),
 behind the architect's ruling on whose identity the page would act as.
 
+### Opening a program manager's report
+
+Each row of the program managers section ends in a button that opens the
+instance's current [lane report](conversation.md#a-program-managers-lane-report)
+on a card of its own, in a pop-up that closes like the others and puts focus
+back on the button that opened it. The card is read once, when it is opened,
+from `/api/program-managers/<agent>`, and shows, as text under plain labels:
+**Status**, the badge with why beside it; **Lane**; the report's **Summary**
+with its line breaks kept, and what it says is **Remaining**; the
+**Blockers** the record bears out, each with what is blocked, whose move it is,
+what it cites, and which open record of the instance's own that citation
+resolved to; the blockers it names that the record does not bear out, under
+**Not blockers**, each with the reason it blocks nothing; when the report was
+**Written**, which version it is, and the pass — or the operator's own turn —
+and the conversation turn that wrote it; the **Last pass** that completed; the
+open **Restart requests**, each with the part, the reason, and when it was
+asked, and that nothing acts on one until the supervisor's periodic pass
+lands; and the **Report file** under the state root. An instance that has
+written no report says so in the summary's place. The instance is the one the
+standing carries, from the same derivation, and the summary shown is the
+version its blockers were read from, so the card, the row, and `yoyo status`
+cannot disagree about it. The card has the four states: **loading** while it is
+read; **empty** when the read model knows no instance by the name — one taken
+out of the configuration since the page last read the standing; **error** with
+the reason the state could not be read; and **ready**. What the model could not
+read behind a ready card is said on it under **Could not be read**.
+
 **Seeing every state without a harness behind it.** `internal/dashboard/testdata/renders`
 holds the page as its own script renders it from the fixtures under
 `internal/dashboard/testdata/fixtures` — the document as the script left it,
@@ -3268,10 +3316,14 @@ behind the spend box, and `card`, `card-loading`,
 `attention-owed-step`, `attention-carried-item`,
 `attention-carried-item-card`, `attention-settled`, `attention-unreadable`,
 and `attention-closed` for the list of what waits on a person and the cards
-opened from it, each opened by clicking what a reader would click on
+opened from it, and `report`, `report-blocked`, `report-unwritten`,
+`report-loading`, `report-missing`, `report-refused`, and `report-closed` for
+a program manager's report card, each opened by clicking what a reader would click on
 one of the pages and holding the pop-ups alone, over the page render it names
 — which together show every section and each pop-up in each of its four
-states. They are golden files:
+states. The `busy` page lists a program manager in each of the three
+statuses, `quiet` shows that section empty, `unreadable` in its error, and
+`degraded` ready with what could not be read listed under it. They are golden files:
 `TestThePageRendersEverySectionInEveryState` runs the page's script under Node
 against the fixtures, checks that each section and each pop-up reaches each
 state and that the fixtures' words land on the page as text, and fails when a

@@ -1379,7 +1379,9 @@ the task and its firing number (`factory-watch#12`). A fifty-first version drops
 the oldest. The numbering keeps counting. The report is never in the repository,
 which is public, and never in the memory store. The report is bounded at 16 KiB
 and redacted before it is written, with the same values every durable record is
-redacted against.
+redacted against. The dashboard's program managers section opens the current
+version on a card and writes nothing
+([opening a program manager's report](operations.md#opening-a-program-managers-report)).
 
 **A malformed block is refused whole, and the turn goes on.** A block over the
 bound, a block missing a field, a block with a field the report does not have,

@@ -24,6 +24,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // injected is the text every test plants where an unescaped value would run.
@@ -39,7 +40,10 @@ type stubReader struct {
 	spend      readmodel.Spend
 	// items is what WorkItem answers by id; an id not in it is one the tracker
 	// holds nothing under.
-	items   map[string]readmodel.WorkItem
+	items map[string]readmodel.WorkItem
+	// reports is what ProgramManagerReport answers by name; a name not in it is
+	// one the read model knows no instance under.
+	reports map[string]readmodel.ProgramManagerReport
 	failure error
 }
 
@@ -64,6 +68,17 @@ func (r stubReader) WorkItem(_ context.Context, id string) (readmodel.WorkItem, 
 		return readmodel.WorkItem{}, fmt.Errorf("%w: bd show failed: issue not found: %s", readmodel.ErrNoSuchWorkItem, id)
 	}
 	return item, nil
+}
+
+func (r stubReader) ProgramManagerReport(_ context.Context, agent string) (readmodel.ProgramManagerReport, error) {
+	if r.failure != nil {
+		return readmodel.ProgramManagerReport{}, r.failure
+	}
+	answer, found := r.reports[agent]
+	if !found {
+		return readmodel.ProgramManagerReport{}, readmodel.ErrNoSuchProgramManager
+	}
+	return answer, nil
 }
 
 // world is one server, bound in name only, and the handler that answers for it.
@@ -595,5 +610,64 @@ func TestRefusesEveryWrite(t *testing.T) {
 				t.Fatalf("%s %s: %d", method, path, response.StatusCode)
 			}
 		}
+	}
+}
+
+// One program manager instance and its lane report are served whole as JSON to
+// the token and to nobody else, at /api/program-managers/<agent>. A name the
+// read model knows no instance under is refused as not found, in fixed words
+// that do not name it back; a name that is not an agent's shape is refused
+// before anything is read; and state that could not be read is refused as
+// unavailable with the reason. What the instance wrote reaches the page as JSON
+// with its tags escaped.
+func TestServesOneProgramManagersReportToTheTokenAlone(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title"), reports: map[string]readmodel.ProgramManagerReport{
+		"factory-pgm": {
+			Instance: readmodel.ProgramManager{Agent: "factory-pgm", Lane: "reliability", Status: readmodel.ProgramManagerBlocked, Blocked: true,
+				Blockers: []readmodel.ProgramManagerBlocker{{What: injected, WaitingOn: readmodel.MoverProductManager, Cites: "report-1", Record: readmodel.CitedReport}},
+				Claims:   []readmodel.ProgramManagerClaim{}, RestartRequests: []runstate.RestartRequest{}},
+			Report: &readmodel.LaneReportText{Summary: injected, Remaining: []string{injected}, Version: 2, ConversationID: "chat-1", Turn: 3},
+		},
+	}})
+
+	response, body := w.get("/api/program-managers/factory-pgm", bearer(w.server.Token()))
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("report with the token: %d %s", response.StatusCode, body)
+	}
+	for _, expected := range []string{`"instance":{"agent":"factory-pgm","lane":"reliability","status":"blocked"`, `"report":{"summary":"`, `"remaining":["`, `"version":2`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("the report lacks %s: %s", expected, body)
+		}
+	}
+	if strings.Count(body, "u003cscript") != 3 || strings.Contains(body, "<script>") {
+		t.Fatalf("the report carries a raw tag, or fewer escaped ones than were planted: %s", body)
+	}
+
+	if response, body := w.get("/api/program-managers/factory-pgm", nil); response.StatusCode != http.StatusUnauthorized || strings.Contains(body, "factory-pgm") {
+		t.Fatalf("report without the token: %d %s", response.StatusCode, body)
+	}
+	if response, _ := w.get("/api/program-managers/factory-pgm", all(bearer(w.server.Token()), withHost("evil.test"))); response.StatusCode != http.StatusForbidden {
+		t.Fatalf("report to a foreign host: %d", response.StatusCode)
+	}
+	if response, _ := w.request(http.MethodPost, "/api/program-managers/factory-pgm", bearer(w.server.Token())); response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("report POST: %d", response.StatusCode)
+	}
+
+	response, body = w.get("/api/program-managers/nobody-pgm", bearer(w.server.Token()))
+	if response.StatusCode != http.StatusNotFound || !strings.Contains(body, `"error":"no program manager instance is recorded under that name"`) || strings.Contains(body, "nobody-pgm") {
+		t.Fatalf("a missing instance: %d %s", response.StatusCode, body)
+	}
+	for _, malformed := range []string{"/api/program-managers/", "/api/program-managers/../escape", "/api/program-managers/a%20b", "/api/program-managers/" + url.PathEscape(injected)} {
+		response, body := w.get(malformed, bearer(w.server.Token()))
+		if response.StatusCode != http.StatusNotFound || strings.Contains(body, "script") || strings.Contains(body, "escape") {
+			t.Fatalf("a malformed name at %s: %d %s", malformed, response.StatusCode, body)
+		}
+	}
+
+	broken := serve(t, stubReader{failure: errors.New("the state root could not be resolved")})
+	response, body = broken.get("/api/program-managers/factory-pgm", bearer(broken.server.Token()))
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"error":"the state root could not be resolved"`) || strings.Contains(body, "instance") {
+		t.Fatalf("an unreadable report: %d %s", response.StatusCode, body)
 	}
 }

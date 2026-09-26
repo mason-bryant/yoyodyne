@@ -1,5 +1,5 @@
 // The page's own script: hold the token, fetch the read model with it, and
-// draw the six sections from what comes back. It is served from this origin
+// draw the seven sections from what comes back. It is served from this origin
 // because the policy allows script from nowhere else.
 //
 // The token lives in sessionStorage and nowhere else. Session storage is scoped
@@ -26,7 +26,8 @@
 // of them ever shows a zero in place of an answer the model did not give. A
 // fourth reading is taken only when asked for: one work item whole, for the
 // card a reader opens on it from Running now or from a grouping of the
-// pipeline.
+// pipeline; and a fifth the same way: one program manager instance's current
+// lane report, for the card a reader opens on it from the program managers.
 //
 // The words are the terminal's. Where `yoyo status` has a way of saying a
 // thing — "no developer runs", "cost unknown", "12m", "approved, resuming
@@ -982,6 +983,103 @@
     section("capacity", "ready");
   }
 
+  // ---- section 7: the program managers ------------------------------------
+
+  // managerStatuses is the read model's word for an instance's status, each
+  // with the class its badge is tinted by. The word is always in the badge, so
+  // the tint is never the only thing that tells two instances apart; beside it
+  // the rule is solid for a working instance, dashed for a blocked one, and
+  // dotted for a stale one. A test holds this list to the model's.
+  var managerStatuses = [
+    { status: "blocked", className: "manager-blocked" },
+    { status: "stale", className: "manager-stale" },
+    { status: "working", className: "manager-working" }
+  ];
+
+  function managerClass(status) {
+    var found = null;
+    managerStatuses.forEach(function (named) {
+      if (named.status === status) {
+        found = named;
+      }
+    });
+    return found ? found.className : "manager-unknown";
+  }
+
+  // managerWhy is what follows an instance's status word, as `yoyo status`
+  // says it: why it is stale, how many open asks of its own block it, and how
+  // many of its report's blockers the record does not bear out. Both halves
+  // are said where both hold, because stale outranks blocked in the word.
+  function managerWhy(instance) {
+    var parts = [];
+    if (instance.stale) {
+      parts.push(instance.stale_says);
+    }
+    var blockers = instance.blockers || [];
+    if (instance.blocked) {
+      parts.push("blocked on " + count(blockers.length, "open ask") + " (" + blockers.map(function (blocker) { return blocker.cites; }).join(", ") + ")");
+    }
+    var claims = instance.claims || [];
+    if (claims.length > 0) {
+      parts.push(count(claims.length, "blocker") + " its report names that the record does not bear out");
+    }
+    return parts.join("; ");
+  }
+
+  function managerBadge(status) {
+    return el("span", "manager-status", status);
+  }
+
+  function managerRow(instance) {
+    var row = el("li", "held manager " + managerClass(instance.status));
+    var head = el("div", "held-head");
+    head.appendChild(el("span", "held-kind", "program manager"));
+    head.appendChild(managerBadge(instance.status));
+    row.appendChild(head);
+    row.appendChild(el("h3", "held-title", instance.agent));
+    var facts = el("dl", "held-facts");
+    facts.appendChild(figureRow("Lane", instance.lane || "no lane configured"));
+    var why = managerWhy(instance);
+    if (why) {
+      facts.appendChild(figureRow("Why", why));
+    }
+    facts.appendChild(figureRow("Last pass", named(instance.last_completed_pass_at) ? "completed " + dayAndClock(instance.last_completed_pass_at) : "none has completed"));
+    facts.appendChild(figureRow("Report", named(instance.report_written_at) ? "written " + dayAndClock(instance.report_written_at) : "none written yet"));
+    var requests = instance.restart_requests || [];
+    if (requests.length > 0) {
+      facts.appendChild(figureRow("Restarts", count(requests.length, "restart request") + " open, which nothing acts on yet"));
+    }
+    row.appendChild(facts);
+    var open = el("p", "manager-open");
+    open.appendChild(reportOpener(instance.agent, "Open " + instance.agent + "'s current report"));
+    row.appendChild(open);
+    return row;
+  }
+
+  function renderManagers() {
+    var standing = model.standing;
+    if (!standing) {
+      section("managers", model.standingError ? "error" : "loading", model.standingError, whatToDoAboutTheStanding());
+      return;
+    }
+    var instances = standing.program_managers || [];
+    if (instances.length === 0 && standing.program_managers_problem) {
+      section("managers", "error", standing.program_managers_problem, whatToDoAboutTheStanding());
+      return;
+    }
+    if (instances.length === 0) {
+      section("managers", "empty", "No instance of the program manager role is configured, and none has a restart request open.");
+      return;
+    }
+    listProblems("managers-problems", [standing.program_managers_problem]);
+    var list = document.getElementById("managers-list");
+    clear(list);
+    instances.forEach(function (instance) {
+      list.appendChild(managerRow(instance));
+    });
+    section("managers", "ready");
+  }
+
   // ---- the pop-ups: a grouping's items, and one item's card -------------------
 
   // Two pop-ups, each a dialog over the page with the four states a section
@@ -1017,7 +1115,7 @@
   var openGrouping = null;
   var openCard = null;
   var openEntry = null;
-  var openers = { grouping: null, card: null };
+  var openers = { grouping: null, card: null, report: null };
   // openersByKey is every opener on the page by the key it opens, newest last,
   // kept only while it is on the page: what close() gives focus back to when
   // the opener it remembered has been redrawn.
@@ -1629,17 +1727,152 @@
     document.getElementById("card-close").focus();
   }
 
+  // ---- the lane report
+
+  // The card on one program manager instance's current lane report, opened
+  // from its row. It is read from /api/program-managers/<agent> when it is
+  // opened and not before, and once: the instance as the standing carries it,
+  // and the report's own text beside it — the summary, what remains, and the
+  // blockers, each with who it waits on and what it cites, split into the ones
+  // the record bears out and the ones it does not. Every value is written as
+  // text.
+
+  var reportPopup = document.getElementById("report");
+  var openReport = null;
+
+  function reportOpener(agent, text) {
+    var button = opener("data-report", agent, el("button", "item-open manager-report", text));
+    button.addEventListener("click", function () { showReport(agent, { element: button, kind: "data-report", key: agent }); });
+    return button;
+  }
+
+  // citedRecords is what each kind of record a blocker's citation resolved to
+  // is, in words: an open ask of the instance's own.
+  var citedRecords = {
+    "report": "a report of its own the product manager has not handled",
+    "amendment": "an amendment of its own nobody has decided",
+    "exchange": "an exchange of its own still open",
+    "restart-request": "a restart request of its own nothing has answered"
+  };
+
+  function listField(label, entries, none, className) {
+    var row = el("div", "card-field" + (className ? " " + className : ""));
+    row.appendChild(el("dt", null, label));
+    var body = el("dd");
+    if (entries.length === 0) {
+      body.className = "card-none";
+      body.textContent = none;
+    } else {
+      var list = el("ul", "card-run-facts");
+      entries.forEach(function (text) { list.appendChild(el("li", null, text)); });
+      body.appendChild(list);
+    }
+    row.appendChild(body);
+    return row;
+  }
+
+  function renderReport(answer) {
+    var instance = answer.instance;
+    var text = answer.report;
+    document.getElementById("report-heading").textContent = instance.agent;
+    document.getElementById("report-note").textContent = (instance.lane ? "lane " + instance.lane : "no lane configured") + " · read " + clock(answer.observed_at);
+    var fields = document.getElementById("report-fields");
+    clear(fields);
+    var status = el("div", "card-field");
+    status.appendChild(el("dt", null, "Status"));
+    var word = el("dd", "manager-line " + managerClass(instance.status));
+    word.appendChild(managerBadge(instance.status));
+    var why = managerWhy(instance);
+    if (why) {
+      word.appendChild(el("span", "manager-why", why));
+    }
+    status.appendChild(word);
+    fields.appendChild(status);
+    fields.appendChild(field("Lane", instance.lane));
+    if (answer.problem) {
+      var problemRow = el("div", "card-field");
+      problemRow.appendChild(el("dt", null, "Could not be read"));
+      problemRow.appendChild(el("dd", "problem", answer.problem));
+      fields.appendChild(problemRow);
+    }
+    if (text) {
+      fields.appendChild(field("Summary", text.summary, "card-field-prose"));
+      fields.appendChild(listField("Remaining", text.remaining || [], "nothing remains, the report says"));
+    } else {
+      fields.appendChild(field("Summary", named(instance.report_written_at) ? "the report could not be read" : "it has written no report yet", "card-field-prose"));
+    }
+    fields.appendChild(listField("Blockers", (instance.blockers || []).map(function (blocker) {
+      return blocker.what + " — " + moverLabel(blocker.waiting_on) + " move; cites " + blocker.cites + ", " + (citedRecords[blocker.record] || blocker.record);
+    }), text ? "none the record bears out" : "none: there is no report to name one"));
+    fields.appendChild(listField("Not blockers", (instance.claims || []).map(function (claim) {
+      return claim.what + " — " + moverLabel(claim.waiting_on) + " move; cites " + claim.cites + ", and blocks nothing: " + claim.reason;
+    }), text ? "none: the record bears out every blocker it names" : "none: there is no report to name one"));
+    var written = "";
+    if (text) {
+      written = dayAndClock(text.written_at) + ", version " + text.version + ", by " + (text.pass ? "pass " + text.pass : "an operator's turn") + " in " + text.conversation_id + " turn " + text.turn;
+    } else if (named(instance.report_written_at)) {
+      written = dayAndClock(instance.report_written_at);
+    }
+    fields.appendChild(field("Written", written));
+    fields.appendChild(field("Last pass", named(instance.last_completed_pass_at) ? "completed " + dayAndClock(instance.last_completed_pass_at) : "none has completed"));
+    fields.appendChild(listField("Restart requests", (instance.restart_requests || []).map(function (request) {
+      return request.part + ": " + request.reason + " — asked " + dayAndClock(request.requested_at) + ", unanswered; nothing acts on a request until the supervisor's periodic pass lands (" + request.id + ")";
+    }), "none open"));
+    fields.appendChild(field("Report file", instance.report_path, "card-field-id"));
+    section("report", "ready");
+  }
+
+  // showReport opens the card on one instance's report and asks for it. A 404
+  // is the read model knowing no instance by the name — one taken out of the
+  // configuration since the page last read the standing — which is the card's
+  // empty state; a 401 sends the page back to asking for the token; anything
+  // else is the card's error state, with the reason.
+  function showReport(agent, from) {
+    openReport = agent;
+    openers.report = from || null;
+    document.getElementById("report-heading").textContent = agent;
+    document.getElementById("report-note").textContent = "";
+    clear(document.getElementById("report-fields"));
+    section("report", "loading");
+    open(reportPopup);
+    document.getElementById("report-close").focus();
+    read("/api/program-managers/" + encodeURIComponent(agent), token(), function (answer) {
+      if (openReport !== agent) {
+        return;
+      }
+      renderReport(answer);
+    }, function (reason, status) {
+      if (openReport !== agent) {
+        return;
+      }
+      if (status === 404) {
+        section("report", "empty", "No program manager instance is recorded under " + agent + ": it may have been taken out of the configuration since the page last read where the harness stands.");
+        return;
+      }
+      section("report", "error", reason, "The card asks once, when it is opened; close it and open it again to ask again. yoyo status --json carries the same instance under standing.program_managers, and its report is the file the row names.");
+    });
+  }
+
+  function closeReport() {
+    openReport = null;
+    close(reportPopup, "report");
+  }
+
   document.getElementById("grouping-close").addEventListener("click", closeGrouping);
   document.getElementById("grouping-backdrop").addEventListener("click", closeGrouping);
   document.getElementById("card-close").addEventListener("click", closeCard);
   document.getElementById("card-backdrop").addEventListener("click", closeCard);
-  // Escape closes the pop-up on top: the card where one is open, on an item
-  // or an entry, else the grouping.
+  document.getElementById("report-close").addEventListener("click", closeReport);
+  document.getElementById("report-backdrop").addEventListener("click", closeReport);
+  // Escape closes the pop-up on top: a lane report where one is open, else the
+  // card where one is open, on an item or an entry, else the grouping.
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") {
       return;
     }
-    if (openCard !== null || openEntry !== null) {
+    if (openReport !== null) {
+      closeReport();
+    } else if (openCard !== null || openEntry !== null) {
       closeCard();
     } else if (openGrouping !== null) {
       closeGrouping();
@@ -1688,6 +1921,7 @@
     renderPipeline();
     renderThroughput();
     renderCapacity();
+    renderManagers();
     // An open grouping, and an open entry card, are drawn again from the
     // reading just taken, so each stays as live as what it was opened from.
     renderGrouping();
@@ -1812,10 +2046,12 @@
     openGrouping = null;
     openCard = null;
     openEntry = null;
-    openers = { grouping: null, card: null };
+    openReport = null;
+    openers = { grouping: null, card: null, report: null };
     openersByKey = {};
     setHidden(groupingPopup, true);
     setHidden(cardPopup, true);
+    setHidden(reportPopup, true);
     render();
     refreshStanding(current);
     refreshThroughput(current);
