@@ -244,7 +244,7 @@ agents:
   # ... architect, development-manager, developer, and reviewer, the same shape
 ```
 
-Five agents — product manager, architect, development manager, developer, and
+Five agents — Lead Product Manager, architect, development manager, developer, and
 reviewer — each with a role, a backend, a model selector, the [provider
 account](../configuration.md#provider-accounts) it runs under, an instance count, and a persona file
 that is in the repository beside the configuration. Change one by
@@ -418,13 +418,13 @@ Up to three layers produce the effective configuration, later ones winning:
    behavior**, and it is worth being plain about rather than leaving to be
    discovered. `publishing: human` is exactly what a file written before it got:
    the harness publishes nothing. `work_items: human` is not, because before this
-   key existed the product manager could admit work to the backlog **directly**,
+   key existed the Lead Product Manager could admit work to the backlog **directly**,
    through its `create` action, and you were told afterwards rather than asked.
    That direct admission is now refused at `human`, so a project that upgrades
-   and leaves the key alone has a product manager that proposes work instead of
+   and leaves the key alone has a Lead Product Manager that proposes work instead of
    admitting it. Nothing is lost when it does — the proposal is put to you and
    approving it creates the item — and the trade is deliberate: a `human` setting
-   that left this door open would be a gate the product manager could walk around
+   that left this door open would be a gate the Lead Product Manager could walk around
    by choosing the other one. An operator who wants the old behavior back sets
    `work_items: automatic`, which admits directly again against goals they have
    approved. See [what reaches the queue](goals.md#what-reaches-the-queue).

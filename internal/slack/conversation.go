@@ -128,13 +128,13 @@ const DefaultConversationDeadline = 10 * time.Minute
 // where the conversation actually is, because the whole point of it being one
 // conversation is that a client that could not answer is not the end of it.
 const (
-	conversationBusy = "The product manager is already answering something else in this conversation — say it again once that lands, or carry on at `yoyo chat`."
+	conversationBusy = "The Lead Product Manager is already answering something else in this conversation — say it again once that lands, or carry on at `yoyo chat`."
 	// conversationHeld is a turn in flight in some other client — a `yoyo chat`
 	// answering at a terminal, or the harness delivering something. A `yoyo chat`
 	// waiting at its prompt is not one: what the conversation holds exclusive is a
 	// turn rather than a window, so what ends this is that turn landing rather
 	// than anybody closing anything.
-	conversationHeld = "The product manager is mid-turn with another client right now — a `yoyo chat` answering at a terminal, or the harness delivering something to it — so nothing was said to it. Say it again once that turn lands; a `yoyo chat` waiting at its prompt does not hold the conversation, only one that is answering does."
+	conversationHeld = "The Lead Product Manager is mid-turn with another client right now — a `yoyo chat` answering at a terminal, or the harness delivering something to it — so nothing was said to it. Say it again once that turn lands; a `yoyo chat` waiting at its prompt does not hold the conversation, only one that is answering does."
 	// conversationOverdue is the bounded wait running out. The turn may yet land,
 	// and until it does it holds the conversation: `yoyo chat` does not read a
 	// turn that is still being written, it queues behind it and says so, and
@@ -142,12 +142,12 @@ const (
 	// plainly rather than as an invitation to go and look, because an operator
 	// sent to `yoyo chat` while the abandoned turn still runs finds a wait, and a
 	// wait nobody told them about reads as a second thing that has hung.
-	conversationOverdue = "I waited %s for the product manager and it had not answered, so I stopped waiting rather than leave you with nothing. The turn may still be running, and it holds the conversation until it lands: `yoyo chat` waits behind it, says so, and then continues the same conversation from wherever that turn got to. `yoyo agent list` says whether it is still mid-turn without waiting on it."
+	conversationOverdue = "I waited %s for the Lead Product Manager and it had not answered, so I stopped waiting rather than leave you with nothing. The turn may still be running, and it holds the conversation until it lands: `yoyo chat` waits behind it, says so, and then continues the same conversation from wherever that turn got to. `yoyo agent list` says whether it is still mid-turn without waiting on it."
 	// conversationFailed carries the reason rather than summarizing it. A
 	// provider out of capacity says so in its own words, and the durable record it
 	// leaves is reported to this channel at warning severity by the feed, so this
 	// is the person who asked being told as well as the channel.
-	conversationFailed = "The product manager could not answer: %v"
+	conversationFailed = "The Lead Product Manager could not answer: %v"
 	// decisionFailed is the same for a decision the harness carried out and that
 	// failed — an approval the tracker refused, a proposal nothing holds any more.
 	// The product manager was never asked, so the line does not name it as the
@@ -155,10 +155,10 @@ const (
 	// failure the operator then looks for in the wrong place. What the reason
 	// says about whether any part of it landed is the harness's own account, and
 	// the decisions that did land are posted ahead of this line.
-	decisionFailed = "That decision could not be carried out, and the product manager was not asked: %v"
+	decisionFailed = "That decision could not be carried out, and the Lead Product Manager was not asked: %v"
 	// conversationSilent is a turn that came back with nothing to say. It is an
 	// answer rather than an absence for the reason every other line here is one.
-	conversationSilent = "The product manager answered without saying anything. `yoyo chat` continues the same conversation."
+	conversationSilent = "The Lead Product Manager answered without saying anything. `yoyo chat` continues the same conversation."
 	// conversationElsewhere is where the whole of a cut answer is. It is the
 	// conversation rather than a command's output, because that is what holds it.
 	conversationElsewhere = "`yoyo chat` continues the same conversation and shows the whole of it"
@@ -176,7 +176,7 @@ func (s *steering) converse(ctx context.Context, message inboundMessage, said st
 		s.answerOnce(ctx, message, conversationBusy, "a turn already in flight")
 		return
 	}
-	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is taking it to the product manager",
+	s.sink.log("this app was addressed by %s outside its own threads, saying %q, and is taking it to the Lead Product Manager",
 		message.user, singleLine(message.text, maxAskedBytes))
 	s.carry(ctx, message, said)
 }
@@ -274,7 +274,7 @@ func (s *steering) came(ctx context.Context, message inboundMessage, bounded con
 // whoever is watching this process will see it.
 func (s *steering) gaveUp(ctx context.Context, message inboundMessage, bounded context.Context) {
 	if !errors.Is(bounded.Err(), context.DeadlineExceeded) {
-		s.sink.log("the sink stopped while the product manager was answering %s, so the answer will not be posted; `yoyo chat` continues the conversation and shows where it got to", message.user)
+		s.sink.log("the sink stopped while the Lead Product Manager was answering %s, so the answer will not be posted; `yoyo chat` continues the conversation and shows where it got to", message.user)
 		return
 	}
 	s.answerOnce(ctx, message, fmt.Sprintf(conversationOverdue, s.deadline), "the wait running out")
@@ -286,7 +286,7 @@ func (s *steering) gaveUp(ctx context.Context, message inboundMessage, bounded c
 // saying so beats printing an empty one.
 func from(answer Answer) string {
 	if answer.ConversationID == "" {
-		return "without anything being said to the product manager"
+		return "without anything being said to the Lead Product Manager"
 	}
 	return fmt.Sprintf("from conversation %s, which stands at %d turn(s)", answer.ConversationID, answer.Turns)
 }

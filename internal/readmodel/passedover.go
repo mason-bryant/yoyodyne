@@ -448,7 +448,7 @@ func (c Cause) Whose() string {
 // 2026-09-07 she had made every one of them.
 var passedOverMoves = map[runstate.PassedOverClass]string{
 	runstate.PassedOverCarriedInConversation: "the role that carries them, in conversation — no run will ever start them",
-	runstate.PassedOverParked:                "the product manager's — a parked item is passed over at every pull until it is released",
+	runstate.PassedOverParked:                "the Lead Product Manager's — a parked item is passed over at every pull until it is released",
 	runstate.PassedOverHeldForAPerson:        "the development manager's — nothing pulls work held for a person until triage decides what happens to it",
 	runstate.PassedOverAwaitingDecision:      "the development manager's — nothing pulls a stopped item until she decides what happens to it",
 	runstate.PassedOverAwaitingCarryOut:      "the harness's — the decisions are recorded, and what is outstanding is the harness acting on them",
@@ -459,6 +459,6 @@ var passedOverMoves = map[runstate.PassedOverClass]string{
 	runstate.PassedOverPausedByDirective:     "the operator's — the work stays paused until the directive is resolved",
 	runstate.PassedOverSequencedBehindWork:   "nobody's — each is pulled at the first pull where the run it would have raced has ended",
 	runstate.PassedOverPrerequisiteUnmet:     "the development manager's — the item asks for something the tree does not have, and it is docketed rather than dispatched",
-	runstate.PassedOverLeftForAnotherSlot:    "nobody's — a developer slot with no preference takes them in the product manager's order, and a preferring slot falls back to them once its label's work is exhausted",
+	runstate.PassedOverLeftForAnotherSlot:    "nobody's — a developer slot with no preference takes them in the Lead Product Manager's order, and a preferring slot falls back to them once its label's work is exhausted",
 	runstate.PassedOverWaitingOnUsageWindow:  "nobody's — the window lifts on the provider's clock, and the session pulls each of them again once its reset has passed",
 }

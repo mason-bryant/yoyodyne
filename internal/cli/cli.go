@@ -652,7 +652,7 @@ func printUsage(writer io.Writer) {
 Commands:
   setup             walk this project to an installation that can run work
   init              write a project its own configuration, personas, and checks
-  chat              talk with the product manager and steer the work from there
+  chat              talk with the Lead Product Manager and steer the work from there
   agent             read the configured agents and their state, and address one
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
@@ -660,7 +660,7 @@ Commands:
   config baseline   record what that template supplies, for a project with no baseline
   artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
-  evaluation        read what the product manager made of the ideas you brought it
+  evaluation        read what the Lead Product Manager made of the ideas you brought it
   goals             read the goals and what work serves, and witness and guard it
   stale             read what a change upstream left unanswered downstream
   conformance       check the product against what it records about itself

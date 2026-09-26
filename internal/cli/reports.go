@@ -227,7 +227,7 @@ the target branch has taken since. A report is a claim about that build, so a
 report from a build behind the tip may describe something already fixed. Check
 before admitting work from it. A report filed before reports carried a build says
 "no build recorded", and a build the product's repository does not hold is named
-as not counted. A report the product manager has
+as not counted. A report the Lead Product Manager has
 decided about carries what it decided, under it; everything else is still
 waiting on somebody. The whole pile is printed, oldest first; `+"`/reports`"+` in
 `+"`yoyo chat`"+` shows the same reports beside the conversation, listing the
@@ -248,9 +248,10 @@ and a pile nothing is draining looks identical to it in any single reading.
 
 A report decides nothing and nothing waits on it, so this is read-only: it
 retires nothing, handles nothing, and changes no work. Deciding what becomes of
-a report is the product manager's, in a conversation, and the unhandled ones are
-carried into that conversation without anybody having to fetch them, oldest
-first with anything critical ahead of them, resuming where the last turn stopped.
+a report is the Lead Product Manager's, in a conversation, and the unhandled
+ones are carried into that conversation without anybody having to fetch them,
+oldest first with anything critical ahead of them, resuming where the last turn
+stopped.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

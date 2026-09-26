@@ -75,7 +75,7 @@ a date in the code — would be this machine's upgrade hour written into every
 installation's ledger.
 
 A run finishing writes the item's total onto the item in the tracker, and that
-recorded total is what travels with the work: `/status`, the product manager's
+recorded total is what travels with the work: `/status`, the Lead Product Manager's
 briefing, and `bd` itself all read the one number the tracker holds, rather than
 each assembling a price of their own. `/show` is the exception, deliberately: it
 prices the item from the run records themselves every time it is asked. That is
@@ -423,7 +423,7 @@ built-in bundle's declared version had gone inert, and a developer's report that
 `bd lint` could not run in its sandbox.
 
 Every role can say such a thing without stopping: the developer, the
-reviewer, and the product manager each end what they say with one small block,
+reviewer, and the Lead Product Manager each end what they say with one small block,
 and the harness collects it. `/reports` shows you the pile, newest last, with
 the twenty most recent listed and the rest counted.
 
@@ -482,7 +482,7 @@ target branch's tip:
 ```
 
 `yoyo reports` and `/reports` print it that way, and the reports carried into
-the product manager's turn are printed the same way, with the instruction to
+the Lead Product Manager's turn are printed the same way, with the instruction to
 check whether a fix has landed before admitting work from a report whose build
 is behind. A build behind the tip is not a verdict. It says the fix may already
 be there and is worth checking, and the report's own run is where to start. The
@@ -544,9 +544,9 @@ silent limit is exactly the failure nobody would otherwise see.
 
 A report that only you can read is a report that reaches triage when you happen
 to be reading. That was the whole of it until recently — you read the channel,
-noticed something, and repeated it to the product manager yourself — which routes
+noticed something, and repeated it to the Lead Product Manager yourself — which routes
 an agent's escalation through you rather than through the role the goals put in
-front of it. The product manager could not have read the pile if it wanted to:
+front of it. The Lead Product Manager could not have read the pile if it wanted to:
 its evidence is the specifications, Beads state, and the documentation of what
 ships, and the pile is none of those.
 
@@ -581,8 +581,8 @@ limited by size rather than by a count. Whatever is not carried is counted, and
 the count is of the whole unhandled pile: a role told the pile is five hundred
 deep works at it differently from one told it is twelve.
 
-Deciding what becomes of one is a product decision and it is the product
-manager's: work to admit, a proposal to put to you, a concern to raise, or
+Deciding what becomes of one is a product decision and it is the Lead Product
+Manager's: work to admit, a proposal to put to you, a concern to raise, or
 nothing at all — a report that asks for nothing is handled by saying so. It
 records the decision with a `handle` action, the same bounded, recorded mechanism
 it acts on the queue through, and that record is the only thing that takes a
@@ -633,8 +633,8 @@ here judges whether it decided well.
 
 ### Whether the pile is draining
 
-Neither the walk nor the bound is worth anything if nobody talks to the product
-manager, and nothing in the harness talks to it on your behalf unless you have
+Neither the walk nor the bound is worth anything if nobody talks to the Lead Product
+Manager, and nothing in the harness talks to it on your behalf unless you have
 said it should. **The pile is worked on a cadence only once you configure a
 recurring task to do it**, the way the development manager's sweep is
 configured; the harness ships the task as a commented example in the file `yoyo
@@ -642,7 +642,7 @@ init` writes and enables nothing by itself, because which roles are woken and
 how often is a project's judgement rather than a release's.
 [Working the report pile on a cadence](configuration.md#working-the-report-pile-on-a-cadence)
 is the entry and what it should say. A project that has not added it works the
-pile only when somebody opens a conversation with the product manager, which for
+pile only when somebody opens a conversation with the Lead Product Manager, which for
 a pile of hundreds is not often enough — that is the state this project was in
 when 564 of 1313 reports were unhandled with the oldest three weeks old.
 
@@ -662,7 +662,7 @@ reports: 564 of 1313 collected report(s) are unhandled, the oldest filed 22d ago
 Both numbers come from one derivation, so the terminal and the channel cannot
 disagree about them. A pile that is draining says nothing anywhere else; one
 whose oldest undecided report has been waiting more than a week is named on
-`yoyo status`'s "needs a human" line as the product manager's. That line is what
+`yoyo status`'s "needs a human" line as the Lead Product Manager's. That line is what
 catches both failures a single reading cannot tell apart: a cadence that has
 stopped keeping up, and no cadence configured at all.
 
@@ -675,7 +675,7 @@ document anyway. So it has a third — it proposes the change, in one small bloc
 like the report block, and the harness carries it to the role that owns the
 document and to you. The developer carries that block today, being the role that
 meets the boundary while implementing against a document; the reviewer says what
-is wrong with a change as a finding instead, and the product manager stops and
+is wrong with a change as a finding instead, and the Lead Product Manager stops and
 asks you.
 
 ```sh
@@ -746,7 +746,7 @@ on exactly that account. The carried refusal above is spent by the developer's
 next reply and this is not: it is what an auditor reads once the run is over.
 
 The owner hears it where it works, and you are the one who decides. Proposals
-against the brief and the goals are carried into the product manager's
+against the brief and the goals are carried into the Lead Product Manager's
 conversation and proposals against the designs, the specifications, and the
 decision records into the architect's, and each argues for or against them and
 can decide or edit nothing. So every decision is recorded by you through
@@ -858,7 +858,7 @@ been true, how much ready work is behind it, and how many promotions are waiting
 on the forge to publish them. That count is what a developer
 run could actually be started for rather than everything the tracker calls ready:
 the tracker's readiness is about dependencies alone, so its answer includes work
-marked for a conversation and work the product manager parked, neither of which
+marked for a conversation and work the Lead Product Manager parked, neither of which
 any pull will ever take. Counting those sent an operator three times to a line
 that had not stopped. Everything else is a
 transition and is said once, which is right for a thread and wrong for a night:
@@ -1449,9 +1449,9 @@ granted `direct-work` with a bound Slack member id, is recorded as a
 — the same record `yoyo directive record` writes, with the same pause semantics
 and the same resolution, so a run meets it whichever way it arrived. A question
 in the same thread — one ending with a question mark — is recorded as nothing
-and carried to the product manager instead, in the same durable conversation
+and carried to the Lead Product Manager instead, in the same durable conversation
 `yoyo chat` holds; the thread gets a one-line receipt saying it was heard as a
-question, and then the product manager's answer, in the product manager's own
+question, and then the Lead Product Manager's answer, in the Lead Product Manager's own
 name. A reply that is neither outright is asked back in one line rather than
 guessed at. The record used to take everything, and on 2026-08-30 it took the
 operator's question about a phrase in a receipt as a standing instruction and
@@ -1470,25 +1470,25 @@ Outside those threads the sink is silent, with one exception: **a message that
 @-mentions the app is always answered**, wherever it can see one — at the top of
 the channel or in a thread it never opened. A question about where things stand
 is answered with the same four lines `yoyo status` prints, read from the same
-place rather than assembled a second way. Everything else reaches **the product
-manager**, in the [same durable conversation](conversation.md) `yoyo chat` holds
+place rather than assembled a second way. Everything else reaches **the Lead Product
+Manager**, in the [same durable conversation](conversation.md) `yoyo chat` holds
 rather than in one this channel keeps of its own: a conversation begun at a
 terminal carries on in Slack and back, because both are clients of one record.
-The answer comes back in the product manager's own name, in the thread it was
+The answer comes back in the Lead Product Manager's own name, in the thread it was
 asked in, and it is held to the same `direct-work` grant a thread reply is —
-talking to the product manager admits work and spends money, while asking where
+talking to the Lead Product Manager admits work and spends money, while asking where
 things stand tells a reader nothing the channel was not already telling them.
 
 The wait for it is bounded and the failures are said rather than swallowed: a
-turn gets ten minutes, and the product manager being mid-turn with another
+turn gets ten minutes, and the Lead Product Manager being mid-turn with another
 client, the wait running out, and a provider out of capacity are each answered
 in the thread with what happened. A turn the channel stopped waiting for holds
 the conversation until it lands, and the thread says so: `yoyo chat` queues
 behind it and continues once it has landed, rather than showing a turn that is
 still being written. No directive is recorded from a mention, because a
 message at the top of the channel names no item to scope one to — what a mention
-changes about the work it changes by speaking to the product manager, which is
-the product manager's own doing and reaches this channel through the ordinary
+changes about the work it changes by speaking to the Lead Product Manager, which is
+the Lead Product Manager's own doing and reaches this channel through the ordinary
 reporting of its record. Commands are not carried out from here either: a
 message that opens with a slash is refused with where to type it, so it costs no
 turn. And every message addressed to the app goes into the sink's own log, with

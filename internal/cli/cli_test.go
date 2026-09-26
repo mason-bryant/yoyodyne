@@ -592,7 +592,7 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	// The persona is guidance underneath the contract, never a replacement for
 	// it: the contract is what the conversation actually sends first.
 	prompt := chat.SystemPrompt(agent.Role, chat.Admission{}, agent.Persona.Text)
-	if !strings.HasPrefix(prompt, "You are the product manager for this product") {
+	if !strings.HasPrefix(prompt, "You are the Lead Product Manager for this product") {
 		t.Fatal("the conversation prompt does not begin with the immutable contract")
 	}
 	// How the product manager briefs the operator -- one question a reply, and a

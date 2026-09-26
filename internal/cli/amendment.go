@@ -335,10 +335,10 @@ does anything an approved one contains.
 
 Every decision is recorded here, by you, under the authority of the role that
 owns the document. No agent records one: an owning role that runs is shown the
-proposals against its documents and argues for or against them, and the product
-manager is told in so many words that it cannot decide one. So a proposal waits
-on you whoever owns the document, and the record says you exercised that role's
-authority.
+proposals against its documents and argues for or against them, and the
+Lead Product Manager is told in so many words that it cannot decide one. So a
+proposal waits on you whoever owns the document, and the record says you
+exercised that role's authority.
 
   list [--all] [--owner <role>]   what is waiting to be decided
   show <id>                       one proposal and what became of it

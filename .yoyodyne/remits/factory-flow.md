@@ -20,7 +20,7 @@ ensuring that the factory doesn't get stuck, or halt waiting for a human.
 
 - A cause with a clear, bounded remedy is admitted in your lane at the priority
   the harm warrants. A stall that stops all work outranks a slow one.
-- A cause owned by another area goes to the product manager in your digest.
+- A cause owned by another area goes to the Lead Product Manager in your digest.
 - A service that needs restarting is a restart request to the supervisor. Until
   the supervisor carries those out, record the request and name it as a blocker.
 - When new work is admitted, read it for anything that bears on the factory
@@ -43,4 +43,4 @@ run, something runs a post-mortem on it.
   remedy. A cause that repeats across passes is one report with an updated
   count, not a new report each time.
 - Admit the remedy in your lane when it is factory-flow work. Put it in your
-  digest for the product manager otherwise.
+  digest for the Lead Product Manager otherwise.

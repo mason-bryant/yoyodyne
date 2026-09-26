@@ -423,11 +423,11 @@ to the brief, are named on stderr beside a set that still holds every document
 it read. The brief is the root and the decision records are not downstream of
 it, so neither is reported for supporting nothing.
 
-Who changed each document is reported the same way. The product manager owns the
-brief and the goals and the architect owns the designs, specifications, and
-decision records, so a revision log recording a change by any other role is named
-on stderr as an unauthorized revision. The document still loads: the log is
-append-only, and losing it would leave a document nobody could correct.
+Who changed each document is reported the same way. The Lead Product Manager
+owns the brief and the goals and the architect owns the designs, specifications,
+and decision records, so a revision log recording a change by any other role is
+named on stderr as an unauthorized revision. The document still loads: the log
+is append-only, and losing it would leave a document nobody could correct.
 
 Your approval of one of these documents is recorded in the same frontmatter,
 against the revision it was given for, so a document amended after you approved

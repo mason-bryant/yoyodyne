@@ -378,7 +378,7 @@ func TestAWithdrawalCarriesTheRoleItWasMadeUnder(t *testing.T) {
 	if withdrawn.WithdrawnRole != domain.RoleProductManager {
 		t.Fatalf("withdrawn role = %q, want the role it was withdrawn under", withdrawn.WithdrawnRole)
 	}
-	if rendered := withdrawn.Render(); !strings.Contains(rendered, "(as the product manager)") {
+	if rendered := withdrawn.Render(); !strings.Contains(rendered, "(as the Lead Product Manager)") {
 		t.Fatalf("Render() = %q, want the role named beside who withdrew it", rendered)
 	}
 	if _, err := operational().Withdraw("the operator, at a command line", "janitor", "recorded in error", recordedAt.Add(time.Hour)); err == nil {

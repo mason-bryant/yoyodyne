@@ -106,7 +106,7 @@ type ProposalConditionError struct {
 }
 
 func (e *ProposalConditionError) Error() string {
-	return "the product manager proposed work whose done-conditions name work no developer run may do: " + e.Err.Error()
+	return "the Lead Product Manager proposed work whose done-conditions name work no developer run may do: " + e.Err.Error()
 }
 
 func (e *ProposalConditionError) Unwrap() error { return e.Err }

@@ -531,7 +531,7 @@ func TestEverySpeakerIsNamedWithTheProductItSpeaksFor(t *testing.T) {
 	}{
 		{speaker: Harness(), name: "Yoyodyne (context-conductor)"},
 		{speaker: Persona(domain.RoleDevelopmentManager, ""), name: "Development Manager (context-conductor)"},
-		{speaker: Persona(domain.RoleProductManager, ""), name: "Product Manager (context-conductor)"},
+		{speaker: Persona(domain.RoleProductManager, ""), name: "Lead Product Manager (context-conductor)"},
 		{speaker: Persona(domain.RoleArchitect, ""), name: "Architect (context-conductor)"},
 		{speaker: Persona(domain.RoleDeveloper, ""), name: "Developer (context-conductor)"},
 		{speaker: Persona(domain.RoleReviewer, ""), name: "Reviewer (context-conductor)"},

@@ -21,7 +21,7 @@ lists docs/configuration.md and none of the guides, and docs/docs-map.md has
 the run that lands the last split document grow the list.
 
 Scope against docs/docs-map.md: every section the map's disposition table
-assigns this guide — Product specifications (+ What the product manager
+assigns this guide — Product specifications (+ What the Lead Product Manager
 sees…), Artifact identity and metadata, Approving a document, Who may change
 an artifact, Protected paths in a developer's change, and Proposing a change
 to a document you do not own. Size: 794 lines against the map's 549-line
@@ -29,7 +29,7 @@ budget; the sections themselves grew after the map's counts were taken.
 -->
 # Configuring artifact homes, identity, and ownership
 
-Where the product manager reads intent from, what identifies a document, how an
+Where the Lead Product Manager reads intent from, what identifies a document, how an
 approval is recorded, who may change which document, and what a developer's
 change is refused from touching.
 
@@ -37,7 +37,7 @@ change is refused from touching.
 
 ## Product specifications
 
-The product manager builds its picture of product intent from the specifications
+The Lead Product Manager builds its picture of product intent from the specifications
 in one configured directory:
 
 ```yaml
@@ -90,7 +90,7 @@ not traceable to anything. A specification that does not follow it — no goals,
 introduction before them, or an empty goals section — is **reported and still
 read**. `yoyo chat` names it on stderr when the conversation opens — and in the
 conversation itself when `/refresh` reads the specifications again — and it is
-listed for the product manager alongside the specifications themselves. Refusing
+listed for the Lead Product Manager alongside the specifications themselves. Refusing
 to load it would silently lose intent somebody wrote down, which is worse than
 loading intent in the wrong shape and saying so.
 
@@ -113,13 +113,13 @@ about identity still counts as one. Goals stated in the brief's own `Goals`
 section count as the goals when there is no goals document — that is where the
 shape above already puts them, and a project that wrote them there has written
 them; once a goals document exists, that document is what the goals are read
-from and the brief's section is not named beside it. What the product manager
+from and the brief's section is not named beside it. What the Lead Product Manager
 does with that signal is the [persona's](agents.md#personas) — the built-in one opens a
 project with no brief or goals by asking what the product is for and offering to
 draft them, and a project that wants something else replaces that guidance like
 any other part of the persona.
 
-### What the product manager sees besides them, and what it does not
+### What the Lead Product Manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
 product ships today.** That last part is the documentation your project names,
@@ -158,7 +158,7 @@ written down here, rather than that the repository holds no documentation.
 Yoyodyne's own documentation layout is eight generic paths (`docs/work.md`,
 `docs/reporting.md`, `docs/operations.md`, and five more), and a repository
 that happens to hold a file at one of them means something else by it. Handing
-those to an adopting project's product manager labeled "what the product
+those to an adopting project's Lead Product Manager labeled "what the product
 ships" is a stranger's prose arriving as description of your product, so the
 harness does not do it: **that set applies only to Yoyodyne's own repository**,
 which it identifies by the Go module that repository declares, and every other
@@ -175,13 +175,13 @@ deliberately narrower than the README's [further-reading
 index](../../README.md#further-reading): the provider-plugin format, the
 coined-term register, the Slack setup, the release notes, the setup skill, and
 the design are all reachable from there and none of them is carried here. So
-adding a document to that index does not thereby show it to the product
-manager — the set has to name it, and a test holds the set to documents this
+adding a document to that index does not thereby show it to the Lead Product
+Manager — the set has to name it, and a test holds the set to documents this
 repository actually has, because a path that stops resolving is a surface the
-product manager silently stops being given.
+Lead Product Manager silently stops being given.
 
 **The set has a ceiling, and a margin under it that warns.** The eight
-documents are carried in full — that is the product manager's decision, taken
+documents are carried in full — that is the Lead Product Manager's decision, taken
 on yoyodyne-ifd.240 and kept on yoyodyne-ifd.403 — and what they add up to is
 measured against `ShippedDocumentationCeiling` in the same file, which is set
 well above what they are today and marks the point at which the briefing's
@@ -203,33 +203,33 @@ that.
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
 shipped-surface section revises that, however emphatically it is written. Where
-the two disagree, the product manager **reports the conflict** rather than
+the two disagree, the Lead Product Manager **reports the conflict** rather than
 resolving it silently or repeating either side as settled product fact. That is
 what makes documentation safe to hand to the role that is authoritative about
 intent: it arrives as an answer to *what exists*, never to *what is wanted*.
 
-**This reverses half of an earlier trade, openly.** Until 2026-08-18 the product
-manager saw the specifications and the tracker and nothing else, narrowed on
+**This reverses half of an earlier trade, openly.** Until 2026-08-18 the Lead Product
+Manager saw the specifications and the tracker and nothing else, narrowed on
 2026-08-16 after a stale sentence in `README.md` reached the operator as a
 statement about the product. What that bought is real and is kept: description
 does not arrive labeled as intent, and it never will again while the section
-carries its label. What it cost was underestimated. On 2026-08-18 the product
-manager did not know `bin/yoyo-status` or `yoyo cost` existed until the operator
+carries its label. What it cost was underestimated. On 2026-08-18 the Lead Product
+Manager did not know `bin/yoyo-status` or `yoyo cost` existed until the operator
 described them, drafted a work item that mis-assumed which surfaces existed, and
 could not evaluate a formatting question about two real outputs it had never
 seen — three failures in one day of the operator's routine interface needing the
 operator to stand in as its eyes.
 
 What is still given up is also real. Reading all of `docs/` is what let the
-product manager notice a contradiction between documentation and reality, and
+Lead Product Manager notice a contradiction between documentation and reality, and
 what it reads now is narrower than that: the design document and the decision
 records are not there, because they say how the product is built and are the
 half of `docs/` that made description reachable as intent in the first place.
 Reconciling accumulated documentation against the code belongs to a role that
 reads the code, and the harness still does not have one. What it has since
 gained is narrower: a management role can [read one named path at a recorded
-commit](../configuration.md#reading-the-repository-from-a-conversation), which lets the product
-manager check a document before it advises about it rather than sweep the tree
+commit](../configuration.md#reading-the-repository-from-a-conversation), which lets the Lead Product
+Manager check a document before it advises about it rather than sweep the tree
 for contradictions. Point `specifications` at a wider directory if you would
 rather have the breadth than the authority; the confinement rule is the only
 limit on where it points.
@@ -467,7 +467,7 @@ weaken.
 
 | Kind | Owner | Every other role |
 | --- | --- | --- |
-| `brief`, `goals`, `non-goals` | Product manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
+| `brief`, `goals`, `non-goals` | Lead Product Manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 | `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 
 The development manager appears in neither row, because it owns no repository
@@ -758,8 +758,8 @@ yoyo amendment decline <id> --reason ...  # turn it down, keeping why
 
 **Every decision is yours, whoever owns the document.** An owning role that runs
 is shown what has been proposed against its documents and argues for or against
-it — proposals against the brief and the goals are carried into the product
-manager's conversation, and proposals against the designs, the specifications,
+it — proposals against the brief and the goals are carried into the Lead Product
+Manager's conversation, and proposals against the designs, the specifications,
 and the decision records are carried into the architect's, each told in so many
 words that it cannot decide one and cannot edit anything. Both owners can now be
 asked directly: `yoyo agent chat architect` is where the argument about a design
@@ -771,7 +771,7 @@ one the same argument arrives to make again.
 
 An owning role recording its own decision is vocabulary the record already has
 and nothing produces: what would make it real is a decision the harness carries
-out for a role from its own reply, the way it carries out the product manager's
+out for a role from its own reply, the way it carries out the Lead Product Manager's
 tracker actions. Until something does that, read "under the architect's
 authority" on a decision as your judgement standing in for the role, taken after
 hearing it rather than instead of hearing it.
@@ -779,7 +779,7 @@ hearing it rather than instead of hearing it.
 The reviewer is deliberately not given this block. What it finds wrong with a
 change is a finding, which decides whether the change is repaired; a reviewer
 that could also propose amendments would have two ways to say one thing. The
-product manager raises what it cannot place under a goal as a concern, which
+Lead Product Manager raises what it cannot place under a goal as a concern, which
 stops and asks you, for the same reason.
 
 A developer that could not be talked out of its argument makes it again on every
@@ -828,7 +828,7 @@ raised.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The
-product manager's work-item proposals live in the conversation that raised them,
+Lead Product Manager's work-item proposals live in the conversation that raised them,
 in memory, decided inside a turn. A proposed amendment has to survive the run
 that raised it, is addressed to an owning role rather than to you alone, and is
 decided from the command line days later — so what carries over is the shape

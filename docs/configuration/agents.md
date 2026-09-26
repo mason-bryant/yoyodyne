@@ -217,7 +217,7 @@ hold the authority, and Slack is not a boundary they can reach it through.
 
 An instruction from somebody on that list is recorded as a directive against the
 item whose thread it was said in, and reaches the work exactly as one typed at a
-terminal does; a question from them is answered by the product manager in the
+terminal does; a question from them is answered by the Lead Product Manager in the
 same thread and recorded as nothing. A reply from a human this mapping names who is not on it is
 answered in the thread saying it was not acted on, naming the grant they are
 missing — visibly, because a channel that silently ignores some people looks

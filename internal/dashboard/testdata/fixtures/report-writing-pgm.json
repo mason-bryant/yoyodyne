@@ -20,7 +20,7 @@
         "what": "the stale operations section on the dashboard",
         "waiting_on": "product-manager",
         "cites": "report-7d3e1f0a",
-        "reason": "it cites report report-7d3e1f0a, which the product-manager handled at 2026-09-19T12:10:00Z"
+        "reason": "it cites report report-7d3e1f0a, which the Lead Product Manager handled at 2026-09-19T12:10:00Z"
       }
     ],
     "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/writing-pgm/report.json",

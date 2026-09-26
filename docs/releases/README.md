@@ -64,7 +64,7 @@ Which items get the `Requested by` line is read off the admission the item's
 notes record: one admitted from a role's collected report names that role, in
 the report's own words, and one the development manager decomposed out of a
 parent names the development manager, the parent, and the reason recorded. An
-item the operator asked for through the product manager carries no such line.
+item the operator asked for through the Lead Product Manager carries no such line.
 The three releases here today — [`v0.3.0.md`](v0.3.0.md),
 [`v0.4.0.md`](v0.4.0.md), and [`v0.5.0.md`](v0.5.0.md) — were drafted before
 this shape existed and carry titles and goals only; the next draft is the first
@@ -79,13 +79,13 @@ counted in the output rather than dropped quietly.
 
 Where the draft puts each item is placed from its type alone, and that placement
 is a starting point rather than an answer. **Which work is key, which is an
-enhancement, and which fix is critical enough to go to the top is the product
-manager's judgement**, until the post-v1 release-manager role exists. Edit the
+enhancement, and which fix is critical enough to go to the top is the Lead Product
+Manager's judgement**, until the post-v1 release-manager role exists. Edit the
 file, then commit it.
 
 ## The readiness section
 
-One section is not the product manager's and is written by the cut itself: the
+One section is not the Lead Product Manager's and is written by the cut itself: the
 **Release readiness** result, between the markers
 `<!-- yoyodyne:release-readiness -->` and `<!-- /yoyodyne:release-readiness -->`
 at the end of the file. It is what

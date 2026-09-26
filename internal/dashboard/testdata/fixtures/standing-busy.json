@@ -30,7 +30,7 @@
       {
         "conversation_id": "chat-91253e0e070c17b0663651cc48602122",
         "state": "capacity-blocked",
-        "waiting": "the product manager's conversation, chat-91253e0e, is waiting on the provider",
+        "waiting": "the Lead Product Manager's conversation, chat-91253e0e, is waiting on the provider",
         "refused_by": "an exhausted usage limit (seven_day)",
         "model": "claude-opus-5",
         "since": "2026-09-19T12:02:00Z",
@@ -260,7 +260,7 @@
         "worst": "warning"
       },
       "what": "2 of 14 collected report(s) are unhandled, the oldest filed 8d ago, worst warning",
-      "whose": "the product manager's — reports are decided in conversation, and a pile this old says the schedule that works it is not keeping up"
+      "whose": "the Lead Product Manager's — reports are decided in conversation, and a pile this old says the schedule that works it is not keeping up"
     },
     {
       "kind": "conversation-carried-item",
@@ -269,7 +269,7 @@
       "work_item_id": "yoyodyne-ifd.188",
       "executor": "conversation:product-manager",
       "what": "yoyodyne-ifd.188 is admitted for \"conversation:product-manager\" rather than a developer run",
-      "whose": "the product manager's — in conversation; no run will ever be started for it"
+      "whose": "the Lead Product Manager's — in conversation; no run will ever be started for it"
     }
   ],
   "reports": {
@@ -398,7 +398,7 @@
           "what": "the stale operations section on the dashboard",
           "waiting_on": "product-manager",
           "cites": "report-7d3e1f0a",
-          "reason": "it cites report report-7d3e1f0a, which the product-manager handled at 2026-09-19T12:10:00Z"
+          "reason": "it cites report report-7d3e1f0a, which the Lead Product Manager handled at 2026-09-19T12:10:00Z"
         }
       ],
       "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/writing-pgm/report.json",

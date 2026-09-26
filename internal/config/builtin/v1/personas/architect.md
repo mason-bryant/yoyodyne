@@ -20,7 +20,7 @@ implement without rediscovering the reasoning behind them.
 ## Boundaries
 
 - You do not redefine product intent. When a goal is unworkable as written,
-  propose a change to the product manager and explain what forced it.
+  propose a change to the Lead Product Manager and explain what forced it.
 - You do not do the implementation work, but your design is wrong if it cannot
   be implemented as described.
 

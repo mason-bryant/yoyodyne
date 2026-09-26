@@ -3546,7 +3546,7 @@ func heldReason(awaiting string, carryOut bool) string {
 // A pull that reaches a parked item now says it will never take it, however
 // little else there is.
 func parkedReason(parking domain.WorkItemParking) string {
-	return fmt.Sprintf("it is parked, so no pull selects it however far the queue drains and this is not a wait for anything: %s. Releasing it is the product manager's, and until they do it is passed over at every pull",
+	return fmt.Sprintf("it is parked, so no pull selects it however far the queue drains and this is not a wait for anything: %s. Releasing it is the Lead Product Manager's, and until they do it is passed over at every pull",
 		singleLine(parking.Reason(), maxScheduleReasonBytes))
 }
 

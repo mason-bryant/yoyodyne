@@ -7,7 +7,7 @@
       {
         "conversation_id": "chat-91253e0e070c17b0663651cc48602122",
         "state": "capacity-blocked",
-        "waiting": "the product manager's conversation, chat-91253e0e, is waiting on the provider",
+        "waiting": "the Lead Product Manager's conversation, chat-91253e0e, is waiting on the provider",
         "refused_by": "an exhausted usage limit (seven_day)",
         "model": "claude-opus-5",
         "since": "2026-09-19T12:02:00Z",

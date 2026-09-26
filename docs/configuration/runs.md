@@ -382,7 +382,7 @@ eleven in the same order, and a test fails when the two lists differ:
 4. **A conversation executor** withholds an item whose `executor` names a
    persona conversation from every developer run; nothing clears it, and what
    moves the item is somebody opening the conversation it names.
-5. **Parking** withholds an item the product manager parked however far the
+5. **Parking** withholds an item the Lead Product Manager parked however far the
    queue drains, and only her `unpark` releases it.
 6. **A hold** withholds an item whose stopped run left its change on a branch,
    or whose publication did not finish, until the development manager's
@@ -468,7 +468,7 @@ setting that has to move with it.
 Each unit of `max_concurrent_developers` is a **developer slot**: the capacity
 one developer run takes. By default every slot pulls in the order you set. A
 slot can instead prefer a **label** — the tracker's own labels, which the
-product manager and the development manager put on work items — and then it
+Lead Product Manager and the development manager put on work items — and then it
 pulls the ready work carrying that label first, wherever that sits in the
 order, and the rest of the backlog only when none of its label's work is ready.
 On 2026-09-19 the operator directed that one of Yoyodyne's own developer
@@ -494,7 +494,7 @@ keeps the system from stalling, and anything that keeps the system from making
 mistakes. The admission practice that goes with it, from the same day: every
 item admitted under the reliability directive, every bug, and every stall or
 mistake fix carries the `reliability` label from admission, put on by the
-product manager's `labels` field in the same write that admits the item, so the
+Lead Product Manager's `labels` field in the same write that admits the item, so the
 item never exists unlabelled. The [conversation guide](../conversation.md#backlog-state-that-has-stopped-being-true)
 states the same practice where it describes the `labels` and `label` actions,
 in the section on an item's tracker state.

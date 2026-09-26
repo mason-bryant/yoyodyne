@@ -42,7 +42,7 @@ func TestARefusedTurnRecordsWhatIsWaitingAndUntilWhen(t *testing.T) {
 	refusal := recorded[0]
 	// What is waiting has to name the conversation: a refused architect and a
 	// refused product manager are the same limit stopping different work.
-	if !strings.Contains(refusal.Waiting, "product manager") || !strings.Contains(refusal.Waiting, session.Evidence().ConversationID) {
+	if !strings.Contains(refusal.Waiting, "Lead Product Manager") || !strings.Contains(refusal.Waiting, session.Evidence().ConversationID) {
 		t.Fatalf("waiting = %q, want the conversation that was stopped", refusal.Waiting)
 	}
 	if refusal.Kind != "five_hour" {

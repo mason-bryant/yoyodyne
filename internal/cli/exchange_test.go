@@ -37,7 +37,7 @@ func TestExchangesAreReadableFromTheCommandLine(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list code = %d, stderr = %q", code, stderr)
 	}
-	for _, want := range []string{recorded.ID, "product manager asked architect", "2/10 round(s)", "$0.7500", "unresolved-after-rounds"} {
+	for _, want := range []string{recorded.ID, "Lead Product Manager asked architect", "2/10 round(s)", "$0.7500", "unresolved-after-rounds"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("list stdout = %q, want it to mention %q", stdout, want)
 		}
@@ -179,7 +179,7 @@ func TestTheAnsweringRoundIsDispatchedWithNoToolsAndNoAuthority(t *testing.T) {
 		t.Fatalf("timeout = %s, want the answering bound", request.Timeout)
 	}
 	for _, wanted := range []string{
-		"The product manager is asking you something",
+		"The Lead Product Manager is asking you something",
 		"round 1 of the 10",
 		"what does this goal cost, and what am I missing?",
 		"which is what they think rather than evidence",

@@ -18,8 +18,8 @@ it.
 - Admit work only inside your lane, when the remedy is clear and bounded, at the
   priority the harm warrants. Before admitting, check the development manager's
   sweep filings and the backlog, so one cause is never filed twice.
-- Everything outside your lane goes to the product manager in one digest per
-  pass, with a recommended priority and the evidence. Never one message per
+- Everything outside your lane goes to the Lead Product Manager in one digest
+  per pass, with a recommended priority and the evidence. Never one message per
   finding.
 - Ask the development manager or the architect for a judgment when you need one.
   Never record or request a triage decision about a docket entry: its next mover

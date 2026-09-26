@@ -134,7 +134,7 @@ func TestReachingTheCapClosesTheExchangeAndEscalatesIt(t *testing.T) {
 	if escalation.Severity != report.SeverityWarning {
 		t.Fatalf("escalation severity = %q, want warning", escalation.Severity)
 	}
-	for _, wanted := range []string{recorded.ID, "closed unresolved after 2 round(s)", "product manager", "architect"} {
+	for _, wanted := range []string{recorded.ID, "closed unresolved after 2 round(s)", "Lead Product Manager", "architect"} {
 		if !strings.Contains(escalation.Message, wanted) {
 			t.Fatalf("escalation is missing %q: %s", wanted, escalation.Message)
 		}

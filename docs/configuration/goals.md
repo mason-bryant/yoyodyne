@@ -41,20 +41,20 @@ or by upgrading the executable. The bundle states `human` at the same value the
 harness default holds, so `automatic` never arrives on its own.
 
 **Upgrading does move one thing, and it moves toward asking you.** Before this
-key existed the product manager could admit work to the backlog directly, and you
+key existed the Lead Product Manager could admit work to the backlog directly, and you
 were told afterwards rather than asked; `human` refuses that direct admission, so
-a project that upgrades and leaves the key alone has a product manager that
+a project that upgrades and leaves the key alone has a Lead Product Manager that
 proposes work instead of admitting it. That is the whole of the change, it is in
 the direction of more consent rather than less, and the work is not lost — the
 proposal is put to you, and approving it creates the item. Set `work_items` to
 `automatic` to have it admit directly again, against goals you approved.
 
 **Approval moved up a level; it did not disappear.** Three things still stop and
-ask, and they are exactly what the product manager escalates rather than
+ask, and they are exactly what the Lead Product Manager escalates rather than
 proposes: work it can attach to no goal, work it says would cut against one, and
 work that fits the goals and that it judges to be against what the product is
 for. A change to the goals themselves is yours and reaches the queue through
-nothing at all — the product manager argues for one in prose and cannot make one.
+nothing at all — the Lead Product Manager argues for one in prose and cannot make one.
 
 **Nothing is admitted without asking until a goal is actually approved.** The
 attribution has to resolve to a goal an active document states, and that
@@ -69,7 +69,7 @@ goals has nothing for it to rest on, so the combination is refused rather than
 left to be discovered as a queue that never fills. That refusal only ever names a
 key you wrote, because `automatic` is never inherited.
 
-**Both ways work reaches the queue are governed by it.** The product manager can
+**Both ways work reaches the queue are governed by it.** The Lead Product Manager can
 admit work to the backlog directly as well as propose it, and `human` refuses the
 direct admission with a pointer at the proposal it should have made instead — a
 setting that governed proposals while work arrived through the other door would
@@ -97,7 +97,7 @@ up for, and with no way to say so the policy stays a sentence nothing enforces.
 
 **The class is the agent's claim about its own work, and the exemption is yours.**
 A proposal or a `create` may carry `class: diagnosis`, and it means nothing at all
-in a project that has not exempted that class — the product manager is told about
+in a project that has not exempted that class — the Lead Product Manager is told about
 a class only where you have exempted it, precisely so it is never invited to claim
 one that would change nothing. What keeps the claim honest is that the exempted
 class is work that changes nothing: an item claiming to be diagnosis and then
@@ -223,7 +223,7 @@ them would be exactly the guess identity exists to remove.
 
 Only a `goals` artifact is read this way. A brief or a design with a `Goals`
 heading of its own states no goals work may be attributed to — the goals are the
-product manager's document, and reading intent out of anything with the right
+Lead Product Manager's document, and reading intent out of anything with the right
 heading is how a design comes to authorize its own work.
 
 The `Goals` heading is the heading whose **whole text** is `Goals`, at any
@@ -385,7 +385,7 @@ and a rule that failed every one of them would stop a backlog to close a gap tha
 has cost nothing yet. An item that lost the goal it recorded fails for the
 opposite reason — it passed the check, and what is wrong is that the record of it
 was written over. Attributing one is a judgement about what the work is for, so it
-is the product manager's to make in conversation and there is no command here that
+is the Lead Product Manager's to make in conversation and there is no command here that
 makes it.
 
 Work that has closed is held to one half of that rule. `lost` fails there like
@@ -402,7 +402,7 @@ be attributed**: until they are, `yoyo goals attribution` reports most of the
 queue as naming no goal, and that is the queue's real state rather than a
 reporting artefact. Grandfathering is what keeps the work running while the pass
 is outstanding; it is not a substitute for making it. The pass is made by the
-product manager in conversation, working from `yoyo goals attribution` and using
+Lead Product Manager in conversation, working from `yoyo goals attribution` and using
 the `attribute` action on each item — which appends, so nothing already recorded
 is lost.
 

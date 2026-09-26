@@ -71,7 +71,7 @@ frontmatter is still read as product intent, because refusing intent somebody
 wrote down is worse than reading it and saying its identity is missing.
 
 Who may change one of these documents is in the code rather than in a persona.
-The product manager owns the brief and the goals, the architect owns the designs,
+The Lead Product Manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no
 document at all. Creating, amending, superseding, and retiring an artifact each
 refuse a role that does not own the kind, the way the invariants already do —
@@ -154,8 +154,8 @@ the item.
 ```
 
 No command there decides what a piece of work is for, for the same reason
-nothing writes an artifact: that judgement is a product one, made by the product
-manager in the conversation where you can see it. What the harness owns is
+nothing writes an artifact: that judgement is a product one, made by the Lead Product
+Manager in the conversation where you can see it. What the harness owns is
 resolving the claim. Two of those commands do write — `witness` and
 `reattribute` — and neither writes a judgement: each records the goal an item
 already names, one into the tracker's metadata and one by the goal's identity. An item that names no goal at all and one that names a

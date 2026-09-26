@@ -140,7 +140,7 @@ func TestATornConversationLineIsSaidByRoleAndTheEventsAfterItAreRead(t *testing.
 		t.Fatalf("said %+v, want the torn line said and then the admission recorded after it", said)
 	}
 	body := harness.rendered(t, said[0])
-	if !strings.Contains(body, "product manager's conversation log") {
+	if !strings.Contains(body, "Lead Product Manager's conversation log") {
 		t.Fatalf("rendered %q, want the log named by the role whose conversation it is", body)
 	}
 	if strings.Contains(body, conversation.ConversationID) {

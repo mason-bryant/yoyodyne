@@ -480,7 +480,7 @@ func recordGoalIdentities(ctx context.Context, tracker beads.Client, goals goal.
 			continue
 		case attribution.Goal.Identity == "":
 			entry.Goal = attribution.Goal.Statement
-			entry.Reason = fmt.Sprintf("the goal it names is stated by %s and carries no identity, so there is nothing to move it onto; the identity is assigned in the goals document, which is the product manager's to amend",
+			entry.Reason = fmt.Sprintf("the goal it names is stated by %s and carries no identity, so there is nothing to move it onto; the identity is assigned in the goals document, which is the Lead Product Manager's to amend",
 				attribution.Goal.ArtifactID)
 			unmatched = append(unmatched, entry)
 			continue
@@ -1052,12 +1052,13 @@ goal's earlier wording and carries no identifier: the words are the whole of
 what it gave, and they now match nothing. Naming the identity is what closes
 that, which is what the roles are asked for and what the harness records.
 
-No command here decides what a piece of work is for. That is the product
-manager's judgement, made in the conversation where the operator can see it, and
-what the harness owns is resolving what an item names and saying what it found.
-Two commands do write, and neither writes a judgement: "witness" copies the goal
-an item's notes already state into the tracker's metadata, and "reattribute"
-appends the goal an item already named, named by that goal's identity.
+No command here decides what a piece of work is for. That is the
+Lead Product Manager's judgement, made in the conversation where the operator
+can see it, and what the harness owns is resolving what an item names and saying
+what it found. Two commands do write, and neither writes a judgement: "witness"
+copies the goal an item's notes already state into the tracker's metadata, and
+"reattribute" appends the goal an item already named, named by that goal's
+identity.
 
   list          the goals work may be attributed to, their identities, and where
                 each is stated

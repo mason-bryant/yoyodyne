@@ -131,7 +131,7 @@ type conversationAuthority struct {
 // of a refusal is what the operator reads.
 var conversationAuthorities = map[domain.AgentRole]conversationAuthority{
 	domain.RoleProductManager: {
-		title: "product manager",
+		title: "Lead Product Manager",
 		owns:  "the brief, the goals, and what is admitted to the backlog and in what order",
 		trackerActions: []string{
 			"read", "survey", "create", "attribute", "update",

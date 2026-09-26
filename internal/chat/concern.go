@@ -219,7 +219,7 @@ type ConcernError struct {
 }
 
 func (e *ConcernError) Error() string {
-	return "the product manager raised a concern the harness cannot read: " + e.Err.Error()
+	return "the Lead Product Manager raised a concern the harness cannot read: " + e.Err.Error()
 }
 
 func (e *ConcernError) Unwrap() error { return e.Err }

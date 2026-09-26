@@ -63,7 +63,7 @@ to an agent's good behavior:
   proposes a change rather than making it.
 
 **You drive it from one conversation.** `yoyo chat` opens it: you talk to a
-product manager that has read your product's own written intent and the work
+Lead Product Manager that has read your product's own written intent and the work
 already tracked against it, approve as many of the work items it proposes as you
 like in a single answer — or hand that decision to your goals and watch the work
 that serves them go into the queue by itself — and say `/work <id>` when you want
@@ -110,8 +110,8 @@ rather than after:
   choosing for itself: it pulls the ready items from the top of the backlog and
   runs up to
   `execution.max_concurrent_developers` of them at once, which defaults to one.
-  The product manager still owns the backlog and its order.
-- **The product manager is the agent you drive the work from**, and it is no
+  The Lead Product Manager still owns the backlog and its order.
+- **The Lead Product Manager is the agent you drive the work from**, and it is no
   longer the only one you can talk to: `yoyo agent chat <name>` addresses any
   configured agent, each with its own durable conversation and its own authority.
   What none of them do yet is act without you — the pulling above is the harness
@@ -217,7 +217,7 @@ Three steps, in this order:
    give your project its own configuration and personas, and its checks
    proposed from what the repository already declares.
 3. **[`yoyo chat`](#3-yoyo-chat--establish-the-brief-and-the-goals)** — establish
-   the brief and the goals with the product manager, and drive the work from
+   the brief and the goals with the Lead Product Manager, and drive the work from
    there.
 
 Nothing here assumes your project is written in Go, and nothing after step 1
@@ -475,7 +475,7 @@ git add -A && git commit -m "adopt yoyo"
 yoyo chat
 ```
 
-**What the product manager can see.** Product intent is the Markdown under
+**What the Lead Product Manager can see.** Product intent is the Markdown under
 `product.specifications` — `docs/product` by default — and nothing else in the
 repository is read as intent. Beside it, and labeled as description rather than
 intent, it is given the documentation of what the product ships today: this
@@ -505,19 +505,19 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 **A repository with none of that written down is the ordinary starting case**,
 and it is what the conversation is for. An empty or missing specifications
 directory is reported as "product intent is not written down", which is a true
-statement about the repository rather than an error, and the product manager
+statement about the repository rather than an error, and the Lead Product Manager
 says exactly that rather than inferring what your product must be about. The
 `README.md` that `yoyo init` writes there does not change that answer: an index
 says what would be filed in a directory and states no intent, so it is carried
 under a heading of its own and never counted as a specification. Tell it
 what you are building and it will draft the brief and the goals with you.
 
-It cannot save them. The product manager runs with no tools at all — it manages
+It cannot save them. The Lead Product Manager runs with no tools at all — it manages
 the Beads backlog through the harness and never touches your filesystem — so the
-division is plain: **the product manager drafts, and you put the files on disk.**
+division is plain: **the Lead Product Manager drafts, and you put the files on disk.**
 Paste what you agreed into `docs/product/`, commit it, and the next conversation
 reads it back as the product's written intent. Nothing fails if you never do, but
-goals are what work is admitted against, and a product manager with no goals to
+goals are what work is admitted against, and a Lead Product Manager with no goals to
 name will stop and ask you for one.
 
 **Then drive the work from the same conversation.** Talk about what you want and
@@ -881,7 +881,7 @@ a bundle, and migration from `.yoyodyne.yaml`.
 - [Release notes](docs/releases/README.md) — one file per tag, what each section
   is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
-  the product manager reads.
+  the Lead Product Manager reads.
 - [Terms](docs/terms.md) — every word this project coined that you can still meet,
   what each means in ordinary words, and where it is used.
 - [Working on yoyo itself](docs/developing-yoyo.md) — the checks, the build, what

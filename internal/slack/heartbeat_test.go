@@ -1210,7 +1210,7 @@ func TestTheWaitingLineSaysAFailedReadIsBeingRetriedInTheHarnesssVoice(t *testin
 	if !strings.Contains(said.Body, "could not read the harness's store and is reading it again") {
 		t.Fatalf("body %q does not say the store read is failing and being retried", said.Body)
 	}
-	if strings.Contains(said.Body, "found nothing") || strings.Contains(said.Body, "product manager") {
+	if strings.Contains(said.Body, "found nothing") || strings.Contains(strings.ToLower(said.Body), "product manager") {
 		t.Fatalf("body %q says the session found nothing, or names the product manager", said.Body)
 	}
 	if strings.Contains(said.Body, "the operator's") {

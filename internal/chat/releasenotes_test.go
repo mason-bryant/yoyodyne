@@ -52,6 +52,22 @@ func TestTheReleaseNotesReadTheAdmissionsThisPackageWrites(t *testing.T) {
 		t.Errorf("REPORTED captured the words as %q, want %q", match[2], want)
 	}
 
+	// The product manager is named as a title, in capitals, since the operator
+	// renamed it the Lead Product Manager; its reports are still read.
+	line = firstLine(t, reportNote(report.Report{
+		ID:       "report-7a2b3c4d",
+		Severity: report.SeverityWarning,
+		Role:     domain.RoleProductManager,
+		Message:  "the goals document names a surface nothing ships.",
+	}))
+	match = patterns["REPORTED"].FindStringSubmatch(line)
+	if match == nil {
+		t.Fatalf("REPORTED %q does not match the Lead Product Manager's report admission:\n%s", patterns["REPORTED"], line)
+	}
+	if match[1] != "Lead Product Manager" {
+		t.Errorf("REPORTED captured the role as %q, want %q", match[1], "Lead Product Manager")
+	}
+
 	session := &Session{state: runstate.Conversation{
 		ConversationID: "chat-419cedb4a013b063f477e322a2a60466",
 		Role:           domain.RoleDevelopmentManager,

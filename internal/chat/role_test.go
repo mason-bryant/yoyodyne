@@ -350,7 +350,7 @@ func TestTheProductManagerAdmitsWorkToTheBacklog(t *testing.T) {
 	if len(tracker.created) != 1 {
 		t.Fatalf("created %d item(s), want 1", len(tracker.created))
 	}
-	if !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the product manager") {
+	if !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the Lead Product Manager") {
 		t.Fatalf("the admission was not recorded as one:\n%s", tracker.created[0].Notes)
 	}
 	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)

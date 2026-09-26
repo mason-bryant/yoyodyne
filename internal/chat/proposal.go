@@ -182,7 +182,7 @@ type ProposalError struct {
 }
 
 func (e *ProposalError) Error() string {
-	return "the product manager proposed work the harness cannot read: " + e.Err.Error()
+	return "the Lead Product Manager proposed work the harness cannot read: " + e.Err.Error()
 }
 
 func (e *ProposalError) Unwrap() error { return e.Err }
@@ -383,7 +383,7 @@ type ProposalPlacementError struct {
 }
 
 func (e *ProposalPlacementError) Error() string {
-	return "the product manager proposed work placed against items that do not exist: " + e.Err.Error()
+	return "the Lead Product Manager proposed work placed against items that do not exist: " + e.Err.Error()
 }
 
 func (e *ProposalPlacementError) Unwrap() error { return e.Err }
@@ -424,7 +424,7 @@ type ProposalGoalError struct {
 }
 
 func (e *ProposalGoalError) Error() string {
-	return "the product manager proposed work under goals the repository does not record: " + e.Err.Error()
+	return "the Lead Product Manager proposed work under goals the repository does not record: " + e.Err.Error()
 }
 
 func (e *ProposalGoalError) Unwrap() error { return e.Err }

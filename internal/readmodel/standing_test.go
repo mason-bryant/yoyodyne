@@ -237,7 +237,7 @@ func TestAPileNothingIsDrainingWaitsOnTheProductManager(t *testing.T) {
 		t.Fatalf("Reports = %#v", standing.Reports)
 	}
 	rendered := standing.Render()
-	for _, want := range []string{"1 of 2 collected report(s) are unhandled", "22d ago", "the product manager's"} {
+	for _, want := range []string{"1 of 2 collected report(s) are unhandled", "22d ago", "the Lead Product Manager's"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered is missing %q:\n%s", want, rendered)
 		}

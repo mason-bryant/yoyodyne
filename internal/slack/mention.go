@@ -83,11 +83,11 @@ const (
 	// product manager admits work, reorders the queue, and spends the operator's
 	// money, so it is held to the grant a thread reply is held to, and the refusal
 	// names the grant rather than the person.
-	ungranted = "Where things stand is what I can tell you — talking to the product manager is for the humans this project granted direct-work with a bound Slack member id, and `operators` in .yoyodyne/config.yaml is where that grant lives."
+	ungranted = "Where things stand is what I can tell you — talking to the Lead Product Manager is for the humans this project granted direct-work with a bound Slack member id, and `operators` in .yoyodyne/config.yaml is where that grant lives."
 	// nothingSaid answers a message that named this app and said nothing else. It
 	// is a prompt rather than a refusal: somebody who typed a mention and stopped
 	// meant to ask something.
-	nothingSaid = "You named me without saying anything — ask me where things stand, or say what you want the product manager to hear."
+	nothingSaid = "You named me without saying anything — ask me where things stand, or say what you want the Lead Product Manager to hear."
 )
 
 // maxAskedBytes bounds how much of somebody's own words one log line carries. It

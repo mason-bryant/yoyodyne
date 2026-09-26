@@ -183,12 +183,12 @@ product:
   repository: %s
 `, bundleName, effective.Version, effective.Product.ID, effective.Product.Repository)
 
-	fmt.Fprintf(&builder, `  # The product manager reads product intent from the specifications under this
-  # directory and from nowhere else in the repository. Beside them, labeled as a
-  # description of what is built rather than as intent, it is given the README,
-  # a fixed set of operator-facing documents under docs/, and the help the
-  # commands print -- not this file, not the source, not the design document. It
-  # must stay inside the repository.
+	fmt.Fprintf(&builder, `  # The Lead Product Manager reads product intent from the specifications under
+  # this directory and from nowhere else in the repository. Beside them, labeled
+  # as a description of what is built rather than as intent, it is given the
+  # README, a fixed set of operator-facing documents under docs/, and the help
+  # the commands print -- not this file, not the source, not the design
+  # document. It must stay inside the repository.
   specifications: %s
   # The architect's durable architectural invariants: one Markdown file per
   # constraint, named by its id. The harness delivers the ones relevant to a
@@ -207,7 +207,7 @@ product:
 execution:
   max_concurrent_developers: %d
   # Each unit of that capacity is a developer slot. A slot may prefer a label --
-  # the tracker's own labels, which the product manager and the development
+  # the tracker's own labels, which the Lead Product Manager and the development
   # manager put on work items -- and then pulls that label's ready work first,
   # wherever it sits in the order, and the rest of the backlog only when none of
   # it is ready. One entry per slot, in slot order; the list may be shorter than
@@ -332,27 +332,26 @@ triage:
   review_rounds_cap: %d
 
 # How long one role may go on asking another one something. Roles can put a
-# question to each other through the harness -- the product manager asking the
-# architect what a goal costs, the architect asking the product manager whether a
-# trade-off is one a user would accept -- and every exchange is recorded where
-# you can read it. This is the hard limit on rounds in one thread. Reaching it
-# closes the exchange as unresolved and tells you about it, because two judgement
-# models can defer to each other politely for ever and the only thing that ends
-# that is a number. It may not be zero: the way to leave the channel unused is to
-# leave it unused.
+# question to each other through the harness -- the Lead Product Manager asking
+# the architect what a goal costs, the architect asking the Lead Product Manager
+# whether a trade-off is one a user would accept -- and every exchange is
+# recorded where you can read it. This is the hard limit on rounds in one
+# thread. Reaching it closes the exchange as unresolved and tells you about it,
+# because two judgement models can defer to each other politely for ever and the
+# only thing that ends that is a number. It may not be zero: the way to leave
+# the channel unused is to leave it unused.
 exchange:
   max_rounds: %d
 
 # How far behind the target branch a management conversation's picture of the
-# repository may fall before the harness re-reads it. The product manager, the
-# architect, and the development manager are briefed once, when a conversation
-# opens, and every later turn resumes a session that already holds that
-# briefing; before each reply the harness counts the landings on the target
-# branch since it was taken and, past this many, re-reads the repository and
-# the tracker before answering. Where the re-read cannot be made the reply says
-# in its own text how many landings old its picture is. This times the re-read
-# and does not switch it off: it may not be zero, and it may not be more than
-# %d.
+# repository may fall before the harness re-reads it. The Lead Product Manager,
+# the architect, and the development manager are briefed once, when a
+# conversation opens, and every later turn resumes a session that already holds
+# that briefing; before each reply the harness counts the landings on the target
+# branch since it was taken and, past this many, re-reads the repository and the
+# tracker before answering. Where the re-read cannot be made the reply says in
+# its own text how many landings old its picture is. This times the re-read and
+# does not switch it off: it may not be zero, and it may not be more than %d.
 conversation:
   refresh_after_landings: %d
 
@@ -367,17 +366,18 @@ conversation:
 # goal is the architect's judgement about how.
 #
 # work_items is the one approval that gates rather than records, and it is where
-# you say how much of this you want to watch. "human" puts every work item to you
-# before it is admitted to the queue, which is what you get until you say
-# otherwise; it refuses the product manager's direct "create" as well as the
-# automatic admission, so the work is proposed to you instead of arriving through
-# a door the setting left open. "automatic" moves that approval up to your goals:
-# work that traces to a goal you approved is then admitted without asking you,
-# and you are told afterwards what went in. Work that traces to no goal, work
-# that would cut against one, and a change to the goals themselves still stop and
-# ask either way. Turning it on gets you a second ramp for free -- nothing is
-# admitted without asking until you have actually approved a goal, so it still
-# asks about everything until your first "yoyo artifact approve".
+# you say how much of this you want to watch. "human" puts every work item to
+# you before it is admitted to the queue, which is what you get until you say
+# otherwise; it refuses the Lead Product Manager's direct "create" as well as
+# the automatic admission, so the work is proposed to you instead of arriving
+# through a door the setting left open. "automatic" moves that approval up to
+# your goals: work that traces to a goal you approved is then admitted without
+# asking you, and you are told afterwards what went in. Work that traces to no
+# goal, work that would cut against one, and a change to the goals themselves
+# still stop and ask either way. Turning it on gets you a second ramp for
+# free -- nothing is admitted without asking until you have actually approved
+# a goal, so it still asks about everything until your first
+# "yoyo artifact approve".
 #
 # Integration and publishing are opted in to separately. Automatic integration is
 # refused unless it is actually gated by the checks below and a reviewer agent,
@@ -674,7 +674,7 @@ func renderScaffoldRecurring(builder *strings.Builder) {
 #       classes rather than working item by item.
 #       Fix what your authority allows. Ask the architect where a ruling is
 #       needed rather than deciding it yourself. File root-cause work with the
-#       product manager for every fix you make -- a repair that leaves the
+#       Lead Product Manager for every fix you make -- a repair that leaves the
 #       cause in place is a repair you will make again next hour.
 #       When the harness is healthy this finds nothing, and that is the report.
 #       A sweep that keeps finding things is itself the signal: say so.

@@ -37,7 +37,7 @@ type AnswerOutcome struct {
 func (a AnswerOutcome) Render() string {
 	return fmt.Sprintf("[%s] answered: %s\n", a.ConcernID, strings.TrimSpace(a.Subject)) +
 		indent("you said: "+a.Answer) +
-		indent("it reaches the product manager when you next say something")
+		indent("it reaches the Lead Product Manager when you next say something")
 }
 
 // namesAConcern reports a message that answers a concern by its identifier, and

@@ -424,7 +424,7 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 // and an instruction answered is direction that never reached the work. Nothing
 // is recorded, and the reply is marked refused, which is what a reply that
 // recorded nothing wears.
-const askedBack = "that reads as either a question or an instruction, so nothing was done with it — end it with a question mark to ask the product manager, or say it as an instruction to record it"
+const askedBack = "that reads as either a question or an instruction, so nothing was done with it — end it with a question mark to ask the Lead Product Manager, or say it as an instruction to record it"
 
 // ask is a question in a thread: the receipt that says it was heard as one, and
 // the question itself framed for the product manager, whose answer follows the
@@ -443,12 +443,12 @@ const askedBack = "that reads as either a question or an instruction, so nothing
 // a product manager already mid-turn, both point at `yoyo chat`.
 func (s *steering) ask(topic notify.Topic, message inboundMessage, question string, at time.Time) (notify.Notification, string) {
 	if s.conversation == nil {
-		return refused(topic, at, "that reads as a question, and this sink was started without the product manager's conversation to carry it to; nothing was recorded, and `yoyo chat` is where to ask it"), ""
+		return refused(topic, at, "that reads as a question, and this sink was started without the Lead Product Manager's conversation to carry it to; nothing was recorded, and `yoyo chat` is where to ask it"), ""
 	}
 	if !s.begin() {
-		return refused(topic, at, "that reads as a question, and the product manager is already answering something else; nothing was recorded — say it again once that lands, or ask at `yoyo chat`"), ""
+		return refused(topic, at, "that reads as a question, and the Lead Product Manager is already answering something else; nothing was recorded — say it again once that lands, or ask at `yoyo chat`"), ""
 	}
-	s.sink.log("a question arrived in the thread of %s from %s, saying %q, and is being taken to the product manager rather than recorded",
+	s.sink.log("a question arrived in the thread of %s from %s, saying %q, and is being taken to the Lead Product Manager rather than recorded",
 		topic.Key(), message.user, singleLine(message.text, maxAskedBytes))
 	return heard(topic, question, at), framed(topic, question)
 }

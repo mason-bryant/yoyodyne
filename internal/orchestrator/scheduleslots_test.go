@@ -363,7 +363,7 @@ func TestTheReportNamesWorkLeftForAnotherSlotRatherThanDeferred(t *testing.T) {
 	for _, want := range []string{
 		string(runstate.PassedOverLeftForAnotherSlot),
 		"developer slot 1 prefers the dashboard label and pulled yoyodyne-dash-1 ahead of it",
-		"a slot with no preference takes this item in the product manager's order",
+		"a slot with no preference takes this item in the Lead Product Manager's order",
 	} {
 		if !strings.Contains(left.Reason, want) {
 			t.Errorf("reason = %q, want it to say %q", left.Reason, want)

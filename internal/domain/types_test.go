@@ -189,6 +189,12 @@ func TestRoleNamesAreTheRoles(t *testing.T) {
 	if got := RoleProgramManager.Title(); got != "program manager" {
 		t.Errorf("Title() = %q, want the name written in full", got)
 	}
+	if got := RoleProductManager.Title(); got != "Lead Product Manager" {
+		t.Errorf("Title() = %q, want the product manager named as the Lead Product Manager", got)
+	}
+	if got := AgentRole("product-manager"); got != RoleProductManager {
+		t.Errorf("the product manager's identifier = %q, want product-manager kept as it was", got)
+	}
 }
 
 // TestAMemoryNameMayLeadWithAWorkItemNumber is the regression test for the

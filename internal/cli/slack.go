@@ -653,7 +653,7 @@ func (c productManagerConversation) Say(ctx context.Context, said string) (slack
 	}
 	defer func() {
 		if err := lease.Release(); err != nil {
-			c.log("the product manager's conversation could not be released after a message from Slack, so a later one may be refused as held: %v", err)
+			c.log("the Lead Product Manager's conversation could not be released after a message from Slack, so a later one may be refused as held: %v", err)
 		}
 	}()
 	return sayToConversation(ctx, session, said, c.log)
@@ -671,7 +671,7 @@ func (c productManagerConversation) Say(ctx context.Context, said string) (slack
 // beside the terminal. What matters is that it is refused rather than spoken:
 // said to the product manager it would buy a confused answer and a turn the
 // operator paid for, which is the defect `yoyo chat --message` already had once.
-const slackCommandRefusal = "That is a command, and commands are not carried out from here — they are your own authority rather than anything the product manager can do. Type it at `yoyo chat`, or as `yoyo` at the terminal. Nothing was said to the product manager and no turn was spent."
+const slackCommandRefusal = "That is a command, and commands are not carried out from here — they are your own authority rather than anything the Lead Product Manager can do. Type it at `yoyo chat`, or as `yoyo` at the terminal. Nothing was said to the Lead Product Manager and no turn was spent."
 
 // refuseCommand is the answer a command typed at this app gets, and reports
 // whether what was said is one.

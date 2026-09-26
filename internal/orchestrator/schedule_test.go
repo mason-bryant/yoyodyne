@@ -4224,7 +4224,7 @@ func TestSchedulerDoesNotDispatchAnItemTheTreeIsNotReadyFor(t *testing.T) {
 				ID: "yoyodyne-ifd.291", Title: "Configuration fails closed on an unrecognized role", Status: "open",
 				Description: "The implementation pinpoint: domain.Backend.SupportsRole returns true for every role.",
 			},
-			required: []string{"stale-pinpoint", "domain.Backend.SupportsRole", "the product manager"},
+			required: []string{"stale-pinpoint", "domain.Backend.SupportsRole", "the Lead Product Manager"},
 		},
 		{
 			name: "machinery on a branch",
@@ -4447,7 +4447,7 @@ func TestASentenceThatSurvivesInAnotherFieldIsRefusedNamingThatField(t *testing.
 	if len(schedule.Started) != 0 {
 		t.Fatalf("started = %#v, want the item still refused while the sentence stands anywhere it authored", schedule.Started)
 	}
-	if len(schedule.Deferred) != 1 || !strings.Contains(schedule.Deferred[0].Reason, "its design guidance, which the product manager's update does not rewrite,") {
+	if len(schedule.Deferred) != 1 || !strings.Contains(schedule.Deferred[0].Reason, "its design guidance, which the Lead Product Manager's update does not rewrite,") {
 		t.Fatalf("deferred = %#v, want the last pull's refusal to name the field the sentence survives in", schedule.Deferred)
 	}
 

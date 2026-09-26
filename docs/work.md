@@ -485,7 +485,7 @@ by its name, so "the slack-reporting design" names
 `docs/designs/slack-reporting-design.md` as surely as the path does — is refused
 with the clause quoted and the fix named, and the fix is one of two things:
 take the clause out of what done means and say that the document's owner (the
-architect for a design or a decision record, the product manager for a product
+architect for a design or a decision record, the Lead Product Manager for a product
 artifact) amends it through the governed path once the run's summary names what
 there is to record; or, where the change behind it is already decided, carry
 the grant on a `Protected-path grant:` line. Only the done-conditions are read —
@@ -543,7 +543,7 @@ another diagnosis of the impediment the last run just diagnosed, and a full
 integration each cycle — and because the run that landed the evidence succeeded,
 no brake counts it. So a landing that does not discharge **parks** its item, with
 the developer's account as the parking reason. Parking is the machinery the
-product manager already has: the item keeps its place in the order, says why it
+Lead Product Manager already has: the item keeps its place in the order, says why it
 is not to be started, and is offered by no pull however far the queue drains,
 until somebody releases it with `unpark`. That is what the developer's "why" is
 written for — it is the sentence whoever considers releasing the item reads, so
@@ -752,7 +752,7 @@ harness choosing:
 ./bin/yoyo work --json
 ```
 
-It reads the admitted work in the order the product manager set, works out which
+It reads the admitted work in the order the Lead Product Manager set, works out which
 of it can be pulled, and starts as many of those at once as
 `execution.max_concurrent_developers` leaves free — which is `1` until you raise
 it. Each run is the run above: its own branch, its own worktree, the same checks,
@@ -802,7 +802,7 @@ she has recorded a decision the harness has still to carry out, or a run that
 integrated the item's change and could not finish publishing it. Whether a
 stopped run's change is still there is looked for in the repository as the hold
 is read, not taken from the run's own removal flags — a flag is a field
-something has to remember to write, and on 2026-09-19 the product manager's
+something has to remember to write, and on 2026-09-19 the Lead Product Manager's
 repair cleared yoyodyne-ifd.372 on one while the item's own notes still said the
 run's branch and worktree were checked and there.
 
@@ -855,8 +855,8 @@ finishes the record, and the hold, the heartbeat's count, the item's
 that cannot read those records holds every blocked item rather than releasing
 work whose hold it could not see.
 
-The claim clearing a stale status is the harness meeting one; the product
-manager corrects them deliberately, in her own pass over the queue, along with
+The claim clearing a stale status is the harness meeting one; the Lead Product
+Manager corrects them deliberately, in her own pass over the queue, along with
 dependencies on work that closed and attributions the goals no longer state. She
 is refused by the same holds and reads them from the same records, so an item
 held for a person is reported with its reason and left alone there too. What that
@@ -888,7 +888,7 @@ eleven in the same order, and a test fails when the two lists differ:
 4. **A conversation executor** withholds an item whose `executor` names a
    persona conversation from every developer run; nothing clears it, and what
    moves the item is somebody opening the conversation it names.
-5. **Parking** withholds an item the product manager parked however far the
+5. **Parking** withholds an item the Lead Product Manager parked however far the
    queue drains, and only her `unpark` releases it.
 6. **A hold** withholds an item whose stopped run left its change on a branch,
    or whose publication did not finish, until the development manager's
@@ -1042,8 +1042,8 @@ spent run, two review rounds, and two rounds counted against that item's cap, so
 an item mis-selected twice reaches its cap having done nothing and escalates work
 nobody ever started.
 
-So an item says what carries it, and whose conversation that is. The product
-manager sets `executor` on the item as it is admitted — `conversation:` followed
+So an item says what carries it, and whose conversation that is. The Lead Product
+Manager sets `executor` on the item as it is admitted — `conversation:` followed
 by the role, as in `conversation:architect` — and `update` takes it too, for work
 already in the queue. The bare word `conversation` is refused: from the handoff
 until whoever holds the item starts on it, the role named here is the only thing
@@ -1062,7 +1062,7 @@ The marker is not retroactive, which is the part worth knowing before you rely
 on it: it covers exactly the items that carry it, so work admitted before you
 started marking carries none and is chosen as ordinary developer work. Bringing
 an existing queue under the guard means marking its conversation-executed items,
-one `update` each, in the product manager's conversation.
+one `update` each, in the Lead Product Manager's conversation.
 
 Two things now read the shape of conversation work, so an item left unmarked by
 mistake is caught before a run is spent on it rather than by the run. On
@@ -1084,7 +1084,7 @@ somebody's decision that a run writes there.
 A marked item also closes when its work lands, rather than by hand. A
 design-only item's landing is a revision in a document the marked role owns,
 and until now the only thing that carried that back to the tracker was the
-product manager closing the item on evidence some turns later — twice, once
+Lead Product Manager closing the item on evidence some turns later — twice, once
 after a developer run had been spent. Now every pull reads the documents the
 marked role owns, and an item whose identifier opens the reason of a revision
 in one of them, made by that role — `yoyodyne-ifd.330 - side conversations
@@ -1115,7 +1115,7 @@ did: it reached work a scope decision had put off the critical path, started it,
 and the run failed having cost $34.38. Nothing about the selection was wrong. The
 deferral lived in a convention nothing that selects work could read.
 
-So the product manager parks it, with `park`, and the reason is the action's own
+So the Lead Product Manager parks it, with `park`, and the reason is the action's own
 reason. A parked item keeps its place in the order, is listed as parked wherever
 the queue is shown, says why it is parked when you read it, and is never selected
 however far the queue drains. It is not a wait: nothing clears, and what moves it
@@ -1167,7 +1167,7 @@ not ready for* — the one docket entry with no run behind it, carrying what the
 item asks for, the read that says the tree does not have it, and who releases it.
 The two halves clear differently and the refusal says which: a pinpoint clears
 itself, so the item is pulled at the first pull after the code lands, while a
-sentence never clears on its own — the product manager amends the item, or the
+sentence never clears on its own — the Lead Product Manager amends the item, or the
 development manager records the dependency the sentence names.
 
 **The reading is remade from the item at every pull, and nothing remembers it.**
@@ -1180,18 +1180,18 @@ soon as the item asks for nothing the tree lacks, has left the backlog, or asks
 for something other than what the entry quotes — in which case the same pull
 dockets it again in the words it now carries. Until that existed nothing took an
 entry off: yoyodyne-ifd.298's went on quoting "this item does not start before
-282's design lands" after the product manager had removed the words and after the
+282's design lands" after the Lead Product Manager had removed the words and after the
 item had been dispatched and closed.
 
 A sentence is quoted with the field it is in — `its description says of it`,
 `its design guidance says of it` — because a copy left in a field nobody looked
 in outlives an amendment to the one they did. The design guidance and the
-acceptance criteria are said to be fields the product manager's update does not
+acceptance criteria are said to be fields the Lead Product Manager's update does not
 rewrite, since it takes the title and the description only and her read of an
 item is bounded: a sentence there is one she can be shown the refusal for and
 not be able to remove herself.
 
-**The refusal also reaches the product manager.** When the entry is docketed, the
+**The refusal also reaches the Lead Product Manager.** When the entry is docketed, the
 same finding is filed as a report — from the harness itself, naming the item and
 what it states — into the pile her conversation is given, so amending the item
 is put in front of the role that can do it rather than relayed to her by whoever
@@ -1580,8 +1580,8 @@ the command exits non-zero on that, exactly as it does on a review that never
 answered. The command says on stderr what the bound kept out either way,
 because what was not shown was not reviewed whatever the verdict decided about
 it. The
-findings are then work, and admitting work to the backlog is the product
-manager's.
+findings are then work, and admitting work to the backlog is the Lead Product
+Manager's.
 
 ### Measuring the reviewer against itself
 

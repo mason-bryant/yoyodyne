@@ -134,7 +134,7 @@ anchor made from inside `docs/product/`, `docs/designs/`, `docs/decisions/`, or
     `make test` with the preamble's line named. `TestThePublishedReleaseNotesLinkIntoTheReadmeIsHeldByThisChecker`
     holds the coverage itself, so the freeze cannot be lost by a change to the
     checker either.
-- **Tracked work items.** The backlog is upstream: the product manager owns it,
+- **Tracked work items.** The backlog is upstream: the Lead Product Manager owns it,
   and no developer rewrites an item to chase a link. **The tracker mentions six
   configuration-guide anchors, and four of them are Tier 1 because of it** —
   unlike at drafting, one of the citing items is open rather than closed:
@@ -293,7 +293,7 @@ table](#what-the-configuration-guide-becomes) either.
 | `#losing-a-race-for-the-target-branch` | `docs/operations.md:1041` | 2 | `configuration/publishing.md` |
 | `#approving-a-document` | `docs/artifacts.md:51` | 2 | `configuration/artifacts.md` |
 | `#protected-paths-in-a-developers-change` | `docs/conversation.md:1098`, `docs/work.md:69` | 2 | `configuration/artifacts.md` |
-| `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:99` | 2 | `configuration/artifacts.md` |
+| `#what-the-lead-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:99` | 2 | `configuration/artifacts.md` |
 | `#traceability-references-and-orphans` | `docs/artifacts.md:85` | 2 | `configuration/goals.md` |
 | `#what-a-change-upstream-leaves-stale` | `docs/artifacts.md:170` | 2 | `configuration/goals.md` |
 | `#the-release-readiness-workflow` | `docs/artifacts.md:355`, `docs/developing-yoyo.md:300` | 2 | **no destination row yet** |
@@ -408,7 +408,7 @@ its notes cite `README.md#talking-to-the-other-agents`**, an anchor ifd.160
 deleted. It is quoted prose inside a recorded review finding rather than a link
 anything follows, and the same finding names the live target, so nothing a
 reader clicks is broken — but it is a live item pointing at a dead anchor, and
-only the product manager can correct it.
+only the Lead Product Manager can correct it.
 
 Two near-misses the sweep turned up, recorded so a re-derivation does not
 re-litigate them. Several intra-file links in `docs/configuration.md` match
@@ -577,7 +577,7 @@ prose the README split writes:
   reporting in threads.
 - [Release notes](docs/releases/README.md) — one file per tag, what each section
   is for, and how a cut drafts one from the work that landed.
-- [`docs/product/`](docs/product) — the brief and goals the product manager reads.
+- [`docs/product/`](docs/product) — the brief and goals the Lead Product Manager reads.
 - [Working on yoyo itself](docs/developing-yoyo.md) — the checks, the build, and
   what a release is.
 ```
@@ -730,7 +730,7 @@ rather than choose a home.
 | `## Extending a built-in bundle` (+ `### Converting an inheriting configuration…`) | 51 (2880–2930) | `configuration/setup.md` |
 | `## Migrating from .yoyodyne.yaml` | 16 (2931–2946) | `configuration/setup.md` |
 | `## Inspection` | 43 (2947–2989) | `configuration/setup.md` |
-| `## Product specifications` (+ `### What the product manager sees…`) | 122 (347–468) | `configuration/artifacts.md` |
+| `## Product specifications` (+ `### What the Lead Product Manager sees…`) | 122 (347–468) | `configuration/artifacts.md` |
 | `## Artifact identity and metadata` | 113 (469–581) | `configuration/artifacts.md` |
 | `### Approving a document` | 63 (582–644) | `configuration/artifacts.md` |
 | `### Who may change an artifact` | 47 (765–811) | `configuration/artifacts.md` |
@@ -797,7 +797,7 @@ Moved to [`configuration/artifacts.md`](configuration/artifacts.md#product-speci
 
 ## What the split breaks that neither item mentions
 
-**The product manager stops being given the content that moves.**
+**The Lead Product Manager stops being given the content that moves.**
 `internal/contextbundle/product.go` carries this repository's own shipped
 documentation as a named set — at drafting
 `[]string{"README.md", "docs/configuration.md"}`, and now
@@ -809,7 +809,7 @@ paths are generic enough that an adopting project holds files at them meaning
 something else; nothing about what this repository is given changed with it, and
 the paragraphs below still describe the set this repository carries. After this
 split those two files are an index and a landing
-page, and everything the product manager reads them *for* lives in thirteen
+page, and everything the Lead Product Manager reads them *for* lives in thirteen
 documents that set did not name. The README half of that has happened:
 yoyodyne-ifd.160 trimmed the README and grew the set to eight in the same
 change, so the six README-split documents are named. The seven
@@ -817,7 +817,7 @@ change, so the six README-split documents are named. The seven
 configuration guide is actually split.
 
 This is the same failure the comment above that variable already records: ifd.20
-narrowed the product manager's view, and the cost came due when it drafted a
+narrowed the Lead Product Manager's view, and the cost came due when it drafted a
 work item that mis-assumed which surfaces existed. Doing it again by accident,
 through a documentation restructure, would be worse than doing it on purpose.
 
@@ -828,7 +828,7 @@ are now named**: yoyodyne-ifd.160 added `conversation.md`, `work.md`,
 `reporting.md`, `artifacts.md`, `operations.md`, and `developing-yoyo.md` in the
 same change that trimmed the README, because that trim is what would otherwise
 have turned this from a pending edit into the ifd.20 failure repeated — the
-product manager reading a landing page and drafting work against surfaces it
+Lead Product Manager reading a landing page and drafting work against surfaces it
 could no longer see. The seven `docs/configuration/` documents are still
 outstanding, and the tranche that lands each one adds it. The set stays
 explicit — this map is the enumeration it needs, which is the argument for the
@@ -842,8 +842,8 @@ README's index, and describes a surface the product ships — declaring a provid
 of your own — but `HarnessShippedDocumentation` does not name it, and did not before the
 split either. Read strictly, "grows to name every document in this map's table"
 says it should. yoyodyne-ifd.121.6 found this and did not act on it: what the
-product manager is shown is a change to the product's behaviour rather than to
-the split's structure, and it is the product manager's own view that would
+Lead Product Manager is shown is a change to the product's behaviour rather than to
+the split's structure, and it is the Lead Product Manager's own view that would
 change. It is recorded here so the decision is taken rather than inherited.
 
 **Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
@@ -939,7 +939,7 @@ when somebody remembered.
    `docs/configuration-runs.md` and so on? The directory is proposed; the
    coexistence is admittedly odd to look at.
 5. **Does `HarnessShippedDocumentation` growing to fifteen entries change what the
-   product manager should be given at all**, or is the enumeration the right
+   Lead Product Manager should be given at all**, or is the enumeration the right
    answer to keep?
 
 ## What the operator is being asked

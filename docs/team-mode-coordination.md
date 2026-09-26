@@ -19,7 +19,7 @@ draft to be adopted: when the architect ratifies it, it moves under
 `supports: v1-goals` — subject to the note below on that goal's standing.
 
 It designs against [team mode scope](team-mode-scope.md), which states on its own
-first line that the product manager drafted it and the operator approved it in
+first line that the Lead Product Manager drafted it and the operator approved it in
 conversation on 2026-08-19, and it serves the v1 goal *"A team can run Yoyodyne
 against one shared repository: collaborators each run their own harness without
 losing work, splitting the tracker, or weakening any safety invariant."*
@@ -28,11 +28,11 @@ losing work, splitting the tracker, or weakening any safety invariant."*
 caveat: the team goal awaited the operator's pen, was accepted while goal
 validation was down, and should be verified when yoyodyne-ifd.1.9 seeds the
 store. The record answers the first half of that. `docs/product/goals/v1-goals.md`
-states the goal; its revision log records the product manager adding it on
+states the goal; its revision log records the Lead Product Manager adding it on
 2026-08-19, in the amendment that also amended the non-goals; and its approvals
 carry an operator entry against exactly that revision, reading *"Approved by the
 operator in conversation on 2026-08-18, 'Both Approved': the team goal, drafted by
-the product manager for the team-mode epic (yoyodyne-ifd.82)."* So the goal is
+the Lead Product Manager for the team-mode epic (yoyodyne-ifd.82)."* So the goal is
 recorded and approved rather than provisional, and the sentence above cites that
 record rather than asserting it.
 

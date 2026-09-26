@@ -285,7 +285,7 @@ func TestACitationTheRecordDoesNotBearOutIsAClaimWithItsReason(t *testing.T) {
 				s.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{restartRequest("restart-0123456789abcdef", "writing-pgm")}}
 			}},
 		{"a citation to a handled report", "report-00000000000000000000000000000003",
-			"which the product-manager handled at 2026-08-30T11:30:00Z", func(s *Sources) {
+			"which the Lead Product Manager handled at 2026-08-30T11:30:00Z", func(s *Sources) {
 				s.Reports = fakeReports{
 					reports: []report.Report{filedBy("report-00000000000000000000000000000003", "factory-pgm")},
 					handlings: []report.Handling{{ReportID: "report-00000000000000000000000000000003", Role: domain.RoleProductManager,

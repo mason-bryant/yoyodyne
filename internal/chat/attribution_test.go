@@ -308,7 +308,7 @@ func TestWorkAdmittedBeforeGoalsWereCheckedCanAcquireOne(t *testing.T) {
 	if change.Title != "" || change.Description != "" || change.Priority != nil || change.Parent != nil {
 		t.Fatalf("attributing rewrote something: %#v", change)
 	}
-	if !strings.Contains(change.AppendNotes, "Attributed to a goal by the product manager") {
+	if !strings.Contains(change.AppendNotes, "Attributed to a goal by the Lead Product Manager") {
 		t.Fatalf("appended notes carry no provenance: %q", change.AppendNotes)
 	}
 	// The item, with what was appended, now resolves.

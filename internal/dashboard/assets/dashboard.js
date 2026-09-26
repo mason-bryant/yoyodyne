@@ -270,7 +270,7 @@
   // human, and three of them were the human's.
   var movers = [
     { mover: "operator", label: "the operator's" },
-    { mover: "product-manager", label: "the product manager's" },
+    { mover: "product-manager", label: "the Lead Product Manager's" },
     { mover: "architect", label: "the architect's" },
     { mover: "development-manager", label: "the development manager's" },
     { mover: "developer", label: "the developer's" },
@@ -1225,7 +1225,7 @@
     var withReason = function (item) { return { id: item.work_item_id, title: item.title, detail: item.reason }; };
     switch (kind) {
       case "admitted":
-        return listing("Admitted", "every admitted item, in the product manager's order", standing.not_startable_problem, whatToDoAboutTheQueue(), "No work item is admitted.",
+        return listing("Admitted", "every admitted item, in the Lead Product Manager's order", standing.not_startable_problem, whatToDoAboutTheQueue(), "No work item is admitted.",
           (standing.admitted_items || []).map(function (item) { return { id: item.work_item_id, title: item.title }; }));
       case "held":
         return listing("Held back", "admitted items nothing will pull, each with the refusal that stops it", standing.not_startable_problem, whatToDoAboutTheQueue(), "No admitted item is held back.", refused.map(withReason));
@@ -1763,7 +1763,7 @@
   // citedRecords is what each kind of record a blocker's citation resolved to
   // is, in words: an open ask of the instance's own.
   var citedRecords = {
-    "report": "a report of its own the product manager has not handled",
+    "report": "a report of its own the Lead Product Manager has not handled",
     "amendment": "an amendment of its own nobody has decided",
     "exchange": "an exchange of its own still open",
     "restart-request": "a restart request of its own nothing has answered"
