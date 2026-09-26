@@ -1308,3 +1308,49 @@ func TestAMissAlreadyRecordedIsNotRecordedAgain(t *testing.T) {
 		t.Errorf("filed = %+v, want the gap said once", filed.filed)
 	}
 }
+
+// What the real trigger does with a capacity refusal across hours of it: each
+// cadence is a firing that reached nobody, recorded with the provider's words
+// and its reset, and the cadence moves on from it. So no firing goes missing,
+// and a session reading the schedule finds nothing to record as missed.
+func TestACapacityRefusalIsRecordedAtEachCadenceAndMissesNothing(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	clock := &movingRecurringClock{now: recurringNow}
+	refusal := fmt.Errorf("%w: api_error: You've hit your weekly limit · resets Sep 5 at 12:00Z", ErrRoleUnreachable)
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: &wokenRole{failure: refusal}, Clock: clock}
+
+	for hour := range 3 {
+		clock.now = recurringNow.Add(time.Duration(hour) * time.Hour)
+		if _, err := trigger.Fire(context.Background()); err != nil {
+			t.Fatalf("Fire() at hour %d error = %v", hour, err)
+		}
+	}
+
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 3 {
+		t.Fatalf("recorded = %+v, want one pass for each cadence", recorded)
+	}
+	for _, pass := range recorded {
+		if pass.Turns != 0 || !strings.Contains(pass.Problem, "weekly limit") || !strings.Contains(pass.Problem, "resets Sep 5 at 12:00Z") {
+			t.Errorf("pass = %+v, want a firing that reached nobody, naming the wait and its reset", pass)
+		}
+	}
+	dues, err := trigger.Cadence(context.Background())
+	if err != nil {
+		t.Fatalf("Cadence() error = %v", err)
+	}
+	if len(dues) != 1 || !dues[0].At.Equal(clock.now.Add(time.Hour)) {
+		t.Fatalf("dues = %+v, want the cadence moved on by the last refused firing", dues)
+	}
+	watch := recurringWatch{opened: recurringNow.Add(-time.Hour), missed: map[string]time.Time{}}
+	schedule := Schedule{}
+	Scheduler{Now: func() time.Time { return clock.now }}.missed(context.Background(), &schedule, Pull{Recurring: trigger}, &watch)
+	if len(watch.missed) != 0 {
+		t.Errorf("missed = %v, want nothing missed on a cadence the refusals kept moving", watch.missed)
+	}
+}

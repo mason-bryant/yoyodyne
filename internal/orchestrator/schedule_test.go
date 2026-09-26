@@ -5124,7 +5124,7 @@ func TestAMissIsSaidAccordingToWhatKeptIt(t *testing.T) {
 			says:     "no watch session was running",
 		},
 		"the operator's pause": {
-			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "the operator paused harness activity at 2026-09-14T10:00:00Z", quiet: true}},
+			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "the operator paused harness activity at 2026-09-14T10:00:00Z", at: now.Add(-time.Minute), quiet: true}},
 			severity: "",
 			says:     "the operator paused",
 		},
@@ -5137,6 +5137,21 @@ func TestAMissIsSaidAccordingToWhatKeptIt(t *testing.T) {
 			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "You've hit your weekly limit · resets Sep 14 at 18:00Z", at: now.Add(-time.Minute), refused: true}},
 			severity: report.SeverityWarning,
 			says:     "resets Sep 14",
+		},
+		"a hold from before the task fell due": {
+			watch:    recurringWatch{opened: due.Add(-2 * time.Hour), held: recurringHold{why: "the pass took its one firing for the recurring task architect-pass", at: due.Add(-10 * time.Minute), fired: "architect-pass"}},
+			severity: report.SeverityCritical,
+			says:     "recorded nothing that kept it",
+		},
+		"the task's own firing": {
+			watch:    recurringWatch{opened: due.Add(-2 * time.Hour), held: recurringHold{why: "the pass took its one firing for the recurring task development-manager-sweep", at: now.Add(-time.Minute), fired: "development-manager-sweep"}},
+			severity: report.SeverityCritical,
+			says:     "recorded nothing that kept it",
+		},
+		"another task's firing after it fell due": {
+			watch:    recurringWatch{opened: due.Add(-2 * time.Hour), held: recurringHold{why: "the pass took its one firing for the recurring task architect-pass", at: now.Add(-time.Minute), fired: "architect-pass"}},
+			severity: report.SeverityCritical,
+			says:     "architect-pass",
 		},
 		"nothing recorded": {
 			watch:    recurringWatch{opened: due.Add(-time.Hour)},
@@ -5170,6 +5185,12 @@ func TestAMissIsSaidAccordingToWhatKeptIt(t *testing.T) {
 // among them, and the miss says so — as a warning, since the wait is the
 // provider's and has its own notice — and the task fires on its own once the
 // window lifts.
+//
+// This covers only a refusal that holds the cadence without moving it, which is
+// what the double here does. The real trigger moves the cadence on a refused
+// firing and records the refusal as that cadence's pass instead, so no miss
+// arises from it at all; TestACapacityRefusalIsRecordedAtEachCadenceAndMissesNothing
+// covers that path.
 func TestACapacityWaitThatHoldsTheCadenceIsNamedWithItsReset(t *testing.T) {
 	t.Parallel()
 

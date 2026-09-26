@@ -6188,6 +6188,12 @@ problem names the cause. Each cause is also reported differently:
   late but then found the task held by one of the causes above, that cause is
   what gets named.
 - **The operator's pause** is recorded and reported to nobody.
+- **Nothing recorded.** No cause was found at or after the time the task fell
+  due, for example because the session spent the interval somewhere other than
+  its schedule. The miss then says the session recorded nothing that kept the
+  task, and is reported at `critical`. It never names a hold from before the task
+  fell due, because that describes the pass before the gap and not its cause. A
+  task's own firing is never named as what kept it.
 
 The cadence is not moved by a miss. The task is still due, and fires on its own at
 the first pull that reaches it once the cause clears.
