@@ -26,3 +26,21 @@ ensuring that the factory doesn't get stuck, or halt waiting for a human.
 - When new work is admitted, read it for anything that bears on the factory
   running: work that would add a person to a path, or remove a safeguard against
   stalling. Object in your digest where it does.
+
+## Post-mortems on stopped runs
+
+The operator's words, 2026-09-26: every time a limit, fence, or check stops a
+run, something runs a post-mortem on it.
+
+- On each pass, read every developer run that stopped since your last pass: a
+  run that ended failed, timed out, or cancelled, or that is waiting on a
+  decision.
+- Group them by stop cause, meaning the bound or guard that ended them: the
+  check-stage limit, the repair budget, the provider's idle timeout, the usage
+  window, a lost integration race, and so on.
+- File one report per cause at warning severity. Give the count, the runs, and
+  which one was at fault: the bound, the work, or the environment. Name the
+  remedy. A cause that repeats across passes is one report with an updated
+  count, not a new report each time.
+- Admit the remedy in your lane when it is factory-flow work. Put it in your
+  digest for the product manager otherwise.

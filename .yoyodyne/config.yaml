@@ -318,7 +318,7 @@ agents:
       path: personas/program-manager.md
     lane: factory-flow
     remit:
-      version: r1
+      version: r2
       path: remits/factory-flow.md
     triggers:
       every: 2h
