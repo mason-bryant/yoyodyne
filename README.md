@@ -168,14 +168,14 @@ came from. Replacing `@latest` with a version — `@v1.2.3` — pins that releas
 rather than following the newest one.
 
 **From a release download**, if you would rather not have Go at all. Each tag on
-[the releases page](https://github.com/mason-bryant/yoyodyne/releases) carries a
+[the releases page](https://github.com/stigmergent/yoyodyne/releases) carries a
 binary per platform and a `checksums.txt` covering them. Set `tag` to the
 version you want from that page, and `platform` to yours:
 
 ```sh
 tag=<the tag from the releases page>
 platform=darwin_arm64   # or darwin_amd64, or linux_amd64
-base="https://github.com/mason-bryant/yoyodyne/releases/download/$tag"
+base="https://github.com/stigmergent/yoyodyne/releases/download/$tag"
 curl -fsSLO "$base/yoyo_${tag}_${platform}.tar.gz"
 curl -fsSL "$base/checksums.txt" | shasum -a 256 -c --ignore-missing
 tar -xzf "yoyo_${tag}_${platform}.tar.gz"
@@ -189,7 +189,7 @@ yoyo version   # the tag you downloaded
 **From source**, which is also how you work on yoyo itself:
 
 ```sh
-git clone https://github.com/mason-bryant/yoyodyne
+git clone https://github.com/stigmergent/yoyodyne
 cd yoyodyne
 make build
 ```
