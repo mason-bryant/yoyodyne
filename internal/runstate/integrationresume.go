@@ -90,8 +90,10 @@ func (s IntegrationStop) Validate() error {
 
 // ContendedIntegrationFailure opens the failure a run records when its
 // promotion kept losing its target branch to other promotions until its retries
-// were spent. The pipeline writes it and LostItsRace reads it, so the two are
-// one phrase rather than a pattern matched against prose.
+// were spent. The pipeline no longer writes it — since yoyodyne-ifd.429.21 a
+// lost race never stops a run, and only a replay that stops on the change spends
+// the budget — but runs recorded before then carry it, and LostItsRace reads it
+// off them.
 const ContendedIntegrationFailure = "integration lost its target branch"
 
 // LostItsRace reports a run that ended because the target branch kept moving

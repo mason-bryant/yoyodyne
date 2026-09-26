@@ -293,7 +293,8 @@ the kind does.
 | Counter | Configured by | What it bounds | What it is evidence about |
 | --- | --- | --- | --- |
 | `repair_attempts` | `execution.repair_attempts_before_replan` | Developer invocations spent on failures of the change | The change |
-| `integration_retries` | `execution.integration_retries_before_reconciliation` | Promotions re-prepared after losing the target branch | The target branch moving |
+| `integration_retries` | nothing — it is the record of the races | Nothing the run stops on: every promotion re-prepared after losing the target branch, however many | The target branch moving |
+| `charged_replays` | `execution.integration_retries_before_reconciliation` | Replays that stopped on the change — conflicted, or handed back for a failing check, a refused path, missing verification, or a repair verdict; the one that takes the count past the budget stops the run there. A replay that passed is charged nothing | The replayed change |
 | `transient_relaunches` | `execution.transient_relaunches_before_blocking` | Provider invocations reissued after one died without judging the work; the developer and the reviewer share it | The provider |
 | `usage_limit_paused_seconds` | `execution.usage_limit_max_pause` | Total waiting committed across every pause | The provider's capacity |
 | `retries` | nothing in the configuration | Per boundary: a two-hour window of Fibonacci waits capped at half an hour | The network under one boundary |
@@ -485,7 +486,7 @@ re-closing or re-blocking an item is exactly what a sweep must not do.
 | `operator-hold-parks-a-claimed-run-and-accounts-for-what-it-cost` | The same hold read at a provider-call boundary of a run already claimed, and `operator_held_seconds` |
 | `intake-hold-starts-nothing-the-harness-chose` | The narrower hold, on the choosing rather than the work |
 | `promotion-is-replayed-when-the-target-branch-moves` | The replay re-earning the whole gate |
-| `integration-retries-are-bounded-and-block-the-item` | The retry budget |
+| `a-replay-that-stops-on-the-change-spends-the-integration-budget` | The integration budget, spent by a replay that stops on the change and never by the race |
 | `reconciliation-completes-a-run-interrupted-inside-integration` | Settlement from the repository rather than the record |
 | `reconciliation-blocks-a-run-interrupted-while-developing` | Settlement as a blocker, and a second sweep finding nothing |
 

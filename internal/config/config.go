@@ -228,13 +228,16 @@ type Product struct {
 type Execution struct {
 	MaxConcurrentDevelopers    int `yaml:"max_concurrent_developers" json:"max_concurrent_developers"`
 	RepairAttemptsBeforeReplan int `yaml:"repair_attempts_before_replan" json:"repair_attempts_before_replan"`
-	// IntegrationRetriesBeforeReconciliation bounds how many times a run whose
+	// IntegrationRetriesBeforeReconciliation bounds the replays of a run whose
 	// promotion lost a race — to another run, or to whoever moved the target
-	// branch mid-run — replays its change onto where the target went and tries
-	// again. Each retry re-runs the deterministic checks and obtains a fresh
-	// independent review, because the reviewed change is not the change that
-	// would now be promoted. Zero never retries, which is the behavior a run had
-	// before this bound existed: the first refusal ends it.
+	// branch mid-run — that stopped on the change: the replay conflicted, or the
+	// replayed change failed its checks or drew a repair verdict. Each replay
+	// re-runs the deterministic checks and obtains a fresh independent review,
+	// because the reviewed change is not the change that would now be promoted,
+	// and a replay that passes both is charged nothing, so a run whose replays
+	// keep passing keeps replaying until it lands. The replay that takes the
+	// count past the bound stops the run there, on the change; zero means no
+	// replay may stop on the change. A lost race itself never stops a run.
 	IntegrationRetriesBeforeReconciliation int `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
 	// TransientRelaunchesBeforeBlocking bounds how many times a run reissues a
 	// provider invocation that died without judging the work — an API error the

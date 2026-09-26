@@ -629,13 +629,12 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 		// A merge the forge still holds is read with its checks, and a red one is
 		// withdrawn before it is handed back or brought up to date.
 		Checks: forge,
-		// Bringing a queued head up to date is a replay, spent from the replay's
-		// own budget, and it makes a finished run live again, so it reads the
-		// hold and the slots a resumption reads. Only the sweep verb hosts the run
-		// it makes live; a pass without Continue leaves the merge queued.
-		IntegrationRetries: parts.config.Execution.IntegrationRetriesBeforeReconciliation,
-		Intake:             parts.intake,
-		Capacity:           parts.config.Execution.MaxConcurrentDevelopers,
+		// Bringing a queued head up to date is a replay, and it makes a finished
+		// run live again, so it reads the hold and the slots a resumption reads.
+		// Only the sweep verb hosts the run it makes live; a pass without Continue
+		// leaves the merge queued.
+		Intake:   parts.intake,
+		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
 		// A run this sweep stops is docketed as it is settled, so a stoppage the
 		// process that made it never got to record still reaches the development
 		// manager.
