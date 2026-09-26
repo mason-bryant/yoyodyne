@@ -1830,7 +1830,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	// on the account it was served under, whatever reset an earlier refusal of it
 	// quoted — which is what reads that refusal, and every surface built on it,
 	// as lifted.
-	if away == nil && err == nil && refusedForUsageLimit(result, err) == nil {
+	if away == nil && err == nil && result.ServedCleanly() {
 		s.noteCapacityServed(s.servingEndpoint(served))
 	}
 	// And it says so in the error the turn fails with. To a person at a terminal

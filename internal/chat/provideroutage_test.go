@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -31,7 +32,7 @@ func TestAServedTurnRecordsTheAccountAndModelItWasServedOn(t *testing.T) {
 	resetsAt := time.Date(2026, 9, 27, 3, 0, 0, 0, time.UTC)
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{IsError: true, UsageLimit: &backendapi.UsageLimit{Kind: "seven_day", ResetsAt: resetsAt}},
-		{SessionID: "session-1", FinalText: "Here it is."},
+		{SessionID: "session-1", FinalText: "Here it is.", Process: execution.ProcessResult{Status: execution.ProcessSucceeded}},
 	}})
 	limits, err := runstate.NewUsageLimitStore(t.TempDir(), "yoyodyne")
 	if err != nil {
@@ -70,6 +71,31 @@ func TestAServedTurnRecordsTheAccountAndModelItWasServedOn(t *testing.T) {
 	// to the key Lifts matches on rather than to the moment.
 	if listed[0].Model != refusals[0].Model || listed[0].AccountAlias != refusals[0].AccountAlias {
 		t.Fatalf("served = %+v, want the account and model the refusal named (%q, %q)", listed[0], refusals[0].AccountAlias, refusals[0].Model)
+	}
+}
+
+// A turn that ended in error with no limit classified on it — a terminal
+// api_error the dialect could not name, which may be a limit the provider is
+// enforcing — is not a served turn and records nothing, so it lifts no refusal.
+func TestATurnEndingInErrorWithNoLimitRecordsNothingServed(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		IsError:    true,
+		StopReason: "api_error",
+		FinalText:  "API Error: 429 rate_limit_error",
+		Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+	}}})
+	served, err := runstate.NewCapacityServedStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewCapacityServedStore() error = %v", err)
+	}
+	options.CapacityServed = served
+	session := openTestSession(t, options)
+
+	_, _ = session.Send(context.Background(), "what is next?")
+	if listed, err := served.List(); err != nil || len(listed) != 0 {
+		t.Fatalf("served after a turn that ended in error = %+v, %v; want nothing recorded", listed, err)
 	}
 }
 

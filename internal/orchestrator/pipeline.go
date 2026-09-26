@@ -6340,7 +6340,7 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		// saying that model's window is open. The model is the one the invocation
 		// recorded asking for — the reviewer's RequestedModel, written to the run
 		// by attemptReview — rather than the configuration.
-		if err == nil && reported.usageLimit == nil && reported.serverOverload == nil && reported.providerOutage == nil {
+		if err == nil && reported.servedCleanly {
 			what := fmt.Sprintf("a review of run %s of %s", a.state.RunID, a.state.WorkItemID)
 			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ReviewModel, what); servedErr != nil {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
@@ -6554,6 +6554,11 @@ type providerEvidence struct {
 	transientFailure *backend.TransientFailure
 	providerOutage   *backend.ProviderOutage
 	processStatus    execution.ProcessStatus
+	// servedCleanly is a review the provider answered with a verdict, a process
+	// that succeeded, and no refusal reported anywhere on it — the only review
+	// that is evidence a window on its model is open. It is set on the verdict's
+	// path alone; every other field here describes a review that was not made.
+	servedCleanly bool
 }
 
 // reviewReachedProvider reports a review attempt the provider actually
@@ -6775,7 +6780,10 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.RequestedModel != configured {
 		return "", providerEvidence{}, fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
 	}
-	return result.Decision, providerEvidence{}, nil
+	return result.Decision, providerEvidence{
+		servedCleanly: result.ProcessStatus == execution.ProcessSucceeded &&
+			result.UsageLimit == nil && result.ServerOverload == nil && result.ProviderOutage == nil,
+	}, nil
 }
 
 func (a *activeRun) clearReviewEvidence() {

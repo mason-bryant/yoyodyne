@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -186,6 +187,59 @@ func TestARetiredConversationIsNeverShownBlockedAndHoldsNobody(t *testing.T) {
 	standing = ReadStanding(context.Background(), capacitySources(current, nil, currentConversations(currentDevelopmentChat)))
 	if len(standing.CapacityBlocked.Conversations) != 1 || standing.CapacityBlocked.Conversations[0].ConversationID != currentDevelopmentChat {
 		t.Fatalf("capacity blocked = %+v, want the current conversation listed", standing.CapacityBlocked.Conversations)
+	}
+}
+
+// Retirement is read off the real conversation store rather than a fake: the
+// store keeps one record per agent, naming the conversation that agent is in
+// now, so after the development manager replaces her conversation only the
+// replacement is current and only the replaced one's refusals are lifted.
+func TestTheConversationStoreNamesOnlyEachAgentsCurrentConversation(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewConversationStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	save := func(agent string, role domain.AgentRole) string {
+		t.Helper()
+		id, err := runstate.NewConversationID()
+		if err != nil {
+			t.Fatalf("NewConversationID() error = %v", err)
+		}
+		if err := store.Save(runstate.Conversation{
+			SchemaVersion:  runstate.ConversationSchemaVersion,
+			ConversationID: id,
+			ProductID:      "yoyodyne",
+			RepositoryID:   "yoyodyne",
+			Agent:          agent,
+			Role:           role,
+			Backend:        domain.BackendClaudeCode,
+			StartedAt:      sevenDayRefused,
+			UpdatedAt:      sevenDayRefused,
+		}); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+		return id
+	}
+	retired := save("development-manager", domain.RoleDevelopmentManager)
+	productManager := save("product-manager", domain.RoleProductManager)
+	replacement := save("development-manager", domain.RoleDevelopmentManager)
+
+	evidence, problem := ReadCapacityEvidence(nil, store)
+	if problem != "" {
+		t.Fatalf("evidence problem = %q, want none", problem)
+	}
+	if evidence.Current[retired] || !evidence.Current[replacement] || !evidence.Current[productManager] {
+		t.Fatalf("current = %v, want the replacement and the product manager's and not the replaced one", evidence.Current)
+	}
+	if !evidence.Lifted(sevenDayRefusal(sevenDayRefused, retired)) {
+		t.Fatal("a refusal of the replaced conversation stands, want it lifted")
+	}
+	for _, current := range []string{replacement, productManager} {
+		if evidence.Lifted(sevenDayRefusal(sevenDayRefused, current)) {
+			t.Fatalf("a refusal of the current conversation %s was lifted, want it standing", current)
+		}
 	}
 }
 

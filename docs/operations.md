@@ -636,7 +636,14 @@ provider serves — a developer attempt, a review with a verdict, a conversation
 turn — writes the account and model it was served on to
 `products/<product>/capacity-served.json` under the state root, and every
 reading of the refusals treats each one recorded before that moment, on that
-account and model, as lifted. The first poll after such a turn pulls again, with
+account and model, as lifted. Only an invocation that genuinely served counts:
+it ended without error, its process succeeded, and nothing on it reported a
+refusal. One that ended in error — a provider death, a malformed stream, an
+`api_error` the dialect could not classify, which may be a limit being
+enforced — writes nothing, and neither does an answer with a limit, an
+overload, or an outage reported beside it. The model recorded is the one the
+invocation asked for, and for a conversation turn failover moved, the
+alternate that answered. The first poll after such a turn pulls again, with
 nothing released. A refusal written before refusals carried the account is
 lifted by its model being served on any account, and one written before they
 carried the model by anything served at all, because neither can be told apart

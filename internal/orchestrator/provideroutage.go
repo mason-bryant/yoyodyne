@@ -120,12 +120,13 @@ type CapacityServedRecorder interface {
 	Record(served runstate.CapacityServed) error
 }
 
-// servedCleanly reports an invocation the provider answered with no refusal
-// reported anywhere on it. A limit, an overload, or an outage reported beside an
-// answer is still not recorded as served: that answer is not evidence a window
-// is open, and a block cleared on it would be cleared on a guess.
+// servedCleanly reports an invocation the provider genuinely served — see
+// backend.RunResult.ServedCleanly — that also returned no error to the caller.
+// An invocation that ended IsError, whose process did not succeed, or that
+// reported any refusal is not recorded as served: none of them is evidence a
+// window is open, and a block cleared on one would be cleared on a guess.
 func servedCleanly(result backend.RunResult, err error) bool {
-	return err == nil && result.ProviderOutage == nil && result.UsageLimit == nil && result.ServerOverload == nil
+	return err == nil && result.ServedCleanly()
 }
 
 // noticeCapacityServed records that the provider served this account and

@@ -5401,6 +5401,40 @@ func (r *recordedServed) forModel(model string) []runstate.CapacityServed {
 	return matched
 }
 
+// A developer attempt that ended in error with no limit classified on it — a
+// terminal api_error the dialect could not name, which may be a limit the
+// provider is enforcing — returned no Go error and is still not a served
+// attempt. Recording it would lift every refusal of its account and model and
+// reopen intake into a window the provider never reopened.
+func TestADeveloperAttemptEndingInErrorRecordsNothingServed(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			IsError: true, StopReason: "api_error", FinalText: "API Error: 429 rate_limit_error",
+			Process:   execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+			LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	served := &recordedServed{}
+	pipeline.CapacityServed = served
+
+	_, _ = pipeline.Run(context.Background(), tracker.item.ID)
+	if len(provider.requestsForRole(domain.RoleDeveloper)) == 0 {
+		t.Fatal("no developer attempt was made, so the test proves nothing")
+	}
+	served.mu.Lock()
+	defer served.mu.Unlock()
+	if len(served.served) != 0 {
+		t.Fatalf("served = %#v, want nothing recorded for an attempt that ended in error", served.served)
+	}
+}
+
 // A review the provider refused is recorded as nothing served, and the review
 // it then answers is recorded on the model that review asked for, after the
 // refusal. A served record written for the refused review would lift the very

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -81,7 +82,7 @@ func TestATurnTheAlternateServedIsRecordedAsTheAlternateAndLiftsNoRefusalOfThePr
 	resetsAt := time.Date(2026, 9, 27, 3, 0, 0, 0, time.UTC)
 	provider := &fakeBackend{results: []backendapi.RunResult{
 		{IsError: true, StopReason: "usage_limit", UsageLimit: &backendapi.UsageLimit{Kind: "seven_day", ResetsAt: resetsAt}},
-		{SessionID: "session-1", FinalText: "Served by the alternate."},
+		{SessionID: "session-1", FinalText: "Served by the alternate.", Process: execution.ProcessResult{Status: execution.ProcessSucceeded}},
 	}}
 	limits := newTestUsageLimits(t)
 	served, err := runstate.NewCapacityServedStore(t.TempDir(), "yoyodyne")
