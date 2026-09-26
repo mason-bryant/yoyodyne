@@ -564,13 +564,49 @@ func (s *Store) Runs(workItemID string) ([]State, error) {
 	if err != nil {
 		return nil, err
 	}
+	NewestFirst(states)
+	return states, nil
+}
+
+// NewestFirst puts runs in the order Runs lists them in, in place: most recently
+// started first, and by identifier where two started at the same instant. It is
+// exported so that a reader holding every recorded run walks one item's history
+// in the one agreed direction rather than a second definition of "most recent".
+func NewestFirst(states []State) {
 	sort.SliceStable(states, func(i, j int) bool {
 		if states[i].StartedAt.Equal(states[j].StartedAt) {
 			return states[i].RunID < states[j].RunID
 		}
 		return states[i].StartedAt.After(states[j].StartedAt)
 	})
-	return states, nil
+}
+
+// Unlanded is the run holding one item's change that never reached the
+// integration target, from that item's runs listed newest first, and whether
+// there is one at all. It is the substrate a child carved out of the item is
+// written against.
+//
+// It walks the runs rather than reading the newest, because the newest run is
+// not always the run that says where the change is. A recorded integration is
+// the promotion itself and ends the walk: the change is on the target branch,
+// and nothing an earlier run did is missing any more. A run still going has not
+// failed to land anything yet, so the walk carries on past it. A terminal run
+// with no recorded change and no commit produced nothing, so it says nothing
+// about where the work is, and the walk carries on past that too. What is left
+// is a terminal run that made a change and did not promote it, which is the
+// answer. An item whose every run falls through has nothing off the target
+// branch.
+func Unlanded(newestFirst []State) (State, bool) {
+	for _, state := range newestFirst {
+		if state.Integration != nil {
+			return State{}, false
+		}
+		if !state.Status.Terminal() || (state.Changes == nil && state.HarnessCommit == "") {
+			continue
+		}
+		return state, true
+	}
+	return State{}, false
 }
 
 // Latest reports the most recently started run recorded for one work item,

@@ -16,6 +16,7 @@ package backlog
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -88,6 +89,12 @@ type Hold struct {
 type Holds struct {
 	held map[string]Hold
 	read bool
+	// unlanded is the work whose own change the harness recorded and never saw
+	// reach the integration target, keyed by item, with where that change is. It
+	// is not a hold on those items — their own stoppages say what holds them — but
+	// the substrate a child carved out of one of them may say it builds on; see
+	// OnUnlandedParents.
+	unlanded map[string]string
 }
 
 // ReadHolds is the holds as a reader actually found them, which may be none at
@@ -134,12 +141,98 @@ func (h Holds) Decided(workItemID string) bool {
 // about any item, which is exactly why the queue holds every blocked one.
 func (h Holds) Read() bool { return h.read }
 
+// OnUnlandedParents is these holds with the work whose change never landed,
+// keyed by item and saying where each change is. It is what lets the queue hold
+// a child that says in its own text that it builds on its parent's change, for
+// as long as that change has not landed.
+//
+// That is the only way a re-scope's child is held for its parent's change. The
+// tracker refuses a dependency from a child onto its own parent, because the
+// child already hangs on it, and the fallback that blocked the child instead set
+// a status nothing ever cleared: on 2026-09-25 all six children of
+// yoyodyne-ifd.429.13 were blocked that way, and they superseded the parent's
+// pull request rather than building on its files, so none of them should have
+// waited at all. So the child says which it is, in its own words, and this
+// reads that; a child that says nothing is not held.
+func (h Holds) OnUnlandedParents(unlanded map[string]string) Holds {
+	h.unlanded = unlanded
+	return h
+}
+
 // hold is what somebody has to do before this item is pulled, with an empty
 // reason for an item nothing is holding.
 func (h Holds) hold(item beads.WorkItem) Hold {
 	held := h.held[item.ID]
 	held.Reason = strings.TrimSpace(held.Reason)
 	return held
+}
+
+// substrate is the hold on a child that builds on its parent's change while that
+// change has not landed, and whether there is one. It clears by itself, however
+// the change lands: a later run of the parent promoting it, which the harness's
+// own records then say, or the parent leaving the backlog closed — the preserved
+// branch cherry-picked, the pull request revived and merged, or the substrate
+// rebuilt and the parent closed on it.
+//
+// The parent is read as still standing where it is in the backlog, or where the
+// child's own edge to it carries a status other than closed. A parent that has
+// left the backlog with nothing saying it is unfinished is read as closed: a
+// hold that outlived its parent's closing would be the blocker nobody clears
+// that this replaced.
+func (h Holds) substrate(item beads.WorkItem, unfinished map[string]struct{}) (string, bool) {
+	parent := item.DecomposedFrom()
+	if parent == "" {
+		return "", false
+	}
+	where, unlanded := h.unlanded[parent]
+	if !unlanded || !BuildsOnParent(item, parent) || !standing(item, parent, unfinished) {
+		return "", false
+	}
+	return fmt.Sprintf("it says it builds on %s's change, and %s; it is pulled once that change lands, however it lands, or once %s closes",
+		parent, strings.TrimSpace(where), parent), true
+}
+
+// standing reports the parent an item was carved out of as unfinished.
+func standing(item beads.WorkItem, parent string, unfinished map[string]struct{}) bool {
+	if _, queued := unfinished[parent]; queued {
+		return true
+	}
+	for _, dependency := range item.Dependencies {
+		if strings.TrimSpace(dependency.ID) != parent {
+			continue
+		}
+		if status := strings.TrimSpace(dependency.Status); status != "" {
+			return status != "closed"
+		}
+	}
+	return false
+}
+
+// buildsOn is the one phrasing in which a child says it builds on its parent's
+// change: "builds on the parent's change", or the parent named — "builds on
+// yoyodyne-ifd.100's files". It is closed and narrow on purpose. "builds on the"
+// alone fires on any item describing what it builds on, which is why the
+// readiness reading dropped it; this one only matters on a child whose parent's
+// change never landed, and there it has to be something the development manager
+// wrote deliberately, because it is the whole of what holds the child.
+var buildsOn = regexp.MustCompile(`(?i)\bbuilds? on (the parent|[a-z0-9][a-z0-9._-]*)['’]s (?:change|files|branch)\b`)
+
+// BuildsOnParent reports an item saying in its own words — title, description,
+// design guidance, or acceptance criteria, never the notes the harness writes
+// into — that it builds on the named parent's change. It is exported because a
+// creation says whether the child it made will be held, and that answer has to
+// be this one.
+func BuildsOnParent(item beads.WorkItem, parent string) bool {
+	parent = strings.TrimSpace(parent)
+	for _, text := range []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria} {
+		for _, match := range buildsOn.FindAllStringSubmatch(text, -1) {
+			named := match[1]
+			if strings.EqualFold(named, "the parent") || (parent != "" && strings.EqualFold(named, parent)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Entry is one admitted work item at the position the product manager's
@@ -187,6 +280,11 @@ type Entry struct {
 	// are one queue entry apiece and different people to go to, which is the
 	// distinction a single "held for a person" hid for days.
 	AwaitingCarryOut bool `json:"awaiting_carry_out,omitempty"`
+	// AwaitingLanding reports a held item whose hold is its parent's change
+	// landing rather than anybody's decision: a child that says it builds on a
+	// change the harness recorded and never saw reach the target branch. It is a
+	// wait, like WaitingOn, and clears by itself; the reason says what on.
+	AwaitingLanding bool `json:"awaiting_landing,omitempty"`
 	// WaitingOn names the unfinished work this item waits for. It explains an
 	// unready open entry and decides a blocked one, which is not two behaviours
 	// but one rule applied where each answer comes from: an open item's readiness
@@ -275,6 +373,14 @@ func Order(items []beads.WorkItem, ready []string, held Holds) Queue {
 		_, reportedReady := pullable[item.ID]
 		holding := held.hold(item)
 		awaiting := holding.Reason
+		// A child building on its parent's unlanded change is held only where
+		// nothing else is holding it: a stoppage of its own is somebody's to
+		// release, and is the thing that would still refuse it once the parent's
+		// change landed.
+		landing := false
+		if awaiting == "" {
+			awaiting, landing = held.substrate(item, unfinished)
+		}
 		waiting := waitingOn(item, unfinished)
 		queue.Entries = append(queue.Entries, Entry{
 			Position: position + 1,
@@ -289,7 +395,8 @@ func Order(items []beads.WorkItem, ready []string, held Holds) Queue {
 			// Only ever true beside a reason: a decision recorded about an item
 			// nothing is holding says nothing about why it is not being pulled, and
 			// carrying it here would put an item on the held count that no hold is on.
-			AwaitingCarryOut: awaiting != "" && holding.Decided,
+			AwaitingCarryOut: awaiting != "" && holding.Decided && !landing,
+			AwaitingLanding:  landing,
 			// An item whose execution is not a developer run is never the next thing
 			// to pull, however clear the dependency answer about it is, and neither is
 			// one somebody parked or one somebody is holding. All three are a
@@ -552,6 +659,10 @@ func (e Entry) hold() (HoldKind, string) {
 		return HeldByConversation, fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
 	case e.Parking.Parked():
 		return HeldParked, "parked, so no pull selects it however far the queue drains: " + e.Parking.Reason()
+	case e.Awaiting != "" && e.AwaitingLanding:
+		// A wait rather than a hold for a person: nobody decides anything, and it
+		// clears as the parent's change lands.
+		return HeldWaitingOn, e.Awaiting
 	case e.Awaiting != "":
 		return HeldForAPerson, e.Awaiting
 	case len(e.WaitingOn) > 0:

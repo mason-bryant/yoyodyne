@@ -381,23 +381,15 @@ func (r conversationStoppedRuns) WorkItemOf(_ context.Context, runID string) (st
 // reached the integration target, which is the substrate a child decomposed out
 // of that item would be written against.
 //
-// It walks the item's runs newest first rather than reading the newest one,
-// because the newest run is not always the run that says where the change is.
-// The question is what the item's work has left lying off the target branch, and
-// a run answers it in one of four ways.
-//
-// A recorded integration is the promotion itself, and it ends the walk: the
-// change is on the target branch, and nothing an earlier run did is missing any
-// more. A run still going has not failed to land anything yet, so it is not
-// evidence either way and the walk carries on past it — holding a decomposition
-// against work in flight would hold it against a state that resolves itself,
-// while stopping there would report an older stopped run's branch as though
-// nothing were being done about it. A terminal run with no recorded change and
-// no commit produced nothing, so it says nothing at all about where the work is,
-// and the walk carries on past that too; reading it as "nothing is missing" is
-// exactly the hole that let a child be carved against a previous run's branch
-// while a re-run that wrote no code sat in front of it. What is left is a
-// terminal run that made a change and did not promote it, which is the answer.
+// The walk over the item's runs is runstate.Unlanded, which the scheduler's
+// substrate hold reads too, so what a creation records about a parent and what
+// the pull holds a child for are one answer. A run still going is walked past:
+// holding a decomposition against work in flight would hold it against a state
+// that resolves itself, while stopping there would report an older stopped run's
+// branch as though nothing were being done about it. A run that produced nothing
+// is walked past too; reading it as "nothing is missing" is exactly the hole
+// that let a child be carved against a previous run's branch while a re-run that
+// wrote no code sat in front of it.
 //
 // An item whose every run falls through — never run, only ever in flight, only
 // ever empty — has nothing off the target branch, which is nearly every
@@ -408,29 +400,25 @@ func (r conversationStoppedRuns) UnlandedChange(_ context.Context, workItemID st
 	if err != nil {
 		return chat.UnlandedChange{}, false, err
 	}
-	for _, state := range runs {
-		if state.Integration != nil {
-			return chat.UnlandedChange{}, false, nil
-		}
-		if !state.Status.Terminal() || (state.Changes == nil && state.HarnessCommit == "") {
-			continue
-		}
-		// The branch is named whether or not the harness has since removed it. A
-		// removed branch does not make the change any more findable, and a reader
-		// deciding which vehicle lands it is owed the name either way.
-		unlanded := chat.UnlandedChange{
-			RunID:        state.RunID,
-			Branch:       state.Branch,
-			TargetBranch: state.TargetBranch,
-		}
-		if state.PullRequest != nil {
-			unlanded.PullRequest = state.PullRequest.Number
-		}
-		return unlanded, true, nil
+	state, found := runstate.Unlanded(runs)
+	if !found {
+		// Work the harness has never run, and work whose runs left nothing behind,
+		// are both a plain answer about the item rather than a failure to look.
+		return chat.UnlandedChange{}, false, nil
 	}
-	// Work the harness has never run, and work whose runs left nothing behind,
-	// are both a plain answer about the item rather than a failure to look.
-	return chat.UnlandedChange{}, false, nil
+	// The branch is named whether or not the harness has since removed it. A
+	// removed branch does not make the change any more findable, and a reader
+	// deciding which vehicle lands it is owed the name either way.
+	unlanded := chat.UnlandedChange{
+		RunID:        state.RunID,
+		Branch:       state.Branch,
+		Commit:       state.HarnessCommit,
+		TargetBranch: state.TargetBranch,
+	}
+	if state.PullRequest != nil {
+		unlanded.PullRequest = state.PullRequest.Number
+	}
+	return unlanded, true, nil
 }
 
 // roleDocumentSets names the documents a role reads beyond the specifications.
