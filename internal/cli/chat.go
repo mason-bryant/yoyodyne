@@ -831,6 +831,9 @@ func (p preparedChat) open(ctx context.Context, hold *runstate.ConversationHold,
 		// and cleared when one is served, for the same reason: the wait is every
 		// process's for as long as it lasts.
 		ProviderOutages: parts.outages,
+		// And where a served turn says which account and model it was served on,
+		// which is what reads a refusal of them as lifted before its quoted reset.
+		CapacityServed: parts.capacityServed,
 		// The operator's switch over the work the harness chooses for itself, so
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.

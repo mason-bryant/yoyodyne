@@ -159,10 +159,15 @@ type CapacityHold struct {
 // and every agent has to be held, not most of them: a project with one agent
 // still being served is a project whose work is moving, and that is the stall
 // alarm's business rather than this reading's.
-func ReadCapacityHold(agents []AgentEndpoint, runs []runstate.State, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration) CapacityHold {
+//
+// Both records are read against the evidence first: a refusal the provider has
+// since served its account and model through, and a refusal of a conversation
+// its role has since replaced, hold nobody — see CapacityEvidence.
+func ReadCapacityHold(agents []AgentEndpoint, runs []runstate.State, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration, evidence CapacityEvidence) CapacityHold {
 	if len(agents) == 0 {
 		return CapacityHold{}
 	}
+	refusals = evidence.Standing(refusals)
 	// What is standing, by model. An availability substitution names the same
 	// field and means something else: the provider has not got that selector,
 	// which is not a window and must not be read as one.
@@ -171,7 +176,7 @@ func ReadCapacityHold(agents []AgentEndpoint, runs []runstate.State, refusals []
 	unnamed := false
 	// The parked runs go first, so that the count of them below is the count of
 	// the standing ones among the first entries rather than a second pass.
-	parked := ParkedRunRefusals(runs)
+	parked := evidence.Standing(ParkedRunRefusals(runs))
 	parkedStanding := 0
 	for index, refusal := range append(parked, refusals...) {
 		if refusal.Substituted() && refusal.Reason() == runstate.SubstitutedForAvailability {
@@ -311,6 +316,7 @@ func parkedRunRefusal(run runstate.State) (runstate.UsageLimitExhaustion, bool) 
 		Kind:          strings.TrimSpace(run.UsageLimitKind),
 		WorkItemID:    run.WorkItemID,
 		Model:         strings.TrimSpace(run.UsageLimitModel),
+		AccountAlias:  strings.TrimSpace(run.AccountAlias),
 	}
 	if run.UsageLimitPausedSince != nil {
 		refusal.At = run.UsageLimitPausedSince.UTC()
@@ -437,7 +443,9 @@ func CapacityHoldOf(sources Sources, now time.Time) (CapacityHold, string) {
 		}
 		refusals = listed
 	}
-	return ReadCapacityHold(sources.Agents, runs, refusals, now, sources.UnknownResetPause), problem
+	evidence, evidenceProblem := CapacityEvidenceOf(sources)
+	problem = joinProblems(problem, evidenceProblem)
+	return ReadCapacityHold(sources.Agents, runs, refusals, now, sources.UnknownResetPause, evidence), problem
 }
 
 func sortedKeys(set map[string]struct{}) []string {

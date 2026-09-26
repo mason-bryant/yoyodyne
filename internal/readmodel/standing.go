@@ -211,6 +211,13 @@ type Sources struct {
 	// a project whose every refusal went unread for five days is the reason
 	// this is here.
 	UsageLimits UsageLimits
+	// CapacityServed is the latest moment the provider served each account and
+	// model, read against the refusals above: a refusal recorded before a served
+	// turn on its account and model is read as lifted, whatever reset it quoted.
+	// It is optional, and a reading without one clears nothing early — every
+	// refusal then stands until its quoted reset, as it did before the record
+	// existed.
+	CapacityServed CapacityServedRecord
 	// ProviderOutages is the product's record of the provider answering nobody.
 	// It is optional, and a reading without one says nothing about an outage
 	// rather than reporting none — three days of a login nobody was told had

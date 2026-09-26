@@ -184,15 +184,29 @@ const (
 // substitution names no window at all. Refusals that name no conversation — a
 // branch review at somebody's terminal — are not conversations and are not
 // listed. One entry per conversation, however many turns of it were stopped.
-func ReadCapacityBlocked(runs []runstate.State, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration) CapacityBlocked {
+//
+// Both are read against the evidence that a window lifted before its quoted
+// reset. A refusal recorded before the provider served the same account and
+// model is not standing, and neither is a refusal of a conversation its role
+// has since replaced — nothing will happen in that one again — so neither lists
+// a conversation. A run the provider stopped is not listed once the provider
+// has served its account and model since it stopped. A run asleep on its
+// deadline is listed whatever the evidence says, because it is still asleep: it
+// asks again at its next probe, and `yoyo resume` asks now.
+func ReadCapacityBlocked(runs []runstate.State, refusals []runstate.UsageLimitExhaustion, now time.Time, unknownResetPause time.Duration, evidence CapacityEvidence) CapacityBlocked {
 	blocked := CapacityBlocked{
 		Runs:          []CapacityBlockedRun{},
 		Conversations: []CapacityBlockedConversation{},
 	}
 	for _, run := range latestRunPerItem(runs) {
-		if entry, held := capacityBlockedRun(run); held {
-			blocked.Runs = append(blocked.Runs, entry)
+		entry, held := capacityBlockedRun(run)
+		if !held {
+			continue
 		}
+		if refusal, named := stoppedRunRefusal(run, entry); named && entry.State == CapacityStateBlocked && evidence.Lifted(refusal) {
+			continue
+		}
+		blocked.Runs = append(blocked.Runs, entry)
 	}
 	// Sorted by item so two readings of one store list the runs in one order,
 	// whatever order the store scanned them in.
@@ -202,7 +216,7 @@ func ReadCapacityBlocked(runs []runstate.State, refusals []runstate.UsageLimitEx
 
 	held := map[string]*CapacityBlockedConversation{}
 	latest := map[string]time.Time{}
-	for _, refusal := range refusals {
+	for _, refusal := range evidence.Standing(refusals) {
 		if strings.TrimSpace(refusal.ConversationID) == "" || refusal.Substituted() {
 			continue
 		}
@@ -316,6 +330,29 @@ func usageWindowRun(run runstate.State, refused runstate.EnvironmentalRefusal) C
 	return entry
 }
 
+// stoppedRunRefusal is a stopped run as the refusal that stopped it, for the
+// evidence to be read against: the moment it stopped, the model it recorded as
+// refused — or, on a record written before that was carried, the developer's
+// model where it stopped developing — and the account it ran under. A run that
+// can name no model is not one, and is left listed: a stopped review recorded
+// no model at all, and reading it as lifted by whatever was served next would
+// clear it on a turn of some other model.
+func stoppedRunRefusal(run runstate.State, entry CapacityBlockedRun) (runstate.UsageLimitExhaustion, bool) {
+	model := strings.TrimSpace(run.UsageLimitModel)
+	if model == "" && run.Phase == runstate.PhaseDeveloping {
+		model = strings.TrimSpace(run.ProviderModel)
+	}
+	if model == "" {
+		return runstate.UsageLimitExhaustion{}, false
+	}
+	return runstate.UsageLimitExhaustion{
+		At:           entry.Since,
+		WorkItemID:   run.WorkItemID,
+		Model:        model,
+		AccountAlias: strings.TrimSpace(run.AccountAlias),
+	}, true
+}
+
 // capacityPause reports a pause cause that is the provider's capacity rather
 // than its availability or the operator's hold. The empty cause reads as an
 // exhausted usage limit only beside a recorded deadline, which is the reading
@@ -380,8 +417,12 @@ func CapacityBlockedOf(sources Sources, now time.Time) CapacityBlocked {
 		}
 		refusals = listed
 	}
-	blocked := ReadCapacityBlocked(runs, refusals, now, sources.UnknownResetPause)
-	blocked.RunsProblem = runsProblem
-	blocked.ConversationsProblem = refusalsProblem
+	evidence, evidenceProblem := CapacityEvidenceOf(sources)
+	blocked := ReadCapacityBlocked(runs, refusals, now, sources.UnknownResetPause, evidence)
+	// The evidence clears stopped runs as well as conversations, so a failure to
+	// read it is said on both halves: each is a list that may be longer than it
+	// would have been.
+	blocked.RunsProblem = joinProblems(runsProblem, evidenceProblem)
+	blocked.ConversationsProblem = joinProblems(refusalsProblem, evidenceProblem)
 	return blocked
 }

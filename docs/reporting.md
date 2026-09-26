@@ -1212,7 +1212,13 @@ a parked run probing every half hour, does not restart the clock. It lifts at
 the reset — or, for a refusal the provider named no reset for, after
 `execution.usage_limit_unknown_reset_pause` with nothing recorded since, which
 is the same reading failover takes of the same log — and nothing is said about
-that: the turn that is served says it. A parked run is read on the same rule:
+that: the turn that is served says it. It lifts sooner on evidence: a turn or
+a run the provider served on the same account and model after a refusal was
+recorded reads that refusal as lifted, whatever reset it quoted, and a
+refusal of a conversation its role has since replaced holds nobody — the
+same reading [`yoyo status`](operations.md#where-the-harness-stands-the-four-lines)
+and the dashboard take, so the channel never says a hold the terminal has
+cleared. A parked run is read on the same rule:
 it stands until the reset it is parked on where the provider named that reset,
 and for the probe interval from when it parked where the deadline it recorded
 is the harness's own next probe, which is never said as a time the provider

@@ -356,6 +356,19 @@ type RunResult struct {
 // log either way.
 const maxFailureDetailBytes = 512
 
+// ServedCleanly reports an invocation the provider genuinely served: it ended
+// without error, its process succeeded, and nothing on it reports a refusal —
+// no usage limit, no overload, no outage, not even one reported beside an
+// answer. It is the one result that is evidence the window on the model it
+// asked for is open. A death, a malformed stream, a terminal api_error the
+// dialect could not classify, and a limit the provider is enforcing all end
+// otherwise, and a window read as open on one of those would be read as open
+// on a guess.
+func (r RunResult) ServedCleanly() bool {
+	return !r.IsError && r.Process.Status == execution.ProcessSucceeded &&
+		r.UsageLimit == nil && r.ServerOverload == nil && r.ProviderOutage == nil
+}
+
 // DescribeFailure says why a provider ended an invocation badly, in its own name
 // for the ending and its own words about it. It lives on the result rather than
 // at any one caller because every role's invocation dies the same way and the
