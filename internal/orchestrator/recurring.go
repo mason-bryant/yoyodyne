@@ -356,6 +356,19 @@ func (t Trigger) Missed(ctx context.Context, missed RecurringMiss) error {
 	if t.Reports == nil {
 		return errors.New("recording a missed cadence requires the sweep log")
 	}
+	// A gap another session already recorded — the one that was running when it
+	// opened, before a restart — is not recorded or said again. What marks it is
+	// a record of the task that took no turn and starts when the task fell due,
+	// which is the shape only a miss has: a firing starts when it was claimed.
+	recorded, _, err := t.Reports.List()
+	if err != nil {
+		return fmt.Errorf("read whether the missed cadence of the recurring task %s is already recorded: %w", missed.Task, err)
+	}
+	for _, earlier := range recorded {
+		if earlier.Task == missed.Task && earlier.Turns == 0 && earlier.Result == nil && earlier.StartedAt.Equal(missed.Due) {
+			return nil
+		}
+	}
 	now := t.now()
 	late := now.Sub(missed.Due)
 	problem := boundedProblem([]string{fmt.Sprintf(

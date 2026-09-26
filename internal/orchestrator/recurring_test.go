@@ -1277,3 +1277,34 @@ func TestAMissUnderThePauseIsRecordedAndNotReported(t *testing.T) {
 		t.Errorf("filed = %+v, want nothing said about the operator's own pause", filed.filed)
 	}
 }
+
+// A gap already in the sweep log — recorded by the session that was running
+// before a restart — is not recorded or reported a second time by the session
+// that comes after it.
+func TestAMissAlreadyRecordedIsNotRecordedAgain(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	filed := &filedReports{}
+	trigger := Trigger{
+		Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: &wokenRole{},
+		Breakage:    filed,
+		Attribution: report.Attribution{ProductID: "example", RepositoryID: "example"},
+		Clock:       recurringClock{},
+	}
+	miss := RecurringMiss{
+		Task: "a-sweep", Role: domain.RoleDevelopmentManager, Every: time.Hour,
+		Due: recurringNow.Add(-2 * time.Hour), Why: "the harness could not be read", Severity: report.SeverityCritical,
+	}
+	for range 2 {
+		if err := trigger.Missed(context.Background(), miss); err != nil {
+			t.Fatalf("Missed() error = %v", err)
+		}
+	}
+	if recorded, _, _ := store.List(); len(recorded) != 1 {
+		t.Errorf("recorded = %+v, want the gap once", recorded)
+	}
+	if len(filed.filed) != 1 {
+		t.Errorf("filed = %+v, want the gap said once", filed.filed)
+	}
+}

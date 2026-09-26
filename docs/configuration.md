@@ -6157,13 +6157,17 @@ run of its own goes back round to the schedule when the next task falls due,
 fires it, and returns to waiting. Before this, the wait ended only when the run
 did: on 2026-09-13 one run took twenty hours and the development manager's hourly
 task fired nothing in all of them. A session waiting out a redeploy is the one
-exception. It fires nothing until its runs finish and it restarts.
+exception. It fires nothing until its runs finish and it restarts. It still
+wakes when a task falls due, though, and records the miss under the redeploy
+before it restarts.
 
 **A task that goes a whole interval unfired is recorded as missed, with what
 kept it.** A task is missed once it is a whole interval past the time it fell
 due. Anything shorter is the ordinary shape of a cadence: one firing per pull,
 and a firing's turns hold the pull while they are taken. A miss is found at the
-first pull that reaches the schedule afterwards, and is recorded once per gap.
+first pull that reaches the schedule afterwards, or at the first wake of a
+session waiting out a redeploy. A gap is recorded once, even across a restart:
+a session finding a gap already in the sweep log records and reports nothing.
 `yoyo sweeps` shows it as a pass that took no turn, spanning the gap, and its
 problem names the cause. Each cause is also reported differently:
 

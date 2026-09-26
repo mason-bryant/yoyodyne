@@ -5230,3 +5230,63 @@ func TestACapacityWaitThatHoldsTheCadenceIsNamedWithItsReset(t *testing.T) {
 		t.Errorf("firings = %v, want the task resumed within a poll of the reset", tasks.firings)
 	}
 }
+
+// A session waiting out a redeploy fires nothing, since what it waits for is
+// the restart, but a run it waits on can still hold the cadence for a whole
+// interval — the twenty-hour shape with a deploy in the middle of it. The miss
+// is recorded before the restart, under the redeploy and at critical, rather
+// than left for the restarted session to put down as nothing having run.
+func TestARedeployWaitThatHoldsTheCadenceIsRecordedUnderItsCause(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.362")...)
+	harness.now = time.Date(2026, 9, 13, 18, 34, 22, 0, time.UTC)
+	due := time.Date(2026, 9, 13, 19, 31, 48, 0, time.UTC)
+	ended := time.Date(2026, 9, 13, 21, 0, 0, 0, time.UTC)
+	deployment := &deployedOver{}
+	release := make(chan struct{})
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		<-release
+		return h.complete(id), nil
+	}
+	tasks := &cadencedTasks{clock: harness.clock, every: time.Hour, firedAt: due.Add(-time.Hour)}
+	harness.recurring = tasks
+	released := false
+	harness.onSleep = func(h *scheduleHarness, _ int) bool {
+		// The build lands while the run is going, before the task falls due.
+		deployment.deploy()
+		if !released && !h.clock().Before(ended) {
+			released = true
+			close(release)
+		}
+		return true
+	}
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Now: harness.clock, Deployment: deployment}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleRedeployed {
+		t.Fatalf("stopped = %q, want the session restarted into the deploy", schedule.Stopped)
+	}
+
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if len(tasks.firings) != 0 {
+		t.Errorf("firings = %v, want nothing fired while waiting out the redeploy", tasks.firings)
+	}
+	if len(tasks.misses) != 1 {
+		t.Fatalf("misses = %+v, want the gap recorded once before the restart: %s", tasks.misses, schedule.Render())
+	}
+	missed := tasks.misses[0]
+	if !missed.Due.Equal(due) || !strings.Contains(missed.Why, "newly deployed build") {
+		t.Errorf("missed = %+v, want the task due at %s held by the redeploy", missed, due.Format(time.RFC3339))
+	}
+	if missed.Severity != report.SeverityCritical {
+		t.Errorf("severity = %q, want critical for the harness holding its own cadence", missed.Severity)
+	}
+	firstMissed := due.Add(time.Hour)
+	if at := tasks.missedAt[0]; at.Before(firstMissed) || at.After(firstMissed.Add(time.Minute)) {
+		t.Errorf("recorded at %s, want it at the first missed firing, %s", at.Format(time.RFC3339), firstMissed.Format(time.RFC3339))
+	}
+}

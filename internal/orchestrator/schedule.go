@@ -1137,6 +1137,10 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// cadence is what this pass knows about why a recurring task might not have
 	// fired when it fell due; see recurringWatch.
 	cadence := recurringWatch{opened: s.now(), missed: map[string]time.Time{}}
+	// lastPull is the most recent pull this pass opened. A session waiting out a
+	// redeploy opens none, and reads the schedule it last read to know when a
+	// task falls due while it waits.
+	var lastPull Pull
 	// tried is every item this pass has already started, against the item as it
 	// read at the time and what became of the start. A drain never looks at that
 	// reading: nothing is ever removed, because a run that ends without moving the
@@ -1579,18 +1583,29 @@ pulling:
 			// bounded by the run rather than by the queue, because the session has
 			// already stopped claiming: the window an external restart could never
 			// find is one this makes rather than waits for.
+			//
+			// It fires nothing while it waits, since what it is waiting for is the
+			// restart, but it does not go quiet about the schedule either. The wait is
+			// bounded by when the next task falls due, as a live session's is, and a
+			// task that goes a whole interval unfired in it is recorded as missed here,
+			// under this cause, before the restart — a restarted session opens after
+			// the task fell due and could only say that nothing was running.
 			if running > 0 {
-				cadence.hold(recurringHold{why: fmt.Sprintf("the session was waiting out %s of its own before restarting into a newly deployed build, and fires nothing while it does", plural(running, "run", "runs")), at: s.now()})
-				if !collect() {
+				if !collectUntilDue(lastPull) {
 					schedule.Stopped = ScheduleCancelled
 					break
 				}
+				cadence.hold(recurringHold{why: fmt.Sprintf("the session was waiting out %s of its own before restarting into a newly deployed build, and fires nothing while it does", plural(running, "run", "runs")), at: s.now()})
+				s.missed(ctx, &schedule, lastPull, &cadence)
 				continue
 			}
 			schedule.Stopped = ScheduleRedeployed
 			break
 		}
 		pull, err := s.Open(ctx)
+		if err == nil {
+			lastPull = pull
+		}
 		if err != nil {
 			if !unreadable(fmt.Errorf("open a pull: %w", err)) {
 				break
