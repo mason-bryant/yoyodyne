@@ -99,6 +99,13 @@ const (
 	// The three separate facts about getting a change out: promoted locally,
 	// published to a forge, and merged there. A queued merge is its own kind
 	// because it is a run that finished with its publication still owed.
+	// A promotion refused because the target branch moved, answered by replaying
+	// the change onto where the target went. It is said at note severity and
+	// never as a stoppage: nothing is wrong with the change, nothing is waiting
+	// on anybody, and a replay that passes costs the item nothing. It is said at
+	// all because a run that loses several races on a busy branch otherwise reads
+	// as one whose review went round for no stated reason.
+	KindRaceLost       Kind = "promotion.race-lost"
 	KindPromoted       Kind = "promotion.made"
 	KindPublished      Kind = "publication.opened"
 	KindMergeQueued    Kind = "merge.queued"
@@ -391,6 +398,7 @@ func Kinds() []Kind {
 		KindPathRefused,
 		KindReviewApproved,
 		KindReviewRepairs,
+		KindRaceLost,
 		KindPromoted,
 		KindPublished,
 		KindMergeQueued,
@@ -449,7 +457,7 @@ func (k Kind) Valid() bool {
 		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut, KindCapCrossed,
 		KindRunStarted, KindChecksPassed, KindChecksFailed, KindPathRefused,
 		KindReviewApproved, KindReviewRepairs,
-		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
+		KindRaceLost, KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted, KindMergeDropped,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindRunEnded, KindUsageLimitExhausted,
 		KindModelSubstituted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
@@ -763,7 +771,8 @@ type Detail struct {
 	// rather than as a run whose reviewer asked for nothing.
 	Requested []string `json:"requested,omitempty"`
 	// TargetBranch and Commit are where a promotion put the change, read by
-	// KindPromoted.
+	// KindPromoted. TargetBranch is also the branch a race was lost for, read by
+	// KindRaceLost.
 	//
 	// Commit is read a second time by KindResidentStale, where it is the revision
 	// a running session's binary was built from: the same kind of fact — a place
@@ -771,6 +780,10 @@ type Detail struct {
 	// change, and a reader who has both is a reader who can check the count.
 	TargetBranch string `json:"target_branch,omitempty"`
 	Commit       string `json:"commit,omitempty"`
+	// Races is how many races for its target branch a run has lost, read by
+	// KindRaceLost beside TargetBranch. It is the run's own count, so the line
+	// for the third race says it is the third.
+	Races int `json:"races,omitempty"`
 	// Behind is how many harness changes have landed since a running session's
 	// binary was built, read by KindResidentStale. It is the count rather than the
 	// elapsed time because what matters is what the session is missing, and an

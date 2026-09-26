@@ -6432,7 +6432,7 @@ func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
 	if !outcome.Blocked || outcome.Integration != nil || tracker.closed {
 		t.Fatalf("Run() outcome = %#v, closed = %t", outcome, tracker.closed)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "target branch kept moving") {
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "which permits no replay") {
 		t.Fatalf("blocker = %t: %q", tracker.blocked, tracker.blockReason)
 	}
 	// The target keeps whatever moved it, and the run's work stays where a person

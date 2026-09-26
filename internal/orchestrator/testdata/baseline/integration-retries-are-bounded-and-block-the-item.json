@@ -1,10 +1,10 @@
 {
   "scenario": "integration-retries-are-bounded-and-block-the-item",
-  "freezes": "A run that keeps losing its target branch stops at execution.integration_retries_before_reconciliation and blocks with nothing promoted and the change preserved.",
+  "freezes": "A run whose project permits no replay -- execution.integration_retries_before_reconciliation at 0 -- stops on its first lost race and blocks with nothing promoted and the change preserved; at any other budget a lost race whose replay passes spends nothing.",
   "steps": [
     {
       "name": "run",
-      "error": "integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+      "error": "integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
       "ending": "stopped",
       "outcome": {
         "base_commit": "\u003ccommit-2\u003e",
@@ -30,7 +30,7 @@
             "timeout": 1800000000000
           }
         ],
-        "failure": "integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+        "failure": "integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
         "phase": "integrating",
         "preservation": {
           "branch": "yoyodyne/yoyodyne-task/01234567",
@@ -75,7 +75,7 @@
     "account_alias": "default",
     "backend": "claude-code",
     "base_commit": "\u003ccommit-2\u003e",
-    "blocker": "Yoyodyne stopped this item: its target branch kept moving under the promotion, so the change was never integrated.\nIntegration retries: 0 of 0 permitted\nFailure: integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nBase commit: \u003ccommit-2\u003e\nThe checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.\nReviewer session: reviewer-session\nReviewer model: opus (resolved: claude-opus-5-reviewer)\nReviewed against: base \u003ccommit-2\u003e, tip \u003ccommit-3\u003e\nReview decision: approve\nApproved as: implementation\nReview summary: the change matches the acceptance criteria",
+    "blocker": "Yoyodyne stopped this item: its target branch moved under the promotion, and execution.integration_retries_before_reconciliation is 0, which permits no replay, so the change was never integrated.\nReplays that stopped on the change: 0 of 0 permitted\nRaces lost to the moving target: 1\nFailure: integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e\nRun: run-0123456789abcdef0123456789abcdef\nBranch: yoyodyne/yoyodyne-task/01234567\nWorktree: \u003cworktrees\u003e/yoyodyne-task-01234567\nBase commit: \u003ccommit-2\u003e\nThe change standing at the promotion passed its checks and the reviewer approved it; nothing here says it is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.\nReviewer session: reviewer-session\nReviewer model: opus (resolved: claude-opus-5-reviewer)\nReviewed against: base \u003ccommit-2\u003e, tip \u003ccommit-3\u003e\nReview decision: approve\nApproved as: implementation\nReview summary: the change matches the acceptance criteria",
     "branch": "yoyodyne/yoyodyne-task/01234567",
     "changes": {
       "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
@@ -83,7 +83,7 @@
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
-    "failure": "integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+    "failure": "integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
     "harness_commit": "\u003ccommit-3\u003e",
     "last_sequence": 4,
     "phase": "integrating",
@@ -144,7 +144,7 @@
       [
         "Yoyodyne blocked this item; the blocker recorded on the item says what stopped it.",
         "Run: run-0123456789abcdef0123456789abcdef",
-        "Failure: integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+        "Failure: integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
         "Phase: integrating",
         "Branch: yoyodyne/yoyodyne-task/01234567 (checked and there)",
         "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567 (checked and there)",
@@ -165,14 +165,15 @@
       ]
     ],
     "blocker": [
-      "Yoyodyne stopped this item: its target branch kept moving under the promotion, so the change was never integrated.",
-      "Integration retries: 0 of 0 permitted",
-      "Failure: integration lost its target branch after 0 of 0 permitted retry(s): integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
+      "Yoyodyne stopped this item: its target branch moved under the promotion, and execution.integration_retries_before_reconciliation is 0, which permits no replay, so the change was never integrated.",
+      "Replays that stopped on the change: 0 of 0 permitted",
+      "Races lost to the moving target: 1",
+      "Failure: integration lost its target branch with 0 of 0 permitted replay(s) already stopped on the change: integrate approved change: integration target moved away from the recorded base commit: main is at \u003ccommit-1\u003e, recorded base is \u003ccommit-2\u003e",
       "Run: run-0123456789abcdef0123456789abcdef",
       "Branch: yoyodyne/yoyodyne-task/01234567",
       "Worktree: \u003cworktrees\u003e/yoyodyne-task-01234567",
       "Base commit: \u003ccommit-2\u003e",
-      "The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
+      "The change standing at the promotion passed its checks and the reviewer approved it; nothing here says it is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
       "Reviewer session: reviewer-session",
       "Reviewer model: opus (resolved: claude-opus-5-reviewer)",
       "Reviewed against: base \u003ccommit-2\u003e, tip \u003ccommit-3\u003e",

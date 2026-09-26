@@ -1053,9 +1053,11 @@ person to unstick.
 **It loosens no bound**, and what holds that is other budgets rather than the
 rounds. An approval sends the change to promotion rather than back to the
 developer, so the only thing that asks for another verdict inside the same run is
-a promotion that lost its race and replayed — and
-`execution.integration_retries_before_reconciliation` bounds those, so a run's
-uncharged approvals are one plus that budget rather than one. A trivial residue
+a promotion that lost its race and replayed. A replay that passes spends no
+budget, so those approvals are bounded by how often other work lands on the
+target rather than by a number: each one is a race another promotion caused,
+and `execution.integration_retries_before_reconciliation` bounds the replays
+that stop on the change instead. A trivial residue
 does send the change back, and `execution.repair_attempts_before_replan` bounds
 that: an attempt is spent by the attempt, whether or not the verdict that asked
 for it cost a round. How many runs an item gets is bounded in turn by the repair

@@ -628,6 +628,37 @@ func TestAReplayedChangeGetsItsOwnVerdict(t *testing.T) {
 	}
 }
 
+func TestEachLostRaceIsSaidAsANoteNamingTheBranchAndTheCount(t *testing.T) {
+	// A lost race is news in the thread and nothing more: the harness replays the
+	// change by itself, so it is a note, and it is never a blocker or an ending.
+	before := running()
+	before.Phase = runstate.PhaseIntegrating
+	before.TargetBranch = "main"
+	before.IntegrationRetries = 2
+	after := before
+	after.IntegrationRetries = 3
+	kinds, notifications := crossed(t, before, after)
+	if len(kinds) != 1 || kinds[0] != KindRaceLost {
+		t.Fatalf("a lost race crossed %v", kinds)
+	}
+	lost := notifications[0]
+	if lost.Event.Severity != report.SeverityNote || !lost.Speaker.IsHarness() || KindRaceLost.Reach() != ReachThread {
+		t.Fatalf("a lost race is said at %q by %q reaching %q, want a harness note in the thread",
+			lost.Event.Severity, lost.Speaker.Key(), KindRaceLost.Reach())
+	}
+	message, err := Render(lost.Topic, lost.Speaker, lost.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, "main") || !strings.Contains(message.Body, "3 lost races") {
+		t.Fatalf("body %q does not name the branch and the count", message.Body)
+	}
+	// The same count read twice is the same race, and is not said again.
+	if kinds, _ := crossed(t, after, after); len(kinds) != 0 {
+		t.Fatalf("re-reading one race crossed %v", kinds)
+	}
+}
+
 func TestAPromotionIsSaidByTheHarnessThatMadeIt(t *testing.T) {
 	// No agent performs a promotion, so no persona gets to give an account of one.
 	before := running()

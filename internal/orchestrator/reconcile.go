@@ -159,8 +159,9 @@ type Reconciler struct {
 	// nothing more.
 	Checks ReconcileChecks
 	// IntegrationRetries is execution.integration_retries_before_reconciliation:
-	// bringing a queued head up to date is a replay, and spends the budget a
-	// replay spends. A run that has spent it is handed back instead.
+	// bringing a queued head up to date is a replay, bounded as a replay is — by
+	// the replays that stopped on the change, never by the races lost. A run that
+	// has spent it is handed back instead.
 	IntegrationRetries int
 	// Intake and Capacity are read before a queued head is put back at its
 	// promotion, because that makes a finished run live again: a held intake and
