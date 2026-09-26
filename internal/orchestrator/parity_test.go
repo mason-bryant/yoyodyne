@@ -501,8 +501,8 @@ func humanApprovalStoppages() []humanApprovalStoppage {
 // the one gate stoppage a developer's own change cannot produce.
 type refusingChecks struct{ cause error }
 
-func (r refusingChecks) Run(_ context.Context, _, _ string, _ []string, lastSequence uint64, _ func(execution.Event) error) ([]checks.Result, uint64, error) {
-	return nil, lastSequence, r.cause
+func (r refusingChecks) Run(_ context.Context, request checks.Request, _ func(execution.Event) error) ([]checks.Result, uint64, error) {
+	return nil, request.LastSequence, r.cause
 }
 
 // TestHumanApprovalDefinitionEndsAStoppedRunWhereThePipelineLeavesIt holds the

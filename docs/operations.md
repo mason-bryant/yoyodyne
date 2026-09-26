@@ -1246,6 +1246,112 @@ This used to end the run too, in the harder way: the process was killed on the
 spot with `token too long`, so the work in the worktree and the invocation's cost
 went with it.
 
+## What a check stage may cost, and where the whole suite runs
+
+A run's checks are bounded twice, and the two bounds answer different
+questions. `execution.check_timeout` is what one check may spend, thirty
+minutes by default. `execution.check_stage_timeout` is what the whole list may
+spend, from the first check starting to the last one ending — thirty minutes
+by default, and in minutes on purpose. The second exists because the first says
+nothing about the list: on 2026-09-19 a run on this repository sat in its
+checks for over two hours under load, every check inside its own budget and
+`make race` alone past ninety minutes, holding a developer seat and the watch
+session's drain for the whole of it. Twenty-one timing-flake reports in the
+same fortnight were the same suite failing under the load it was creating.
+
+**A stage that reaches its bound ends the run as a stoppage**, `timed_out`,
+with the change preserved and no repair attempt spent — a stage the bound
+stopped never judged the change, so there is nothing to hand a developer. The
+reason names the bound, the check the bound stopped and how long it had run,
+what the stage had spent across how many checks, and what moves it:
+
+```text
+the check stage reached its 30m0s execution.check_stage_timeout bound during make race, which had run for 12m0s; the stage had spent 30m0s across 3 check(s) (gate narrowed to: the whole module (the repository root is not a Go module)); narrow the per-run gate to what the change touches with $YOYODYNE_CHANGED_GO_PACKAGES, move the whole suite to landing_checks, or raise the bound
+```
+
+It is a different stoppage from a check reaching its own budget, and it is
+worded as one, because raising `check_timeout` does nothing for a check the
+stage stopped. Both are docketed for the development manager like any other
+stoppage, and both leave the branch and the worktree where they were.
+
+**While the checks run, the bound is what `yoyo status` shows.** A run in its
+checks says where the stage stands in place of the bare phase — how much of the
+bound it has spent, and which check it is on:
+
+```text
+Running (1 developer run):
+  yoyodyne-ifd.389 — checks: 14m of 30m, on make race, 1h02m elapsed, $4.10 so far
+```
+
+`yoyo status <beads-id>` prints the same line under a run that is in its checks
+or that the bound stopped, and the item's notes carry `Check stage: 14m0s of
+the 30m0s execution.check_stage_timeout bound` above the per-check lines, with
+what the gate was narrowed to. The run's Slack thread says what the stage spent
+of its bound when the checks pass, so the thread reads "checks passed in 14m0s
+of the 30m0s bound" rather than only "passed".
+
+**Where the whole suite runs is once per landing.** The stage fits its bound
+by running the expensive suite narrowed per run and whole per landing. Every
+check is handed `YOYODYNE_CHANGED_GO_PACKAGES`, the Go packages the change
+touches, and a check written to read it — `make race
+RACE_PACKAGES="${YOYODYNE_CHANGED_GO_PACKAGES-./...}"` here, with the shell's
+unset-only default so the same line tests the whole module wherever the
+harness did not set the variable — runs over those alone.
+`landing_checks` is then what runs whole, once per landing on the target
+branch: after a run has integrated, closed its item, and removed its worktree,
+the harness cuts a detached checkout of the integrated commit under the
+worktree root, runs the list there, and removes the checkout. The landing has
+a budget of its own, `execution.landing_check_timeout` (two hours by default,
+per check, with no stage bound over the list), because what is moved there is
+the suite the gate's stage bound cannot hold. The run is over before they
+start, so they hold no seat, no claim, and no place in the queue, and the next
+run starts beside them; what they do hold is the process that ran the landing —
+`yoyo run` reports only once they end, a `yoyo work` drain or `--limit` returns
+only once every run it started has landed, and a deploy's restart waits them
+out with the runs — for up to the budget times the number of landing checks.
+What the landing made of the commit is recorded on the run and said on the
+item and in the thread:
+
+```text
+green landing: 1 landing check passed over 3d3d367a1b2c in 18m
+red landing: make race exited 1 over 3d3d367a1b2c; filed as yoyodyne-ifd.402
+unverified landing: the landing checks did not run to the end over 3d3d367a1b2c (make race was stopped at its 2h0m0s execution.landing_check_timeout budget after 2h0m0s and judged nothing)
+```
+
+A landing check stopped at its budget judged nothing, exactly as a gate check
+the harness stops on time judged nothing, so the landing is unverified rather
+than red and files nothing: the record and the channel say which check was
+stopped and at what budget, and raising `landing_check_timeout` is the remedy.
+
+**A red landing files its own item and blocks nothing.** The run that landed
+the change passed its gate and was approved, so the run stays succeeded and its
+item stays closed. What the harness does is admit a bug at priority 0 — the
+front of the queue — naming the target branch, the commit, the failing check,
+and the run and the item that landed it, with the check's bounded output in
+the item's notes, under the goal the landed item served, because every run
+after it is cut from that commit. A branch that stays red is one such item:
+a later red landing of the same check finds it open, notes the later commit on
+it, and files nothing. The red landing reaches the channel as a warning naming
+the item it filed; a green one stays in the thread; an unverified one reaches
+the channel too, because a landing nobody verified reads as green to anybody
+who was not told.
+
+**A process that dies inside the landing checks is settled by the sweep.** It
+leaves a run that is over with a landing the record says is still running, and
+the checkout the checks ran in — `landing-<run>` under the worktree root —
+still registered. Such a run owes a step, so `yoyo reconcile` takes it up:
+where the process is really gone (a live one still holds the run's lease and is
+left alone) the landing is settled as unverified, saying the process died, and
+the checkout is removed. A checkout the sweep could not remove is named on the
+run for somebody to remove by hand. A run killed inside its per-run checks is
+settled the same way: the sweep closes the stage as interrupted, naming the
+check it was on, so `yoyo status` stops saying the checks are running under a
+run that has ended.
+
+[What a whole check stage may cost](configuration.md#what-a-whole-check-stage-may-cost)
+and [where the whole suite runs](configuration.md#where-the-whole-suite-runs)
+in the configuration guide are the settings and the arithmetic.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got

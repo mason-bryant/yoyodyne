@@ -338,16 +338,16 @@ var ledgerChecks = []string{"make fmtcheck", "make test", "make race", "make vet
 // front of the checks rather than about the checks.
 type passingChecks struct{}
 
-func (passingChecks) Run(_ context.Context, _, _ string, commands []string, lastSequence uint64, _ func(execution.Event) error) ([]checks.Result, uint64, error) {
-	results := make([]checks.Result, 0, len(commands))
-	for _, command := range commands {
+func (passingChecks) Run(_ context.Context, request checks.Request, _ func(execution.Event) error) ([]checks.Result, uint64, error) {
+	results := make([]checks.Result, 0, len(request.Commands))
+	for _, command := range request.Commands {
 		results = append(results, checks.Result{
 			Command: command,
 			Passed:  true,
 			Process: execution.ProcessResult{Status: execution.ProcessSucceeded},
 		})
 	}
-	return results, lastSequence, nil
+	return results, request.LastSequence, nil
 }
 
 // A field stored short is cut on a rune boundary, so what the record keeps of a

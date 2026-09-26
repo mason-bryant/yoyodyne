@@ -13,6 +13,14 @@
           "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
           "status": "A feature.txt"
         },
+        "check_stage": {
+          "bound_seconds": 1800,
+          "command": "test -f feature.txt",
+          "elapsed_seconds": "\u003celapsed\u003e",
+          "finished_at": "\u003ctime\u003e",
+          "narrowed": "the whole module (the repository root is not a Go module)",
+          "started_at": "\u003ctime\u003e"
+        },
         "checks": [
           {
             "command": "test -f feature.txt",
@@ -25,6 +33,8 @@
               "Stderr": "",
               "Stdout": ""
             },
+            "stage_elapsed": "\u003celapsed\u003e",
+            "stage_timeout": 1800000000000,
             "timeout": 1800000000000
           }
         ],
@@ -79,6 +89,14 @@
     "changes": {
       "diff_stat": "feature.txt | 1 +\n 1 file changed, 1 insertion(+)",
       "files": "A feature.txt"
+    },
+    "check_stage": {
+      "bound_seconds": 1800,
+      "command": "test -f feature.txt",
+      "elapsed_seconds": "\u003celapsed\u003e",
+      "finished_at": "\u003ctime\u003e",
+      "narrowed": "the whole module (the repository root is not a Go module)",
+      "started_at": "\u003ctime\u003e"
     },
     "completed_at": "\u003ctime\u003e",
     "config_revision": "\u003cconfig-revision\u003e",
@@ -160,6 +178,7 @@
         "Diff stat:",
         "feature.txt | 1 +",
         " 1 file changed, 1 insertion(+)",
+        "Check stage: \u003celapsed\u003e of the 30m0s execution.check_stage_timeout bound (gate narrowed to: the whole module (the repository root is not a Go module))",
         "Check: test -f feature.txt (passed=true, exit=0, \u003celapsed\u003e of 30m0s)",
         "Reviewer session: reviewer-session",
         "Reviewer model: opus (resolved: claude-opus-5-reviewer)",

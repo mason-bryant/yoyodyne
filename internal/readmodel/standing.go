@@ -285,10 +285,17 @@ type RunningRun struct {
 	// runstate.ResumingIntegrationSays for it in place of the bare phase, because
 	// a run integrating after such a stop and one integrating for the first time
 	// are the same phase and different facts.
-	ResumingIntegration bool          `json:"resuming_integration,omitempty"`
-	StartedAt           time.Time     `json:"started_at"`
-	Elapsed             time.Duration `json:"elapsed"`
-	CostUSD             float64       `json:"cost_usd"`
+	ResumingIntegration bool `json:"resuming_integration,omitempty"`
+	// Checks is where the check stage stands, said as the record words it —
+	// "checks: 14m of 30m, on make race" — and empty for a run whose current
+	// attempt is not in its checks. The line says it in place of the bare phase,
+	// because a run "checking" for forty minutes and a run fourteen minutes into
+	// a thirty-minute stage are the same phase and different facts, and the
+	// second is the one an operator watching a slow stage is reading for.
+	Checks    string        `json:"checks,omitempty"`
+	StartedAt time.Time     `json:"started_at"`
+	Elapsed   time.Duration `json:"elapsed"`
+	CostUSD   float64       `json:"cost_usd"`
 	// UnknownCost says why there is no figure rather than reporting one of zero: a
 	// run whose evidence cannot be read has not cost nothing.
 	UnknownCost string `json:"unknown_cost,omitempty"`
@@ -665,6 +672,7 @@ func readRunning(sources Sources, now time.Time) ([]RunningRun, string) {
 			Phase:               state.Phase,
 			Stage:               StageOf(state.Phase),
 			ResumingIntegration: state.ResumingIntegration(),
+			Checks:              checksOf(state, now),
 			StartedAt:           state.StartedAt,
 			Elapsed:             now.Sub(state.StartedAt),
 			// A run nothing has priced yet is stated as unpriced rather than as free.
@@ -744,6 +752,17 @@ func readSlots(sources Sources, running []RunningRun) []DeveloperSlotStanding {
 		}
 	}
 	return assignment.Slots
+}
+
+// checksOf is where a run's check stage stands, for a run that is in it: what
+// the stage has spent of its bound and which check it is on, in the record's
+// own words. A run in any other phase says nothing here, and so does a record
+// written before the stage was recorded.
+func checksOf(state runstate.State, now time.Time) string {
+	if state.Phase != runstate.PhaseChecking || state.CheckStage == nil || !state.CheckStage.Running() {
+		return ""
+	}
+	return state.CheckStage.Describe(now)
 }
 
 // readWorking is the persona conversations with a turn in flight. A conversation

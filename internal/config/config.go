@@ -69,11 +69,20 @@ type Config struct {
 	// repository is held to. It is always present, at the harness default where
 	// a project writes nothing, because the measurement it times is not
 	// something a project opts into.
-	Conversation Conversation           `yaml:"conversation" json:"conversation"`
-	Research     Research               `yaml:"research,omitempty" json:"research,omitempty"`
-	Approvals    Approvals              `yaml:"approvals" json:"approvals"`
-	Checks       []string               `yaml:"checks" json:"checks"`
-	Agents       map[string]AgentConfig `yaml:"agents" json:"agents"`
+	Conversation Conversation `yaml:"conversation" json:"conversation"`
+	Research     Research     `yaml:"research,omitempty" json:"research,omitempty"`
+	Approvals    Approvals    `yaml:"approvals" json:"approvals"`
+	Checks       []string     `yaml:"checks" json:"checks"`
+	// LandingChecks are the commands run once per landing on the target branch,
+	// over the integrated commit, after a run has integrated and closed its item.
+	// They are the other half of a per-run gate narrowed to what a change
+	// touches: the suite the gate no longer runs whole is run whole here, once
+	// per landing rather than once per attempt, and a failure is reported as a
+	// red landing that files its own work item and blocks nothing. A project
+	// that names none runs nothing after a landing, which is what every project
+	// did before this existed.
+	LandingChecks []string               `yaml:"landing_checks,omitempty" json:"landing_checks,omitempty"`
+	Agents        map[string]AgentConfig `yaml:"agents" json:"agents"`
 	// Accounts are the provider accounts this project runs agents under, keyed by
 	// the alias each one is named by. It is top level rather than under `agents`
 	// because an account is a thing several agents share: which roles run on which
@@ -291,6 +300,24 @@ type Execution struct {
 	// may have been passing the whole time, which is why every check reports
 	// what it spent against this budget rather than only the one that ran out.
 	CheckTimeout Duration `yaml:"check_timeout" json:"check_timeout"`
+	// CheckStageTimeout is the total budget the whole check stage of one run
+	// gets: every configured check together, from the first one starting to the
+	// last one ending. CheckTimeout above bounds one check and says nothing about
+	// the list, so four checks each inside their budget could hold a run — and
+	// the seat it occupies — for hours; on 2026-09-19 one did, for over two, with
+	// the race suite alone past ninety minutes under the load the concurrent
+	// suites were themselves creating. A stage that reaches this bound ends as a
+	// stoppage naming the bound and the check it stopped, and the bound is on the
+	// run's record while the stage runs, so `yoyo status` says how much of it has
+	// been spent rather than only how long the run has been going.
+	CheckStageTimeout Duration `yaml:"check_stage_timeout" json:"check_stage_timeout"`
+	// LandingCheckTimeout is the budget each landing check gets. It is its own
+	// budget rather than the per-run gate's, and the landing has no stage bound,
+	// because what is moved to the landing is exactly the suite too long for the
+	// gate — bounding it the same way would stop it on every landing. A landing
+	// check stopped at this budget makes the landing unverified rather than
+	// red, since a stopped check judged nothing.
+	LandingCheckTimeout Duration `yaml:"landing_check_timeout" json:"landing_check_timeout"`
 	// ServerOverloadPause is how long a run waits before reissuing an attempt the
 	// provider refused because its own servers were transiently overloaded. It is
 	// the same polling discipline as an exhausted limit with a different clock:
@@ -426,6 +453,21 @@ const (
 	// minutes with two of them running at once, and a project that outgrows
 	// thirty minutes raises this rather than meeting it as a failed run.
 	defaultCheckTimeout = Duration(30 * time.Minute)
+	// defaultCheckStageTimeout is stated in minutes on purpose, because the bound
+	// it replaces was the sum of the per-check budgets, which for a four-check
+	// list is two hours — and a check stage that can take hours is what held a
+	// watch session's drain for two of them and starved the seat beside it. It
+	// equals the per-check default rather than exceeding it: with the race suite
+	// narrowed to the packages a change touches, this repository's whole stage
+	// fits it with two runs contending, and a project whose stage does not is
+	// told which check the bound stopped and what moves it.
+	defaultCheckStageTimeout = Duration(30 * time.Minute)
+	// defaultLandingCheckTimeout is what the whole race suite took under load
+	// on 2026-09-19 with room to spare: a landing runs once per landing rather
+	// than once per attempt, and holds no seat, claim, or place in the queue
+	// while it runs — only the process that landed — so it can be given what
+	// the suite actually takes rather than what a developer seat can spare.
+	defaultLandingCheckTimeout = Duration(2 * time.Hour)
 	// defaultServerOverloadPause is long enough to be worth waiting — the
 	// provider CLI has already spent its own ten retries on the condition before
 	// the harness ever sees it — and short enough that a run resumes within a
@@ -882,6 +924,15 @@ func (c Config) Validate() error {
 	if c.Execution.CheckTimeout <= 0 {
 		problems = append(problems, "execution.check_timeout must be positive")
 	}
+	// The stage bound is what a per-check budget cannot be — a bound on the whole
+	// list — so a stage with none would be every check's budget added up again,
+	// which is the two-hour stage this exists to end.
+	if c.Execution.CheckStageTimeout <= 0 {
+		problems = append(problems, "execution.check_stage_timeout must be positive")
+	}
+	if c.Execution.LandingCheckTimeout <= 0 {
+		problems = append(problems, "execution.landing_check_timeout must be positive")
+	}
 	// An overload names no reset time, so this interval is the whole of the wait
 	// rather than a bound on it. Zero would mean reissuing straight back into the
 	// same overloaded server with nothing between the attempts.
@@ -1081,6 +1132,11 @@ func (c Config) Validate() error {
 	for index, check := range c.Checks {
 		if strings.TrimSpace(check) == "" {
 			problems = append(problems, fmt.Sprintf("check %d cannot be empty", index))
+		}
+	}
+	for index, check := range c.LandingChecks {
+		if strings.TrimSpace(check) == "" {
+			problems = append(problems, fmt.Sprintf("landing check %d cannot be empty", index))
 		}
 	}
 	// Admitting work without asking rests entirely on the operator's approval of

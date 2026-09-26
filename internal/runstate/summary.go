@@ -271,6 +271,17 @@ type RunSummary struct {
 	// behind the reason rather than a second reason — and because it is the one
 	// the reader cannot go and reproduce: the worktree it describes is gone.
 	RefusedPaths *PathRefusal `json:"refused_paths,omitempty"`
+	// CheckStage is the current attempt's check stage as the record last saw
+	// it: its bound, what it has spent, and which check it is on. It is here so
+	// a surface reading a running run can say how much of the bound is gone,
+	// and so a stage the bound stopped is read afterwards as that rather than as
+	// a check that failed.
+	CheckStage *CheckStage `json:"check_stage,omitempty"`
+	// LandingChecks is what the landing checks made of the commit this run
+	// integrated. It says nothing about the run — the run succeeded and its
+	// item closed — and it is here because a red landing is the one fact about
+	// a landed change that its run's ending does not carry.
+	LandingChecks *LandingChecks `json:"landing_checks,omitempty"`
 	// ContextTruncation is what the work item's notes lost to the context budget
 	// when this run's context was assembled. It says nothing about the work — a
 	// run whose item was truncated delivered exactly as it would have — and it is
@@ -507,6 +518,14 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.PathRefusal != nil {
 		refused := *state.PathRefusal
 		summary.RefusedPaths = &refused
+	}
+	if state.CheckStage != nil {
+		stage := *state.CheckStage
+		summary.CheckStage = &stage
+	}
+	if state.LandingChecks != nil {
+		landed := *state.LandingChecks
+		summary.LandingChecks = &landed
 	}
 	if state.IntegrationStop != nil {
 		stopped := *state.IntegrationStop

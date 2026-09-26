@@ -852,6 +852,14 @@ var notAStep = map[string]string{
 	// what it creates is outside the worktree and can never enter the change.
 	"prepareScratch": "cuts the run the scratch directory its developer contract names",
 
+	// After the delivery. The landing checks run once the run is terminal, its
+	// item settled and its artifacts gone, over the target branch rather than
+	// over the change, and nothing they find changes what the run recorded: a
+	// red landing is reported and filed as its own work, never a verdict on the
+	// run that landed it. A definition that could order them would be ordering
+	// something after the run it defines has ended.
+	"runLandingChecks": "runs the landing checks over the integrated commit once the run is over, and files a red landing as its own work",
+
 	// Inside a step rather than beside one. Actions are coarse by design — a
 	// promotion is one operation that takes the lease, checks the remote, moves the
 	// branch and merges the request — so the parts of a registered step are not
@@ -870,6 +878,7 @@ var notAStep = map[string]string{
 	"repair":                     "records one repair attempt and re-enters candidate.develop with the findings",
 	"prepareIntegrationRetry":    "replays a change whose promotion lost its race, so candidate.integrate can be re-earned",
 	"verifyHandback":             "checks a resumed run still has the change it preserved",
+	"closeCheckStage":            "records how the check stage ended, inside candidate.check",
 
 	// The declarative path. These step the workflow instance a run is observed
 	// through and are the one group here that is not part of the delivery at all:
