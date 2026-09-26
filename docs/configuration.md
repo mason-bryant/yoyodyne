@@ -2362,13 +2362,32 @@ ended, a `yoyo work` drain or a `--limit` returns only once every run it
 started has landed, and the restart a deployed build causes waits out every run
 the session started, landing included. So a landing holds those for up to
 `landing_check_timeout` times the number of landing checks — two hours a check
-by default — and a project that cannot afford that on a drain lowers the
-budget or shortens the list; it does not hold a seat, a claim, or the queue.
+by default — plus any time it spends waiting its turn behind another landing
+(below), and a project that cannot afford that on a drain lowers the budget or
+shortens the list; it does not hold a seat, a claim, or the queue.
+
+**One landing at a time, per target branch.** Landings on one target branch
+queue on a lease of their own, so at most one landing suite runs at a time
+however many runs land back to back: with two developer seats, the most the
+checks put on the machine is one landing suite beside two narrowed gates, not
+two whole suites beside them. The lease is an advisory file lock beside the
+branch's promotion lease in the run state directory, dropped by the operating
+system when its holder dies, and it is not the promotion lease — a landing
+holds nobody out of integration. A landing that finds another running records
+when it began waiting before it waits, and `yoyo status` says so under the run
+until it is let in. The wait is bounded by what the landing ahead may take —
+`landing_check_timeout` times the number of landing checks, and a
+fifteen-minute margin for its checkout — and a landing that waits that out
+runs nothing and is unverified. The bound covers one landing ahead, so a third
+landing queued behind two full-budget suites waits it out unverified. The landing checkout runs its checks against
+the repository's shared build cache, the one under the common Git directory
+every run's worktree compiles against, rather than a cold one of its own.
 
 A landing whose checks all pass on their own exit is **green**; one where a
 check fails on its own exit is **red**; one whose checks did not run to a
 verdict — no checkout could be cut, a check was stopped at its budget, the
-process running them died — is **unverified**. A stopped check judged nothing,
+landing waited out its turn behind another, the process running them died — is
+**unverified**. A stopped check judged nothing,
 which is the rule the per-run gate already applies to a check it stops on
 time, so a landing it happened in files nothing and says why instead. All
 three are recorded on the run, said on the item's notes, and said in the run's

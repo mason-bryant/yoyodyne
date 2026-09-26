@@ -197,3 +197,11 @@ busy machine never runs.
 2. **ifd.422 is released**, and the four things above are written against the
    machinery that then exists, with the build-cache clause pinned by a test
    rather than re-implemented.
+
+**Since released and done.** yoyodyne-ifd.401 landed, and the four things
+above were written against its code under yoyodyne-ifd.422 itself: the landing
+lease (`runstate.Store.LeaseLanding`), the named wait in `yoyo status` and the
+sweep record (worded "since <time>" rather than "<n> so far"), the two-landing
+test in `internal/orchestrator/landingqueue_test.go`, the build-cache test in
+`internal/gitworktree/landing_test.go`, and the landing-checks section of
+`docs/operations.md`. This record is kept as the diagnosis it was.
