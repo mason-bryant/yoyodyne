@@ -452,7 +452,10 @@ harness made, every run that reaches integration meets the same one until a
 person settles the branches, and the brake does not trip on any number of them.
 What tells you is the run's own blocker — the item is stopped with both branch
 positions and the recovery steps, said in its thread at `critical` and put on
-the development manager's docket, once per run rather than once per trip. On
+the development manager's docket — and, since `yoyodyne-ifd.428.26`, a record of
+the divergence against the product that
+[holds the line by itself](#unwedging-a-target-branch-that-diverged-from-the-forge)
+until the branches converge, so the one refusal is the only run it costs. On
 2026-09-21 three identical diverged-target refusals tripped the brake, which
 held the line a second time over the one cause the first blocker had already
 put in front of a person.
@@ -2008,12 +2011,39 @@ harness will not decide. You see it as the same line on every sweep:
 main not caught up: main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right
 ```
 
-and until it is resolved every run that reaches integration for that target
-stops with both branch positions named rather than promoting into it. That
-refusal is deliberate — the alternative is a promotion nobody can publish and an
-item settled as integrated against it — but it does mean the branch does no more
-work until you say which history is right. Nothing sweeps it away in the
-meantime, and no later `yoyo reconcile` resolves it.
+and the run that reached integration for that target stops with both branch
+positions named rather than promoting into it. That refusal is deliberate — the
+alternative is a promotion nobody can publish and an item settled as integrated
+against it — but it does mean the branch does no more work until you say which
+history is right. Nothing sweeps it away in the meantime, and no later
+`yoyo reconcile` resolves it.
+
+**The line holds itself while the wedge stands.** The refused promotion records
+the divergence against the product — the branch, both positions, the catch-up's
+own words, and the run it stopped — and a watching `yoyo work` session reads that
+record at every pull and chooses nothing while it stands; a drain stops on it.
+Before `yoyodyne-ifd.428.26` the line went on pulling, and every item it pulled
+spent a whole development and review before stopping on the same divergence. It
+is neither [the brake](#pausing-everything-and-resuming-it) nor an intake hold
+somebody placed: it counts nothing, nobody placed it, and `yoyo release` does not
+lift it. `yoyo status` names it on its "Needs a human" line as yours, with this
+section as what settles it:
+
+```text
+Needs a human (1):
+  the target branch main will not catch up to the remote's, so the harness chooses no work for it: main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right; 1 promotion refused since 2026-09-21T08:00:00Z — the operator's — follow "Unwedging a target branch that diverged from the forge" in docs/operations.md, and the next `yoyo reconcile` that finds the branches converged lifts it; nothing needs releasing
+```
+
+Every ready item on the "Not startable" line is refused for it in the same words,
+the channel repeats it every `--heartbeat` at `warning`, tagged to the operators,
+and `yoyo status --json` carries the record under `standing.diverged_targets`.
+**What lifts it is the branches converging**, and nothing else: the next
+`yoyo reconcile` whose catch-up finds the local target level with the remote's,
+or brought onto it, removes the record and says so, and the watching session
+chooses again at its next poll with nothing to release. The record lives at
+`products/<product>/diverged-targets.json` under the state root. The target is
+the branch the primary checkout is on, which is what every run promotes into, so
+while one stands the session chooses nothing at all.
 
 Runs that predate the fix in `yoyodyne-ifd.177` could produce this by losing a
 cross-machine race after promoting, and a repository still standing in that state
@@ -2094,7 +2124,10 @@ remote gained, which is by definition work this repository has never seen.
    ./bin/yoyo reconcile
    ```
 
-   The held catch-up should be absent from the sweep, and runs for that target
+   The held catch-up should be absent from the sweep, and in its place the sweep
+   says the divergence recorded on the branch is lifted — `main has converged
+   with the remote's, and the divergence recorded on it since … is lifted` — so a
+   watching session chooses work again at its next poll and runs for that target
    promote again. That is the state this recovery is for: resolvable, and back
    under the harness.
 
@@ -2110,7 +2143,7 @@ remote gained, which is by definition work this repository has never seen.
    spends no review round, repair grant, or re-run. Asked before the branches
    are settled, it refuses, writes nothing, and names what is still diverged.
 
-6. **Decide what happens to the preserved branch.** Its commits carry work a
+7. **Decide what happens to the preserved branch.** Its commits carry work a
    reviewer approved and this repository integrated, which the shared remote never
    received; the work items behind them carry a `Publication outstanding` line
    naming the pull request that was never merged. Open a pull request from the
@@ -2170,7 +2203,8 @@ Needs a human (3):
   a status that only asked the tracker showed the epic as work about to be
   started and merely stalled, which sent whoever read it after a stall that was
   not one. That last one comes from a closed set of named reasons, each
-  of which says who it is waiting on: the operator's hold, a held intake, every
+  of which says who it is waiting on: the operator's hold, a held intake, a
+  target branch the harness will not catch up to the remote's, every
   developer slot taken, a session waiting out the provider's usage window, a live
   watch session retrying a read of the harness's store that failed, a live watch
   session that has found nothing it can start, no watch session running any more,
@@ -2246,8 +2280,10 @@ Needs a human (3):
   directive, a
   proposed change nobody has decided, a run that ended still owing a step, a
   promotion the forge has not published, work
-  marked for a conversation rather than for a run, a queue nothing is pulling
-  from — a session sitting idle over it, or no session at all — while admitted
+  marked for a conversation rather than for a run, a target branch the harness
+  will not catch up to the remote's, with
+  [the recovery](#unwedging-a-target-branch-that-diverged-from-the-forge), a
+  queue nothing is pulling from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), a
   part of the product [its supervisor has left down](#starting-the-product-and-stopping-it)
   as degraded, with the reason, and a

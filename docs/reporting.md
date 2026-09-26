@@ -852,7 +852,8 @@ a workspace that refuses it costs the board and not one message.
 
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
-everything held, the watch session idle, or no session running — says so again
+everything held, a target branch the harness will not catch up to the remote's,
+the watch session idle, or no session running — says so again
 every `--heartbeat`, an hour by default, naming what stopped it, how long that has
 been true, how much ready work is behind it, and how many promotions are waiting
 on the forge to publish them. That count is what a developer
@@ -868,6 +869,12 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing a run could take and nothing
 waiting on the forge — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
+
+A [diverged target](operations.md#unwedging-a-target-branch-that-diverged-from-the-forge)
+is said louder than the rest: at `warning`, tagged to the operators every time,
+with the recovery steps named as the operator's move. It is the one of these
+nothing but a person ends, and the only thing that said it before was the
+`critical` blocker on the one item whose promotion first met it.
 
 The provider's usage window is deliberately not one of the states it repeats. It
 has its own message below, which opens with the cause rather than saying it after

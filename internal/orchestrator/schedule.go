@@ -259,6 +259,12 @@ const (
 	// usage limit covers every model a developer's turn could end on, and the
 	// provider named a reset that has not come. A watch waits it out instead.
 	ScheduleProviderWindow = "the provider's usage window is closed for every developer model, so nothing more was chosen"
+	// ScheduleDivergedTarget reports a drain that stopped because a target branch
+	// stands recorded as one the harness will not catch up to the remote's. A
+	// watch waits it out instead, until the convergence sweep finds the branches
+	// converged; every run a drain started into it would stop on the same
+	// divergence after a whole development and review.
+	ScheduleDivergedTarget = "a target branch will not catch up to the remote's, so nothing more was chosen"
 	// ScheduleSpendUnreadable reports a bounded session that stopped because it
 	// could not tell what it had spent. A budget measured against evidence
 	// nobody can read is not a smaller budget, it is no budget at all, so the
@@ -675,7 +681,12 @@ type Pull struct {
 	// like everything else here, so an item whose design lands is closed at the
 	// first pull after the revision is in the tree.
 	Landings ScheduleLandings
-	Start    Starter
+	// Divergences is the product's record of the target branches the harness
+	// will not catch up to the remote's. Optional; see ScheduleDivergences. A
+	// pull wired without it chooses into a wedged target exactly as it did, and
+	// each run it starts stops on the divergence itself.
+	Divergences ScheduleDivergences
+	Start       Starter
 }
 
 // ScheduleOutages is the product's record of the provider answering nobody, as
@@ -994,6 +1005,13 @@ type Schedule struct {
 	// the pass its wait between pulls and nothing else, so it is reported beside
 	// the pull rather than stopping it.
 	OutageProblem string `json:"outage_problem,omitempty"`
+	// DivergedTargets is every target branch the last pull found recorded as one
+	// the harness will not catch up to the remote's, empty once the convergence
+	// sweep has lifted them. While any stands the session chooses nothing.
+	// DivergedTargetProblem names a record that could not be read, which the pull
+	// read past as though none stood.
+	DivergedTargets       []runstate.DivergedTarget `json:"diverged_targets,omitempty"`
+	DivergedTargetProblem string                    `json:"diverged_target_problem,omitempty"`
 	// UsageWindowResetsAt is when the provider said the recorded window that held
 	// this pass's last pull lifts, nil once no recorded window holds it.
 	// UsageWindowProblem names a record that could not be read, which the pull
@@ -1635,6 +1653,26 @@ pulling:
 			}
 			said := account{reason: windowReason(closed.window, closed.found), running: running, window: closed.window}
 			if !awaitProvider(pull, said) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
+		}
+		// A target branch the harness will not catch up to the remote's is read
+		// here, for the reason the two above are: nothing a person placed and
+		// nothing `yoyo release` lifts, and every run a pull started into it would
+		// spend a whole development and review before stopping on the same
+		// divergence. The brake does not count those stops, so without this the line
+		// went on paying for them one item at a time until somebody unwedged the
+		// branch. It is read from the durable record the refusing run wrote, and it
+		// lifts when the convergence sweep finds the branches converged — the next
+		// pull after that chooses again, with nothing to release.
+		if diverged, standing := s.divergedTarget(&schedule, pull); standing {
+			if !s.Watching {
+				schedule.Stopped = ScheduleDivergedTarget
+				break
+			}
+			if !awaitProvider(pull, account{reason: divergedTargetReason(diverged), running: running}) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -4290,6 +4328,14 @@ func (s Schedule) Render() string {
 	}
 	if s.OutageProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.OutageProblem)
+	}
+	// A diverged target is said with its recovery, because it is the operator's
+	// and nothing the harness does ends it except finding the branches settled.
+	for _, diverged := range s.DivergedTargets {
+		fmt.Fprintf(&rendered, "%s\n", divergedTargetReason(diverged))
+	}
+	if s.DivergedTargetProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.DivergedTargetProblem)
 	}
 	if s.Braked != nil {
 		// The brake places a hold nobody chose, so the line that reports it says

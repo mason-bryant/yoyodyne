@@ -126,6 +126,12 @@ type Activity struct {
 	// is the record itself, which the first served invocation clears.
 	ProviderOutage runstate.ProviderOutage
 	ProviderAway   bool
+	// Diverged is every target branch recorded as one the harness will not catch
+	// up to the remote's. It accounts for the quiet because a watching session
+	// chooses nothing while one stands, deliberately, and says why on the
+	// attention line and in the channel; what bounds it is the record, which the
+	// convergence sweep lifts the moment it finds the branches converged.
+	Diverged []runstate.DivergedTarget
 	// TrackerWaits is every dispatch a session started that is waiting out a
 	// tracker failure before it has claimed anything, as WaitingOnTracker reads
 	// them. Such a dispatch holds a slot with no run record, so nothing above can
@@ -224,6 +230,8 @@ func (a Activity) explanation() string {
 		return "intake is held"
 	case a.ProviderAway:
 		return a.ProviderOutage.Says()
+	case len(a.Diverged) > 0:
+		return a.Diverged[0].Says()
 	case a.Running > 0:
 		return fmt.Sprintf("%d developer run(s) are in flight and still moving", a.Running)
 	case a.ProviderWindow.Standing(a.Now):
