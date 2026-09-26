@@ -1232,7 +1232,9 @@ configuration they started under.
 conversation** — a run that failed independent review after every permitted
 attempt, rather than that run waiting on the docket for somebody to tell the
 development manager. Only the courier changes, and `yoyo work --help` has what
-bounds it.
+bounds it. It is delivered per stopped run rather than per docket entry: a run
+docketed both as that stoppage and as an escalation a role raised from it is put
+to her once, as the one entry her docket folds the two into.
 
 **A pass also carries out what she decided about it.** A repair or a re-run she
 recorded is fired by the pass itself, oldest stoppage first, one per pull,
@@ -1259,6 +1261,9 @@ is due**, where a project has configured any — a role woken on a cadence to lo
 at its own domain, rather than because something happened. At most one per pass,
 and every firing ends in a durable report that
 [`yoyo sweeps`](operations.md#reading-what-the-recurring-tasks-found) reads. A
+firing of a development manager's task carries the [triage
+docket](conversation.md#roles-asking-each-other-things) as it stands, read for
+that firing, in the message that wakes her. A
 project that schedules nothing has none of this and its passes are unchanged.
 
 **A pass also wakes a role whose block of tracker actions the harness refused.**

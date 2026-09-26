@@ -1076,3 +1076,78 @@ func TestEveryTurnOfAFiringIsToldItsPass(t *testing.T) {
 		t.Fatalf("the turns were told passes %v, want a-sweep#1 on both", role.passes)
 	}
 }
+
+// fixedDocket is the docket as a test hands it to the trigger, counting how
+// often it was read.
+type fixedDocket struct {
+	rendered string
+	reads    int
+}
+
+func (d *fixedDocket) Window() string {
+	d.reads++
+	return d.rendered
+}
+
+// The development manager's pass carries the docket as it stands in the message
+// that wakes her, read once for the firing however many turns it takes; a pass
+// of any other role's carries none, because no other role decides about it.
+func TestADevelopmentManagersFiringCarriesTheDocketAndNoOtherRolesDoes(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	docket := &fixedDocket{rendered: "## Triage docket\n\n[stopped run] on yoyodyne-ifd.428.29"}
+	role := &wokenRole{answers: []scriptedTurn{
+		{result: &sweep.Result{Status: sweep.StatusMore, Summary: "half"}},
+		{result: complete("the rest")},
+	}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Docket: docket, Clock: recurringClock{}}
+	if _, err := trigger.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if len(role.messages) != 2 || !strings.Contains(role.messages[0], "on yoyodyne-ifd.428.29") || !strings.Contains(role.messages[0], "read for this pass") {
+		t.Fatalf("messages = %q, want the docket in the message that woke her", role.messages)
+	}
+	if strings.Contains(role.messages[1], "Triage docket") || docket.reads != 1 {
+		t.Errorf("the docket was read %d time(s) and continued into %q, want it read once for the firing", docket.reads, role.messages[1])
+	}
+
+	other := sweepStore(t)
+	tasks := hourlyTask("scan")
+	task := tasks["a-sweep"]
+	task.Role = domain.RoleProductManager
+	tasks["a-sweep"] = task
+	pm := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	unread := &fixedDocket{rendered: "## Triage docket"}
+	trigger = Trigger{Tasks: tasks, Claims: other, Reports: other, Roles: pm, Docket: unread, Clock: recurringClock{}}
+	if _, err := trigger.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	if unread.reads != 0 || strings.Contains(pm.messages[0], "Triage docket") {
+		t.Errorf("a product manager's pass read the docket %d time(s):\n%s", unread.reads, pm.messages[0])
+	}
+}
+
+// A summons is a firing of her sweep like any other, so it carries the docket
+// beside the trip that summoned her.
+func TestASummonsCarriesTheDocketBesideTheTrip(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	docket := &fixedDocket{rendered: "## Triage docket\n\n[stopped run] on yoyodyne-ifd.429.21"}
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("probed")}}}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Docket: docket, Clock: recurringClock{}}
+	hold := runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "example",
+		HeldAt:        recurringNow,
+		HeldBy:        runstate.IntakeHolderBrake,
+		Reason:        "3 run(s) blocked in a row",
+	}
+	if _, err := trigger.Summon(context.Background(), BrakeSummons{Hold: hold}); err != nil {
+		t.Fatalf("Summon() error = %v", err)
+	}
+	if len(role.messages) != 1 || !strings.Contains(role.messages[0], "The intake brake summoned you now") || !strings.Contains(role.messages[0], "on yoyodyne-ifd.429.21") {
+		t.Fatalf("messages = %q, want the trip and the docket in the summons", role.messages)
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/forgehygiene"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
@@ -61,6 +62,12 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		Outages:     parts.outages,
 		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
 	}
+	// The docket a development manager's pass carries, built by the docketer her
+	// conversation builds it with and rendered by the section her conversation
+	// renders, so the two never disagree about what is waiting on her.
+	if parts.docket != nil {
+		trigger.Docket = sweepDocket{docketer: docketerFrom(parts)}
+	}
 	// The harness's own reading of the forge on the development manager's pass,
 	// through the same client the publication path opens and merges requests
 	// with, so what it lists is the repository runs publish into. The tracker
@@ -85,6 +92,35 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		}
 	}
 	return trigger
+}
+
+// sweepDocket is the triage docket as a scheduled pass of the development
+// manager's carries it: built now, as her conversation builds it when it opens,
+// and rendered by the same section.
+type sweepDocket struct {
+	docketer interface {
+		Build() (orchestrator.DocketBuild, error)
+	}
+}
+
+// Window builds the docket and renders it. A build that failed outright is
+// rendered as unreadable, one that failed part way is rendered with what it
+// found and says it is incomplete, and an empty docket says so in words — a
+// pass handed no docket section could not tell nothing waiting from nothing
+// read.
+func (d sweepDocket) Window() string {
+	built, err := d.docketer.Build()
+	if err != nil && len(built.Entries) == 0 {
+		return contextbundle.TriageDocket(nil, err.Error())
+	}
+	rendered := contextbundle.TriageDocket(built.Entries, "")
+	if rendered == "" {
+		return "## Triage docket\n\nNothing is on the docket: no stoppage is waiting on a decision of yours.\n"
+	}
+	if err != nil {
+		rendered += fmt.Sprintf("\nThe docket could only be built in part, so there may be stoppages it does not list: %v\n", err)
+	}
+	return rendered
 }
 
 // roleConversation is a role's own conversation, reached the way an operator

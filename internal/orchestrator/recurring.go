@@ -246,7 +246,24 @@ type Trigger struct {
 	// wired without one records what the role said and reads the forge for
 	// nothing, which is what every pass did until the requests were counted.
 	Forge RecurringForge
-	Clock execution.Clock
+	// Docket is the triage docket as the development manager reads it, read
+	// afresh for every firing of a task of hers and carried in the message that
+	// wakes her. Optional: a trigger wired without one wakes her with the task
+	// alone, which is what every pass did until three of them in one afternoon
+	// decided none of three approved changes waiting on her — the docket in her
+	// context was the one rendered when her conversation opened, and a pass
+	// resumes that conversation rather than opening it.
+	Docket RecurringDocket
+	Clock  execution.Clock
+}
+
+// RecurringDocket is the triage docket rendered as the development manager's
+// conversation renders it: the live entries, one per stopped run, oldest first,
+// with what the window could not show counted. A docket that could not be read
+// renders as saying so rather than as empty, because a pass told nothing has
+// stopped when nothing could be read would decide nothing on a false reading.
+type RecurringDocket interface {
+	Window() string
 }
 
 // RecurringOutages is the outage record as a firing reads it. It is satisfied
@@ -306,7 +323,7 @@ func (t Trigger) Fire(ctx context.Context) (RecurringSweep, error) {
 			fired := t.refuse(ctx, name, task, outage)
 			return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 		}
-		fired := t.run(ctx, name, passName(claimed), task, wakeMessage(name, task), "")
+		fired := t.run(ctx, name, passName(claimed), task, wakeMessage(name, task, t.docketFor(task)), "")
 		return RecurringSweep{Fired: []Fired{fired}}, errors.Join(problems...)
 	}
 	return RecurringSweep{}, errors.Join(problems...)
@@ -376,8 +393,19 @@ func (t Trigger) Summon(ctx context.Context, summons BrakeSummons) (Fired, error
 		return Fired{}, fmt.Errorf("claim the summoned firing of the recurring task %s: %w", name, err)
 	}
 	summoned := summonedBy(summons.Hold)
-	fired := t.run(ctx, name, passName(claimed), task, summonsMessage(name, task, summons.Hold), summoned)
+	fired := t.run(ctx, name, passName(claimed), task, summonsMessage(name, task, summons.Hold, t.docketFor(task)), summoned)
 	return fired, nil
+}
+
+// docketFor is the docket a firing of this task carries: the development
+// manager's, read now, and nothing for any other role. It is read once per
+// firing rather than once per turn, because the turns after the first continue
+// the same pass over what the first was shown.
+func (t Trigger) docketFor(task config.RecurringTask) string {
+	if t.Docket == nil || task.Role != domain.RoleDevelopmentManager {
+		return ""
+	}
+	return t.Docket.Window()
 }
 
 // developmentManagerTask is the first enabled task, in name order, that wakes
@@ -760,16 +788,43 @@ func describeFailedTurn(name string, role domain.AgentRole, turn int, err error)
 // only thing standing between a weekly cadence and a duplicate admitted every
 // week, which has already cost this project a full run and two review rounds
 // twice.
-func wakeMessage(name string, task config.RecurringTask) string {
-	return strings.Join([]string{
+//
+// A development manager's pass carries the docket too, between the preamble and
+// the task, because a pass resumes her conversation and the docket in it is the
+// one rendered when it opened. Stoppages otherwise reach her one per delivery,
+// so a pass between deliveries saw none of them: on 2026-09-25 three passes ran
+// after an approved change stopped at integration, and decided nothing about it
+// or the two that stopped after it.
+func wakeMessage(name string, task config.RecurringTask, docket string) string {
+	lines := []string{
 		fmt.Sprintf("The harness woke you for the recurring task %q, which runs every %s. Nobody is waiting at a terminal for this: what you produce is recorded and read later.", name, task.Every),
 		"Your authority here is exactly the authority your role already holds — this turn grants you nothing extra, and nothing about being woken on a schedule widens what you may decide or change.",
 		"Before you file anything, check it against the work already admitted. A duplicate admission costs a whole run and the reviews after it, and a task that runs on a cadence files the same duplicate on every cadence.",
+	}
+	lines = append(lines, docketLines(docket)...)
+	lines = append(lines,
 		"",
 		strings.TrimSpace(task.Prompt),
 		"",
 		sweep.Contract(),
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
+}
+
+// docketLines is the docket a pass carries, introduced as what it is: read for
+// this pass, and standing in for the one the conversation opened with. Nothing
+// is added where the firing carries no docket.
+func docketLines(docket string) []string {
+	docket = strings.TrimSpace(docket)
+	if docket == "" {
+		return nil
+	}
+	return []string{
+		"",
+		"The triage docket below was read for this pass, and is the docket as it stands now rather than the one your conversation opened with. Every entry on it is a stoppage nobody has decided about, whether or not it was ever delivered to you on its own; decide what you can on this pass.",
+		"",
+		docket,
+	}
 }
 
 // summonsMessage is what the harness says when the intake brake summons the
@@ -783,8 +838,10 @@ func wakeMessage(name string, task config.RecurringTask) string {
 // briefing, deliberately. The briefing is assembled when her conversation opens
 // and lists the docket as it stands; the runs that tripped the brake are on it
 // too, among everything else, and a summons that pointed at the docket would be
-// asking her to find the three entries this turn is about.
-func summonsMessage(name string, task config.RecurringTask, hold runstate.IntakeHold) string {
+// asking her to find the three entries this turn is about. The docket as it
+// stands now follows the trip, as on every pass of hers, for everything else
+// that is waiting on her.
+func summonsMessage(name string, task config.RecurringTask, hold runstate.IntakeHold, docket string) string {
 	lines := []string{
 		fmt.Sprintf("The intake brake summoned you now, ahead of the cadence of %q: %s, and intake is held since %s. Nobody is waiting at a terminal for this: what you produce is recorded and read later.",
 			name, strings.TrimSpace(hold.Reason), hold.HeldAt.UTC().Format(time.RFC3339)),
@@ -822,6 +879,7 @@ func summonsMessage(name string, task config.RecurringTask, hold runstate.Intake
 	if hold.Brake != nil && hold.Brake.Loop() != "" {
 		lines = append(lines, fmt.Sprintf("This is %s; once it does, no further probe starts and the hold waits on the operator, so escalate it yourself sooner if that is where it belongs.", hold.Brake.Loop()))
 	}
+	lines = append(lines, docketLines(docket)...)
 	lines = append(lines,
 		"",
 		strings.TrimSpace(task.Prompt),

@@ -8,8 +8,10 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
@@ -1630,10 +1632,12 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 //
 // It is bounded twice over — by how many entries it lists and by what the
 // section may cost — because a docket grows with everything that ever stopped
-// and a conversation's budget does not. The newest are listed first, so what
-// the bound cuts is the oldest stoppage rather than the latest one, and how
-// many were cut is stated: a docket read as complete when it is not is worse
-// than one that says what it could not show.
+// and a conversation's budget does not. The oldest are listed first, in the
+// order the docket recorded them, because an undecided stoppage is the one that
+// has waited longest: listed newest first, the bound cut exactly the stoppages
+// that had aged for weeks behind the latest ones. How many were cut is stated:
+// a docket read as complete when it is not is worse than one that says what it
+// could not show.
 func renderTriageDocket(entries []triage.Entry, unavailable string) string {
 	if len(entries) == 0 && strings.TrimSpace(unavailable) == "" {
 		return ""
@@ -1649,10 +1653,12 @@ func renderTriageDocket(entries []triage.Entry, unavailable string) string {
 		rendered.WriteString("Nothing has stopped: no run ended on a blocker, no publication is unmerged, and no item was found unready to dispatch.\n")
 		return rendered.String()
 	}
-	ordered := make([]triage.Entry, len(entries))
-	for index, entry := range entries {
-		ordered[len(entries)-1-index] = entry
-	}
+	// A folded run stands where its latest docketing was recorded, and what it has
+	// waited is measured from its first, so the order is by that.
+	ordered := slices.Clone(entries)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return firstDocketed(ordered[i]).Before(firstDocketed(ordered[j]))
+	})
 	listed := 0
 	spent := rendered.Len()
 	for _, entry := range ordered {
@@ -1674,10 +1680,34 @@ func renderTriageDocket(entries []triage.Entry, unavailable string) string {
 	return rendered.String()
 }
 
+// firstDocketed is when an entry's stopped run was first docketed: its own
+// recording, or the earliest of those folded beneath it.
+func firstDocketed(entry triage.Entry) time.Time {
+	first := entry.RecordedAt
+	for _, earlier := range entry.Earlier {
+		if earlier.RecordedAt.Before(first) {
+			first = earlier.RecordedAt
+		}
+	}
+	return first
+}
+
+// TriageDocket is the docket section exactly as a development manager's
+// conversation carries it, for the other place she has to be shown it: the
+// message that wakes her for a scheduled pass. A pass resumes a session whose
+// docket was rendered when the conversation opened, so the pass carries the
+// docket as it stands now, and through this rather than a rendering of its own,
+// so the two can never disagree about what the window holds or in what order.
+// It renders nothing where there is nothing and nothing could not be read,
+// exactly as the conversation's section does.
+func TriageDocket(entries []triage.Entry, unavailable string) string {
+	return renderTriageDocket(entries, unavailable)
+}
+
 const triageDocketHeader = `
 ## Triage docket
 
-The work that has stopped moving, newest first. A run that ended on a durable
+The work that has stopped moving, oldest first. A run that ended on a durable
 blocker is here, and so is an approved publication the forge has not merged.
 So is an item dispatch would not start, because the tree does not meet a
 prerequisite the item states — that one has no run behind it, which is the point

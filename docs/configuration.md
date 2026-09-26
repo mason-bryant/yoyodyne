@@ -4441,10 +4441,13 @@ nearly had one authorized recovery spent twice. An item whose record cannot be
 read says so on its entries instead of rendering as an item nobody has decided
 anything about.
 
-The docket is built when something scans: `yoyo reconcile`, and the moment a
-development manager conversation opens. There is no scheduled process behind it,
-so `stuck_merge_age` is a floor rather than a promise — a publication becomes
-docketable at that age and is docketed the next time one of those happens.
+The docket is built when something scans: `yoyo reconcile`, the moment a
+development manager conversation opens, and every firing of a
+[recurring task](#recurring-tasks) of hers, which carries the docket in the
+message that wakes her. Only that last is scheduled, and only where a project
+configures one, so `stuck_merge_age` is a floor rather than a promise — a
+publication becomes docketable at that age and is docketed the next time one of
+those happens.
 
 **All three are read.** The docket above consumes `stuck_merge_age` — an approved
 publication older than it is docketed at the next scan — and `review_rounds_cap`
@@ -5975,6 +5978,12 @@ open by hand. A scheduled turn also reads the role's own persona, so the
 personality that answers is the one the project configured and not a second
 version of it. The loader is strict about keys, so a `capabilities:` or `tools:`
 written under a task fails the configuration rather than being ignored.
+
+A development manager's task is handed one thing no prompt has to ask for: the
+[triage docket](conversation.md#roles-asking-each-other-things) as it stands,
+built for each firing and put in the message that wakes her, ahead of the
+prompt. A pass resumes her conversation rather than opening it, so the docket
+that conversation opened with is not what is waiting on her now.
 
 | Key | What it says |
 | --- | --- |

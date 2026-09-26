@@ -1650,6 +1650,7 @@ func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
 	entries := make([]triage.Entry, 0, maxDocketEntries+5)
 	for index := range maxDocketEntries + 5 {
 		entry := docketEntry(fmt.Sprintf("run-%032x", index), fmt.Sprintf("yoyodyne-%d", index))
+		entry.RecordedAt = entry.RecordedAt.Add(time.Duration(index) * time.Hour)
 		entries = append(entries, entry)
 	}
 	bundle, err := AssembleProduct(ProductRequest{
@@ -1663,10 +1664,34 @@ func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
 	if !strings.Contains(bundle.Text, "5 further docket entry(s) are not listed here") {
 		t.Fatalf("a cut docket did not say what it cut:\n%s", bundle.Text)
 	}
-	// The newest are what is kept, because the oldest stoppage is the one a
-	// reader can most afford not to see first.
-	if !strings.Contains(bundle.Text, "on yoyodyne-29") || strings.Contains(bundle.Text, "on yoyodyne-0 ") {
-		t.Fatalf("the docket kept the oldest entries rather than the newest:\n%s", bundle.Text)
+	// The oldest are what is kept, because an undecided stoppage is the one that
+	// has waited longest, and a bound that cut the oldest is how stoppages aged
+	// for weeks behind the latest ones.
+	if !strings.Contains(bundle.Text, "on yoyodyne-0 (") || strings.Contains(bundle.Text, "on yoyodyne-29 (") {
+		t.Fatalf("the docket kept the newest entries rather than the oldest:\n%s", bundle.Text)
+	}
+}
+
+// A run docketed more than once is one entry standing where its latest docketing
+// was recorded, and it has waited since its first. The docket is ordered by that,
+// so a stoppage an escalation was later docketed beside is not moved behind the
+// stoppages that came after it.
+func TestTheDocketListsAFoldedRunByWhenItFirstStopped(t *testing.T) {
+	t.Parallel()
+
+	earliest := docketEntry("run-00000000000000000000000000000001", "yoyodyne-folded")
+	later := docketEntry("run-00000000000000000000000000000002", "yoyodyne-later")
+	later.RecordedAt = earliest.RecordedAt.Add(time.Hour)
+	folded := earliest
+	folded.Key = triage.Key(triage.ClassEscalation, earliest.RunID)
+	folded.Class = triage.ClassEscalation
+	folded.RecordedAt = earliest.RecordedAt.Add(2 * time.Hour)
+	folded.Earlier = []triage.Entry{earliest}
+
+	rendered := TriageDocket([]triage.Entry{later, folded}, "")
+	first, second := strings.Index(rendered, "on yoyodyne-folded"), strings.Index(rendered, "on yoyodyne-later")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("the run that stopped first is not listed first:\n%s", rendered)
 	}
 }
 
