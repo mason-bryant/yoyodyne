@@ -50,6 +50,10 @@ revisions:
       by: architect
       at: 2026-09-25T04:56:31Z
       reason: yoyodyne-ifd.339 companion - the architect's pass named as the third recurring-task consumer, pointing at its design
+    - action: amended
+      by: architect
+      at: 2026-09-26T16:00:00Z
+      reason: yoyodyne-ifd.432.7 companion - the operators mapping's fourth namespace and the decide-amendments grant recorded beside the bundles they never reach
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -89,6 +93,8 @@ The shipped default bundles for the management roles carry acting authority, not
 Role definitions may live in the repository under `.yoyodyne/roles/` with two hard properties: the protected-path gate refuses any grant naming that directory — an absolute exception to the grant mechanism, with no decided-change override — and no definition is effective until operator-authorized activation records its digest, so the *activated digest* is the authority and a file changed by anyone is inert until a person activates it. Audit history is a CLI surface, never an agent one.
 
 The management bundles — product manager, development manager, architect — hold `repository.read` and `repository.list`: the harness resolves a named path, or one directory's names, against the tree of a recorded commit, never the working tree, bounded per turn by count and bytes, redacted, recorded on the conversation as commit, path, and time, and returned as evidence framed as untrusted. Confinement holds by construction, because a committed tree contains no traversable link. Content returned to the product manager is labeled as description of the implementation, never intent. The reviewer holds neither; its evidence is the change. This is a distinct action from research, which is evidence from outside the repository.
+
+The operators mapping gains a fourth identifier namespace, `dashboard_token`, and a grant, `decide-amendments`, for a person acting from the dashboard as [observability-and-dashboard](observability-and-dashboard.md) specifies; both are properties of the person, and no token or configuration key grants either to a role.
 
 A sixth shipped bundle, the program manager, holds the management reads plus a lane-scoped admission and ordering set, its own memory and lane report, reports, amendment proposals, the ask channel, and one bounded request to the supervisor; it is specified in [program-manager](program-manager.md) and recorded as a shipped Go bundle rather than an operator-defined one in [program-manager-is-a-shipped-bundle](../decisions/program-manager-is-a-shipped-bundle.md). Its lane is a scope on existing tracker-action capabilities, enforced at the authority table, and it is the first specialist to ship; the Sentinel below is the second.
 

@@ -107,7 +107,7 @@ longer says.
 
 | Term                | Write instead                                          | Still written in, until its owner amends it                                                                                                    |
 | ------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cadence`           | how often it repeats, or its schedule                  |                                                                                                                                                |
+| `cadence`           | how often it repeats, or its schedule                  | `docs/designs/v1-harness-design.md`                                                                                                           |
 | `in force`          | active, or still applies                               |                                                                                                                                                |
 | `one pane of glass` | one window                                             |                                                                                                                                                |
 | `posture`           | tool access, meaning the tools a role may use          |                                                                                                                                                |
