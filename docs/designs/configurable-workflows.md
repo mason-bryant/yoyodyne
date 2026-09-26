@@ -38,6 +38,10 @@ revisions:
       by: architect
       at: 2026-09-25T04:00:00Z
       reason: yoyodyne-ifd.430.6 companion - the authority model names the program manager as the sixth shipped bundle and the first specialist, with its lane as a scope on existing tracker-action capabilities; the Sentinel becomes the second specialist
+    - action: amended
+      by: architect
+      at: 2026-09-26T19:54:03Z
+      reason: tool-interface companion - a conversation-invoked action is a tool, per the tool-interface design; one registry, two invokers
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -58,7 +62,7 @@ The schema is a state machine, not a DAG: sequential steps, conditional transiti
 
 ## Actions and evidence
 
-Actions are registered in Go with a descriptor — subject types, outcomes, parameter schema, required capabilities, mutation class, evidence inputs and outputs, revision behavior, idempotency — and are deliberately coarse: `candidate.integrate` is one operation that takes the promotion lease, verifies authorization evidence, integrates under existing policy, records, and releases. Security-sensitive internals are never assembled from individually optional pieces. An action returns an outcome; only the definition maps outcomes to destinations.
+Actions are registered in Go with a descriptor — subject types, outcomes, parameter schema, required capabilities, mutation class, evidence inputs and outputs, revision behavior, idempotency — and are deliberately coarse: `candidate.integrate` is one operation that takes the promotion lease, verifies authorization evidence, integrates under existing policy, records, and releases. Security-sensitive internals are never assembled from individually optional pieces. An action returns an outcome; only the definition maps outcomes to destinations. An action marked invocable from a conversation is a tool, described, bounded, and granted as [tool-interface](tool-interface.md) specifies; one registry serves both invokers.
 
 Evidence is a typed fact bound to a revision — protected paths accepted for candidate X; checks passed for X under check-set digest Y; reviewer R approved X against item revision Z; the target stood at commit W when authorization was evaluated — minted only by the trusted action that performed the operation, verified by later actions for producer, type, subject, revision, configuration digest, and invalidation. Any new candidate revision invalidates all candidate-bound evidence; target movement invalidates the target-position evidence alone and drives replay; a changed check set invalidates check evidence. Static validation catches bad paths first; the runtime proof is the final boundary, per `integration-requires-revision-bound-evidence`.
 
