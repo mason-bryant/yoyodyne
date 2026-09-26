@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
@@ -478,6 +479,84 @@ func TestGatherWindowsTheDocketAgainstTheTrackerAndRecordsWhereItStopped(t *test
 	}
 	if want := triage.Key(triage.ClassStoppedRun, "run-0123456789abcdef0123456789abcdef"); position.Key != want {
 		t.Fatalf("WindowPosition() = %+v, want the walk past %s", position, want)
+	}
+}
+
+// The same window decided against bd itself rather than a scripted listing. The
+// scripted one above replays whatever status it was written with, so it passes
+// identically against a tracker whose unfiltered listing leaves closed work out
+// — which bd's does unless it is asked for closed work too, and against which
+// every entry reads as live and the window fills with dead work with nothing
+// failing. beads.TestUnfilteredListingConformance pins the listing; this pins
+// that the window reads it through the adapter it is actually wired to.
+func TestGatherWindowsTheDocketAgainstTheRealTracker(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skipf("bd is not installed: %v", err)
+	}
+	repository := filepath.Join(t.TempDir(), "repository")
+	git(t, filepath.Dir(repository), "init", "-q", "-b", "main", repository)
+	git(t, repository, "config", "user.name", "Yoyodyne Test")
+	git(t, repository, "config", "user.email", "yoyodyne@example.invalid")
+	initialize := exec.Command("bd", "init")
+	initialize.Dir = repository
+	if output, err := initialize.CombinedOutput(); err != nil {
+		t.Fatalf("bd init error = %v: %s", err, output)
+	}
+	tracker := beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository, Timeout: 10 * time.Minute}
+	ctx := context.Background()
+
+	create := func(title string) string {
+		created, err := tracker.Create(ctx, beads.NewWorkItem{Title: title, Description: "A run stopped on it.", Type: "task"})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		return created.ID
+	}
+	landed := create("the stopped item that landed after all")
+	if _, err := tracker.Complete(ctx, landed, "landed"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	live := create("the stopped item still waiting")
+
+	gather := func(workItemID string) chat.Briefing {
+		runs, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+		if err != nil {
+			t.Fatalf("runstate.NewStore() error = %v", err)
+		}
+		if err := runs.Create(stoppedRunOf(workItemID)); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+		if err != nil {
+			t.Fatalf("runstate.NewDocketStore() error = %v", err)
+		}
+		ground := conversationGround{
+			runner:         execution.OSProcessRunner{},
+			repository:     repository,
+			specifications: "docs/product",
+			docket:         docketerOverDocket(runs, docket),
+			docketWindow:   docket,
+			gitBinary:      "git",
+			timeout:        10 * time.Minute,
+		}
+		briefing, err := ground.Gather(ctx)
+		if err != nil {
+			t.Fatalf("Gather() error = %v", err)
+		}
+		return briefing
+	}
+
+	closed := gather(landed)
+	if strings.Contains(closed.Text, "the repair budget was spent") ||
+		!strings.Contains(closed.Text, "1 docket entry(s) are not listed because the work item they stopped is closed.") {
+		t.Fatalf("a stoppage on work bd holds as closed was listed, or not counted:\n%s", closed.Text)
+	}
+	// The control, without which the assertion above would pass against a window
+	// that listed nothing at all.
+	if open := gather(live); !strings.Contains(open.Text, "the repair budget was spent") {
+		t.Fatalf("a stoppage on work bd holds as open was not listed:\n%s", open.Text)
 	}
 }
 
