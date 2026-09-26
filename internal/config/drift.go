@@ -108,12 +108,21 @@ func (d Drift) Current() bool { return d.Known && d.BaselineRevision == d.Bundle
 // written that value deliberately, and a baseline reconstructed by assuming it
 // did not is a guess dressed as a record -- so it is left out rather than
 // reported as an improvement nobody can be sure is one.
-func CompareToBaseline(lock Lock, effective Config) (Drift, error) {
+//
+// A persona file the bundle ships unbound is the one exception, because its
+// third side is not a guess. Every baseline records every such file the bundle
+// shipped when it was taken, and the bundle shipped none before the program
+// manager's, so a baseline without one says the template supplied nothing
+// there. The project's side is read off its own configuration directory, where
+// configPath keeps its personas: a project that has no such file did not write
+// one, and is offered it; one that wrote its own is compared against it like
+// any other value both sides moved. An empty configPath reads no files.
+func CompareToBaseline(lock Lock, effective Config, configPath string) (Drift, error) {
 	current, err := BundleValues(lock.Bundle)
 	if err != nil {
 		return Drift{}, err
 	}
-	yours := ProjectValues(effective)
+	yours := ProjectValues(effective, configPath)
 
 	drift := Drift{
 		Known:            true,
@@ -121,8 +130,17 @@ func CompareToBaseline(lock Lock, effective Config) (Drift, error) {
 		BaselineRevision: lock.Revision,
 		BundleRevision:   baselineRevision(current),
 	}
-	keys := make([]string, 0, len(lock.Values))
-	for key := range lock.Values {
+	baselineValues := make(map[string]string, len(lock.Values))
+	for key, value := range lock.Values {
+		baselineValues[key] = value
+	}
+	for key := range current {
+		if _, recorded := baselineValues[key]; !recorded && isShippedPersonaKey(key) {
+			baselineValues[key] = ""
+		}
+	}
+	keys := make([]string, 0, len(baselineValues))
+	for key := range baselineValues {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
@@ -133,7 +151,7 @@ func CompareToBaseline(lock Lock, effective Config) (Drift, error) {
 			// offering. Whatever the project holds is the project's now.
 			continue
 		}
-		baseline := lock.Values[key]
+		baseline := baselineValues[key]
 		drift.Values = append(drift.Values, Value{
 			Key:      key,
 			Class:    classify(baseline, yours[key], bundleNow),
@@ -167,7 +185,12 @@ func classify(baseline, yours, bundle string) Class {
 
 // ProjectValues is a project's effective configuration keyed the way a baseline
 // is, so the two are comparable value by value.
-func ProjectValues(effective Config) map[string]string {
+//
+// The persona files in the project's configuration directory are keyed as well,
+// by file, because a persona no agent binds yet is in the configuration nowhere
+// and is still something the template ships. configPath is the configuration
+// they belong to; an empty one reads no files.
+func ProjectValues(effective Config, configPath string) map[string]string {
 	values := flattenConfig(effective)
 	for name, agent := range effective.Agents {
 		if !agent.Persona.Defined() {
@@ -175,7 +198,45 @@ func ProjectValues(effective Config) map[string]string {
 		}
 		values[personaTextKey(name)] = personaTextDigest(agent.Persona.Text)
 	}
+	for key, digest := range projectPersonaFiles(configPath) {
+		values[key] = digest
+	}
 	return values
+}
+
+// projectPersonaFiles digests every persona file in a configuration's own
+// persona directory, keyed as shippedPersonaKey keys the bundle's. Each is read
+// through the same loader the configuration's agents are, so a file it would
+// refuse -- a symlink out of the directory, one past the size bound -- reads as
+// absent here too rather than as content nothing else would load.
+func projectPersonaFiles(configPath string) map[string]string {
+	files := map[string]string{}
+	if configPath == "" {
+		return files
+	}
+	loader := personaLoaderFor(configPath)
+	for _, directory := range personaDirectories(configPath) {
+		entries, err := os.ReadDir(filepath.Join(directory, bundlePersonaDirectory))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+				continue
+			}
+			personaPath := bundlePersonaDirectory + "/" + entry.Name()
+			key := shippedPersonaKey(personaPath)
+			if _, seen := files[key]; seen {
+				continue
+			}
+			text, _, err := loader.load("persona", personaPath)
+			if err != nil {
+				continue
+			}
+			files[key] = personaTextDigest(text)
+		}
+	}
+	return files
 }
 
 // LockPath is where a configuration's baseline lives: beside the configuration,
@@ -227,7 +288,7 @@ func ReadDrift(resolved Resolved) (Drift, Unknown) {
 	if err != nil {
 		return Drift{}, Unknown{Reason: err.Error()}
 	}
-	drift, err := CompareToBaseline(lock, resolved.Config)
+	drift, err := CompareToBaseline(lock, resolved.Config, resolved.Path)
 	if err != nil {
 		return Drift{}, Unknown{Reason: err.Error()}
 	}

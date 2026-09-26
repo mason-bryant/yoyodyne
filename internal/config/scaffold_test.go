@@ -621,3 +621,48 @@ func loadScaffoldEdited(t *testing.T, options ScaffoldOptions, edit func(string)
 	}
 	return resolved
 }
+
+// init configures no program manager -- an instance is a lane and a remit
+// somebody chooses -- and still copies its persona, so the project that later
+// writes one has it to bind rather than to write by hand.
+func TestScaffoldCopiesAPersonaNoGeneratedAgentBinds(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{ProductID: "example", Repository: "."})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	template, err := loadBuiltinBundle(BuiltinV1)
+	if err != nil {
+		t.Fatalf("loadBuiltinBundle() error = %v", err)
+	}
+	want, _, err := template.personas.load("persona", "personas/program-manager.md")
+	if err != nil {
+		t.Fatalf("load the template's program manager persona: %v", err)
+	}
+	var copied []string
+	found := false
+	for _, file := range scaffold.Personas {
+		copied = append(copied, file.Path)
+		if file.Path == "personas/program-manager.md" {
+			found = true
+			if string(file.Content) != want {
+				t.Error("the copied program manager persona differs from the template's")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("scaffold personas = %v, want personas/program-manager.md among them", copied)
+	}
+	if strings.Contains(string(scaffold.Config.Content), "role: program-manager") {
+		t.Error("the generated configuration configures a program manager, which init must leave to the operator")
+	}
+	// Every persona the template ships is copied, bound or not.
+	shipped, err := template.shippedPersonas()
+	if err != nil {
+		t.Fatalf("shippedPersonas() error = %v", err)
+	}
+	if len(scaffold.Personas) != len(shipped) {
+		t.Errorf("scaffold copied %v, want every one of %v", copied, shipped)
+	}
+}

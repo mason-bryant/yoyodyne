@@ -27,6 +27,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -128,7 +130,37 @@ func BundleValues(bundleName string) (map[string]string, error) {
 		}
 		values[personaTextKey(name)] = personaTextDigest(agent.Persona.Text)
 	}
+	// A persona the bundle ships and no agent of it binds is in the configuration
+	// nowhere at all, so it is recorded by its file. It is still something a later
+	// bundle can improve -- or add, which is how the program manager's arrived --
+	// and a project that materialized without it is owed being told.
+	unbound, err := template.unboundPersonas(resolved.Config)
+	if err != nil {
+		return nil, err
+	}
+	for _, personaPath := range unbound {
+		text, _, err := template.personas.load("persona", personaPath)
+		if err != nil {
+			return nil, err
+		}
+		values[shippedPersonaKey(personaPath)] = personaTextDigest(text)
+	}
 	return values, nil
+}
+
+// shippedPersonaKey names a persona file the bundle ships without binding it to
+// an agent: `personas/program-manager.md` is `personas.program-manager.text`. No
+// configuration has a top-level `personas` key, so it names a file rather than a
+// setting, and reads as `.text` for the reason personaTextKey does.
+func shippedPersonaKey(personaPath string) string {
+	slashed := filepath.ToSlash(personaPath)
+	stem := strings.TrimSuffix(slashed, path.Ext(slashed))
+	return strings.ReplaceAll(stem, "/", ".") + ".text"
+}
+
+// isShippedPersonaKey reports whether a key is one shippedPersonaKey makes.
+func isShippedPersonaKey(key string) bool {
+	return strings.HasPrefix(key, bundlePersonaDirectory+".") && strings.HasSuffix(key, ".text")
 }
 
 // personaTextKey names an agent's persona text as a key of its own, beside the
