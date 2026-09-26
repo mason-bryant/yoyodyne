@@ -70,6 +70,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -254,7 +255,168 @@ type Trigger struct {
 	// context was the one rendered when her conversation opened, and a pass
 	// resumes that conversation rather than opening it.
 	Docket RecurringDocket
-	Clock  execution.Clock
+	// Breakage is where a missed cadence is said to somebody, as a report the
+	// harness files itself. Optional: a trigger wired without one still records
+	// the miss in the sweep log, and only the report is left unsaid.
+	Breakage RecurringBreakage
+	// Attribution is the product, repository, and build a miss report is filed
+	// under. The role and the run it names are the miss's own.
+	Attribution report.Attribution
+	Clock       execution.Clock
+}
+
+// RecurringBreakage is the report pile as a missed cadence files into it. It is
+// satisfied by *runstate.ReportStore.
+type RecurringBreakage interface {
+	Append(reported report.Report) error
+}
+
+// RecurringDue is when one enabled task is next due, as the claim that paces it
+// says. At is zero for a task that has never fired, which is due at once.
+type RecurringDue struct {
+	Task  string
+	Role  domain.AgentRole
+	Every time.Duration
+	At    time.Time
+}
+
+// RecurringMiss is a task that went a whole interval past the time it fell due
+// without firing, and what kept it from firing.
+type RecurringMiss struct {
+	Task  string
+	Role  domain.AgentRole
+	Every time.Duration
+	// Due is when the task fell due, and Why is what the session that noticed
+	// the miss knows kept it: the harness itself, the operator's pause, or no
+	// session running at all.
+	Due time.Time
+	Why string
+	// Severity is how the miss is said. Empty records it in the sweep log and
+	// says it to nobody, which is the operator's own pause: a stop somebody
+	// placed on purpose is not breakage.
+	Severity report.Severity
+}
+
+// RecurringCadence is the schedule read without firing it, and the miss
+// recorded where it has gone unfired. It is asked by a watching session that is
+// waiting on a run of its own, so the wait ends when a task falls due rather
+// than when the run does; on 2026-09-13 a session waited on one run for twenty
+// hours, and the development manager's hourly task fired nothing in all of them.
+//
+// It is satisfied by Trigger. A schedule that does not satisfy it is waited on
+// as it always was: the session reaches it when a run ends.
+type RecurringCadence interface {
+	Cadence(ctx context.Context) ([]RecurringDue, error)
+	Missed(ctx context.Context, missed RecurringMiss) error
+}
+
+// recurringFinder is a claim store that can be read without claiming. It is
+// satisfied by runstate.SweepStore; a store that cannot is one whose cadence
+// nothing reads ahead of firing.
+type recurringFinder interface {
+	Find(task string) (runstate.SweepClaim, bool, error)
+}
+
+// Cadence reports when each enabled task is next due. It claims nothing, so a
+// session that reads it and then fires still meets the claim as the due check.
+func (t Trigger) Cadence(context.Context) ([]RecurringDue, error) {
+	finder, readable := t.Claims.(recurringFinder)
+	if !readable {
+		return nil, nil
+	}
+	var dues []RecurringDue
+	var problems []error
+	for _, name := range t.names() {
+		task := t.Tasks[name]
+		if !task.Enabled {
+			continue
+		}
+		due := RecurringDue{Task: name, Role: task.Role, Every: task.Every.Duration()}
+		claimed, found, err := finder.Find(name)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("read when the recurring task %s is due: %w", name, err))
+			continue
+		}
+		if found && !claimed.FiredAt.IsZero() {
+			due.At = claimed.NextDue(due.Every)
+		}
+		dues = append(dues, due)
+	}
+	return dues, errors.Join(problems...)
+}
+
+// Missed records a missed cadence in the sweep log, where every other thing
+// that became of the task is, and says it as a report where it has a severity.
+//
+// The record is a firing that took no turn and spans the time the task went
+// unfired, so `yoyo sweeps` reads the gap in the place a reader looks for the
+// passes. The cadence is not moved: the task is still due, and fires at the
+// first pass that reaches it once what kept it clears.
+func (t Trigger) Missed(ctx context.Context, missed RecurringMiss) error {
+	if t.Reports == nil {
+		return errors.New("recording a missed cadence requires the sweep log")
+	}
+	now := t.now()
+	late := now.Sub(missed.Due)
+	problem := boundedProblem([]string{fmt.Sprintf(
+		"the recurring task %s, due every %s, fell due at %s and had not fired %s later, so its %s's standing look was not taken: %s; nothing was asked, and it fires at the first pass that reaches it once that clears",
+		missed.Task, missed.Every, missed.Due.UTC().Format(time.RFC3339), late.Round(time.Minute), missed.Role, missed.Why)})
+	var problems []error
+	if err := t.Reports.Append(runstate.Sweep{
+		Task:      missed.Task,
+		Role:      missed.Role,
+		StartedAt: missed.Due,
+		EndedAt:   now,
+		Problem:   problem,
+	}); err != nil {
+		problems = append(problems, fmt.Errorf("record the missed cadence of the recurring task %s: %w", missed.Task, err))
+	}
+	if missed.Severity != "" && t.Breakage != nil {
+		if err := t.reportMiss(missed, now); err != nil {
+			problems = append(problems, fmt.Errorf("report the missed cadence of the recurring task %s: %w", missed.Task, err))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+// reportMiss files the miss as the harness's own report. It names the task and
+// the time it fell due as the run it came out of, because there is no run: a
+// firing that never happened is what the report is about.
+func (t Trigger) reportMiss(missed RecurringMiss, now time.Time) error {
+	attribution := t.Attribution
+	attribution.Role = report.HarnessReporter
+	attribution.Agent = ""
+	attribution.RunID = fmt.Sprintf("%s@%s", missed.Task, missed.Due.UTC().Format(time.RFC3339))
+	attribution.WorkItemID = ""
+	collected, err := report.Collect([]report.Entry{{
+		Severity: missed.Severity,
+		Message:  missedReportMessage(missed, now),
+	}}, attribution, now)
+	if err != nil {
+		return err
+	}
+	for _, reported := range collected {
+		if err := t.Breakage.Append(reported); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// missedReportMessage is the two sentences a missed cadence is said in: what
+// has not fired and what kept it, and what that costs while it stands.
+func missedReportMessage(missed RecurringMiss, now time.Time) string {
+	why := strings.Join(strings.Fields(missed.Why), " ")
+	if limit := report.MaxMessageBytes / 2; len(why) > limit {
+		cut := limit
+		for cut > 0 && !utf8.RuneStart(why[cut]) {
+			cut--
+		}
+		why = why[:cut] + " […]"
+	}
+	return fmt.Sprintf("The recurring task %s has not fired since it fell due at %s, %s ago: %s. "+
+		"The %s's standing look is not being taken while it stands, and the task fires on its own at the first pass that reaches it once that clears.",
+		missed.Task, missed.Due.UTC().Format(time.RFC3339), now.Sub(missed.Due).Round(time.Minute), why, missed.Role)
 }
 
 // RecurringDocket is the triage docket rendered as the development manager's

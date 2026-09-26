@@ -20,12 +20,14 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/buildinfo"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/forgehygiene"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -62,6 +64,15 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 		// interval has passed, fires into it to find out whether it still does.
 		Outages:     parts.outages,
 		OutageProbe: parts.config.Execution.UsageLimitUnknownResetPause.Duration(),
+		// Where a cadence that went unfired is said, as the harness's own report
+		// in the pile every other report is in, so it reaches the operator the way
+		// breakage does rather than only the sweep log somebody has to go and read.
+		Breakage: parts.reports,
+		Attribution: report.Attribution{
+			ProductID:    parts.config.Product.ID,
+			RepositoryID: string(parts.config.Product.RepositoryID),
+			Build:        buildinfo.Commit(),
+		},
 	}
 	// The docket a development manager's pass carries, built by the docketer her
 	// conversation builds it with and rendered by the section her conversation
