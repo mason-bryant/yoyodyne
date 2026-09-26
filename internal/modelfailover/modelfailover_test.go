@@ -525,7 +525,7 @@ func TestASubstitutionOntoAnIneligibleEndpointIsRefusedWithTheReasonNamed(t *tes
 	if served.Substituted() {
 		t.Fatalf("served = %#v, want the turn left on the endpoint it was already on", served)
 	}
-	if len(reported) != 1 || !strings.Contains(reported[0].Error(), `cannot hold the "read-only" tool posture`) {
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("reported = %v, want the posture that could not be held named", reported)
 	}
 	// Nothing is written down: no substitution happened, so a record of one would

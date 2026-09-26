@@ -120,7 +120,7 @@ rather than after:
 - **Claude Code is the backend everything runs on by default, and Codex is the
   second one that runs.** Codex is the developer's alone: its sandbox scopes
   writes to a directory, which is what a developer needs, and has no setting for
-  the no-tools posture every other role requires, so a reviewer configured for it
+  refusing every tool, which every other role requires, so a reviewer configured for it
   is refused when the configuration loads. A project can also declare a fork, a
   proxy, or a variant of either under `providers:` — see
   [provider plugins](docs/provider-plugins.md).

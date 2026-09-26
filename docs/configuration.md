@@ -252,7 +252,7 @@ the role's name. It is reported and never written: the set is read off the role
 in the harness's own registry, there is no `capabilities` key to put in a
 configuration, and a file that writes one is refused like any other key that
 does not exist. The set of role names is fixed for the same reason —
-every posture the harness derives, a reviewer's absent tools included, is derived
+the tools each role may use, a reviewer's absence of any included, are derived
 from the name — so `role` must be one of the six: `product-manager`,
 `architect`, `development-manager`, `developer`, `reviewer`, or
 `program-manager`, and anything else is
@@ -271,10 +271,10 @@ the table itself.
 
 `backend` is `claude-code` or `codex` unless your project declares one of its
 own — and `codex` only for a `developer` agent, since its sandbox cannot hold
-the tool posture every other role requires. A project running a fork, a proxy, or
+the tool access every other role requires. A project running a fork, a proxy, or
 a variant of a provider yoyo already speaks can describe it under a top-level `providers:` key and name it here: which
 compiled adapter launches it, which executable that adapter runs, which roles it
-serves, which tool postures it can hold them to, and how to read what it says
+serves, which kinds of tool access it can hold them to, and how to read what it says
 about rate limits, retries, and reset times. A declared provider describes and
 decides nothing: whether to wait, how long, and against which budget stay the
 harness's, because those are what the `execution.usage_limit_*` settings below
@@ -1264,8 +1264,8 @@ paths for the case no gate can catch — an item that describes the work without
 granting anything, whose developer would otherwise spend attempts looking for a
 way in.
 
-The list is short and evidenced rather than a guess at a provider's whole
-posture: an entry refuses work at admission, so a path added on suspicion costs
+The list is short and evidenced rather than a guess at everything a provider's
+sandbox refuses: an entry refuses work at admission, so a path added on suspicion costs
 items nobody needed to refuse. It grows the same way it started — something meets
 the wall and reports it.
 
@@ -2751,7 +2751,7 @@ costs is read off the same surfaces as before — a mapped run simply says
 `sonnet` where it used to say `opus`.
 
 **The reviewer's model is not reachable from here.** There is no key in this
-block that could name it, deliberately: a reviewer's posture is a safety
+block that could name it, deliberately: which tools a reviewer may use is a safety
 property rather than a spend decision, and an independent verdict bought more
 cheaply is the one saving that costs the gate its meaning. The
 [account pool and the failover rules](#serving-a-turn-from-a-permitted-alternate-model)
@@ -3741,13 +3741,13 @@ too — switching failover off keeps a choice already made, and there is none to
 keep in a block nobody finished.
 
 A crossing is refused where the file is read if the alternate names a provider
-this project does not name, one that cannot be held to the tool posture the
+this project does not name, one that cannot be held to the tool access the
 agent's role requires, or an account that could not sign that provider in. The
 account is the one the agent would actually be served under — the account it
 names, or the pool's first that can sign its own provider in — rather than only
 the alias the `failover` block wrote down, so an agent that named no account of
 its own is refused here too. The same three are asked again at the moment of the
-substitution, because a posture is not something to take on trust from a check
+substitution, because which tools a role can use is not something to take on trust from a check
 that ran earlier.
 
 A crossing that cannot be resolved when a conversation opens — an account edited
@@ -3774,11 +3774,11 @@ What happens on a refused turn:
   the cost log says what was spent where rather than billing the alternate's turn
   to the model that refused it. A crossing is charged to the alternate's own
   account and provider, which is the subscription the money actually left.
-- The endpoint the turn would move onto is checked against the tool posture the
+- The endpoint the turn would move onto is checked against the tool access the
   role requires before it is moved. A substitution can never put a role on a
-  provider whose sandbox cannot hold that posture — a reviewer needs a provider
+  provider whose sandbox cannot hold that tool access — a reviewer needs a provider
   that can refuse every tool, and a developer one that can scope writes to a
-  worktree — and a substitution that would is refused with the posture named,
+  worktree — and a substitution that would is refused with the tool access named,
   leaving the turn to take the refusal it would have taken anyway.
 - **A crossing rebuilds rather than resumes.** Every turn but the first resumes a
   provider session, which is why a later turn's prompt carries so little: the
@@ -5344,15 +5344,15 @@ These are all errors, reported before any work is claimed:
   have been meant. Adding a role is a change to the harness, not to this file;
 - a role and backend combination the backend does not support, such as an
   architect on the Codex backend — and the same refusal for a provider your
-  project declared itself, including one asked to hold a tool posture it never
+  project declared itself, including one asked to hold a kind of tool access it never
   claimed, such as a developer on a provider that declared only `read-only`;
 - a role and backend combination the backend serves and cannot hold to the tool
-  posture the role requires, such as a reviewer on the Codex backend: Codex
+  access the role requires, such as a reviewer on the Codex backend: Codex
   declares `worktree-write` and not `read-only`, so it is the developer's
-  backend and no other role's, and the refusal names the posture rather than the
+  backend and no other role's, and the refusal names the tool access rather than the
   role. [Provider plugins](provider-plugins.md#capability-validation) is why;
 - a `providers:` entry that names no adapter or one this build ships none for,
-  serves no role, holds no tool posture, names a role or posture the harness does
+  serves no role, holds no tool access, names a role or kind of tool access the harness does
   not have, reads nothing its provider says, or tries to replace a backend this
   build ships;
 - an `execution.developer_slots` list longer than `max_concurrent_developers`,

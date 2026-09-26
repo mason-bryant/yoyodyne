@@ -202,7 +202,7 @@ func TestACrossingOntoAProviderThatCannotHoldTheRolesPostureIsRefused(t *testing
 	if len(held.requests) != 1 {
 		t.Fatalf("the configured provider was asked %d times, want the one attempt", len(held.requests))
 	}
-	if !strings.Contains(reply.FailoverProblem, `cannot hold the "read-only" tool posture`) {
+	if !strings.Contains(reply.FailoverProblem, `cannot hold the "read-only" tool access`) {
 		t.Fatalf("failover problem = %q, want the posture that could not be held named", reply.FailoverProblem)
 	}
 	if recorded, err := limits.List(); err != nil || len(recorded) != 1 || recorded[0].Substituted() {

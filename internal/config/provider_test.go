@@ -103,7 +103,7 @@ func TestADeclaredProviderIsRefusedForWhatItDoesNotServe(t *testing.T) {
 			edit: func(input string) string {
 				return strings.Replace(input, "      - worktree-write\n", "      - read-only\n", 1)
 			},
-			wants: []string{`cannot hold the "worktree-write" tool posture`},
+			wants: []string{`cannot hold the "worktree-write" tool access`},
 		},
 		{
 			name: "a provider nothing declared",

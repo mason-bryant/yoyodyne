@@ -614,8 +614,8 @@ paths for the case no gate can catch — an item that describes the work without
 granting anything, whose developer would otherwise spend attempts looking for a
 way in.
 
-The list is short and evidenced rather than a guess at a provider's whole
-posture: an entry refuses work at admission, so a path added on suspicion costs
+The list is short and evidenced rather than a guess at everything a provider's
+sandbox refuses: an entry refuses work at admission, so a path added on suspicion costs
 items nobody needed to refuse. It grows the same way it started — something meets
 the wall and reports it.
 

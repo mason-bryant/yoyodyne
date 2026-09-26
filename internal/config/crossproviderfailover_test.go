@@ -184,7 +184,7 @@ func TestACrossingIsRefusedWhereTheAlternateCouldNotServeTheRole(t *testing.T) {
       provider: second-provider
       account: second-account
 `,
-			want: `cannot hold the "read-only" tool posture`,
+			want: `cannot hold the "read-only" tool access`,
 		},
 		{
 			name:    "an account this project does not declare",

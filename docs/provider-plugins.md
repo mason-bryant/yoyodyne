@@ -3,7 +3,7 @@
 Yoyo runs agents through a provider — a coding CLI or a harness that speaks to a
 model API. Two are in the vocabulary and this build ships an adapter for both:
 Claude Code, which serves every role, and Codex, which is the developer's alone
-because its sandbox cannot hold the tool posture every other role requires
+because its sandbox cannot hold the tool access every other role requires
 ([capability validation](#capability-validation)).
 
 A project can declare a provider of its own in its configuration, without forking
@@ -163,12 +163,12 @@ install would give this build one.
 
 ## Capability validation
 
-A declared provider states which roles it serves and which tool postures it can
-hold them to. Both are checked when your configuration loads, before any work is
-assigned — the same check a built-in gets, and the reason `codex` is refused for
+A declared provider states which roles it serves and which kinds of tool access
+it can hold them to. Both are checked when your configuration loads, before any
+work is assigned — the same check a built-in gets, and the reason `codex` is refused for
 an `architect` agent.
 
-The two postures are:
+The two kinds of tool access are:
 
 - `read-only` — the agent reasons over the evidence it was handed and reaches
   outside it for nothing. It requires a provider that can refuse *every* tool,
@@ -184,17 +184,17 @@ declare what is true.
 The built-ins are held to it too, and Codex is the worked example: it declares
 `worktree-write` and not `read-only`. Its read-only sandbox stops writes and
 network, and still lets the agent read the machine — and reading unrelated local
-files and sending them to a provider is the thing the `read-only` posture exists
+files and sending them to a provider is the thing `read-only` tool access exists
 to prevent. So `codex` is refused for a `reviewer` agent, with the refusal naming
-the posture rather than the role. That is a fact about the sandbox rather than
+the tool access rather than the role. That is a fact about the sandbox rather than
 about what this build carries: it held before the Codex adapter landed and holds
 after it, and the way to make the read-only claim true is an adapter that
 achieves the property rather than a line that asserts it.
 
 The same check stands behind a substitution. When a turn is moved off the model
 it asked for — because that model's capacity window closed — the endpoint it
-would be moved onto is checked against the posture the role requires, and a move
-onto a provider that cannot hold it is refused with the posture named. The turn
+would be moved onto is checked against the tool access the role requires, and a move
+onto a provider that cannot hold it is refused with the tool access named. The turn
 then takes the refusal it would have taken anyway rather than being served
 somewhere the configuration would never have permitted. Configuration validation
 answers for the configuration as written; this answers for the endpoint an
@@ -219,7 +219,7 @@ build read its stream with, which is what lets a later reader tell two harness
 builds reading one provider differently apart. You do not write the adapter
 version: it follows from the adapter your declaration names.
 
-The posture is also what decides the session mode an invocation is made in, and
+The tool access is also what decides the session mode an invocation is made in, and
 the invocation the harness asks for carries none: nothing above the adapter names
 a mode, so which one a role gets follows from which role it is. That matters most
 for what an adapter must *not* choose. A provider with an interactive planning
@@ -227,7 +227,7 @@ mode puts that mode's own workflow into the session — do not execute yet, writ
 plan, hand the plan back — and a harness-invoked role receives it on top of a role
 contract that says the opposite: a reviewer told to plan when its contract wants
 one verdict, or a developer told not to edit when the whole run is an edit. An
-adapter picks the mode that grants what the posture needs and nothing else, never
+adapter picks the mode that grants what the tool access needs and nothing else, never
 the one that instructs.
 
 ## Writing one
@@ -317,7 +317,7 @@ agents:
 | `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` and `codex` are the ones this build ships; naming anything else is refused at load. |
 | `binary` | The executable that adapter runs. Omit it for the adapter's own. |
 | `roles` | Which of the harness's roles this provider serves. |
-| `postures` | `read-only`, `worktree-write`, or both. |
+| `postures` | The tool access it can hold its roles to: `read-only`, `worktree-write`, or both. |
 | `capabilities` | What the provider can do, stated rather than assumed. |
 | `dialect.rules` | How to read what it says, below. |
 

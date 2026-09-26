@@ -36,7 +36,6 @@ the prose the check reads, every one of them a term with a row below.
 | `handback`    | handing the work back to the developer that made it                                                                                        | `internal/orchestrator` and `internal/runstate` only — it names no command output and no document                                                                                                                                        |
 | `heartbeat`   | how often to repeat                                                                                                                        | the `yoyo slack --heartbeat` flag, whose own help says it in plain words; [reporting into Slack](slack/setup.md)                                                                                                                         |
 | `minute zero` | before development begins                                                                                                                  | the [developer-verifies-before-submitting](decisions/invariants/developer-verifies-before-submitting.md) invariant, whose wording only the architect changes — written there both spaced and as `minute-zero`, which this one row covers |
-| `posture`     | which tools a role may use — written as *tool posture*                                                                                     | the [harness-is-the-only-role-invoker](decisions/invariants/harness-is-the-only-role-invoker.md) invariant, whose wording only the architect changes; the configuration guide                                                            |
 | `program manager` | a role instance that owns one named work stream: it admits work only under that stream's own tracker label, and asks the product manager for anything outside it. There is one program manager role type, with what it may do fixed in code, and each configured instance owns one stream and one label. Written in full wherever a person reads it; `pgm` is the identifier form only — in configuration keys, code, and instance identifiers — because *PM* already means the product manager | [the program manager design](designs/program-manager.md); `role: program-manager` on an agent block in [the configuration](configuration.md), which declares each instance; the role-capability registry and [the authority inventory](authority-inventory.md); and the surfaces that name role instances — each named here as it comes to exist |
 | `re-arm`      | repeat the merge request a forge dropped, once per publication — the `yoyo triage rearm` verb and the budget it spends                     | `yoyo triage rearm` and its help; the merge re-arms count in `yoyo status`; the development manager's triage decisions and `yoyo ground`; the guides that say when to type it — [operations](operations.md), [recovery](configuration/recovery.md), [the conversation](conversation.md), and [configuration](configuration.md); `internal/orchestrator` and `internal/runstate` |
 | `seat`        | an instance of a specific persona type — a developer seat, the product manager seat — often with persistent memory but not always. A *developer slot* is the harness's word for the capacity one developer seat fills: the seat is what does the work, and the slot is what it takes up while it does | the operator's own conversations, which is where the word came from; [a developer slot that prefers a label](configuration.md#a-developer-slot-that-prefers-a-label), the yoyodyne-ifd.388 mechanism, and the reliability seat yoyodyne-ifd.415 configured under it |
@@ -44,15 +43,16 @@ the prose the check reads, every one of them a term with a row below.
 | `steer`       | direct the work, or change what is being worked on                                                                                         | `yoyo chat` help and the Slack thread replies; `internal/chat`; [the Slack reporting design](designs/slack-reporting-design.md)                                                                                                          |
 
 
-Two entries are here because the word is still written somewhere no other role
-may edit. `minute zero` and `posture` are the sweep's decoration rather than
-mechanism names, and each survives only inside the text of an active
-invariant. That wording is the architect's alone — the sweep says so outright —
-so the entry is what keeps the word readable until the architect decides
-otherwise, and each is retired when it does. `in force` was the third of these
-until yoyodyne-ifd.418 retired it: the operator objected to it by name, so it is
-now listed below as replaced, with the governed documents that still carry it
-named on its row until the architect amends them.
+One entry is here because the word is still written somewhere no other role
+may edit. `minute zero` is the sweep's decoration rather than a mechanism name,
+and it survives only inside the text of an active invariant. That wording is
+the architect's alone — the sweep says so outright — so the entry is what keeps
+the word readable until the architect decides otherwise, and it is retired
+when the architect does. `in force` and `posture` were two more of these until
+the operator objected to each by name: yoyodyne-ifd.418 retired `in force`, and
+yoyodyne-ifd.437.6 retired `posture` on 2026-09-25 because it was unclear to
+him. Both are now listed below as replaced, with the governed documents that
+still carry them named on their rows until the architect amends them.
 
 One entry is a command's own name. The sweep replaced `re-arm` in the prose of
 the governed documents, but `yoyo triage rearm` is a verb an operator types and
@@ -110,6 +110,7 @@ longer says.
 | `cadence`           | how often it repeats, or its schedule                  |                                                                                                                                                |
 | `in force`          | active, or still applies                               | `docs/decisions/invariants/README.md`                                                                                                          |
 | `one pane of glass` | one window                                             |                                                                                                                                                |
+| `posture`           | tool access, meaning the tools a role may use          | `docs/decisions/invariants/harness-is-the-only-role-invoker.md` `docs/designs/program-manager.md` `docs/designs/provider-adapters-and-endpoints.md` |
 | `seam`              | the boundary, named for what attaches to what          |                                                                                                                                                |
 | `sidecar`           | a separate directory outside the repository            |                                                                                                                                                |
 | `soak`              | a trial run kept alongside the old path for comparison |                                                                                                                                                |

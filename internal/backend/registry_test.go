@@ -223,13 +223,13 @@ func TestAPluginThatCouldNeverWorkIsRefused(t *testing.T) {
 			name:   "holding no posture",
 			id:     "my-harness",
 			spoil:  func(p *ProviderPlugin) { p.Postures = nil },
-			wanted: "holds no tool posture",
+			wanted: "holds no tool access",
 		},
 		{
 			name:   "holding a posture nothing means",
 			id:     "my-harness",
 			spoil:  func(p *ProviderPlugin) { p.Postures = []Posture{"trusted"} },
-			wanted: "holds posture \"trusted\"",
+			wanted: "holds tool access \"trusted\"",
 		},
 		{
 			name:   "reading nothing its provider says",
