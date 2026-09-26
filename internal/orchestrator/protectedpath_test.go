@@ -84,6 +84,104 @@ func TestTheDeveloperContractNamesEveryPathBeyondAGrant(t *testing.T) {
 	}
 }
 
+// The role definitions are the harness's own path beyond a grant, and the
+// developer is told so before its first attempt for the reason it is told about
+// the provider's.
+func TestTheDeveloperContractNamesTheRoleDefinitionsAsBeyondAGrant(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(developerContract(scratchForTest, nil), protectedpath.RoleDefinitions+"/") {
+		t.Fatalf("the developer contract never names %q, which no grant reaches", protectedpath.RoleDefinitions)
+	}
+}
+
+// An item whose acceptance criteria grant a role definition reached no admission
+// door, so the run is what refuses it — before it claims the item or spends an
+// attempt.
+func TestARunRefusesToStartOnAnItemGrantingARoleDefinition(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
+		ID:                 "yoyodyne-task",
+		Title:              "Give the developer a new capability",
+		Status:             "open",
+		AcceptanceCriteria: "The developer's definition carries it.\n" + protectedpath.GrantMarker + " " + protectedpath.RoleDefinitions + "/developer.yaml\n",
+	}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
+	if err == nil {
+		t.Fatal("Run() on an item granting a role definition = nil error, want it refused before it started")
+	}
+	for _, want := range []string{protectedpath.RoleDefinitions + "/developer.yaml", "no grant reaches", "operator"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q never names %q", err, want)
+		}
+	}
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 0 {
+		t.Fatalf("developer invocations = %d, want none", developers)
+	}
+	if tracker.Claimed {
+		t.Fatal("the item was claimed by a run that could never be given the path")
+	}
+}
+
+// A grant of the configuration directory admits the configuration and never the
+// role definitions inside it: a change touching one is refused before any check
+// runs, and the refusal says no grant would have admitted it.
+func TestAChangeTouchingARoleDefinitionIsRefusedThoughTheItemGrantsTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	const roleDefinition = protectedpath.RoleDefinitions + "/developer.yaml"
+	repository := pipelineRepository(t)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
+		ID:          "yoyodyne-task",
+		Title:       "Adjust the project configuration",
+		Description: "The configuration needs a new check.\n\n" + protectedpath.GrantMarker + " .yoyodyne\n",
+		Status:      "open",
+	}}
+	attempts := 0
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
+		attempts++
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		if attempts == 1 {
+			return writeUpstream(t, request.WorkingDirectory, roleDefinition, "capabilities: [everything]\n")
+		}
+		return os.RemoveAll(filepath.Join(request.WorkingDirectory, filepath.FromSlash(protectedpath.RoleDefinitions)))
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || outcome.RepairAttempts != 1 {
+		t.Fatalf("the repaired change was not integrated on one refusal: %#v", outcome)
+	}
+	// No reviewer and no check judged the attempt that wrote a role definition.
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Fatalf("reviews = %d, want only the attempt that left the role definitions alone", reviews)
+	}
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
+	}
+	for _, want := range []string{roleDefinition, "Granted by this work item: .yoyodyne", protectedpath.RoleInstruction} {
+		if !strings.Contains(developerRequests[1].Prompt, want) {
+			t.Fatalf("the refusal is missing %q:\n%s", want, developerRequests[1].Prompt)
+		}
+	}
+	if _, err := attemptPipelineGit(repository, "show", "main:"+roleDefinition); err == nil {
+		t.Fatal("the role definition reached the target branch")
+	}
+}
+
 // A grant is honoured from an item's design guidance and acceptance criteria as
 // well as from its title and description, and the two doors admission holds — a
 // proposal and a tracker action — carry neither of those two: no action takes

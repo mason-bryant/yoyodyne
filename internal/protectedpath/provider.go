@@ -100,8 +100,10 @@ func BeyondGrant(granted []string) []ProviderPath {
 }
 
 // GrantProblems reports what is wrong with the grants an item's text carries,
-// which is one thing: a grant naming a path the provider refuses. An empty
-// result is the ordinary answer, because nearly no item grants anything at all.
+// which is one of two things: a grant naming a path the provider refuses, or a
+// grant naming the role definitions this harness refuses absolutely (see
+// roles.go). An empty result is the ordinary answer, because nearly no item
+// grants anything at all.
 //
 // It is one predicate every door into the queue asks rather than each deciding
 // for itself, for the reason the admission gap is: a door that asked a weaker
@@ -109,9 +111,10 @@ func BeyondGrant(granted []string) []ProviderPath {
 // fields are passed is the caller's, because it is the caller that knows which of
 // them the item will actually carry.
 func GrantProblems(texts ...string) []error {
+	granted := Grants(texts...)
 	var problems []error
-	for _, beyond := range BeyondGrant(Grants(texts...)) {
+	for _, beyond := range BeyondGrant(granted) {
 		problems = append(problems, errors.New(beyond.GrantRefusal()))
 	}
-	return problems
+	return append(problems, roleGrantProblems(granted)...)
 }
