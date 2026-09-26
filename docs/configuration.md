@@ -6171,8 +6171,18 @@ problem names the cause. Each cause is also reported differently:
   harness could not be read, the session was waiting out a redeploy, or the pull
   that reached the task gave its one firing to another task. This is filed as the
   harness's own report at `critical`, which puts it in front of the operator.
+- **The firing was turned away before it reached the role.** The provider had
+  no capacity, the provider was answering nobody, or the role's conversation was
+  held by another process. The miss quotes the refusal, including the reset the
+  provider named. Where the session's own reading of the provider says more, such
+  as the usage window and when it resets, that is added. This is reported at
+  `warning`, since the provider's wait already has a notice of its own. In
+  practice a refused firing is itself recorded as the pass for that cadence,
+  so this cause names a miss only where the cadence was held without moving.
 - **No session was running** when the task fell due. This is reported at
-  `warning`, since whoever stopped the harness knows.
+  `warning`, since whoever stopped the harness knows. If this session did open
+  late but then found the task held by one of the causes above, that cause is
+  what gets named.
 - **The operator's pause** is recorded and reported to nobody.
 
 The cadence is not moved by a miss. The task is still due, and fires on its own at

@@ -1356,15 +1356,22 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		}
 	}
 
+	// finish takes one run of this session's off the books once it has ended.
+	// Every wait that can collect a run collects it through here, so none of them
+	// can take a run back differently from the others.
+	finish := func(done completed) {
+		running--
+		delete(mine, schedule.Started[done.index].WorkItemID)
+		settle(done)
+	}
+
 	// collect takes one finished run. It reports false when the context ended
 	// first, which stops the pulling; the runs still in flight are waited out
 	// below either way.
 	collect := func() bool {
 		select {
 		case done := <-completions:
-			running--
-			delete(mine, schedule.Started[done.index].WorkItemID)
-			settle(done)
+			finish(done)
 			return true
 		case <-ctx.Done():
 			return false
@@ -1394,9 +1401,12 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		}()
 		select {
 		case done := <-completions:
-			running--
-			delete(mine, schedule.Started[done.index].WorkItemID)
-			settle(done)
+			// The wait is stopped and then waited for, so nothing this pass started
+			// is still sleeping once it has moved on. What it answers is not read:
+			// it was stopped here, and a stop this pass made is not the operator's.
+			stopWaiting()
+			<-interval
+			finish(done)
 			return true
 		case slept := <-interval:
 			return slept && ctx.Err() == nil
@@ -1440,9 +1450,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 		for {
 			select {
 			case done := <-completions:
-				running--
-				delete(mine, schedule.Started[done.index].WorkItemID)
-				settle(done)
+				finish(done)
 			case <-interval:
 				return ctx.Err() == nil
 			case <-ctx.Done():
@@ -1474,7 +1482,7 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 			retries.delay = firstReadRetryDelay
 		}
 		retries.attempts++
-		cadence.hold(recurringHold{why: fmt.Sprintf("the watch session could not read the harness and was reading it again rather than firing anything: %v", err)})
+		cadence.hold(recurringHold{why: fmt.Sprintf("the watch session could not read the harness and was reading it again rather than firing anything: %v", err), at: now})
 		if tried := now.Sub(retries.since); tried >= readRetryWindow {
 			schedule.Stopped = ScheduleUnreadable
 			schedule.ReadFailure = fmt.Sprintf(
@@ -1572,7 +1580,7 @@ pulling:
 			// already stopped claiming: the window an external restart could never
 			// find is one this makes rather than waits for.
 			if running > 0 {
-				cadence.hold(recurringHold{why: fmt.Sprintf("the session was waiting out %s of its own before restarting into a newly deployed build, and fires nothing while it does", plural(running, "run", "runs"))})
+				cadence.hold(recurringHold{why: fmt.Sprintf("the session was waiting out %s of its own before restarting into a newly deployed build, and fires nothing while it does", plural(running, "run", "runs")), at: s.now()})
 				if !collect() {
 					schedule.Stopped = ScheduleCancelled
 					break
@@ -1664,6 +1672,7 @@ pulling:
 				schedule.Stopped = ScheduleProviderAway
 				break
 			}
+			cadence.provider(outage.Says())
 			if !awaitProvider(pull, account{reason: outage.Says(), running: running}) {
 				schedule.Stopped = ScheduleCancelled
 				break
@@ -1685,6 +1694,7 @@ pulling:
 				break
 			}
 			said := account{reason: windowReason(closed.window, closed.found), running: running, window: closed.window}
+			cadence.provider(said.reason)
 			if !awaitProvider(pull, said) {
 				schedule.Stopped = ScheduleCancelled
 				break
@@ -3060,20 +3070,29 @@ func (s Scheduler) fire(ctx context.Context, schedule *Schedule, pull Pull) recu
 	}
 	sweep, err := pull.Recurring.Fire(ctx)
 	var problems []string
-	held := recurringHold{}
+	held := recurringHold{at: s.now()}
 	if err != nil {
 		problems = append(problems, fmt.Sprintf("the recurring schedule could not be fired, so standing work is waiting on somebody starting it: %v", err))
 		held.why = fmt.Sprintf("the harness could not fire its recurring schedule: %v", err)
 	}
 	if sweep.Paused != nil {
-		held = recurringHold{
-			why:    fmt.Sprintf("the operator paused harness activity at %s", sweep.Paused.HeldAt.UTC().Format(time.RFC3339)),
-			paused: true,
-		}
+		held.why = fmt.Sprintf("the operator paused harness activity at %s", sweep.Paused.HeldAt.UTC().Format(time.RFC3339))
+		held.quiet = true
 	}
 	fired := false
 	for _, task := range sweep.Fired {
-		if held.why == "" {
+		switch {
+		case held.why != "":
+		case task.Turns == 0 && strings.TrimSpace(task.Problem) != "":
+			// A firing that reached nobody — the provider out of capacity or
+			// answering nobody, the role's conversation held — says why in the
+			// words the refusal came with, the provider's reset among them. It is
+			// the provider's or the lease's rather than the harness's own, so a
+			// miss it leads to is said as a warning; the refusal itself has its own
+			// notice already.
+			held.why = strings.TrimSpace(task.Problem)
+			held.refused = true
+		default:
 			held.why = fmt.Sprintf("the pass took its one firing for the recurring task %s", task.Task)
 		}
 		// What the firing cost is the session's spend, exactly as a delivery's is
@@ -3102,12 +3121,28 @@ func (s Scheduler) fire(ctx context.Context, schedule *Schedule, pull Pull) recu
 	return held
 }
 
-// recurringHold is what kept a pass from firing a due task. Paused marks the
-// operator's own pause, which a missed cadence records and says to nobody: a
-// stop somebody placed on purpose is not breakage.
+// recurringHold is what kept a pass from firing a due task, and when the pass
+// found it. Quiet marks the operator's own pause, which a missed cadence
+// records and says to nobody: a stop somebody placed on purpose is not
+// breakage. Refused marks a firing the provider or the role's lease turned
+// away, which is said as a warning rather than as the harness's own breakage.
 type recurringHold struct {
-	why    string
-	paused bool
+	why     string
+	at      time.Time
+	quiet   bool
+	refused bool
+}
+
+// said is the severity a miss this hold kept is reported at.
+func (h recurringHold) said() report.Severity {
+	switch {
+	case h.quiet:
+		return ""
+	case h.refused:
+		return report.SeverityWarning
+	default:
+		return report.SeverityCritical
+	}
 }
 
 // recurringWatch is what a pass knows about why a recurring task might not have
@@ -3131,6 +3166,20 @@ type recurringWatch struct {
 func (w *recurringWatch) hold(held recurringHold) {
 	held.why = strings.TrimSpace(held.why)
 	w.held = held
+}
+
+// provider adds what the session read of the provider — a usage window closed
+// with its reset, or the provider answering nobody — to a firing the provider
+// turned away, so a miss it leads to says when the wait lifts even where the
+// refusal's own words did not. A hold of any other kind is left as it is: the
+// session's reading is about developer turns, and it says nothing about a task
+// the pass had some other reason not to fire.
+func (w *recurringWatch) provider(said string) {
+	said = strings.TrimSpace(said)
+	if !w.held.refused || said == "" || strings.Contains(w.held.why, said) {
+		return
+	}
+	w.held.why += "; the provider was still refusing when the session last read it: " + said
 }
 
 // nextFiring is how long a session waiting on its own runs waits before going
@@ -3197,16 +3246,20 @@ func (s Scheduler) missed(ctx context.Context, schedule *Schedule, pull Pull, wa
 			continue
 		}
 		miss := RecurringMiss{Task: due.Task, Role: due.Role, Every: due.Every, Due: due.At}
+		// A hold this session found at or after the task fell due is what kept it,
+		// even where the session opened after that: a session that opened late and
+		// then could not fire for hours was kept by that, not by the gap before it.
+		held := watch.held.why != "" && !watch.held.at.Before(due.At)
 		switch {
+		case held:
+			miss.Why = watch.held.why
+			miss.Severity = watch.held.said()
 		case watch.opened.After(due.At):
 			miss.Why = fmt.Sprintf("no watch session was running to fire it; this one opened at %s", watch.opened.UTC().Format(time.RFC3339))
 			miss.Severity = report.SeverityWarning
 		case watch.held.why != "":
 			miss.Why = watch.held.why
-			miss.Severity = report.SeverityCritical
-			if watch.held.paused {
-				miss.Severity = ""
-			}
+			miss.Severity = watch.held.said()
 		default:
 			miss.Why = "the watch session did not reach its schedule while the task was due, and recorded nothing that kept it"
 			miss.Severity = report.SeverityCritical

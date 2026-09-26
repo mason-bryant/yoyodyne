@@ -4902,8 +4902,11 @@ type cadencedTasks struct {
 	every   time.Duration
 	firedAt time.Time
 	refuse  func(now time.Time) error
-	firings []time.Time
-	misses  []RecurringMiss
+	// turnAway stands in for a firing the provider refuses without the cadence
+	// moving — a capacity wait holding the task — for as long as it says why.
+	turnAway func(now time.Time) string
+	firings  []time.Time
+	misses   []RecurringMiss
 	// missedAt is when each miss was recorded, by the session's clock.
 	missedAt []time.Time
 }
@@ -4918,6 +4921,11 @@ func (c *cadencedTasks) Fire(context.Context) (RecurringSweep, error) {
 	if c.refuse != nil {
 		if err := c.refuse(now); err != nil {
 			return RecurringSweep{}, err
+		}
+	}
+	if c.turnAway != nil {
+		if why := c.turnAway(now); why != "" {
+			return RecurringSweep{Fired: []Fired{{Task: "development-manager-sweep", Role: domain.RoleDevelopmentManager, Problem: why}}}, nil
 		}
 	}
 	c.firedAt = now
@@ -5007,7 +5015,7 @@ func TestARunInFlightDoesNotHoldTheCadence(t *testing.T) {
 	previous := time.Date(2026, 9, 13, 18, 31, 48, 0, time.UTC)
 	for _, at := range tasks.firings {
 		if gap := at.Sub(previous); gap > time.Hour+time.Minute {
-			t.Errorf("fired at %s, %s after the one before it, want the hourly cadence held", at.Format(time.RFC3339), gap)
+			t.Errorf("fired at %s, %s after the one before it, want the hourly cadence held; all: %v", at.Format(time.RFC3339), gap, tasks.firings)
 		}
 		previous = at
 	}
@@ -5116,9 +5124,19 @@ func TestAMissIsSaidAccordingToWhatKeptIt(t *testing.T) {
 			says:     "no watch session was running",
 		},
 		"the operator's pause": {
-			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "the operator paused harness activity at 2026-09-14T10:00:00Z", paused: true}},
+			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "the operator paused harness activity at 2026-09-14T10:00:00Z", quiet: true}},
 			severity: "",
 			says:     "the operator paused",
+		},
+		"held after a late opening": {
+			watch:    recurringWatch{opened: now.Add(-time.Minute), held: recurringHold{why: "the harness could not fire its recurring schedule: the claim could not be taken", at: now.Add(-30 * time.Second)}},
+			severity: report.SeverityCritical,
+			says:     "the claim could not be taken",
+		},
+		"a refused firing": {
+			watch:    recurringWatch{opened: due.Add(-time.Hour), held: recurringHold{why: "You've hit your weekly limit · resets Sep 14 at 18:00Z", at: now.Add(-time.Minute), refused: true}},
+			severity: report.SeverityWarning,
+			says:     "resets Sep 14",
 		},
 		"nothing recorded": {
 			watch:    recurringWatch{opened: due.Add(-time.Hour)},
@@ -5144,5 +5162,71 @@ func TestAMissIsSaidAccordingToWhatKeptIt(t *testing.T) {
 				t.Errorf("missed = %+v, want %q said at %q", tasks.misses[0], test.says, test.severity)
 			}
 		})
+	}
+}
+
+// A capacity wait that holds the task past an interval is the first cause the
+// item names. The firing is turned away with the provider's own words, reset
+// among them, and the miss says so — as a warning, since the wait is the
+// provider's and has its own notice — and the task fires on its own once the
+// window lifts.
+func TestACapacityWaitThatHoldsTheCadenceIsNamedWithItsReset(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.362")...)
+	harness.now = time.Date(2026, 9, 13, 18, 34, 22, 0, time.UTC)
+	due := time.Date(2026, 9, 13, 19, 31, 48, 0, time.UTC)
+	resets := time.Date(2026, 9, 13, 23, 0, 0, 0, time.UTC)
+	ended := time.Date(2026, 9, 14, 0, 30, 0, 0, time.UTC)
+	stopped := time.Date(2026, 9, 14, 1, 0, 0, 0, time.UTC)
+	release := make(chan struct{})
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		<-release
+		return h.complete(id), nil
+	}
+	tasks := &cadencedTasks{
+		clock:   harness.clock,
+		every:   time.Hour,
+		firedAt: due.Add(-time.Hour),
+		turnAway: func(now time.Time) string {
+			if now.Before(resets) {
+				return "the recurring task development-manager-sweep could not be put to the development-manager at all: api_error: You've hit your weekly limit · resets Sep 13 at 23:00Z"
+			}
+			return ""
+		},
+	}
+	harness.recurring = tasks
+	released := false
+	harness.onSleep = func(h *scheduleHarness, _ int) bool {
+		now := h.clock()
+		if !released && !now.Before(ended) {
+			released = true
+			close(release)
+		}
+		return now.Before(stopped)
+	}
+
+	schedule, err := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Now: harness.clock}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if len(tasks.misses) != 1 {
+		t.Fatalf("misses = %+v, want the one gap recorded once: %s", tasks.misses, schedule.Render())
+	}
+	missed := tasks.misses[0]
+	if !strings.Contains(missed.Why, "weekly limit") || !strings.Contains(missed.Why, "resets Sep 13 at 23:00Z") {
+		t.Errorf("why = %q, want the capacity wait named with its reset", missed.Why)
+	}
+	if strings.Contains(missed.Why, "recorded nothing") {
+		t.Errorf("why = %q, want the wait rather than nothing", missed.Why)
+	}
+	if missed.Severity != report.SeverityWarning {
+		t.Errorf("severity = %q, want a warning for a wait the provider holds", missed.Severity)
+	}
+	if len(tasks.firings) == 0 || tasks.firings[0].Before(resets) || tasks.firings[0].After(resets.Add(time.Minute)) {
+		t.Errorf("firings = %v, want the task resumed within a poll of the reset", tasks.firings)
 	}
 }
