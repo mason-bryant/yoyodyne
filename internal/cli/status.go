@@ -1216,6 +1216,18 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		fmt.Fprintf(writer, "  proposal not kept: %s\n", singleLine(run.AmendmentProblem))
 		printed = true
 	}
+	// A restatement dropped in favour of a proposal already raised is kept on
+	// this record and nowhere else, so it is printed with what it was folded into
+	// and how alike the two read: a fold the comparison got wrong has cost the
+	// second argument its decision, and this is where somebody finds that.
+	for _, proposed := range run.Amendments {
+		if !proposed.Dropped() {
+			continue
+		}
+		fmt.Fprintf(writer, "  restatement dropped: the %s's change to %s was folded into %s (likeness %.2f): %s\n",
+			proposed.Role, proposed.Artifact, proposed.FoldedInto, proposed.Likeness, singleLine(proposed.Change))
+		printed = true
+	}
 	// A divergence is not a reason the run ended and is never read as one: the run
 	// delivered exactly as it would have, and what diverged is the observation
 	// beside it. It is printed because every run executes the definition by

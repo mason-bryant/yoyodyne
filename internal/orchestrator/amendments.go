@@ -67,20 +67,32 @@ func (a *activeRun) collectAmendments(role domain.AgentRole, entries []amendment
 		// for it: one disagreement would arrive as up to repair_attempts_before_replan
 		// separate proposals, and whoever decides would answer the same argument
 		// several times to clear the queue. The second and later copies within a run
-		// are dropped rather than noted, because nothing was lost — the first one is
-		// recorded and is the one waiting.
-		argument := amendmentArgumentOf(proposal)
-		if a.hasProposedArgument(argument) {
+		// are dropped rather than raised, and the drop is written onto the run's
+		// record beside what it was folded into, because a fold the comparison got
+		// wrong costs the second argument its decision and nothing else would say so.
+		if folded, likeness, ok := a.restatedAmendment(proposal); ok && a.canRecordAmendment() {
+			a.recordRunAmendment(runstate.RunAmendment{
+				Role:       role,
+				Artifact:   proposal.Artifact,
+				Change:     proposal.Change,
+				FoldedInto: folded,
+				Likeness:   likeness,
+			})
 			continue
 		}
 		if err := a.pipeline.Amendments.Append(proposal); err != nil {
 			a.noteAmendmentProblem(role, err)
 			continue
 		}
-		// Remembered only once it is actually recorded, so a proposal the log
-		// refused is not treated as already made: if the developer argues it again
-		// on the next attempt and the log has recovered, that attempt keeps it.
-		a.rememberAmendment(argument)
+		// Recorded on the run only once it is actually in the log, so a proposal the
+		// log refused is not treated as already made: if the developer argues it
+		// again on the next attempt and the log has recovered, that attempt keeps it.
+		a.recordRunAmendment(runstate.RunAmendment{
+			Role:     role,
+			Artifact: proposal.Artifact,
+			Change:   proposal.Change,
+			ID:       proposal.ID,
+		})
 		a.outcome.Amendments = append(a.outcome.Amendments, proposal)
 	}
 }
@@ -146,11 +158,23 @@ func amendmentArgumentOf(proposal amendment.Proposal) amendmentArgument {
 // time, and a document is the one thing about a proposal the agent does not get
 // to assert loosely.
 func sameAmendmentArgument(recorded, proposed amendmentArgument) bool {
+	return amendmentLikeness(recorded, proposed) >= amendmentRestatementLikeness
+}
+
+// amendmentLikeness is how alike two proposals read, from 0 to 1: the share of
+// content words their changes have in common, 0 for changes to different
+// documents, and for a change with no content words either 1 or 0 as the two
+// read literally the same or not. It is what a dropped restatement is recorded
+// with, so whoever doubts a fold can see how close to the boundary it was.
+func amendmentLikeness(recorded, proposed amendmentArgument) float64 {
 	if recorded.artifact != proposed.artifact {
-		return false
+		return 0
 	}
 	if len(recorded.words) == 0 || len(proposed.words) == 0 {
-		return recorded.folded == proposed.folded
+		if recorded.folded == proposed.folded {
+			return 1
+		}
+		return 0
 	}
 	shared := 0
 	for word := range proposed.words {
@@ -159,7 +183,7 @@ func sameAmendmentArgument(recorded, proposed amendmentArgument) bool {
 		}
 	}
 	union := len(recorded.words) + len(proposed.words) - shared
-	return float64(shared)/float64(union) >= amendmentRestatementLikeness
+	return float64(shared) / float64(union)
 }
 
 // amendmentContentWords is the change reduced to the words that carry the
@@ -195,17 +219,45 @@ were what when where which while who whom whose will with within would`) {
 	return words
 }()
 
-func (a *activeRun) hasProposedArgument(argument amendmentArgument) bool {
-	for _, recorded := range a.proposedAmendments {
-		if sameAmendmentArgument(recorded, argument) {
-			return true
+// restatedAmendment reports the raised proposal on this run's record that a new
+// one restates, with how alike the two read. Where several are alike enough it
+// names the likeliest, since that is the one a reader checking the fold should be
+// sent to. The record is the run's durable state rather than anything this
+// process holds, so a run continued in another process compares against every
+// proposal the run has raised, wherever it was raised.
+func (a *activeRun) restatedAmendment(proposal amendment.Proposal) (string, float64, bool) {
+	argument := amendmentArgumentOf(proposal)
+	folded, best := "", 0.0
+	for _, recorded := range a.state.Amendments {
+		if recorded.Dropped() {
+			continue
+		}
+		likeness := amendmentLikeness(amendmentArgumentOf(amendment.Proposal{Artifact: recorded.Artifact, Change: recorded.Change}), argument)
+		if likeness >= amendmentRestatementLikeness && likeness > best {
+			folded, best = recorded.ID, likeness
 		}
 	}
-	return false
+	return folded, best, folded != ""
 }
 
-func (a *activeRun) rememberAmendment(argument amendmentArgument) {
-	a.proposedAmendments = append(a.proposedAmendments, argument)
+// canRecordAmendment reports whether the run's record has room for one more
+// proposal. A restatement is only dropped where it can be: a drop the record
+// cannot hold is an argument lost with nothing to find it by, so past the bound
+// the restatement is raised instead, which costs its owner a second copy at
+// worst.
+func (a *activeRun) canRecordAmendment() bool {
+	return len(a.state.Amendments) < runstate.MaxRunAmendments
+}
+
+// recordRunAmendment writes one proposal onto the run's record, or nothing once
+// the record is full. A raised proposal the record has no room for is still in
+// the amendment log and still reaches its owner; what it costs is that a later
+// restatement of it is raised too rather than folded.
+func (a *activeRun) recordRunAmendment(proposed runstate.RunAmendment) {
+	if !a.canRecordAmendment() {
+		return
+	}
+	a.state.Amendments = append(a.state.Amendments, proposed)
 }
 
 // artifacts is the recorded artifact set a proposal's document is resolved

@@ -219,3 +219,38 @@ func testProposal(id string) amendment.Proposal {
 		RaisedAt:      time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC),
 	}
 }
+
+// A proposal on the run's record is raised or dropped and never both or neither:
+// a drop has to name what it was folded into, because that is the whole of what
+// somebody checking the fold needs, and a raised one has to name the proposal the
+// owner will decide.
+func TestARunsRecordOfAProposalSaysWhichOfRaisedOrDroppedItIs(t *testing.T) {
+	t.Parallel()
+
+	const id = "amendment-0123456789abcdef0123456789abcdef"
+	for name, testCase := range map[string]struct {
+		proposed RunAmendment
+		valid    bool
+	}{
+		"raised":               {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which ordering holds", ID: id}, true},
+		"dropped":              {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which holds", FoldedInto: id, Likeness: 0.5}, true},
+		"neither":              {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which holds"}, false},
+		"both":                 {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which holds", ID: id, FoldedInto: id, Likeness: 0.5}, false},
+		"a raised one's score": {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which holds", ID: id, Likeness: 0.5}, false},
+		"a score past one":     {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which holds", FoldedInto: id, Likeness: 1.5}, false},
+		"no change":            {RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", ID: id}, false},
+	} {
+		err := testCase.proposed.Validate()
+		if (err == nil) != testCase.valid {
+			t.Fatalf("%s: Validate() error = %v, want valid %t", name, err, testCase.valid)
+		}
+	}
+
+	var state State
+	for range MaxRunAmendments + 1 {
+		state.Amendments = append(state.Amendments, RunAmendment{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which ordering holds", ID: id})
+	}
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "exceeds the bound") {
+		t.Fatalf("Validate() error = %v, want the record's bound named", err)
+	}
+}

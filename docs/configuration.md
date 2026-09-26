@@ -1457,12 +1457,24 @@ folded into one cost the second of them its decision, silently. Those five
 proposals are quoted in the test beside the comparison, so moving the boundary
 fails there rather than in an owner's queue.
 
-What it reaches is one process of one run. Nothing compares a proposal against
-one an earlier run raised, and nothing carries the comparison across a process
-either — so a run continued in a second process, by a usage-limit pause that
-exited on its in-process bound or by a repair triage re-entering it, begins with
-an empty memory and records a restatement made there as a second proposal. That
-was as true of the literal comparison as it is of this one.
+What it reaches is one run, in whichever process continues it. Every proposal
+the run's agents make is written onto the run's own state as `amendments`: each
+one raised, with the id it was recorded under, and each one dropped as a
+restatement, with the id of the raised proposal it was folded into and the
+likeness it was folded on. That record is the memory the next proposal is
+compared against, so a run continued in a second process — by a usage-limit
+pause that exited on its in-process bound, or by a repair triage re-entering it —
+reads it back and folds a restatement made there exactly as the first process
+would have. It is also the only record a drop has: a dropped proposal reaches
+neither the amendment log nor `amendment_problem`, so a pair the boundary folded
+wrongly would otherwise lose its second argument with nothing anybody could
+find. `yoyo status <beads-id>` prints each drop under the run as
+`restatement dropped:`, naming the document, the proposal it was folded into,
+the likeness, and the change as it was written, and `--json` carries the whole
+list. The record holds 32 proposals; past that a restatement is raised rather
+than dropped, because a drop the record cannot hold is exactly the lost argument
+it exists to prevent. Nothing compares a proposal against one an earlier run
+raised.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The
