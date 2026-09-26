@@ -360,7 +360,7 @@ func (r MemoryRevision) Validate() error {
 	if err := domain.ValidateIdentifier("role", string(r.Role)); err != nil {
 		problems = append(problems, err)
 	}
-	if err := domain.ValidateIdentifier("memory", r.Memory); err != nil {
+	if err := domain.ValidateMemoryName(r.Memory); err != nil {
 		problems = append(problems, err)
 	}
 	if r.Sequence < 1 {
@@ -867,7 +867,7 @@ func (s *MemoryStore) decodeTip(agent string, stored []byte) (*memoryTip, error)
 	}
 	live := 0
 	for name, head := range tip.Heads {
-		if err := domain.ValidateIdentifier("memory", name); err != nil {
+		if err := domain.ValidateMemoryName(name); err != nil {
 			return nil, err
 		}
 		if head.Sequence < 1 || !head.Continuity.Valid() {

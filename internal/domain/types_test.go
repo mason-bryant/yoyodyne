@@ -190,3 +190,19 @@ func TestRoleNamesAreTheRoles(t *testing.T) {
 		t.Errorf("Title() = %q, want the name written in full", got)
 	}
 }
+
+// TestAMemoryNameMayLeadWithAWorkItemNumber is the regression test for the
+// development manager's sweep of 2026-09-26, refused whole for a memory named
+// after the work item it was about.
+func TestAMemoryNameMayLeadWithAWorkItemNumber(t *testing.T) {
+	for _, name := range []string{"372-owes-rerun-decision", "429-13", "sweep-cadence", "v2"} {
+		if err := ValidateMemoryName(name); err != nil {
+			t.Errorf("ValidateMemoryName(%q) = %v, want accepted", name, err)
+		}
+	}
+	for _, name := range []string{"", "Upper", "trailing-", "-leading", "two--hyphens", "has space", "dot.ted"} {
+		if err := ValidateMemoryName(name); err == nil {
+			t.Errorf("ValidateMemoryName(%q) = nil, want refused", name)
+		}
+	}
+}

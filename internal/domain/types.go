@@ -432,6 +432,23 @@ func ValidateIdentifier(kind, value string) error {
 	return nil
 }
 
+// memoryNamePattern is identifierPattern with a leading digit allowed. A role
+// names a memory after what it is about, and what it is about is often a work
+// item, whose number comes first: on 2026-09-26 the development manager's sweep
+// named one "372-owes-rerun-decision", the reply was refused whole, and the
+// triage decisions it carried were lost with it. A memory name is a key in the
+// role's own store and never a configured identifier, so nothing needs it to
+// start with a letter.
+var memoryNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// ValidateMemoryName checks the name a role gives one of its memories.
+func ValidateMemoryName(value string) error {
+	if !memoryNamePattern.MatchString(value) {
+		return fmt.Errorf("memory %q must be lowercase letters and digits in hyphen-separated words, matching %s", value, memoryNamePattern.String())
+	}
+	return nil
+}
+
 // Valid reports a well-formed backend identifier. Which backends a project may
 // actually name, and which roles and tool postures each of them serves, is not
 // this package's to say: a project may declare a provider of its own, and the
