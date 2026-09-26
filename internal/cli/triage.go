@@ -59,6 +59,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -241,6 +242,32 @@ func buildIntegrationResumer(configPath string) (orchestrator.IntegrationResumer
 			return pipelineFrom(parts).Continue(ctx, workItemID, runID)
 		},
 	}, nil
+}
+
+// checkStageContinuerFrom wires the harness's own continuation of a check stage
+// its bound stopped over parts that are already built: the docket it reads and
+// settles, the runs it proves the stoppage from, the worktree it proves the
+// change from, the machine's load it waits on, and the pipeline it continues.
+// Like the resumption of an approved change, it is wired with no triage budget,
+// because it spends none.
+func checkStageContinuerFrom(parts components) orchestrator.CheckStageContinuer {
+	return orchestrator.CheckStageContinuer{
+		Docket: parts.docket,
+		// A continuation the worktree refuses is handed back to the development
+		// manager on the same docket every other stoppage reaches her on.
+		Redocket:  docketerFrom(parts),
+		Runs:      parts.store,
+		Intake:    parts.intake,
+		Items:     parts.tracker(),
+		Worktrees: parts.worktrees,
+		// The load a local Git command's budget is scaled by: what stopped the
+		// stage, and what the continuation waits to fall.
+		Load:     gitworktree.MachineLoad,
+		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
+		Start: func(ctx context.Context, workItemID, runID string) (orchestrator.Outcome, error) {
+			return pipelineFrom(parts).Continue(ctx, workItemID, runID)
+		},
+	}
 }
 
 // reportResume describes what the action did. A refusal before anything was
@@ -657,6 +684,10 @@ func carryOutFrom(parts components) *orchestrator.CarryOut {
 		Runs:     parts.store,
 		Rerunner: rerunnerFrom(parts),
 		Repairer: repairContinuerFrom(parts),
+		// The one thing fired here that nobody decided: a check stage its bound
+		// stopped, continued by the harness at its checks on the change the run
+		// already has. It spends nothing, so no triage budget is wired to it.
+		CheckStages: checkStageContinuerFrom(parts),
 		// The same pause every run and every turn reads. A carry-out spends on a
 		// provider, so `yoyo pause` covers it exactly as it covers them — and it is
 		// read here rather than left to the pipeline because a repair writes to the

@@ -854,6 +854,10 @@ type Detail struct {
 	// repair verb refuses in — while the run's branch is there. Once it is gone
 	// the sentence is the one those surfaces then say, naming the re-run.
 	//
+	// Both read it too for a run whose check stage its bound stopped: load stopped
+	// it rather than the change, and the harness continues it at its checks, in
+	// the run record's own sentence — the one the docket entry carries.
+	//
 	// KindCapacityHold reads Mover alone: whose move ends a hold early is worded by
 	// the read model beside the hold itself, so the sentence a terminal prints on
 	// its attention line and the clause this message ends on are one wording.

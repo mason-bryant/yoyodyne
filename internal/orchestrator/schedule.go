@@ -3196,6 +3196,9 @@ func (p Pull) paused() (bool, error) {
 // gate stopped it, or the process died — where a started entry with no reason at
 // all would be the only thing in the report that could not say what it was doing.
 func carryingOutReason(task CarryOutTask) string {
+	if task.Decision == DecisionContinueChecks {
+		return fmt.Sprintf("the check stage bound stopped run %s under load and the harness is continuing it at its checks", task.RunID)
+	}
 	return fmt.Sprintf("the development manager recorded a %q about the stoppage of run %s and the harness is carrying it out",
 		task.Decision, task.RunID)
 }

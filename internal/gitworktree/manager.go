@@ -3591,6 +3591,14 @@ func (m *Manager) localTimeout() time.Duration {
 	return scaledTimeout(defaultTimeout, load, runtime.NumCPU())
 }
 
+// MachineLoad is the machine's one-minute load average and the number of cores
+// it is read against, the same two figures a local Git command's budget is
+// scaled by, and whether the platform could report the load at all.
+func MachineLoad() (load float64, cores int, ok bool) {
+	load, ok = loadAverage()
+	return load, runtime.NumCPU(), ok
+}
+
 // checkoutTimeout is the budget one creation's `git worktree add` gets: the
 // budget a local Git command gets, plus an allowance for every file the add has
 // to write.

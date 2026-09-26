@@ -1473,12 +1473,16 @@ func (p Pipeline) Continue(ctx context.Context, workItemID, runID string) (Outco
 	// reconcile sweep continues once the deadline has passed. All three are the
 	// same entry point because they are the same act — the run named is adopted
 	// and carried on, and a fresh run can satisfy none of them.
-	if !resumableRepair(inFlight) && !resumableIntegration(inFlight) && !pausedForUsageLimit(inFlight) {
+	//
+	// A fourth is a run the check stage bound stopped, put back at its checks by
+	// the harness: it is re-entered at that step on the change it already has,
+	// which is what the continuation recorded on it says it is owed.
+	if !resumableRepair(inFlight) && !resumableIntegration(inFlight) && !pausedForUsageLimit(inFlight) && !continuedAtCheckStage(inFlight) {
 		return Outcome{}, ContinuationMismatchError{
 			WorkItemID: workItemID,
 			RunID:      runID,
 			InFlight:   inFlight.RunID,
-			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop, an approved promotion, or a recorded usage-limit wait this can re-enter",
+			Found: fmt.Sprintf("that run is in flight in status %s at the %s phase, which is not a repair loop, an approved promotion, a check stage the harness continued, or a recorded usage-limit wait this can re-enter",
 				inFlight.Status, inFlight.Phase),
 		}
 	}
@@ -6981,6 +6985,25 @@ func resumableRepair(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// continuedAtCheckStage reports an in-flight run the harness put back at its
+// checks after execution.check_stage_timeout stopped the stage: running, at the
+// checking phase, with a continuation on its record saying the harness put it
+// there on purpose, and with the worktree, branch, and developer session its
+// change and its review need. A run at the checks with none is one a process
+// died in, and that is the sweep's to settle rather than this path's to adopt.
+func continuedAtCheckStage(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.Phase != runstate.PhaseChecking {
+		return false
+	}
+	if len(state.CheckStageContinuations) == 0 {
+		return false
+	}
+	if state.WorktreePath == "" || state.Branch == "" || state.BaseCommit == "" || state.TargetBranch == "" {
+		return false
+	}
+	return state.ProviderSessionID != ""
 }
 
 // resumableIntegration reports an in-flight run standing at its promotion with

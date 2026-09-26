@@ -132,6 +132,21 @@ type CarryOutRepairer interface {
 	Continue(ctx context.Context, request RepairContinueRequest) (RepairContinueResult, error)
 }
 
+// CarryOutCheckStages continues a run the check stage bound stopped, at its
+// checks. It is the one thing this fires that nobody decided: the harness
+// stopped the stage, so carrying it on is the harness's own act rather than a
+// decision of the development manager's. It is satisfied by CheckStageContinuer.
+type CarryOutCheckStages interface {
+	Due(runID string) (bool, error)
+	Continue(ctx context.Context, request CheckStageContinueRequest) (CheckStageContinueResult, error)
+}
+
+// DecisionContinueChecks is the task a carry-out fires for a check stage the
+// bound stopped. It is not a word from the development manager's vocabulary and
+// is never written onto an item's triage record: no refusal of it is recorded
+// there, because nobody's decision is waiting on it.
+const DecisionContinueChecks = "continue-checks"
+
 // CarryOut fires the decisions the development manager recorded. It decides
 // nothing, spends nothing, and grants nothing: what it does is find a decision
 // somebody else made that the harness has not acted on, hand it to the action
@@ -154,6 +169,10 @@ type CarryOut struct {
 	// carry-out with neither fires nothing.
 	Rerunner CarryOutRerunner
 	Repairer CarryOutRepairer
+	// CheckStages continues a run the check stage bound stopped, where she has
+	// decided nothing about it. Optional: a carry-out wired without it leaves such
+	// a stoppage on the docket for her, which is what it was before.
+	CheckStages CarryOutCheckStages
 	// Holds is the operator's pause over everything the harness spends. Optional,
 	// and a carry-out wired without one is one nothing can pause, which is what
 	// every provider invocation was before the switch existed.
@@ -267,6 +286,13 @@ func (c CarryOut) Outstanding() ([]CarryOutTask, error) {
 		if err != nil {
 			problems = append(problems, err)
 			continue
+		}
+		if !outstanding {
+			task, outstanding, err = c.checkStageTask(entry, item)
+			if err != nil {
+				problems = append(problems, err)
+				continue
+			}
 		}
 		if !outstanding {
 			continue
@@ -387,6 +413,33 @@ func (i outstandingItem) taskFor(entry triage.Entry, now time.Time, history func
 	}, true, nil
 }
 
+// checkStageTask reports a stoppage the check stage bound made that the harness
+// continues itself now, and whether there is one. A decision the development
+// manager recorded about the stoppage is hers to have carried out instead, so
+// only an entry nobody decided anything about is taken; and it is taken only
+// while the machine's load is below the threshold, because a pull that took a
+// slot for it under load would be refused inside and take the slot again on the
+// next poll.
+func (c CarryOut) checkStageTask(entry triage.Entry, item outstandingItem) (CarryOutTask, bool, error) {
+	if c.CheckStages == nil || !entry.HarnessContinuesChecks {
+		return CarryOutTask{}, false, nil
+	}
+	if _, decided := item.counters.DecisionOf(entry.RunID); decided {
+		return CarryOutTask{}, false, nil
+	}
+	due, err := c.CheckStages.Due(entry.RunID)
+	if err != nil || !due {
+		return CarryOutTask{}, false, err
+	}
+	return CarryOutTask{
+		WorkItemID: entry.WorkItemID,
+		RunID:      entry.RunID,
+		DocketKey:  entry.Key,
+		Decision:   DecisionContinueChecks,
+		Reason:     "the check stage bound stopped this run under load, and the harness continues it at its checks",
+	}, true, nil
+}
+
 // rerunOutstanding reports a re-run decision the harness has not acted on. Both
 // halves are the question, and they are the ones the re-run action itself asks:
 // this stoppage's own claim is what makes the once-per-stoppage bound, and the
@@ -420,6 +473,9 @@ func (c CarryOut) Carry(ctx context.Context, task CarryOutTask) (CarriedOut, Out
 		RunID:      task.RunID,
 		DocketKey:  task.DocketKey,
 		Decision:   task.Decision,
+	}
+	if task.Decision == DecisionContinueChecks {
+		return c.continueChecks(ctx, task, carried)
 	}
 	hold, held, err := c.paused()
 	if err != nil {
@@ -504,6 +560,51 @@ func (c CarryOut) repair(ctx context.Context, task CarryOutTask, carried Carried
 	carried.Carried = true
 	carried.Reason = result.Reason
 	carried.RecordProblem = result.RecordProblem
+	return carried, result.Outcome, runErr
+}
+
+// continueChecks continues a run the check stage bound stopped, at its checks.
+// Nothing it meets is written onto the item's triage record, because nobody's
+// decision is waiting on it: a wait is said on the pass and asked again at the
+// next pull, and a refusal is written onto the run by the action itself, which
+// hands the stoppage to the development manager.
+func (c CarryOut) continueChecks(ctx context.Context, task CarryOutTask, carried CarriedOut) (CarriedOut, Outcome, error) {
+	waiting := func(gate, what string) (CarriedOut, Outcome, error) {
+		carried.Gate = gate
+		carried.Waiting = true
+		carried.Problem = fmt.Sprintf("the harness's continuation of the check stage the bound stopped on run %s is waiting on %s: %s; nothing was spent, and the next pull asks again", task.RunID, gate, what)
+		return carried, Outcome{}, nil
+	}
+	if c.CheckStages == nil {
+		carried.Gate = runstate.TriageGateHarness
+		carried.Problem = fmt.Sprintf("nothing is wired to this harness to continue the check stage of run %s", task.RunID)
+		return carried, Outcome{}, nil
+	}
+	hold, held, err := c.paused()
+	if err != nil {
+		carried.Gate = runstate.TriageGateHarness
+		carried.Problem = fmt.Sprintf("the harness's continuation of the check stage of run %s was not attempted: %v", task.RunID, err)
+		return carried, Outcome{}, nil
+	}
+	if held {
+		return waiting(runstate.TriageGateSpendingPause, fmt.Sprintf("the operator has paused everything the harness spends, since %s", hold.HeldAt.UTC().Format(time.RFC3339)))
+	}
+	result, runErr := c.CheckStages.Continue(ctx, CheckStageContinueRequest{Run: task.RunID})
+	carried.RecordProblem = result.RecordProblem
+	switch {
+	case result.IntakeHeld != nil:
+		return waiting(runstate.TriageGateIntakeHold, fmt.Sprintf("the operator has held what the harness chooses, since %s", result.IntakeHeld.HeldAt.UTC().Format(time.RFC3339)))
+	case result.CapacityFull != nil:
+		return waiting(runstate.TriageGateCapacity, fmt.Sprintf("every developer slot is occupied: %d active, limit %d", result.CapacityFull.Active, result.CapacityFull.Limit))
+	case result.LoadHigh != "":
+		return waiting("the machine's load", result.LoadHigh)
+	case !result.Continued:
+		carried.Gate = runstate.TriageGateHarness
+		carried.Problem = fmt.Sprintf("the harness did not continue the check stage the bound stopped on run %s: %s", task.RunID, strings.TrimSpace(refusalText(runErr)))
+		return carried, Outcome{}, nil
+	}
+	carried.Carried = true
+	carried.Reason = result.Reason
 	return carried, result.Outcome, runErr
 }
 
@@ -677,10 +778,14 @@ func (c CarryOut) now() time.Time {
 // which is the same sentence the item's own record now carries.
 func (carried CarriedOut) Render() string {
 	var rendered strings.Builder
-	if carried.Carried {
+	switch {
+	case carried.Carried && carried.Decision == DecisionContinueChecks:
+		fmt.Fprintf(&rendered, "continued the check stage the bound stopped on run %s of %s, at its checks on the change it already has\n",
+			carried.RunID, carried.WorkItemID)
+	case carried.Carried:
 		fmt.Fprintf(&rendered, "carried out the %q the development manager decided about %s, on the stopped work of run %s\n",
 			carried.Decision, carried.WorkItemID, carried.RunID)
-	} else {
+	default:
 		fmt.Fprintf(&rendered, "%s\n", carried.Problem)
 	}
 	if carried.RecordProblem != "" {

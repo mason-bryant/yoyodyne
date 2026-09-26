@@ -611,7 +611,7 @@ func (d Docketer) RecordStoppedRun(state runstate.State) (bool, error) {
 		return false, err
 	}
 	found := d.look(state)
-	if !stoppedRun(state) && !diedHolding(state, found) {
+	if !stoppedRun(state) && !diedHolding(state, found) && !stageBoundHolding(state, found) {
 		return false, nil
 	}
 	entry, err := d.stoppedRunEntry(state, d.now(), found)
@@ -1328,6 +1328,27 @@ func diedHolding(state runstate.State, found triage.Found) bool {
 	return state.DiedInItsOwnProcess() && found.Holds()
 }
 
+// stageBoundHolding reports a run the check stage bound stopped with its change
+// still there. It is the one deliberate stop that is docketed: a deadline
+// otherwise hands nobody anything, but this one ends a run whose change is
+// finished and sitting on its branch, and until yoyodyne-ifd.429.25 the claim
+// audit gave its item back half an hour later to a fresh run that redid the
+// development. The entry is what the harness's own continuation of it is
+// fired from, and what the development manager decides from once those
+// continuations are spent.
+func stageBoundHolding(state runstate.State, found triage.Found) bool {
+	return state.StoppedAtStageBound() && found.Holds()
+}
+
+// stageBoundFailure is where the bound stopped the stage, in the words the run
+// ended on, for a run the bound stopped and for no other.
+func stageBoundFailure(state runstate.State) string {
+	if !state.StoppedAtStageBound() {
+		return ""
+	}
+	return runstate.RecordFailure(state.Failure)
+}
+
 // unstartedRun reports a run that died before it took its work item.
 //
 // This was the one way a run could fail and reach nobody. Every other stoppage is
@@ -1472,7 +1493,12 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time, found tri
 		// And where it is carried on, from the predicate that decides the phase the
 		// carry-out puts the run back at, for the same reason.
 		ResumesAt: resumesAtOf(state),
-		Counters:  counters,
+		// A stage the bound stopped says so in the run's own sentence, which the
+		// channel says too, and whether the harness is the one that continues it.
+		CheckStageStop:         singleLine(state.CheckStageStopSays(), triage.MaxMessageBytes),
+		CheckStageFailure:      stageBoundFailure(state),
+		HarnessContinuesChecks: state.HarnessContinuesCheckStage(),
+		Counters:               counters,
 	}
 	if err := entry.Validate(); err != nil {
 		return triage.Entry{}, fmt.Errorf("docket the stoppage of run %s: %w", state.RunID, err)

@@ -55,6 +55,7 @@ var structuredStrings = map[string]string{
 	"review_finding_details[].disposition": "an enumeration",
 	"check_failure.command":                "a command the configuration declares",
 	"check_stage.command":                  "a command the configuration declares",
+	"check_stage_continuations[].command":  "a command the configuration declares",
 	"landing_checks.commit":                "the integrated commit the harness recorded",
 	"landing_checks.target_branch":         "a local branch name",
 	"landing_checks.checks[].command":      "a command the configuration declares",

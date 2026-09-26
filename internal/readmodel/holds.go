@@ -354,6 +354,11 @@ func StoppageMover(run runstate.State, found *triage.Found, awaitingCarryOut boo
 	if awaitingCarryOut {
 		return MoverHarness
 	}
+	// A check stage its bound stopped is continued by the harness at its checks
+	// until its continuations are spent, with nobody deciding anything.
+	if run.HarnessContinuesCheckStage() {
+		return MoverHarness
+	}
 	return MoverDevelopmentManager
 }
 
@@ -388,11 +393,14 @@ func latestPerItem(runs []runstate.State, matches func(runstate.State) bool) map
 // stoppage's does. run-b0b6d18d ended that way on an approved change the
 // environment stopped, and read to the pull as an item with nothing holding it.
 // To a reader the two are the same fact, and the hold covers them the same way.
+// A run whose check stage its bound stopped is the same fact a third time: it
+// ends `timed out` with its finished change on the branch, and the harness
+// continues it at its checks rather than anybody starting it over.
 func stoppage(run runstate.State) bool {
 	if run.WorkItemID == "" || !run.Status.Terminal() {
 		return false
 	}
-	return strings.TrimSpace(run.Blocker) != "" || run.DiedInItsOwnProcess()
+	return strings.TrimSpace(run.Blocker) != "" || run.DiedInItsOwnProcess() || run.StoppedAtStageBound()
 }
 
 // preservedChange says why an item with work still on a branch is not something

@@ -2292,7 +2292,12 @@ how long that check had run, what the stage had spent across how many checks,
 and the two things that move it: narrow the per-run gate to what the change
 touches, or raise the bound. That is a different failure from a check reaching
 its own budget, and it is reported as one, because raising `check_timeout` does
-nothing for a check the stage stopped.
+nothing for a check the stage stopped. Because a stage the bound stopped judged
+nothing, the harness [continues it at its checks by
+itself](operations.md#what-a-check-stage-may-cost-and-where-the-whole-suite-runs)
+— on the change the run already has, at a pull with a slot free and the
+machine's load below its cores, at most twice per run, spending nothing —
+rather than leaving it to a re-run that redoes the development.
 
 **The bound is visible while the checks run, not only when it stops them.**
 The run's record carries the stage — when it began, its bound, and which check

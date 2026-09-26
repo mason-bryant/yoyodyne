@@ -172,15 +172,18 @@ func DeadClaims(claims []Claim, runs []runstate.State, now time.Time, threshold,
 // by a fresh pull that spent a developer run and a review to reach the change
 // that was already sitting on the branch.
 //
-// Three endings qualify, and the first is the one that had no other marker at
+// Four endings qualify, and the first is the one that had no other marker at
 // all. An integration stop is an approved change the environment stopped short
 // of the target branch, which `yoyo triage resume` carries the rest of the way.
 // A recorded blocker is the harness having handed the item to somebody — a
 // replay that conflicted against a moved target first among them. And a run that
 // died inside its own process hands nobody a blocker on purpose, so its record
 // ends `failed` while its change sits on a branch exactly as a stoppage's does.
+// A run whose check stage its bound stopped is the fourth: it ends `timed out`
+// with its finished change on the branch, and the harness continues it at its
+// checks — a claim given back here is a fresh run that redoes the development.
 //
-// All three ask whether the change survived, and none of them holds a claim
+// All four ask whether the change survived, and none of them holds a claim
 // without it: a stoppage whose branch is gone leaves nothing for a fresh run to
 // strand, and an integration stop whose branch is gone is one nothing can resume
 // at all. It is asked of the repository, as the pull's hold asks it, and a look
@@ -197,7 +200,8 @@ func stillHeld(run runstate.State, found triage.Found) bool {
 	}
 	return run.IntegrationStop != nil ||
 		strings.TrimSpace(run.Blocker) != "" ||
-		run.DiedInItsOwnProcess()
+		run.DiedInItsOwnProcess() ||
+		run.StoppedAtStageBound()
 }
 
 // readClaim reads one item's runs: the most recent of them, the last moment that
