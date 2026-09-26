@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The bundle that ships inside the executable declares the schema version this
@@ -92,5 +94,46 @@ func TestBundleRulesBeyondVersionStillHold(t *testing.T) {
 				t.Fatalf("loadBundleFiles() error = %v, want %q", err, test.problem)
 			}
 		})
+	}
+}
+
+// The template ships one persona per role the harness knows, named for the role,
+// and nothing beside them. A role added to the harness without one is a role
+// every project has to write a persona for by hand before it can configure an
+// agent for it -- which is how the program manager's first persona was written.
+func TestTheTemplateShipsOnePersonaPerRole(t *testing.T) {
+	t.Parallel()
+
+	loaded, err := loadBuiltinBundle(BuiltinV1)
+	if err != nil {
+		t.Fatalf("loadBuiltinBundle() error = %v", err)
+	}
+	shipped, err := loaded.shippedPersonas()
+	if err != nil {
+		t.Fatalf("shippedPersonas() error = %v", err)
+	}
+	want := map[string]bool{}
+	for _, role := range domain.Roles() {
+		want["personas/"+string(role)+".md"] = true
+	}
+	got := map[string]bool{}
+	for _, personaPath := range shipped {
+		got[personaPath] = true
+		if !want[personaPath] {
+			t.Errorf("the template ships %s, which names no role the harness knows", personaPath)
+		}
+		text, _, err := loaded.personas.load("persona", personaPath)
+		if err != nil {
+			t.Errorf("load %s: %v", personaPath, err)
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
+			t.Errorf("%s is empty", personaPath)
+		}
+	}
+	for personaPath := range want {
+		if !got[personaPath] {
+			t.Errorf("the template ships no %s", personaPath)
+		}
 	}
 }

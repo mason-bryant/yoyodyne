@@ -337,7 +337,7 @@ func TestInitWritesTheBaselineBesideTheConfigurationItGenerated(t *testing.T) {
 	// digest to what the baseline recorded would be reported as the operator's
 	// own for ever after, so a later improvement to it would reach them as a
 	// conflict they never made rather than as an improvement they could take.
-	values := config.ProjectValues(resolved.Config)
+	values := config.ProjectValues(resolved.Config, resolved.Path)
 	for key, recorded := range lock.Values {
 		if got := values[key]; got != recorded {
 			t.Errorf("%s: the generated project holds %q and the baseline recorded %q", key, got, recorded)
@@ -472,7 +472,7 @@ func TestConfigBaselineGivesAProjectWithNoneOneWithoutTouchingAnythingElse(t *te
 	if err != nil {
 		t.Fatalf("NewLock() error = %v", err)
 	}
-	lock.Values["agents.reviewer.persona.text"] = config.ProjectValues(overtaken.Config)["agents.reviewer.persona.text"]
+	lock.Values["agents.reviewer.persona.text"] = config.ProjectValues(overtaken.Config, configPath)["agents.reviewer.persona.text"]
 	if err := os.WriteFile(config.LockPath(configPath), lock.Render(), 0o600); err != nil {
 		t.Fatalf("write the moved baseline: %v", err)
 	}

@@ -134,12 +134,13 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 .yoyodyne/
   config.yaml          # the project configuration
   config.lock          # the template's values; absent in older projects
-  personas/            # one Markdown file per agent persona
+  personas/            # one Markdown file per role's persona
     product-manager.md
     architect.md
     development-manager.md
     developer.md
     reviewer.md
+    program-manager.md # copied for a program manager you configure later
 ```
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version
@@ -6228,6 +6229,17 @@ Persona rules:
 - A persona is limited to 32 KiB. It is role guidance, not a document to paste
   into every prompt.
 
+The template ships six personas, one per role: `product-manager.md`,
+`architect.md`, `development-manager.md`, `developer.md`, `reviewer.md`, and
+`program-manager.md`. A test holds it to exactly one per role the harness knows,
+so a role added without its persona fails there rather than in a project. `init`
+copies all six, although it configures only five agents: the program manager's
+persona is there for the project that later
+[configures an instance](#a-program-manager-instance), which binds
+`personas/program-manager.md` rather than writing its own. Like the rest of the
+persona, it says how the role works and grants nothing — the role's contract and
+the lane decide what an instance may do.
+
 In a project `init` wrote, every persona is already a file in
 `.yoyodyne/personas/`: change how the reviewer works by editing
 `personas/reviewer.md`, and bump the `version` label beside it in the
@@ -6290,7 +6302,13 @@ unprompted on stderr, silently when none, without changing exit codes. Where the
 [Slack sink](reporting.md#what-arrives-as-a-direct-message) is running it says
 the same `available` values without anybody running a command: one direct
 message per reading that finds something new, each improvement said once and
-never repeated. A project without a
+never repeated. A persona the template ships with no agent bound to it — the
+program manager's — is recorded by its file, as `personas.program-manager.text`,
+and it is the one value compared where the baseline has no record of it: a
+baseline taken before the template shipped the file says the template supplied
+nothing there, so a project that has no such file is offered it as `available`,
+and one that wrote its own by hand reads as `conflicting` and is not spoken
+about unprompted. A project without a
 baseline hears nothing until `yoyo config baseline` writes it, which touches
 nothing else and starts level. Nothing is adopted for you; `materialize`,
 `extract`, and `adopt` do not exist yet.

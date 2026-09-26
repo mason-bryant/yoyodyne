@@ -88,7 +88,7 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 		return Scaffold{}, err
 	}
 
-	personas, err := scaffoldPersonas(effective)
+	personas, err := scaffoldPersonas(template, effective)
 	if err != nil {
 		return Scaffold{}, err
 	}
@@ -111,7 +111,12 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 // scaffoldPersonas collects the persona text every agent refers to, at the path
 // the rendered configuration refers to it by. Agents that share a persona share
 // one file, because two copies of one persona is two things to edit.
-func scaffoldPersonas(effective Config) ([]ScaffoldFile, error) {
+//
+// It also copies every persona the template ships that no generated agent binds.
+// The program manager is the case: init configures no instance of it, because an
+// instance is a lane and a remit somebody chooses, and the project that later
+// writes one needs the persona there to bind rather than to write by hand.
+func scaffoldPersonas(template bundle, effective Config) ([]ScaffoldFile, error) {
 	byPath := map[string]string{}
 	for _, name := range sortedNames(effective.Agents) {
 		persona := effective.Agents[name].Persona
@@ -123,6 +128,17 @@ func scaffoldPersonas(effective Config) ([]ScaffoldFile, error) {
 			return nil, fmt.Errorf("persona %q has two different texts in the template", persona.Path)
 		}
 		byPath[persona.Path] = persona.Text
+	}
+	unbound, err := template.unboundPersonas(effective)
+	if err != nil {
+		return nil, err
+	}
+	for _, personaPath := range unbound {
+		text, _, err := template.personas.load("persona", personaPath)
+		if err != nil {
+			return nil, err
+		}
+		byPath[personaPath] = text
 	}
 	paths := make([]string, 0, len(byPath))
 	for path := range byPath {

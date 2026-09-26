@@ -69,7 +69,7 @@ func TestAProjectThatMatchesItsTemplateSaysNothing(t *testing.T) {
 	t.Parallel()
 
 	lock, effective := materialized(t)
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAnImprovedTemplateValueIsAvailableAndIsWhatTheNoticeSpeaks(t *testing.T
 	lock = moved(lock, "agents.developer.model", "sonnet")
 	effective.Agents["developer"] = withModel(effective.Agents["developer"], "sonnet")
 
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestOneImprovementIsSaidWithBothItsValues(t *testing.T) {
 	lock = moved(lock, "agents.developer.model", "sonnet")
 	effective.Agents["developer"] = withModel(effective.Agents["developer"], "sonnet")
 
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -201,7 +201,7 @@ func TestAValueTheProjectMovedIsNeverSpokenUnprompted(t *testing.T) {
 	lock, effective := materialized(t)
 	effective.Agents["developer"] = withModel(effective.Agents["developer"], "haiku")
 
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestAValueBothSidesMovedIsHeldForTheOperatorAndNotSpokenUnprompted(t *testi
 	lock = moved(lock, "agents.developer.model", "sonnet")
 	effective.Agents["developer"] = withModel(effective.Agents["developer"], "haiku")
 
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestAnImprovedPersonaIsNoticedThoughTheConfigurationSaysNothingAboutItsText
 	developer.Persona.Text += " as it used to read"
 	effective.Agents["developer"] = developer
 
-	drift, err := CompareToBaseline(lock, effective)
+	drift, err := CompareToBaseline(lock, effective, "")
 	if err != nil {
 		t.Fatalf("CompareToBaseline() error = %v", err)
 	}
@@ -367,4 +367,73 @@ func classOf(drift Drift, key string) Class {
 func withModel(agent AgentConfig, model string) AgentConfig {
 	agent.Model = model
 	return agent
+}
+
+// A persona the template ships without binding it is recorded by its file, and a
+// project that materialized before the template shipped it hears about it: its
+// baseline has no record of the file, and neither does its directory.
+func TestAPersonaTheTemplateAddedIsOfferedToAProjectThatPredatesIt(t *testing.T) {
+	t.Parallel()
+
+	const key = "personas.program-manager.text"
+	lock, err := NewLock(BuiltinV1)
+	if err != nil {
+		t.Fatalf("NewLock() error = %v", err)
+	}
+	if digest := lock.Values[key]; !strings.HasPrefix(digest, "text-") {
+		t.Fatalf("baseline %s = %q, want the shipped persona recorded as a digest", key, digest)
+	}
+
+	resolved := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."})
+	personaFile := filepath.Join(filepath.Dir(resolved.Path), "personas", "program-manager.md")
+
+	// Freshly generated: the file is there and matches, and nothing is said.
+	drift, err := CompareToBaseline(lock, resolved.Config, resolved.Path)
+	if err != nil {
+		t.Fatalf("CompareToBaseline() error = %v", err)
+	}
+	if got := classOf(drift, key); got != ClassUnchanged {
+		t.Errorf("%s in a fresh project = %q, want %q", key, got, ClassUnchanged)
+	}
+	if notice := drift.Notice(); notice != "" {
+		t.Errorf("Notice() = %q, want silence in a fresh project", notice)
+	}
+
+	// Materialized before the template shipped it: no record, and no file.
+	predating := Lock{Version: lock.Version, Bundle: lock.Bundle, Values: map[string]string{}}
+	for name, value := range lock.Values {
+		if name != key {
+			predating.Values[name] = value
+		}
+	}
+	predating.Revision = baselineRevision(predating.Values)
+	if err := os.Remove(personaFile); err != nil {
+		t.Fatalf("remove the persona: %v", err)
+	}
+	drift, err = CompareToBaseline(predating, resolved.Config, resolved.Path)
+	if err != nil {
+		t.Fatalf("CompareToBaseline() error = %v", err)
+	}
+	if got := classOf(drift, key); got != ClassAvailable {
+		t.Fatalf("%s in a predating project = %q, want %q", key, got, ClassAvailable)
+	}
+	if notice := drift.Notice(); !strings.Contains(notice, key) {
+		t.Errorf("Notice() = %q, want the added persona named", notice)
+	}
+
+	// A predating project that wrote its own by hand has moved it as well: it is
+	// held for the operator rather than offered over the top of theirs.
+	if err := os.WriteFile(personaFile, []byte("# Program manager persona\n\nWritten by hand.\n"), 0o600); err != nil {
+		t.Fatalf("write a hand-made persona: %v", err)
+	}
+	drift, err = CompareToBaseline(predating, resolved.Config, resolved.Path)
+	if err != nil {
+		t.Fatalf("CompareToBaseline() error = %v", err)
+	}
+	if got := classOf(drift, key); got != ClassConflicting {
+		t.Errorf("%s with a hand-written persona = %q, want %q", key, got, ClassConflicting)
+	}
+	if notice := drift.Notice(); notice != "" {
+		t.Errorf("Notice() = %q, want nothing said unprompted over a persona the project wrote", notice)
+	}
 }
