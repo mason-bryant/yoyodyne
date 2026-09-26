@@ -178,3 +178,122 @@ func TestStatusPrintsEachProgramManagerWithItsStatus(t *testing.T) {
 		t.Fatalf("standing.program_managers = %+v, want the blocked instance with its blocker, report, and request", instances)
 	}
 }
+
+// An instance the scheduler has never woken is measured from the first load of
+// the configuration that carried it: loaded five hours ago on a two-hour
+// schedule with no pass and no conversation since, `yoyo status` reads it stale
+// and says from when, and its own load moves the recorded moment nowhere. One
+// loaded an hour ago is still working.
+func TestAProgramManagerNothingHasWokenIsStaleFromTwiceItsScheduleAfterItWasFirstLoaded(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		loadedAgo time.Duration
+		stale     bool
+	}{
+		{name: "past twice its schedule", loadedAgo: 5 * time.Hour, stale: true},
+		{name: "inside twice its schedule", loadedAgo: time.Hour, stale: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+			configPath := writeConfig(t, twoArchitectsConfig+`  reliability-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    lane: reliability
+    triggers:
+      every: 2h
+`)
+			resolved, err := loadConfiguration(configPath)
+			if err != nil {
+				t.Fatalf("loadConfiguration() error = %v", err)
+			}
+			root, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded := time.Now().Add(-tc.loadedAgo).UTC().Truncate(time.Second)
+			store := observeProgramManagers(resolved.Config, root, loaded)
+			if store == nil {
+				t.Fatal("observeProgramManagers() built no store")
+			}
+
+			encoded, stderr, code := runCLI(t, "status", "--config", configPath, "--json")
+			if code != 0 {
+				t.Fatalf("status --json code = %d, stderr = %q", code, stderr)
+			}
+			var decoded struct {
+				Standing struct {
+					ProgramManagers        []readmodel.ProgramManager `json:"program_managers"`
+					ProgramManagersProblem string                     `json:"program_managers_problem"`
+				} `json:"standing"`
+			}
+			if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+				t.Fatalf("decode status JSON: %v", err)
+			}
+			instances := decoded.Standing.ProgramManagers
+			if len(instances) != 1 || instances[0].Agent != "reliability-pm" {
+				t.Fatalf("standing.program_managers = %+v, want the one instance", instances)
+			}
+			instance := instances[0]
+			if instance.Stale != tc.stale {
+				t.Fatalf("instance = %+v (problem %q); want stale %v %s after it was first loaded with no pass",
+					instance, decoded.Standing.ProgramManagersProblem, tc.stale, tc.loadedAgo)
+			}
+			if tc.stale {
+				want := "no pass has ever completed, and it was first seen in the configuration at " + loaded.Format(time.RFC3339) + " on a schedule of every 2h0m0s"
+				if instance.Status != readmodel.ProgramManagerStale || instance.StaleSays != want {
+					t.Errorf("instance = %s, %q; want stale saying %q", instance.Status, instance.StaleSays, want)
+				}
+			} else if instance.Status != readmodel.ProgramManagerWorking {
+				t.Errorf("instance = %s; want working inside twice its schedule", instance.Status)
+			}
+
+			seen, err := store.FirstSeen()
+			if err != nil {
+				t.Fatalf("FirstSeen() error = %v", err)
+			}
+			if at := seen["reliability-pm"]; !at.Equal(loaded) {
+				t.Errorf("first seen = %s after a later load, want the first load's %s", at, loaded)
+			}
+		})
+	}
+}
+
+// The standing every dashboard request reads records nothing: reading it for a
+// configuration carrying a new instance leaves no first-seen record behind, and
+// `yoyo status`, one of the loads that does record, then writes it.
+func TestTheStandingADashboardRequestReadsRecordsNoFirstSeenMoment(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, twoArchitectsConfig+`  reliability-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    lane: reliability
+    triggers:
+      every: 2h
+`)
+	root, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstate.NewFirstSeenStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readmodel.ReadStanding(context.Background(), standingSources(configPath))
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Fatalf("reading the standing left %s behind (stat error %v); a request writes nothing", store.Path(), err)
+	}
+
+	if _, stderr, code := runCLI(t, "status", "--config", configPath); code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	seen, err := store.FirstSeen()
+	if err != nil {
+		t.Fatalf("FirstSeen() error = %v", err)
+	}
+	if _, recorded := seen["reliability-pm"]; !recorded {
+		t.Errorf("first seen = %v after `yoyo status`, want reliability-pm recorded", seen)
+	}
+}

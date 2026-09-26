@@ -2326,10 +2326,22 @@ is derived by the read model, and nothing an instance writes sets it:
   the same here, which is the point: it is the sign that the watcher is not
   watching, and it is plain Go over the pass records with no provider call on
   the path, held there by the sweep in `internal/watchdog` that holds the stall
-  reading to the same. An instance that has never completed a pass is stale from
-  twice its schedule after its first conversation was opened — the configuration
-  records no moment an instance was added, so an instance nothing has ever woken
-  is not called stale — and one with no `every` is never stale.
+  reading to the same. An instance that has never completed a pass is measured
+  from when the harness first saw it in the loaded configuration: the first load
+  that carries an instance — `yoyo status`, the dashboard or the Slack sink as
+  it starts, or any verb that builds the harness — records that moment under the
+  state root at `products/<product>/program-managers/first-seen.json`, and no
+  later load moves it. That is a write made by surfaces that otherwise only
+  read, and it is on them on purpose: the dead scheduler this word is for is
+  exactly the case in which nothing else loads the configuration. So an
+  instance the scheduler has never woken reads stale twice its schedule after
+  it was first seen; the line says `first seen in the configuration at …`.
+  Where its first conversation is earlier — an instance configured before the
+  record existed — that is the moment instead, said as `first woken at …`. The
+  moment is kept when an instance is taken out of the configuration, so one put
+  back under the same name long afterwards, with no pass completed in between,
+  reads stale at once until its first pass completes. One with no `every` is
+  never stale.
 - **Working** is neither. Stale outranks blocked in the word, and both are
   carried.
 
@@ -3337,7 +3349,11 @@ serves one dashboard per scenario on a loopback port of its own and prints each
 URL with its token.
 
 **It is a projection and nothing else.** It reads the same durable records the
-terminal reads and writes none of them; the only form is the one that takes the
+terminal reads and no request writes any of them. The one thing it writes, once
+as it starts, is the record of when each program manager instance was
+[first seen in the configuration](#where-the-harness-stands-the-four-lines),
+which `yoyo status` and the Slack sink write too: it is what lets an instance
+the scheduler never woke read stale, and it directs no work. The only form is the one that takes the
 token, every button on the page opens or closes one of its own pop-ups and
 nothing else, and nothing but `GET` and `HEAD` is answered at all. Restarting it
 changes nothing about the harness and loses nothing, because the history it

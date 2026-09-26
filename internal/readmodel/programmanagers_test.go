@@ -58,6 +58,13 @@ type fakeExchanges struct {
 
 func (f fakeExchanges) List() ([]exchange.Exchange, error) { return f.exchanges, f.err }
 
+type fakeFirstSeen struct {
+	seen map[string]time.Time
+	err  error
+}
+
+func (f fakeFirstSeen) FirstSeen() (map[string]time.Time, error) { return f.seen, f.err }
+
 const (
 	factoryConversation = "chat-00000000000000000000000000000001"
 	writingConversation = "chat-00000000000000000000000000000002"
@@ -385,6 +392,64 @@ func TestAnInstanceWithNoCompletedPassIsStaleFromTwiceItsScheduleAfterActivation
 	}
 	if writing := instanceNamed(t, sources, "writing-pgm"); writing.Status != ProgramManagerWorking {
 		t.Errorf("writing-pgm = %s; ninety minutes after activation is inside twice an hourly schedule", writing.Status)
+	}
+}
+
+// An instance the scheduler has never woken has no conversation to be measured
+// from, and is measured from when it was first seen in the configuration: stale
+// past twice its schedule after that, and working inside it.
+func TestAnInstanceNothingHasWokenIsStaleFromTwiceItsScheduleAfterItWasFirstSeen(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Conversations = fakeConversations{}
+	sources.Passes = fakePasses{}
+	sources.FirstSeen = fakeFirstSeen{seen: map[string]time.Time{
+		"factory-pgm": moment.Add(-150 * time.Minute),
+		"writing-pgm": moment.Add(-90 * time.Minute),
+	}}
+
+	if factory := instanceNamed(t, sources, "factory-pgm"); factory.Status != ProgramManagerStale ||
+		factory.StaleSays != "no pass has ever completed, and it was first seen in the configuration at 2026-08-30T09:30:00Z on a schedule of every 1h0m0s" {
+		t.Errorf("factory-pgm = %s, %q; want stale past twice its schedule after it was first seen", factory.Status, factory.StaleSays)
+	}
+	if writing := instanceNamed(t, sources, "writing-pgm"); writing.Status != ProgramManagerWorking {
+		t.Errorf("writing-pgm = %s; ninety minutes after it was first seen is inside twice an hourly schedule", writing.Status)
+	}
+
+	// With no first-seen record, the same instances have nothing to be measured
+	// from, which is the blind spot the record closes.
+	sources.FirstSeen = nil
+	if factory := instanceNamed(t, sources, "factory-pgm"); factory.Stale {
+		t.Errorf("factory-pgm = %+v with no trace at all; want not stale", factory)
+	}
+}
+
+// The earlier of the two traces is the one measured from: an instance configured
+// before the first-seen record existed keeps its first conversation.
+func TestAnInstancesFirstConversationCountsWhereItIsEarlierThanItWasFirstSeen(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Passes = fakePasses{}
+	sources.FirstSeen = fakeFirstSeen{seen: map[string]time.Time{"factory-pgm": moment.Add(-10 * time.Minute)}}
+
+	if factory := instanceNamed(t, sources, "factory-pgm"); factory.Status != ProgramManagerStale ||
+		!strings.Contains(factory.StaleSays, "first woken at 2026-08-30T09:00:00Z") {
+		t.Errorf("factory-pgm = %s, %q; want stale from its conversation three hours ago", factory.Status, factory.StaleSays)
+	}
+}
+
+// A first-seen record that could not be read is said, and not read as none.
+func TestAnUnreadableFirstSeenRecordIsSaid(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.FirstSeen = fakeFirstSeen{err: errors.New("permission denied")}
+	standing := ReadStanding(context.Background(), sources)
+	if !strings.Contains(standing.ProgramManagersProblem, "first seen in the configuration could not be read") ||
+		!strings.Contains(standing.ProgramManagersProblem, "permission denied") {
+		t.Errorf("problem = %q, want the first-seen record's failure", standing.ProgramManagersProblem)
 	}
 }
 

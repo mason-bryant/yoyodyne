@@ -230,12 +230,15 @@ type Sources struct {
 	// amendments, and the exchanges, and its passes are attributed to it through
 	// the conversations. All are optional: a reading without the instances
 	// carries none, and one without a store it needs says so rather than
-	// reporting what it could not read as nothing.
+	// reporting what it could not read as nothing. FirstSeen is when each
+	// instance was first seen in the loaded configuration, which is what an
+	// instance that has never completed a pass is measured from.
 	ProgramManagers []ProgramManagerInstance
 	RestartRequests RestartRequests
 	LaneReports     LaneReports
 	Passes          Passes
 	Exchanges       Exchanges
+	FirstSeen       FirstSeen
 	// Agents is every configured agent, as the configuration resolved it: what
 	// each asks for and what each may be served by instead. It is the other half
 	// of the hold above, because a refusal holds a role only against what that
