@@ -16,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -164,14 +165,14 @@ func TestSweepingRecordsTheBranchItDeleted(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The round produces nothing, which is what leaves a branch the sweep may
 	// delete: every attempt that writes anything is committed onto the run branch
 	// before the checks run, so a branch with work on it is one the sweep keeps.
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -371,13 +372,13 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -452,10 +453,10 @@ func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	// from the moment above it describes a directory that is not there; the person
 	// who picks the item up reads the item rather than the run's state file, and
 	// the ref is the only route from what they read back to the work.
-	if !strings.Contains(tracker.notes, retired.PreservedWork) ||
-		!strings.Contains(tracker.notes, "Retired worktree: "+settled.WorktreePath) ||
-		!strings.Contains(tracker.notes, "git worktree add --detach") {
-		t.Errorf("the item was not told where the retired checkout's work went: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, retired.PreservedWork) ||
+		!strings.Contains(tracker.Notes, "Retired worktree: "+settled.WorktreePath) ||
+		!strings.Contains(tracker.Notes, "git worktree add --detach") {
+		t.Errorf("the item was not told where the retired checkout's work went: %q", tracker.Notes)
 	}
 
 	// Asking again says there was nothing there, so a sweep that runs on every
@@ -474,13 +475,13 @@ func TestSweepingRecordsACheckoutSomethingElseAlreadyRemoved(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
@@ -539,7 +540,7 @@ func TestConvergeRetiresSettledCheckoutsPastTheTail(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	worktrees := newSweepManager(t, repository, worktreeRoot)
 
 	// One more settled run than the tail keeps, oldest first, each with a real

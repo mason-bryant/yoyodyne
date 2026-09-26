@@ -15,6 +15,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -28,11 +29,11 @@ func TestAProposedChangeIsRecordedWithoutChangingWhatTheRunDid(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	design := writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		reportBlock(`{"severity":"note","message":"worth knowing"}`) +
 		"\n" + amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
 	recorder := &fakeAmendments{}
@@ -40,7 +41,7 @@ func TestAProposedChangeIsRecordedWithoutChangingWhatTheRunDid(t *testing.T) {
 	pipeline.Reports = &fakeReports{}
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -59,7 +60,7 @@ func TestAProposedChangeIsRecordedWithoutChangingWhatTheRunDid(t *testing.T) {
 	if proposed.Owner != domain.RoleArchitect || proposed.Kind != artifact.KindDesign || proposed.Artifact != "v1-design" {
 		t.Fatalf("proposal = %#v", proposed)
 	}
-	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.item.ID {
+	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.Item.ID {
 		t.Fatalf("proposal is not attributed to the run that made it: %#v", proposed)
 	}
 	// Both channels came out of one reply, and neither took the other with it.
@@ -92,17 +93,17 @@ func TestAChangeProposedToTheProductManagersOwnDocumentReachesTheProductManager(
 
 	repository := pipelineRepository(t)
 	goals := writeGoalsArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		amendmentBlock(`{"artifact":"v1-goals","change":"say what recovery means for a killed run","why":"the goal cannot be told apart from the one above it"}`)
 	recorder := &fakeAmendments{}
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -141,9 +142,9 @@ func TestTheSameArgumentMadeAgainOnARepairAttemptIsOneProposal(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		// The first attempt leaves the check failing, so the developer is asked
 		// again and says the same thing about the design both times.
@@ -152,14 +153,14 @@ func TestTheSameArgumentMadeAgainOnARepairAttemptIsOneProposal(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "worked on it\n\n" +
+	provider.DeveloperFinalText = "worked on it\n\n" +
 		amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
 	recorder := &fakeAmendments{}
 	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -187,9 +188,9 @@ func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if attempts == 1 {
 			return nil
@@ -199,7 +200,7 @@ func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
 	// The two changes run-62e78d87 made of one argument, verbatim: the second
 	// attempt asks for the same thing and shares barely half its wording with the
 	// first, which the literal comparison this replaces read as a second proposal.
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperFinalTextByAttempt = []string{
 		"worked on it\n\n" + amendmentBlock(fmt.Sprintf(
 			`{"artifact":"v1-design","change":%q,"why":"the architect's voice was asked for and the implementation had to settle a shape to ship at all"}`,
 			rewordedGrantShapeArgument)),
@@ -212,7 +213,7 @@ func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -331,16 +332,16 @@ func TestADifferentChangeOnARepairAttemptIsItsOwnProposal(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if attempts == 1 {
 			return nil
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperFinalTextByAttempt = []string{
 		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`),
 		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design","change":"say what happens when the queue is empty","why":"nothing here answers it"}`),
 	}
@@ -349,7 +350,7 @@ func TestADifferentChangeOnARepairAttemptIsItsOwnProposal(t *testing.T) {
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -393,15 +394,15 @@ func TestAProposalThatCannotBeRecordedNeverFailsTheRun(t *testing.T) {
 
 			repository := pipelineRepository(t)
 			writeDesignArtifact(t, repository)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-			provider := roleBackend(func(request backend.RunRequest) error {
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
-			provider.developerFinalText = fixture.reply
+			provider.DeveloperFinalText = fixture.reply
 			pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 			pipeline.Amendments = fixture.recorder
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -427,15 +428,15 @@ func TestAPipelineWithNowhereToRecordSaysTheProposalWasLost(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		amendmentBlock(`{"artifact":"v1-design","change":"x","why":"y"}`)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -456,8 +457,8 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// Named once and used both to write the block and to check what comes back,
@@ -466,7 +467,7 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 		change = "say which ordering holds"
 		why    = "the item cannot satisfy both"
 	)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		amendmentBlock(`{"artifact":"v1-design","change":"`+change+`","why":"`+why+`"}`)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = &fakeReports{}
@@ -482,7 +483,7 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 	}
 	pipeline.Amendments = recorder
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -513,7 +514,7 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 	if proposed.Artifact != "v1-design" || proposed.Kind != artifact.KindDesign || proposed.Owner != domain.RoleArchitect {
 		t.Fatalf("proposal = %#v", proposed)
 	}
-	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.item.ID {
+	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.Item.ID {
 		t.Fatalf("proposal is not attributed to the run that made it: %#v", proposed)
 	}
 	// Identity and attribution say which proposal this is and who made it, but
@@ -577,9 +578,9 @@ func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		// Two failing checks, so the developer is invoked three times: the attempt
 		// that proposes, the one that is told, and one more that must not be told
@@ -589,7 +590,7 @@ func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalTextByAttempt = []string{
+	provider.DeveloperFinalTextByAttempt = []string{
 		"worked on it\n\n" + amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`),
 		"worked on it",
 	}
@@ -597,7 +598,7 @@ func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
 	pipeline.Amendments = &fakeAmendments{}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -606,7 +607,7 @@ func TestARefusedProposalIsPutInFrontOfTheDeveloperThatMadeIt(t *testing.T) {
 	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
 		t.Fatalf("a refused proposal changed what the run did: %#v", outcome)
 	}
-	requests := provider.requestsForRole(domain.RoleDeveloper)
+	requests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(requests) != 3 {
 		t.Fatalf("developer invocations = %d, want the attempt that proposed and two repairs", len(requests))
 	}
@@ -654,16 +655,16 @@ func TestARefusedProposalIsDurableForAnInvocationInAnotherProcess(t *testing.T) 
 
 	repository := pipelineRepository(t)
 	writeDesignArtifact(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		amendmentBlock(`{"artifact":"invented","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Amendments = &fakeAmendments{}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

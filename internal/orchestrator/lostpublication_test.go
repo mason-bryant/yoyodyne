@@ -89,7 +89,7 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	}
 	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Record().Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -111,8 +111,8 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	if recorded.PullRequest == nil || recorded.PullRequest.Number != outcome.PullRequest.Number {
 		t.Fatalf("recorded pull request = %#v, want #%d as the outcome reports", recorded.PullRequest, outcome.PullRequest.Number)
 	}
-	if !strings.Contains(tracker.notes, "Pull request: #1") {
-		t.Errorf("the work item does not name the request:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Record().Notes, "Pull request: #1") {
+		t.Errorf("the work item does not name the request:\n%s", tracker.Record().Notes)
 	}
 	// The entry is what the development manager reads before deciding, and the
 	// request is an artifact of the run exactly as its branch is.

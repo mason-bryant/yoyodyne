@@ -55,7 +55,7 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// More refusals than the relaunch budget could have paid for, so what the run
 	// is doing while it waits is provably not relaunching.
 	provider := providerAwayBackend(4, domain.ProviderUnreachable, approveVerdict)
@@ -89,7 +89,7 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 		standing = outage
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -110,8 +110,8 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 	if standing.Cause != domain.ProviderUnreachable || standing.Refusals < 1 || !strings.Contains(standing.Waiting, pipelineRunID) {
 		t.Fatalf("outage on the product = %#v, want the run named as what is waiting", standing)
 	}
-	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
-		t.Fatalf("the waited-out run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	if outcome.Integration == nil || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("the waited-out run did not complete normally: %#v (blocked=%t)", outcome, tracker.Blocked)
 	}
 	if outcome.TransientRelaunches != 0 || outcome.RepairAttempts != 0 {
 		t.Fatalf("outcome = %#v, want the relaunch and repair counters untouched once the provider returned", outcome)
@@ -188,7 +188,7 @@ func (r *stderrRefusingRunner) Run(_ context.Context, command execution.Command,
 	}
 	stream := []string{
 		`{"type":"system","subtype":"init","session_id":"developer-session","model":"` + developerResolved + `"}`,
-		developerResultEnvelope(withVerification("implemented the work item")),
+		developerResultEnvelope(orchestratortest.WithVerification("implemented the work item")),
 	}
 	for _, line := range stream {
 		observer(execution.Output{Stream: execution.StreamStdout, Text: line})
@@ -225,7 +225,7 @@ func TestRunWaitsOutALoginRefusedOnStderrBeforeAnyEnvelope(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The reviewer is served by the usual fake; the developer's provider is the
 	// real adapter over a process that refuses on stderr.
 	reviewer := refusingBackend(0, nil, approveVerdict)
@@ -258,7 +258,7 @@ func TestRunWaitsOutALoginRefusedOnStderrBeforeAnyEnvelope(t *testing.T) {
 		standing = outage
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -286,8 +286,8 @@ func TestRunWaitsOutALoginRefusedOnStderrBeforeAnyEnvelope(t *testing.T) {
 	if pausedState.UsageLimitPausedSeconds != 0 || pausedState.TransientRelaunches != 0 {
 		t.Fatalf("paused state = %#v, want the wait to have spent nothing", pausedState)
 	}
-	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
-		t.Fatalf("the waited-out run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	if outcome.Integration == nil || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("the waited-out run did not complete normally: %#v (blocked=%t)", outcome, tracker.Blocked)
 	}
 	if outcome.TransientRelaunches != 0 || outcome.RepairAttempts != 0 {
 		t.Fatalf("outcome = %#v, want the relaunch and repair counters untouched once the provider returned", outcome)
@@ -323,13 +323,13 @@ func TestADispatchIntoAnExpiredLoginIsAWaitRatherThanAFailure(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := &fakeBackend{availability: backend.Availability{Installed: true, Authenticated: false, AuthMethod: "none"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &orchestratortest.Backend{ReportedAvailability: backend.Availability{Installed: true, Authenticated: false, AuthMethod: "none"}}
 	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	outages := newOutageStore(t)
 	pipeline.ProviderOutages = outages
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	var away ProviderOutageError
 	if !errors.As(err, &away) || away.Cause != domain.ProviderUnauthenticated {
 		t.Fatalf("Run() error = %v, want the dispatch refused as a wait on the login", err)
@@ -337,18 +337,18 @@ func TestADispatchIntoAnExpiredLoginIsAWaitRatherThanAFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "the operator must log in") || !strings.Contains(err.Error(), "the claude-code backend is not authenticated") {
 		t.Fatalf("Run() error = %v, want the wait named and the login it needs", err)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Fatal("a dispatch the provider turned away claimed the item")
 	}
 	standing, recorded, err := outages.Standing()
-	if err != nil || !recorded || standing.Cause != domain.ProviderUnauthenticated || !strings.Contains(standing.Waiting, tracker.item.ID) {
+	if err != nil || !recorded || standing.Cause != domain.ProviderUnauthenticated || !strings.Contains(standing.Waiting, tracker.Item.ID) {
 		t.Fatalf("Standing() = %#v, %t, %v, want the login recorded on the product with the dispatch named", standing, recorded, err)
 	}
 
 	// The operator logs in. The next dispatch finds the provider ready, clears
 	// the outage on that evidence, and runs the item exactly as it would have.
-	provider.availability = backend.Availability{Installed: true, Authenticated: true}
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.ReportedAvailability = backend.Availability{Installed: true, Authenticated: true}
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleDeveloper {
 			if err := os.WriteFile(request.WorkingDirectory+"/feature.txt", []byte("implemented\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -359,7 +359,7 @@ func TestADispatchIntoAnExpiredLoginIsAWaitRatherThanAFailure(t *testing.T) {
 			FinalText: "implemented the work item", LastEvent: request.LastSequence,
 		}, nil
 	}
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() after the login error = %v", err)
 	}
 	if _, recorded, err := outages.Standing(); err != nil || recorded {
@@ -375,7 +375,7 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := refusingBackend(0, nil, approveVerdict)
 	served := provider.Respond
 	refused := 0
@@ -408,7 +408,7 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 		}
 		pausedState = loaded
 	}
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -418,7 +418,7 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	if clock.waited() != 30*time.Minute {
 		t.Fatalf("waited %s, want one probe interval", clock.waited())
 	}
-	if outcome.Integration == nil || !tracker.closed || outcome.TransientRelaunches != 0 {
+	if outcome.Integration == nil || !tracker.Closed || outcome.TransientRelaunches != 0 {
 		t.Fatalf("outcome = %#v, want the run finished with no relaunch counted", outcome)
 	}
 	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 2 {
