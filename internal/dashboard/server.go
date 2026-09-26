@@ -35,8 +35,9 @@
 // style: static text compiled into the binary, with nothing of the read model
 // in it, which is what a browser needs before it can present a token at all.
 // Everything that reads state is behind the token: the standing, the
-// throughput, the spend, and one work item at a time at /api/items/<id>, which
-// is what the page opens a card from. The page never reads the tracker; the
+// throughput, the spend, one work item at a time at /api/items/<id>, which is
+// what the page opens a card from, and one program manager instance's lane
+// report at a time at /api/program-managers/<agent>. The page never reads the tracker; the
 // card is the read model's projection of the item, served here like the rest.
 //
 // It is a projection, never an engine: it owns no workflow, conversation,
@@ -116,6 +117,13 @@ type Reader interface {
 	// readmodel.ErrNoSuchWorkItem is the tracker holding nothing under the id,
 	// and any other is the item not being readable.
 	WorkItem(ctx context.Context, id string) (readmodel.WorkItem, error)
+	// ProgramManagerReport reads one program manager instance — the instance as
+	// the standing carries it, and its current lane report whole — for the card
+	// the page opens on an instance's report. It is asked for when that card is
+	// opened. An error refuses the whole answer: one that is
+	// readmodel.ErrNoSuchProgramManager is the read model knowing no instance by
+	// the name, and any other is the state not being readable.
+	ProgramManagerReport(ctx context.Context, agent string) (readmodel.ProgramManagerReport, error)
 }
 
 // Server is one dashboard process: the token it generated or was handed, the
@@ -281,7 +289,7 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 		s.servePage(writer)
 	case strings.HasPrefix(request.URL.Path, "/assets/"):
 		s.serveAsset(writer, request)
-	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput", request.URL.Path == "/api/spend", strings.HasPrefix(request.URL.Path, "/api/items/"):
+	case request.URL.Path == "/api/standing", request.URL.Path == "/api/throughput", request.URL.Path == "/api/spend", strings.HasPrefix(request.URL.Path, "/api/items/"), strings.HasPrefix(request.URL.Path, "/api/program-managers/"):
 		// The routes that read state, and so the ones the token guards.
 		if !s.presented(request) {
 			refuse(writer, request, http.StatusUnauthorized, "this dashboard requires the token it printed when it started, as a bearer token")
@@ -294,6 +302,8 @@ func (s *Server) serve(writer http.ResponseWriter, request *http.Request) {
 			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Spend(ctx) })
 		case request.URL.Path == "/api/standing":
 			s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.Standing(ctx) })
+		case strings.HasPrefix(request.URL.Path, "/api/program-managers/"):
+			s.serveProgramManager(writer, request)
 		default:
 			s.serveWorkItem(writer, request)
 		}
@@ -315,7 +325,7 @@ func (s *Server) presented(request *http.Request) bool {
 }
 
 // servePage is the shell: the page with its states — asking for the token,
-// loading, error, ready — and its six sections, each with an empty, a loading,
+// loading, error, ready — and its seven sections, each with an empty, a loading,
 // and an error state of its own, and nothing of the read model in any of them.
 // It is static text the page's own script then fills from the JSON, so it is
 // served to a browser that has no token yet, which is every browser before it
@@ -339,6 +349,10 @@ func (s *Server) serveReading(writer http.ResponseWriter, request *http.Request,
 			// the second keeps asking. The reason is fixed words rather than the
 			// tracker's, which would name the id back.
 			refuse(writer, request, http.StatusNotFound, "no work item is recorded under that id")
+			return
+		}
+		if errors.Is(err, readmodel.ErrNoSuchProgramManager) {
+			refuse(writer, request, http.StatusNotFound, "no program manager instance is recorded under that name")
 			return
 		}
 		refuse(writer, request, http.StatusServiceUnavailable, err.Error())
@@ -371,6 +385,19 @@ func (s *Server) serveWorkItem(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.WorkItem(ctx, id) })
+}
+
+// serveProgramManager is one program manager instance's lane report as JSON,
+// whole or refused, for the card the page opens on it. The name is the rest of
+// the path and is held to an agent's shape before anything is read, and refused
+// as a path nothing is served at, reflecting nothing, where it is not one.
+func (s *Server) serveProgramManager(writer http.ResponseWriter, request *http.Request) {
+	agent := strings.TrimPrefix(request.URL.Path, "/api/program-managers/")
+	if !readmodel.ValidProgramManagerName(agent) {
+		refuse(writer, request, http.StatusNotFound, "nothing is served at that path")
+		return
+	}
+	s.serveReading(writer, request, func(ctx context.Context) (any, error) { return s.reader.ProgramManagerReport(ctx, agent) })
 }
 
 // serveAsset is the page's own script and style, from the binary. They are the

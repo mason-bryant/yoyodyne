@@ -59,5 +59,29 @@
     "unhandled": 0
   },
   "startable": 0,
-  "working_problem": "whether a turn is in flight could not be asked of product-manager (open conversations/product-manager.lock: permission denied)"
+  "working_problem": "whether a turn is in flight could not be asked of product-manager (open conversations/product-manager.lock: permission denied)",
+  "program_managers": [
+    {
+      "agent": "factory-pgm",
+      "lane": "reliability",
+      "status": "stale",
+      "stale": true,
+      "blocked": false,
+      "stale_says": "no pass has completed since 2026-09-19T08:00:00Z, and its schedule is every 1h0m0s",
+      "last_completed_pass_at": "2026-09-19T08:00:00Z",
+      "blockers": [],
+      "claims": [
+        {
+          "what": "the scheduler is down and nothing restarts it until the supervisor's periodic pass lands",
+          "waiting_on": "harness",
+          "cites": "restart-0123456789abcdef",
+          "reason": "it cites restart-0123456789abcdef, which no record that could be read holds; the restart requests could not be read"
+        }
+      ],
+      "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/factory-pgm/report.json",
+      "report_written_at": "2026-09-19T07:58:00Z",
+      "restart_requests": []
+    }
+  ],
+  "program_managers_problem": "the program managers' restart requests could not be read: open program-managers/restart-requests.jsonl: permission denied"
 }

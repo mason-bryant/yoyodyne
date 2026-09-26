@@ -90,6 +90,20 @@
             <p id="capacity-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
           </div>
         </section>
+        <section id="managers" class="panel managers" data-state="error" aria-labelledby="managers-heading">
+          <div class="panel-head">
+            <h2 id="managers-heading">Program managers</h2>
+            <p class="panel-note">
+              each instance with its lane and its status, as
+              <code>yoyo status</code>
+              lists them under the four lines; each opens its current lane report
+            </p>
+          </div>
+          <div class="section-error" role="alert">
+            <p id="managers-problem" class="problem">Could not be read: the program managers' restart requests could not be read: open program-managers/restart-requests.jsonl: input/output error; the pass records could not be read, so no program manager is called stale: open sweeps: input/output error</p>
+            <p id="managers-remedy" class="remedy">The dashboard asks again every ten seconds. If this stays, yoyo status in the checkout says the same thing with more room, and yoyo doctor says what cannot be read.</p>
+          </div>
+        </section>
       </div>
     </main>
     <script src="about:blank" data-note="the script ran once to produce this render; it is not loaded again here"></script>

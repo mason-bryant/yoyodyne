@@ -40,14 +40,16 @@ import (
 
 var updateRenders = flag.Bool("update-renders", false, "rewrite the rendered pages under testdata/renders from the fixtures")
 
-// sections are the six the page carries, by the id each carries in the shell:
-// the five the design names, and the spend box above Running now.
-var sections = []string{"band", "spend", "live", "pipeline", "throughput", "capacity"}
+// sections are the seven the page carries, by the id each carries in the
+// shell: the five the design names, the spend box above Running now, and the
+// program managers under Provider capacity.
+var sections = []string{"band", "spend", "live", "pipeline", "throughput", "capacity", "managers"}
 
-// popups are the two dialogs the page opens over the sections: a grouping — of
-// the pipeline listed by title, or of the attention line listed by what waits
-// — and one thing's card, a work item's or an attention entry's.
-var popups = []string{"grouping", "card"}
+// popups are the three dialogs the page opens over the sections: a grouping —
+// of the pipeline listed by title, or of the attention line listed by what
+// waits — one thing's card, a work item's or an attention entry's, and one
+// program manager instance's current lane report.
+var popups = []string{"grouping", "card", "report"}
 
 // sectionStates are the states every section has, each a child the panel
 // shows when its data-state names it. A pop-up has the same four, and is
@@ -75,7 +77,7 @@ func strict(t *testing.T, name string, body []byte, into any) {
 	}
 }
 
-// The shell carries the six sections, and each of them carries its four states
+// The shell carries the seven sections, and each of them carries its four states
 // with the lines the script fills, so a section the script has not reached yet
 // says it is reading rather than being blank.
 func TestTheShellCarriesEverySectionEachWithItsStates(t *testing.T) {
@@ -136,7 +138,7 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	standings, throughputs, spends, items := 0, 0, 0, 0
+	standings, throughputs, spends, items, reports := 0, 0, 0, 0, 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -196,12 +198,24 @@ func TestTheFixturesAreTheReadModelsShape(t *testing.T) {
 				t.Fatalf("fixture %s is not a work item as the server sends one: %+v", name, item)
 			}
 			items++
+		case strings.HasPrefix(name, "report-"):
+			var answer readmodel.ProgramManagerReport
+			strict(t, name, body, &answer)
+			// The fixture is the instance it is named for, with its lists empty
+			// rather than absent, as the server sends it, and a report where the
+			// instance says one was written.
+			instance := answer.Instance
+			if instance.Agent != strings.TrimPrefix(name, "report-") || answer.ObservedAt.IsZero() || instance.Blockers == nil || instance.Claims == nil || instance.RestartRequests == nil ||
+				(answer.Report != nil) != (instance.ReportWrittenAt != nil) || (answer.Report != nil && answer.Report.Remaining == nil) {
+				t.Fatalf("fixture %s is not a program manager's report as the server sends one: %+v", name, answer)
+			}
+			reports++
 		default:
-			t.Fatalf("fixture %s is none of a standing, a throughput, a spend, or an item", name)
+			t.Fatalf("fixture %s is none of a standing, a throughput, a spend, an item, or a report", name)
 		}
 	}
-	if standings < 4 || throughputs < 3 || spends < 3 || items < 3 {
-		t.Fatalf("expected the standing, throughput, spend, and item fixtures, found %d, %d, %d, and %d", standings, throughputs, spends, items)
+	if standings < 4 || throughputs < 3 || spends < 3 || items < 3 || reports < 3 {
+		t.Fatalf("expected the standing, throughput, spend, item, and report fixtures, found %d, %d, %d, %d, and %d", standings, throughputs, spends, items, reports)
 	}
 }
 
@@ -391,6 +405,37 @@ func TestTheEntryCardsAreHeadedByTheModelsKinds(t *testing.T) {
 	}
 }
 
+// The words a program manager's badge says are the model's statuses, every one
+// of them, so a status the page has no class for cannot arrive unannounced, and
+// the section and the report card read the instances the standing carries and
+// the report the model serves, and nothing else.
+func TestTheProgramManagersSectionSaysTheModelsStatuses(t *testing.T) {
+	t.Parallel()
+	w := serve(t, stubReader{standing: standingWith("title")})
+	_, script := w.get("/assets/dashboard.js", nil)
+	var named []readmodel.ProgramManagerStatus
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.Contains(line, `{ status: "`) {
+			continue
+		}
+		named = append(named, readmodel.ProgramManagerStatus(strings.Split(line, `"`)[1]))
+	}
+	statuses := []readmodel.ProgramManagerStatus{readmodel.ProgramManagerBlocked, readmodel.ProgramManagerStale, readmodel.ProgramManagerWorking}
+	if len(named) != len(statuses) {
+		t.Fatalf("the script names %d statuses, and the model has %d: %v against %v", len(named), len(statuses), named, statuses)
+	}
+	for i, status := range statuses {
+		if named[i] != status {
+			t.Fatalf("the script's status %d is %q, and the model's is %q", i, named[i], status)
+		}
+	}
+	for _, expected := range []string{"standing.program_managers", "standing.program_managers_problem", `"/api/program-managers/" + encodeURIComponent(agent)`, "instance.stale_says", "instance.blockers", "instance.claims"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("the script does not read %q from the model:\n%s", expected, script)
+		}
+	}
+}
+
 // The pipeline reads the model's own figures: the startable count and each
 // run's stage arrive on the standing, and the script keeps no list of phases
 // and makes no subtraction of one line from another to get either.
@@ -547,8 +592,8 @@ func TestARenderWithoutNodeFailsUnlessDeclaredUnavailable(t *testing.T) {
 
 // The page's script draws every section in every state from the fixtures, and
 // what it draws is what the renders under testdata/renders hold. Each of the
-// six sections reaches each of its four states in at least one scenario, each
-// of the two pop-ups reaches each of its four and is closed in another, the
+// seven sections reaches each of its four states in at least one scenario, each
+// of the three pop-ups reaches each of its four and is closed in another, the
 // page reaches its own four, and no scenario sets a style or sends the token
 // anywhere but as a bearer to this origin — render.js refuses both.
 func TestThePageRendersEverySectionInEveryState(t *testing.T) {
@@ -655,7 +700,7 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 			"What to do: nothing needs doing",
 			"no reset named, and nothing probes: the run stopped",
 		},
-		"quiet":      {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran in the last 7 days", "Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.", "No run or conversation is waiting on provider capacity"},
+		"quiet":      {"The harness is idle", "Nothing is running, and no conversation has a turn in flight.", "The backlog is empty", "Nothing ran in the last 7 days", "Nothing is recorded as spent: no run, conversation, branch review, side thread, or exchange here has a priced record.", "No run or conversation is waiting on provider capacity", `<p id="managers-empty" class="empty">No instance of the program manager role is configured, and none has a restart request open.</p>`},
 		"degraded":   {`<span class="figure">—</span>`, `<li class="stage stage-unreadable">`, "Could not be read: the admitted work could not be read", `<button class="grouping-open pile-label" type="button" data-grouping="stage:developing">developing</button>`},
 		"unreadable": {"Could not be read: the recorded runs could not be read: open runs: input/output error", "Could not be read: the spend could not be read: open streams: input/output error", "yoyo doctor says whether bd answers in this checkout"},
 		"held": {
@@ -790,12 +835,12 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	// pop-up, a pop-up scenario carries the pop-ups it left open over the page
 	// it names rather than that page again, and the one that closed both with
 	// Escape carries neither.
-	for _, scenario := range []string{"busy", "closed", "attention-closed"} {
+	for _, scenario := range []string{"busy", "closed", "attention-closed", "report-closed"} {
 		if strings.Contains(page(scenario), `class="popup"`) {
 			t.Errorf("the %s render carries a pop-up nobody opened", scenario)
 		}
 	}
-	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy", "attention-amendment": "busy", "attention-error": "degraded", "spend-days": "busy"} {
+	for scenario, beneath := range map[string]string{"card": "busy", "grouping-error": "degraded", "closed": "busy", "attention-amendment": "busy", "attention-error": "degraded", "spend-days": "busy", "report": "busy"} {
 		if body := page(scenario); strings.Contains(body, `class="panel `) || !strings.Contains(body, "the "+beneath+" render") {
 			t.Errorf("the %s render does not stand alone over the %s render", scenario, beneath)
 		}
@@ -831,8 +876,14 @@ func TestThePageRendersEverySectionInEveryState(t *testing.T) {
 	if !strings.Contains(page("attention-amendment"), `data-item="yoyodyne-ifd.210"`) {
 		t.Errorf("the amendment card does not open the item its proposer was working on")
 	}
+	// Every instance the busy page lists opens its current report.
+	for _, agent := range []string{"docs-pgm", "factory-pgm", "writing-pgm"} {
+		if strings.Count(page("busy"), `data-report="`+agent+`"`) != 1 {
+			t.Errorf("the busy render does not open %s's report from its row", agent)
+		}
+	}
 	// The card acts on nothing: every button on it opens or closes a pop-up.
-	for _, scenario := range []string{"attention-amendment", "attention-owed-step", "attention-carried-item"} {
+	for _, scenario := range []string{"attention-amendment", "attention-owed-step", "attention-carried-item", "report", "report-blocked"} {
 		for _, button := range strings.Split(page(scenario), "<button")[1:] {
 			if !strings.Contains(button, `data-item="`) && !strings.Contains(button, `data-entry="`) && !strings.Contains(button, `data-grouping="`) && !strings.Contains(button, `-close"`) {
 				t.Errorf("the %s render carries a button that neither opens nor closes a pop-up: %.120s", scenario, button)

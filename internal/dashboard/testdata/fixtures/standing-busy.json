@@ -331,5 +331,79 @@
       "work_item_id": "yoyodyne-ifd.436.1",
       "title": "Release notes carry every item's description"
     }
+  ],
+  "program_managers": [
+    {
+      "agent": "docs-pgm",
+      "lane": "docs",
+      "status": "working",
+      "stale": false,
+      "blocked": false,
+      "last_completed_pass_at": "2026-09-19T13:30:00Z",
+      "blockers": [],
+      "claims": [],
+      "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/docs-pgm/report.json",
+      "restart_requests": []
+    },
+    {
+      "agent": "factory-pgm",
+      "lane": "reliability",
+      "status": "stale",
+      "stale": true,
+      "blocked": true,
+      "stale_says": "no pass has completed since 2026-09-19T08:00:00Z, and its schedule is every 1h0m0s",
+      "last_completed_pass_at": "2026-09-19T08:00:00Z",
+      "blockers": [
+        {
+          "what": "the scheduler is down and nothing restarts it until the supervisor's periodic pass lands",
+          "waiting_on": "harness",
+          "cites": "restart-0123456789abcdef",
+          "record": "restart-request"
+        }
+      ],
+      "claims": [],
+      "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/factory-pgm/report.json",
+      "report_written_at": "2026-09-19T07:58:00Z",
+      "restart_requests": [
+        {
+          "schema_version": 1,
+          "product_id": "yoyodyne",
+          "id": "restart-0123456789abcdef",
+          "agent": "factory-pgm",
+          "part": "scheduler",
+          "reason": "the scheduler died four times in an hour and the supervisor left it down",
+          "requested_at": "2026-09-19T07:55:00Z",
+          "conversation_id": "chat-00000000000000000000000000000001",
+          "turn": 12
+        }
+      ]
+    },
+    {
+      "agent": "writing-pgm",
+      "lane": "writing",
+      "status": "blocked",
+      "stale": false,
+      "blocked": true,
+      "last_completed_pass_at": "2026-09-19T13:40:00Z",
+      "blockers": [
+        {
+          "what": "whether the terms register may name a role by its identifier form",
+          "waiting_on": "architect",
+          "cites": "exchange-0123456789abcdef",
+          "record": "exchange"
+        }
+      ],
+      "claims": [
+        {
+          "what": "the stale operations section on the dashboard",
+          "waiting_on": "product-manager",
+          "cites": "report-7d3e1f0a",
+          "reason": "it cites report report-7d3e1f0a, which the product-manager handled at 2026-09-19T12:10:00Z"
+        }
+      ],
+      "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/writing-pgm/report.json",
+      "report_written_at": "2026-09-19T13:40:00Z",
+      "restart_requests": []
+    }
   ]
 }

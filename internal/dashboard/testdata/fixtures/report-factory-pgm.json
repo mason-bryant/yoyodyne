@@ -1,0 +1,48 @@
+{
+  "observed_at": "2026-09-19T14:05:09Z",
+  "instance": {
+    "agent": "factory-pgm",
+    "lane": "reliability",
+    "status": "stale",
+    "stale": true,
+    "blocked": true,
+    "stale_says": "no pass has completed since 2026-09-19T08:00:00Z, and its schedule is every 1h0m0s",
+    "last_completed_pass_at": "2026-09-19T08:00:00Z",
+    "blockers": [
+      {
+        "what": "the scheduler is down and nothing restarts it until the supervisor's periodic pass lands",
+        "waiting_on": "harness",
+        "cites": "restart-0123456789abcdef",
+        "record": "restart-request"
+      }
+    ],
+    "claims": [],
+    "report_path": "/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/factory-pgm/report.json",
+    "report_written_at": "2026-09-19T07:58:00Z",
+    "restart_requests": [
+      {
+        "schema_version": 1,
+        "product_id": "yoyodyne",
+        "id": "restart-0123456789abcdef",
+        "agent": "factory-pgm",
+        "part": "scheduler",
+        "reason": "the scheduler died four times in an hour and the supervisor left it down",
+        "requested_at": "2026-09-19T07:55:00Z",
+        "conversation_id": "chat-00000000000000000000000000000001",
+        "turn": 12
+      }
+    ]
+  },
+  "report": {
+    "summary": "Two stoppages this week had one cause: a checkout timeout under load.\nThe fix landed; the root-cause item has not been filed.",
+    "remaining": [
+      "a root-cause item for the checkout timeout under load",
+      "confirm the sweep filed nothing for the second stoppage"
+    ],
+    "version": 7,
+    "pass": "factory-pgm-pass#31",
+    "conversation_id": "chat-00000000000000000000000000000001",
+    "turn": 12,
+    "written_at": "2026-09-19T07:58:00Z"
+  }
+}

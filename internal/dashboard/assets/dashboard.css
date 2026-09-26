@@ -902,6 +902,61 @@ input:focus-visible {
   padding-top: 0.4rem;
 }
 
+/* ---- section 7: the program managers ------------------------------------------- */
+
+/* An instance's status is a word in a badge first. The tint and the rule are
+   beside it: solid for working, dashed for blocked, dotted for stale, so the
+   three stay apart under a forced palette and in a print with no colour. */
+.manager-status {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  border: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.held.manager-working {
+  border-left-color: var(--landed);
+}
+
+.manager-working .manager-status {
+  border-color: var(--landed);
+  color: var(--landed);
+}
+
+.held.manager-blocked {
+  border-left-style: dashed;
+  border-left-color: var(--held);
+}
+
+.manager-blocked .manager-status {
+  border-color: var(--held);
+  border-style: dashed;
+  color: var(--held);
+}
+
+.held.manager-stale {
+  border-left-style: dotted;
+  border-left-color: var(--attention);
+}
+
+.manager-stale .manager-status {
+  border-color: var(--attention);
+  border-style: dotted;
+  color: var(--attention);
+  font-weight: 600;
+}
+
+.manager-open {
+  border-top: 1px solid var(--rule);
+  padding-top: 0.4rem;
+}
+
+.manager-line .manager-why {
+  margin-left: 0.5rem;
+}
+
 /* ---- the pop-ups --------------------------------------------------------------------- */
 
 /* A pop-up is a dialog over the page: a backdrop that closes it, and a card
@@ -1109,6 +1164,7 @@ input:focus-visible {
 @media (forced-colors: active) {
   .phase,
   .held-state,
+  .manager-status,
   .mark,
   .popup-card {
     border: 1px solid CanvasText;

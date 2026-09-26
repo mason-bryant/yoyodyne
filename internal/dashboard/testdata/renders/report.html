@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>yoyodyne — yoyo dashboard</title>
+    <link rel="stylesheet" href="../../assets/dashboard.css">
+  </head>
+  <body>
+    <p class="render-note">Opened over the busy render, which is not repeated here.</p>
+    <div id="report" class="popup" role="dialog" aria-modal="true" aria-labelledby="report-heading" data-state="ready">
+      <div id="report-backdrop" class="popup-backdrop"></div>
+      <div class="popup-card">
+        <div class="popup-head">
+          <div>
+            <h2 id="report-heading" class="popup-title">factory-pgm</h2>
+            <p id="report-note" class="popup-note">lane reliability · read 14:05:09</p>
+          </div>
+          <button type="button" id="report-close" class="popup-close">Close</button>
+        </div>
+        <div class="section-ready">
+          <dl id="report-fields" class="card-fields">
+            <div class="card-field">
+              <dt>Status</dt>
+              <dd class="manager-line manager-stale">
+                <span class="manager-status">stale</span>
+                <span class="manager-why">no pass has completed since 2026-09-19T08:00:00Z, and its schedule is every 1h0m0s; blocked on 1 open ask (restart-0123456789abcdef)</span>
+              </dd>
+            </div>
+            <div class="card-field">
+              <dt>Lane</dt>
+              <dd>reliability</dd>
+            </div>
+            <div class="card-field card-field-prose">
+              <dt>Summary</dt>
+              <dd>Two stoppages this week had one cause: a checkout timeout under load.
+The fix landed; the root-cause item has not been filed.</dd>
+            </div>
+            <div class="card-field">
+              <dt>Remaining</dt>
+              <dd>
+                <ul class="card-run-facts">
+                  <li>a root-cause item for the checkout timeout under load</li>
+                  <li>confirm the sweep filed nothing for the second stoppage</li>
+                </ul>
+              </dd>
+            </div>
+            <div class="card-field">
+              <dt>Blockers</dt>
+              <dd>
+                <ul class="card-run-facts">
+                  <li>the scheduler is down and nothing restarts it until the supervisor's periodic pass lands — the harness's move; cites restart-0123456789abcdef, a restart request of its own nothing has answered</li>
+                </ul>
+              </dd>
+            </div>
+            <div class="card-field">
+              <dt>Not blockers</dt>
+              <dd class="card-none">none: the record bears out every blocker it names</dd>
+            </div>
+            <div class="card-field">
+              <dt>Written</dt>
+              <dd>2026-09-19 07:58:00, version 7, by pass factory-pgm-pass#31 in chat-00000000000000000000000000000001 turn 12</dd>
+            </div>
+            <div class="card-field">
+              <dt>Last pass</dt>
+              <dd>completed 2026-09-19 08:00:00</dd>
+            </div>
+            <div class="card-field">
+              <dt>Restart requests</dt>
+              <dd>
+                <ul class="card-run-facts">
+                  <li>scheduler: the scheduler died four times in an hour and the supervisor left it down — asked 2026-09-19 07:55:00, unanswered; nothing acts on a request until the supervisor's periodic pass lands (restart-0123456789abcdef)</li>
+                </ul>
+              </dd>
+            </div>
+            <div class="card-field card-field-id">
+              <dt>Report file</dt>
+              <dd>/Users/somebody/Library/Application Support/Yoyodyne/state/products/yoyodyne/program-managers/factory-pgm/report.json</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -7,11 +7,13 @@
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
-      "capacity": "loading"
+      "capacity": "loading",
+      "managers": "loading"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "loading": {
@@ -22,11 +24,13 @@
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
-      "capacity": "loading"
+      "capacity": "loading",
+      "managers": "loading"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "quiet": {
@@ -37,11 +41,13 @@
       "live": "empty",
       "pipeline": "empty",
       "throughput": "empty",
-      "capacity": "empty"
+      "capacity": "empty",
+      "managers": "empty"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "busy": {
@@ -52,11 +58,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "held": {
@@ -67,11 +75,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "empty"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "degraded": {
@@ -82,11 +92,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "unreadable": {
@@ -97,11 +109,13 @@
       "live": "error",
       "pipeline": "error",
       "throughput": "error",
-      "capacity": "error"
+      "capacity": "error",
+      "managers": "error"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "throughput-pending": {
@@ -112,11 +126,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "loading",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "throughput-refused": {
@@ -127,11 +143,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "error",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-pending": {
@@ -142,11 +160,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "refused": {
@@ -157,11 +177,13 @@
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
-      "capacity": "loading"
+      "capacity": "loading",
+      "managers": "loading"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "unreachable": {
@@ -172,11 +194,13 @@
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
-      "capacity": "loading"
+      "capacity": "loading",
+      "managers": "loading"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "wrong-token": {
@@ -187,11 +211,13 @@
       "live": "loading",
       "pipeline": "loading",
       "throughput": "loading",
-      "capacity": "loading"
+      "capacity": "loading",
+      "managers": "loading"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "stale": {
@@ -202,11 +228,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "throughput-stale": {
@@ -217,11 +245,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-stale": {
@@ -232,11 +262,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "card": {
@@ -247,11 +279,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "card-loading": {
@@ -262,11 +296,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "loading"
+      "card": "loading",
+      "report": "closed"
     }
   },
   "card-missing": {
@@ -277,11 +313,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "empty"
+      "card": "empty",
+      "report": "closed"
     }
   },
   "card-refused": {
@@ -292,11 +330,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "error"
+      "card": "error",
+      "report": "closed"
     }
   },
   "grouping": {
@@ -307,11 +347,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "grouping-landed": {
@@ -322,11 +364,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "grouping-empty": {
@@ -337,11 +381,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "empty"
     },
     "popups": {
       "grouping": "empty",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "grouping-error": {
@@ -352,11 +398,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "error",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "grouping-loading": {
@@ -367,11 +415,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "loading",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "loading",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-days": {
@@ -382,11 +432,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-days-empty": {
@@ -397,11 +449,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "empty",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-days-error": {
@@ -412,11 +466,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "error",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "spend-days-loading": {
@@ -427,11 +483,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "loading",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "grouping-card": {
@@ -442,11 +500,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "closed": {
@@ -457,11 +517,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "closed-after-poll": {
@@ -472,11 +534,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "attention": {
@@ -487,11 +551,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "attention-empty": {
@@ -502,11 +568,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "empty"
+      "capacity": "empty",
+      "managers": "empty"
     },
     "popups": {
       "grouping": "empty",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "attention-error": {
@@ -517,11 +585,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "error",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
     }
   },
   "attention-amendment": {
@@ -532,11 +602,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "attention-owed-step": {
@@ -547,11 +619,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "attention-carried-item": {
@@ -562,11 +636,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "attention-carried-item-card": {
@@ -577,11 +653,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "ready",
-      "card": "ready"
+      "card": "ready",
+      "report": "closed"
     }
   },
   "attention-settled": {
@@ -592,11 +670,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "empty"
+      "capacity": "empty",
+      "managers": "empty"
     },
     "popups": {
       "grouping": "empty",
-      "card": "empty"
+      "card": "empty",
+      "report": "closed"
     }
   },
   "attention-unreadable": {
@@ -607,11 +687,13 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "error",
-      "card": "error"
+      "card": "error",
+      "report": "closed"
     }
   },
   "attention-closed": {
@@ -622,11 +704,132 @@
       "live": "ready",
       "pipeline": "ready",
       "throughput": "ready",
-      "capacity": "ready"
+      "capacity": "ready",
+      "managers": "ready"
     },
     "popups": {
       "grouping": "closed",
-      "card": "closed"
+      "card": "closed",
+      "report": "closed"
+    }
+  },
+  "report": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "ready"
+    }
+  },
+  "report-blocked": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "ready"
+    }
+  },
+  "report-unwritten": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "ready"
+    }
+  },
+  "report-loading": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "loading"
+    }
+  },
+  "report-missing": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "empty"
+    }
+  },
+  "report-refused": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "error"
+    }
+  },
+  "report-closed": {
+    "page": "ready",
+    "sections": {
+      "band": "ready",
+      "spend": "ready",
+      "live": "ready",
+      "pipeline": "ready",
+      "throughput": "ready",
+      "capacity": "ready",
+      "managers": "ready"
+    },
+    "popups": {
+      "grouping": "closed",
+      "card": "closed",
+      "report": "closed"
     }
   }
 }

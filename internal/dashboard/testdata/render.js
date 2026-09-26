@@ -2,7 +2,7 @@
 // Renders the dashboard page from the fixtures, without a browser, and writes
 // what each scenario leaves in the DOM.
 //
-// The page's script is the one thing that turns the read model into the six
+// The page's script is the one thing that turns the read model into the seven
 // sections, and a Go test cannot run it. This runs it under Node against a small
 // document model — enough of the DOM for the script's own needs and nothing
 // more — with fetch answered from the fixtures under ./fixtures, and serializes
@@ -294,8 +294,17 @@ function items(...ids) {
   return answers;
 }
 
+// reports answers /api/program-managers/<agent> for the names given, from the
+// report fixtures.
+function reports(...agents) {
+  const answers = {};
+  agents.forEach((agent) => { answers["/api/program-managers/" + agent] = ok(fixture("report-" + agent)); });
+  return answers;
+}
+
 // A scenario's `open` is what a reader clicks once the page is drawn, in
-// order: a grouping by its key, or an item by its id — or `poll`, which is
+// order: a grouping by its key, an item by its id, or a program manager's
+// report by its name — or `poll`, which is
 // the page asking again in between, redrawing every section under the
 // pop-up; `escape` presses Escape afterwards. The pop-ups answer from the standing and the throughput already
 // in hand, and the card from the item answers. `beneath` names the scenario
@@ -386,7 +395,20 @@ const scenarios = pages.concat([
   // Escape twice from the item card opened off an entry card: the card
   // closes, then the list, and focus is back on the tile's label that opened
   // the list.
-  over("attention-closed", "busy", { items: items("yoyodyne-ifd.188"), open: [{ grouping: "attention" }, { entry: "conversation-carried-item:yoyodyne-ifd.188" }, { item: "yoyodyne-ifd.188" }], escape: 2 })
+  over("attention-closed", "busy", { items: items("yoyodyne-ifd.188"), open: [{ grouping: "attention" }, { entry: "conversation-carried-item:yoyodyne-ifd.188" }, { item: "yoyodyne-ifd.188" }], escape: 2 }),
+  // A program manager's current lane report, opened from its row: a stale
+  // instance that is blocked as well, with an open restart request; a blocked
+  // one whose report names a blocker the record does not bear out; a working
+  // one that has written no report yet; one still being read; one the read
+  // model no longer knows; one whose state could not be read; and one closed
+  // with Escape, focus going back to the row's opener.
+  over("report", "busy", { reports: reports("factory-pgm"), open: [{ report: "factory-pgm" }] }),
+  over("report-blocked", "busy", { reports: reports("writing-pgm"), open: [{ report: "writing-pgm" }] }),
+  over("report-unwritten", "busy", { reports: reports("docs-pgm"), open: [{ report: "docs-pgm" }] }),
+  over("report-loading", "busy", { reports: { "/api/program-managers/factory-pgm": pending }, open: [{ report: "factory-pgm" }] }),
+  over("report-missing", "busy", { reports: { "/api/program-managers/docs-pgm": refused(404, "no program manager instance is recorded under that name") }, open: [{ report: "docs-pgm" }] }),
+  over("report-refused", "busy", { reports: { "/api/program-managers/writing-pgm": refused(503, "the state root could not be resolved: open /Users/somebody/Library/Application Support/Yoyodyne/state: permission denied") }, open: [{ report: "writing-pgm" }] }),
+  over("report-closed", "busy", { reports: reports("factory-pgm"), open: [{ report: "factory-pgm" }], escape: 1 })
 ]);
 
 function settle() {
@@ -403,7 +425,7 @@ async function run(scenario) {
     storage.set("yoyo-dashboard-token", scenario.token);
   }
   const intervals = [];
-  let answers = Object.assign({ "/api/standing": scenario.standing, "/api/throughput": scenario.throughput, "/api/spend": scenario.spend }, scenario.items || {});
+  let answers = Object.assign({ "/api/standing": scenario.standing, "/api/throughput": scenario.throughput, "/api/spend": scenario.spend }, scenario.items || {}, scenario.reports || {});
   const requests = [];
 
   const fetch = (url, options) => {
@@ -473,7 +495,7 @@ async function run(scenario) {
       }
       continue;
     }
-    const opener = step.item ? ["data-item", step.item] : step.entry ? ["data-entry", step.entry] : ["data-grouping", step.grouping];
+    const opener = step.item ? ["data-item", step.item] : step.entry ? ["data-entry", step.entry] : step.report ? ["data-report", step.report] : ["data-grouping", step.grouping];
     opened.push(opener);
     clicked.push(openerFor(...opener));
     clicked[clicked.length - 1].dispatch("click", {});
@@ -491,8 +513,8 @@ async function run(scenario) {
   }
 
   const page = document.getElementById("page");
-  const sections = ["band", "spend", "live", "pipeline", "throughput", "capacity"];
-  const popups = ["grouping", "card"];
+  const sections = ["band", "spend", "live", "pipeline", "throughput", "capacity", "managers"];
+  const popups = ["grouping", "card", "report"];
   const matrix = { page: page.getAttribute("data-state"), sections: {}, popups: {} };
   sections.forEach((id) => {
     matrix.sections[id] = document.getElementById(id).getAttribute("data-state");

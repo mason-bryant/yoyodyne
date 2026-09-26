@@ -115,7 +115,7 @@ func dashboardTokenStores(stateRoot string) dashboard.TokenStores {
 
 // dashboardHeaderLine is said whichever way the token came, because it is
 // about how the token is presented rather than where it came from.
-const dashboardHeaderLine = "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, and /api/items/<work-item-id>"
+const dashboardHeaderLine = "the page asks for the token and keeps it in the tab's session storage; a tool sends it as `Authorization: Bearer <token>` to /api/standing, /api/throughput, /api/spend, /api/items/<work-item-id>, and /api/program-managers/<agent>"
 
 // dashboardServer makes the server under the token the entry names, and says
 // what the command prints about it. Under `generated` the server makes its own
@@ -220,6 +220,18 @@ func (r dashboardReader) WorkItem(ctx context.Context, id string) (readmodel.Wor
 		return readmodel.WorkItem{}, err
 	}
 	return readmodel.ReadWorkItem(ctx, sources, id)
+}
+
+// ProgramManagerReport is one program manager instance and its current lane
+// report, for the card the page opens on the report. It is read from the same
+// sources the standing is, through the instance's one query, so the card and
+// the standing's line for the instance — and `yoyo status` — cannot disagree
+// about its status.
+func (r dashboardReader) ProgramManagerReport(ctx context.Context, agent string) (readmodel.ProgramManagerReport, error) {
+	if err := r.ready(); err != nil {
+		return readmodel.ProgramManagerReport{}, err
+	}
+	return readmodel.ReadProgramManagerReport(standingSources(r.configPath), agent)
 }
 
 // workItemSources opens the tracker and the run store one work item is read
@@ -337,10 +349,10 @@ func printDashboardUsage(writer io.Writer) {
 
 Serves the read model -- the same four lines and capacity state `+"`yoyo status`"+`
 reads, what the harness is spending, and what landed -- to a browser on this
-machine, at a loopback port, until stopped, as a page of six sections: the
+machine, at a loopback port, until stopped, as a page of seven sections: the
 status band, what the harness is spending, the runs and conversations in
-flight, where admitted work stands in the pipeline, throughput, and provider
-capacity. It prints the URL and, beside it,
+flight, where admitted work stands in the pipeline, throughput, provider
+capacity, and the program managers. It prints the URL and, beside it,
 where the token every request for the read model has to carry as
 `+"`Authorization: Bearer <token>`"+` comes from: with services.dashboard.token at its
 `+"`generated`"+` default, the token itself, once, and a restart makes a new one; with
@@ -356,7 +368,9 @@ at /api/standing, what landed over today and the last seven days at
 /api/throughput, what was spent over the last 24 hours and the last seven local
 days with a line for each of the last thirty at /api/spend, and one work item
 whole -- its tracker fields and the run last made for it -- at
-/api/items/<work-item-id>, which is what the page's card on an item reads; the page shell at / and its own script and style are
+/api/items/<work-item-id>, which is what the page's card on an item reads,
+and one program manager instance with its current lane report at
+/api/program-managers/<agent>, which is what the page's report card reads; the page shell at / and its own script and style are
 static text with nothing of the read model in them, served to the browser before
 it has a token. Everything else is refused: a request for the read model with no
 token or the wrong one, a Host or Origin that is not the address it bound, and

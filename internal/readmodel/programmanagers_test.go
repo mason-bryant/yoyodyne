@@ -466,3 +466,120 @@ func TestTheInstancesAreRenderedOneLineEachAndTheStaleOnesCounted(t *testing.T) 
 		t.Errorf("RenderProgramManagers() with no instance = %q, want nothing", got)
 	}
 }
+
+// rewritingLaneReports is a report store whose report is rewritten each time it
+// is read: each read of its one instance's report answers the next version in
+// turn, and the last once the versions run out. Every other instance has none.
+type rewritingLaneReports struct {
+	versions []runstate.LaneReport
+	reads    *int
+}
+
+func (f rewritingLaneReports) Current(agent string) (runstate.LaneReport, bool, error) {
+	if agent != f.versions[0].Agent {
+		return runstate.LaneReport{}, false, nil
+	}
+	at := *f.reads
+	*f.reads++
+	if at >= len(f.versions) {
+		at = len(f.versions) - 1
+	}
+	return f.versions[at], true, nil
+}
+
+func (f rewritingLaneReports) ReportPath(agent string) string {
+	return fakeLaneReports{}.ReportPath(agent)
+}
+
+// One instance's report query carries the instance as the standing carries it
+// and the report its blockers were read from — the summary, what remains, and
+// which version and turn wrote it — so the page's report card and the standing
+// cannot disagree about the instance.
+func TestAProgramManagersReportQueryCarriesTheInstanceAndItsReport(t *testing.T) {
+	t.Parallel()
+
+	current := blockedBy("factory-pgm", "restart-0123456789abcdef")
+	current.Report.Summary = "Two stoppages this week had one cause."
+	current.Report.Remaining = []string{"a root-cause item for the checkout timeout"}
+	current.Stamp.Pass = "pgm-pass#12"
+	sources := programManagerSources()
+	sources.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{restartRequest("restart-0123456789abcdef", "factory-pgm")}}
+	sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{"factory-pgm": current}}
+
+	answer, err := ReadProgramManagerReport(sources, "factory-pgm")
+	if err != nil {
+		t.Fatalf("ReadProgramManagerReport() error = %v", err)
+	}
+	if answer.Instance.Status != ProgramManagerBlocked || len(answer.Instance.Blockers) != 1 || answer.Problem != "" {
+		t.Fatalf("Instance = %+v, problem %q; want the blocked instance the standing carries", answer.Instance, answer.Problem)
+	}
+	standing := ReadStanding(context.Background(), sources)
+	if standing.ProgramManagers[0].Status != answer.Instance.Status || standing.ProgramManagers[0].ReportPath != answer.Instance.ReportPath {
+		t.Errorf("the standing carries %+v and the query %+v", standing.ProgramManagers[0], answer.Instance)
+	}
+	want := LaneReportText{
+		Summary: "Two stoppages this week had one cause.", Remaining: []string{"a root-cause item for the checkout timeout"},
+		Version: 3, Pass: "pgm-pass#12", ConversationID: factoryConversation, Turn: 4, WrittenAt: current.RecordedAt,
+	}
+	if answer.Report == nil || answer.Report.Summary != want.Summary || strings.Join(answer.Report.Remaining, "|") != strings.Join(want.Remaining, "|") ||
+		answer.Report.Version != want.Version || answer.Report.Pass != want.Pass || answer.Report.ConversationID != want.ConversationID ||
+		answer.Report.Turn != want.Turn || !answer.Report.WrittenAt.Equal(want.WrittenAt) {
+		t.Errorf("Report = %+v, want %+v", answer.Report, want)
+	}
+	if !answer.ObservedAt.Equal(moment) {
+		t.Errorf("ObservedAt = %v, want the reading's moment %v", answer.ObservedAt, moment)
+	}
+
+	// An instance that has written no report is carried with no report, rather
+	// than refused: the card still has its status and its requests to show.
+	quiet, err := ReadProgramManagerReport(sources, "writing-pgm")
+	if err != nil || quiet.Report != nil || quiet.Instance.Agent != "writing-pgm" {
+		t.Errorf("ReadProgramManagerReport(writing-pgm) = %+v, %v; want the instance and no report", quiet, err)
+	}
+}
+
+// A name the read model knows no instance under, and a name that is not an
+// agent's name at all, are both the instance not being recorded — a different
+// answer from a record that could not be read.
+func TestAReportQueryForNoSuchInstanceIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"nobody-pgm", "../factory-pgm", ""} {
+		if _, err := ReadProgramManagerReport(programManagerSources(), name); !errors.Is(err, ErrNoSuchProgramManager) {
+			t.Errorf("ReadProgramManagerReport(%q) error = %v, want ErrNoSuchProgramManager", name, err)
+		}
+	}
+}
+
+// A report rewritten between the derivation and the read of its text is read
+// again, so the summary shown is the version the blockers beside it came from;
+// one that keeps moving is said rather than shown against the wrong blockers.
+func TestAReportRewrittenWhileItIsReadIsReadAgain(t *testing.T) {
+	t.Parallel()
+
+	first := blockedBy("factory-pgm")
+	first.Report.Summary = "first"
+	second := blockedBy("factory-pgm")
+	second.Report.Summary, second.Version, second.RecordedAt = "second", 4, first.RecordedAt.Add(time.Minute)
+
+	sources := programManagerSources()
+	reads := 0
+	// The derivation reads the first, the text the second, and the retry reads
+	// the second twice.
+	sources.LaneReports = rewritingLaneReports{versions: []runstate.LaneReport{first, second}, reads: &reads}
+	answer, err := ReadProgramManagerReport(sources, "factory-pgm")
+	if err != nil || answer.Report == nil || answer.Report.Summary != "second" || !answer.Instance.ReportWrittenAt.Equal(second.RecordedAt) {
+		t.Fatalf("ReadProgramManagerReport() = %+v, %v; want the second version read whole", answer, err)
+	}
+
+	third := blockedBy("factory-pgm")
+	third.Version, third.RecordedAt = 5, second.RecordedAt.Add(time.Minute)
+	fourth := blockedBy("factory-pgm")
+	fourth.Version, fourth.RecordedAt = 6, third.RecordedAt.Add(time.Minute)
+	reads = 0
+	sources.LaneReports = rewritingLaneReports{versions: []runstate.LaneReport{first, second, third, fourth}, reads: &reads}
+	answer, err = ReadProgramManagerReport(sources, "factory-pgm")
+	if err != nil || answer.Report != nil || !strings.Contains(answer.Problem, "rewritten twice while it was being read") {
+		t.Fatalf("ReadProgramManagerReport() = %+v, %v; want no text and the reason", answer, err)
+	}
+}
