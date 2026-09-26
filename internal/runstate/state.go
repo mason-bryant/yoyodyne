@@ -613,6 +613,16 @@ type LandingChecks struct {
 	StartedAt time.Time `json:"started_at"`
 	// FinishedAt is absent while the landing checks run.
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	// TargetBranch is the branch the commit landed on, which is what landings
+	// queue on: at most one landing per target branch runs its checks at a time.
+	TargetBranch string `json:"target_branch,omitempty"`
+	// WaitingSince is when the landing found another landing on its branch
+	// running and began waiting its turn, and AdmittedAt when that landing let
+	// it in. Both are absent on a landing that never waited. A landing with
+	// WaitingSince and no AdmittedAt is waiting — or, once finished, waited out
+	// its bound or died waiting — and has run no check and cut no checkout.
+	WaitingSince *time.Time `json:"waiting_since,omitempty"`
+	AdmittedAt   *time.Time `json:"admitted_at,omitempty"`
 	// BoundSeconds is the budget each landing check ran under —
 	// execution.landing_check_timeout — which is its own rather than the
 	// gate's: the suite moved to the landing is the one too long for the gate's
@@ -699,7 +709,18 @@ func (l *LandingChecks) CloseInterrupted(now time.Time) {
 	l.FinishedAt = &finished
 	l.Ran = false
 	l.Green = false
+	if l.Waiting() {
+		l.Problem = strings.TrimPrefix(l.Problem+"; the process waiting its turn behind another landing died before the landing checks started", "; ")
+		return
+	}
 	l.Problem = strings.TrimPrefix(l.Problem+"; the process running the landing checks died before they ended", "; ")
+}
+
+// Waiting reports a landing that found another landing on its branch running
+// and was never let in: while it is unfinished, it is queued rather than
+// running.
+func (l LandingChecks) Waiting() bool {
+	return l.WaitingSince != nil && l.AdmittedAt == nil
 }
 
 // Red reports a finished landing whose checks ran and did not all pass.
@@ -747,6 +768,8 @@ func (l LandingChecks) Describe() string {
 	}
 	var said string
 	switch {
+	case !l.Finished() && l.Waiting():
+		return fmt.Sprintf("landing checks waiting over %s behind another landing on %s, since %s", commit, nonEmptyBranch(l.TargetBranch), l.WaitingSince.UTC().Format(time.RFC3339))
 	case !l.Finished():
 		return fmt.Sprintf("landing checks running over %s, each bounded at %s", commit, describeSpan(l.Bound()))
 	case !l.Ran:
@@ -765,15 +788,32 @@ func (l LandingChecks) Describe() string {
 			said += "; no item could be filed: " + l.FilingProblem
 		}
 	}
+	if l.WaitingSince != nil && l.AdmittedAt != nil {
+		said += fmt.Sprintf(", after waiting %s behind another landing on %s", describeSpan(l.AdmittedAt.Sub(*l.WaitingSince)), nonEmptyBranch(l.TargetBranch))
+	}
 	if l.Problem != "" {
 		said += " (" + l.Problem + ")"
 	}
 	return said
 }
 
+// nonEmptyBranch names a landing's branch, or says it went unrecorded, which is
+// every landing recorded before landings queued.
+func nonEmptyBranch(branch string) string {
+	if branch == "" {
+		return "its target branch"
+	}
+	return branch
+}
+
+// spent is how long the checks themselves took: from the landing's admission
+// where it waited its turn, so the wait is said once and not counted twice.
 func (l LandingChecks) spent() time.Duration {
 	if l.FinishedAt == nil {
 		return 0
+	}
+	if l.AdmittedAt != nil {
+		return l.FinishedAt.Sub(*l.AdmittedAt)
 	}
 	return l.FinishedAt.Sub(l.StartedAt)
 }

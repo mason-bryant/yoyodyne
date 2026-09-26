@@ -56,6 +56,7 @@ var structuredStrings = map[string]string{
 	"check_failure.command":                "a command the configuration declares",
 	"check_stage.command":                  "a command the configuration declares",
 	"landing_checks.commit":                "the integrated commit the harness recorded",
+	"landing_checks.target_branch":         "a local branch name",
 	"landing_checks.checks[].command":      "a command the configuration declares",
 	"landing_checks.filed_work_item":       "the tracker's identifier",
 	"path_refusal.paths[]":                 "repository paths the change touched, bounded in number",

@@ -1304,18 +1304,46 @@ worktree root, runs the list there, and removes the checkout. The landing has
 a budget of its own, `execution.landing_check_timeout` (two hours by default,
 per check, with no stage bound over the list), because what is moved there is
 the suite the gate's stage bound cannot hold. The run is over before they
-start, so they hold no seat, no claim, and no place in the queue, and the next
-run starts beside them; what they do hold is the process that ran the landing —
-`yoyo run` reports only once they end, a `yoyo work` drain or `--limit` returns
-only once every run it started has landed, and a deploy's restart waits them
-out with the runs — for up to the budget times the number of landing checks.
+start, so they hold no seat, no claim, and no place in the run queue, and the
+next developer run starts beside them; what they do hold is the process that
+ran the landing — `yoyo run` reports only once they end, a `yoyo work` drain or
+`--limit` returns only once every run it started has landed, and a deploy's
+restart waits them out with the runs — for up to the budget times the number
+of landing checks, plus any wait for its turn. The landing checkout compiles
+against the repository's shared build cache, the one under the common Git
+directory every run's worktree uses, rather than a cold cache of its own.
+
+**Landings on one target branch run one at a time.** A second landing does not
+start beside the first: landings queue on a lease per target branch — an
+advisory file lock beside the branch's promotion lease, dropped by the
+operating system when its holder dies, and separate from it, so a landing
+holds nobody out of integration. Without it, two runs landing back to back
+would run two whole race suites at once beside the next runs' gates, which is
+the load the suite was moved to the landing to escape. A landing that
+finds another running records when it began waiting before it waits, and its
+checkout is not cut until the first landing's is removed. While it waits,
+`yoyo status` says so under the run, where it would otherwise say the checks
+are running:
+
+```text
+  landing checks waiting over 3d3d367a1b2c behind another landing on main, since 2026-09-19T14:02:10Z
+```
+
+The wait is bounded by what the landing ahead may take — the budget times the
+number of landing checks, and a fifteen-minute margin for its checkout —
+and a landing that waits it out runs nothing and is unverified, saying which
+queue it waited on. The bound covers one landing ahead: a third landing queued
+behind two that each run their whole budget waits it out and is unverified,
+which is the case to look for when several land back to back. A landing that did wait says how long beside its result.
 What the landing made of the commit is recorded on the run and said on the
 item and in the thread:
 
 ```text
 green landing: 1 landing check passed over 3d3d367a1b2c in 18m
+green landing: 1 landing check passed over 3d3d367a1b2c in 18m, after waiting 12m behind another landing on main
 red landing: make race exited 1 over 3d3d367a1b2c; filed as yoyodyne-ifd.402
 unverified landing: the landing checks did not run to the end over 3d3d367a1b2c (make race was stopped at its 2h0m0s execution.landing_check_timeout budget after 2h0m0s and judged nothing)
+unverified landing: the landing checks did not run to the end over 3d3d367a1b2c (the landing checks never started: wait to land on main: another landing held the lease for the whole 2h15m0s wait)
 ```
 
 A landing check stopped at its budget judged nothing, exactly as a gate check
@@ -1341,8 +1369,9 @@ leaves a run that is over with a landing the record says is still running, and
 the checkout the checks ran in — `landing-<run>` under the worktree root —
 still registered. Such a run owes a step, so `yoyo reconcile` takes it up:
 where the process is really gone (a live one still holds the run's lease and is
-left alone) the landing is settled as unverified, saying the process died, and
-the checkout is removed. A checkout the sweep could not remove is named on the
+left alone) the landing is settled as unverified, saying the process died —
+and, for one that was still waiting its turn behind another landing, that it
+died waiting before its checks started — and the checkout is removed. A checkout the sweep could not remove is named on the
 run for somebody to remove by hand. A run killed inside its per-run checks is
 settled the same way: the sweep closes the stage as interrupted, naming the
 check it was on, so `yoyo status` stops saying the checks are running under a
