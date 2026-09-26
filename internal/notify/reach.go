@@ -230,6 +230,10 @@ var reaches = map[Kind]Reach{
 	// operator asked that a pause name its cause.
 	KindProviderOutage:   ReachChannel,
 	KindProviderRestored: ReachChannel,
+	// A recurring task failing before its first turn, firing after firing. It is
+	// the harness degraded in a way no record but the sweep log says, and what
+	// ends it is a fix rather than a clock, so it belongs at the top.
+	KindRecurringTaskFailing: ReachChannel,
 	// A claim the harness gave back because nothing was working on it. It is the
 	// stall's blind spot said from the other end — an item that had left the ready
 	// queue under a run that died, with the line idle behind it — and it is said

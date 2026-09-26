@@ -945,6 +945,33 @@ func FromProviderRestored(says string, since, at time.Time) Notification {
 	})
 }
 
+// RecurringTaskFailing is a recurring task failing before its first turn, as
+// the read model says it: the sentence, since when, and whose move it is.
+type RecurringTaskFailing struct {
+	// Says is the failure as the read model words it: the task, the cause, and
+	// how many firings in a row.
+	Says string
+	// Since is the first of the failed firings, which the age is measured from.
+	Since time.Time
+	// Mover is whose move ends it, worded by the read model beside the fact.
+	Mover string
+}
+
+// FromRecurringTaskFailing says that a recurring task keeps failing before its
+// first turn. It is addressed to the product and spoken by the harness, like
+// the outage beside it: what failed is the harness's own firing, not any work
+// item. The severity is the caller's — a warning when it is first said, and
+// critical once it has stood long enough that nothing is going to end it.
+func FromRecurringTaskFailing(failing RecurringTaskFailing, severity report.Severity, at time.Time) Notification {
+	notification := productNotification(KindRecurringTaskFailing, at, Detail{
+		Stopped: strings.TrimSpace(failing.Says),
+		Since:   failing.Since,
+		Mover:   strings.TrimSpace(failing.Mover),
+	})
+	notification.Event.Severity = severity
+	return notification
+}
+
 // FromReleasedClaim says that an item the tracker called in progress had nothing
 // working on it, and that the harness has given it back to the queue.
 //

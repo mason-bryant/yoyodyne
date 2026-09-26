@@ -218,6 +218,7 @@ var harnessVoice = voice{
 		KindCapacityHold:             "{stopped}. Nothing has moved on this product for {age}: every turn every role would take asks a model the provider is refusing, and nothing any of them may fail over to is being served either. The window lifts on the provider's clock; failover on the agents is what would move the work before it does.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. Every run in flight is waiting on it with its claim, its branch, and its worktree kept, no relaunch or repair attempt is being spent, and the intake brake is not tripping on it. The harness asks again on its own; nothing to release, nothing to restart.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. Every run that was waiting has resumed where it stopped, and the queue is being pulled from again. Nothing was released and nothing was restarted.",
+		KindRecurringTaskFailing:     "{stopped}. Each of those is a failed firing rather than a partial pass: nothing was asked of the role and nothing was spent, and the next firing meets the same refusal until its cause is fixed. It has stood for {age}.",
 		KindClaimReleased:            "{item} was claimed with nothing working on it, so the harness gave it back to the queue: {stopped}. Nothing had moved on it for {age}.",
 		KindResidentStale:            "The watch session on this product is running a build from before {behind} landed, made at {commit}. It restarts itself into a build installed over it, between the runs it is carrying.",
 		KindBundleImprovement:        "{improvement}. Nothing has changed and nothing is waiting on anybody: `yoyo config drift` shows {setting} beside everything else the template moved, and it is adopted by hand or not at all.",
@@ -294,6 +295,7 @@ var developerVoice = voice{
 		KindCapacityHold:             "{stopped}. Nothing has reached me for {age}, and nothing will: every role here is refused on the model it asks for, mine included, and nothing my turns could be moved onto is being served either.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. My runs are holding where they stopped — claim, branch, worktree, session, all kept — and I am asking again on my own; nothing I was doing is being counted against me.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. I have picked my runs up exactly where they were waiting.",
+		KindRecurringTaskFailing:     "{stopped}. Nothing I would be handed by that pass is being decided while it fails, and waiting will not end it: every firing meets the same refusal. It has stood for {age}.",
 		KindClaimReleased:            "{item} was sitting claimed with no run alive behind it for {age} — {stopped} — so it is back in the queue and can be handed to me again.",
 		KindResidentStale:            "What hands me work was built at {commit}, before {behind} landed. A fix already on the main line is not in what runs me until that build is installed over it, and I'd spend the round finding that out.",
 		KindBundleImprovement:        "{improvement}. What the template says about {setting} is what I'd be run under if this project took it up, and until somebody does I go on being run under what it holds now.",
@@ -370,6 +372,7 @@ var reviewerVoice = voice{
 		KindCapacityHold:             "{stopped}. No change has reached me for a verdict in {age}, and none was written to reach me: the provider is refusing every role at once, so nobody writes and nobody judges.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. Nothing reaches me for a verdict and nothing is being written to: every invocation is waiting on the same provider, and none of it is a failure of the work.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. Changes reach me for a verdict again.",
+		KindRecurringTaskFailing:     "{stopped}. None of that pass's work reaches anybody while it fails, and waiting will not end it: every firing meets the same refusal. It has stood for {age}.",
 		KindClaimReleased:            "{item} was claimed with nothing working on it for {age}, so it is back in the queue: {stopped}. Nothing has been judged either way; the change that run left, if any, is still where it left it.",
 		KindResidentStale:            "What sends me changes was built at {commit}, before {behind} landed. A repair round I grant against a bug that is already dead on the main line is a round nobody gets back, and installing that build is what stops me granting one — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. It changes nothing about the standard I hold a change to today, and it would change {setting} for every change judged after somebody adopts it.",
@@ -445,6 +448,7 @@ var developmentManagerVoice = voice{
 		KindCapacityHold:             "{stopped}. My queue has not been pulled from for {age}, and I cannot decide what is waiting on me either: the provider refuses my turns as it refuses everybody's, and nothing they could be moved onto is being served.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. My queue is not being pulled from and my sweeps record the wait rather than a pass; nothing on it has stopped, the runs in flight are holding, and the brake is not tripping over this.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. My queue is being pulled from again, from the top, in the order I set.",
+		KindRecurringTaskFailing:     "{stopped}. I am not being asked anything on that pass, so whatever it would have decided is waiting, and it will go on waiting: every firing meets the same refusal until its cause is fixed. It has stood for {age}.",
 		KindClaimReleased:            "{item} had been out of the queue for {age} with nothing working on it, so it is back in it and pullable again: {stopped}.",
 		KindResidentStale:            "What pulls my queue was built at {commit}, before {behind} landed. Rounds spent against work the system has already done come out of the same capacity the real queue does, and they stop when that build is installed — the session takes it up itself between runs.",
 		KindBundleImprovement:        "{improvement}. Nothing in the queue moves for it, and nothing I hand out changes until {setting} is adopted by hand.",
@@ -521,6 +525,7 @@ var productManagerVoice = voice{
 		KindCapacityHold:             "{stopped}. Nothing has been spent on this product for {age}, and this quiet is not free: every role is refused at once, the window lifts on the provider's clock, and a second model each agent could fail over to is what keeps the work moving through the next one.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. Nothing is being spent on this product and nothing is being lost: the work in flight is kept where it is, and this ends when the provider answers rather than on any clock or any decision of mine.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. The product is moving again, and nothing that was in flight was lost to the wait.",
+		KindRecurringTaskFailing:     "{stopped}. What that pass decides is not being decided, and nothing on a clock ends it: every firing meets the same refusal until its cause is fixed. It has stood for {age}.",
 		KindClaimReleased:            "{item} spent {age} looking like work in progress while nothing was being spent on it. It is back in the queue: {stopped}.",
 		KindResidentStale:            "What is being spent on this product was built at {commit}, before {behind} landed. Until that build is installed, some of that spend buys work the system has already paid for once; the session takes it up itself between runs once it is.",
 		KindBundleImprovement:        "{improvement}. Whether {setting} is worth taking is the operator's to decide and nobody else's, which is why it is offered once rather than asked for repeatedly.",
@@ -597,6 +602,7 @@ var architectVoice = voice{
 		KindCapacityHold:             "{stopped}. Selection has started nothing for {age}: every role depends on capacity the provider is refusing, and a system whose every role shares one capacity dependency stops whole.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. Every role shares one provider and one login, so the system waits whole — correctly, this time: the runs hold their state, no budget is spent, and no brake mistakes the wait for a failure storm.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. The system resumed as designed, from where each run held.",
+		KindRecurringTaskFailing:     "{stopped}. A scheduled role that never receives its turn is a watcher that has stopped watching, and nothing on a clock restarts it: every firing meets the same refusal. It has stood for {age}.",
 		KindClaimReleased:            "Selection had been passing over {item} for {age} because the tracker called it claimed, and nothing was working on it: {stopped}. An item that leaves the ready queue and never comes back is the failure a stall reading structurally cannot see, which is why the claims are audited against the runs.",
 		KindResidentStale:            "Selection is running a build made at {commit}, before {behind} landed. A process that outlives the deploys it is supposed to be running is the supervision gap; the session closes it itself, between the runs it is carrying, once a build is installed over it.",
 		KindBundleImprovement:        "{improvement}. A project that never hears its template moved is one whose configuration drifts by neglect rather than by decision; saying {setting} once makes the difference visible without deciding it for anybody.",
@@ -674,6 +680,7 @@ var programManagerVoice = voice{
 		KindCapacityHold:             "{stopped}. The line has started nothing for {age}: every role needs capacity the provider is refusing, so the whole line waits together.\n\n{standing}",
 		KindProviderOutage:           "{stopped}. Every role uses one provider and one login, so the line waits as a whole — the runs keep their state, no budget is spent, and no brake mistakes this for failures.\n\n{standing}",
 		KindProviderRestored:         "The provider is answering again after {age}: {stopped}. The line picked up from where each run was held.",
+		KindRecurringTaskFailing:     "{stopped}. A scheduled pass that never reaches its role is a watcher that has stopped watching, and waiting will not restart it: every firing meets the same refusal. It has stood for {age}.",
 		KindClaimReleased:            "The line had been skipping {item} for {age} because the tracker said it was claimed, and nothing was working on it: {stopped}. An item stuck out of the queue that way is invisible to a stall reading, which is why the claims are checked against the runs.",
 		KindResidentStale:            "The line is running a build made at {commit}, from before {behind} landed. The session takes up a newer build by itself between runs once one is installed.",
 		KindBundleImprovement:        "{improvement}. The template this project started from has moved; saying {setting} once lets the project decide rather than drift.",
@@ -891,6 +898,11 @@ var nextMoves = map[Kind]string{
 	// The provider answering again is nobody's move: the runs resumed by
 	// themselves, which is the whole of what the message is for.
 	KindProviderRestored: "nobody's — the line carried on by itself, and nothing was released or restarted to make it.",
+	// A task failing before its first turn is the harness's or the operator's by
+	// its cause, and the message carries the read model's own wording of which in
+	// Mover, so a terminal and a channel name the same move. This is what a record
+	// that carried none would say.
+	KindRecurringTaskFailing: "the harness's or the operator's, by its cause — fix what refuses the firing; the first firing that takes a turn clears it.",
 	// Nobody's move, and the message is still worth sending. The item is back in
 	// the queue, the run that left it is ended, and the slot it was filling is
 	// free — so the state this reports is one the harness has already put right,
@@ -984,7 +996,7 @@ func nextMove(event Event) (string, bool) {
 	// the operator exactly when it is his.
 	if strings.TrimSpace(event.Detail.Mover) != "" {
 		switch event.Kind {
-		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage, KindWatchBraked, KindIntakeHeld, KindLineWaiting:
+		case KindStallNoticed, KindRunEnded, KindBlockerRecorded, KindCapacityHold, KindProviderOutage, KindRecurringTaskFailing, KindWatchBraked, KindIntakeHeld, KindLineWaiting:
 			return ended(strings.TrimSpace(event.Detail.Mover)), true
 		}
 	}

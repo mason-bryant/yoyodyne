@@ -641,6 +641,14 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.ProgramManagers, standing.ProgramManagersProblem = ReadProgramManagers(sources)
 	needs = append(needs, standing.Services.Attention()...)
 	needsProblem = joinProblems(needsProblem, standing.ServicesProblem)
+	// A recurring task whose firings keep failing before their first turn is
+	// said here from its second failure in a row: the sweep log records each
+	// one, and the log is somewhere nobody reads until they already know to.
+	failing, failingProblem := ReadFailingTasks(sources)
+	for _, task := range failing {
+		needs = append(needs, failingTaskAttention(task))
+	}
+	needsProblem = joinProblems(needsProblem, failingProblem)
 	// Held work is on both lines for the reason handed-off work below is, and says
 	// a different thing on each: the queue's line says why nothing pulls each
 	// item, and this says who has to move and how many items are waiting on them.

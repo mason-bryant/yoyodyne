@@ -1291,6 +1291,37 @@ being told it carried on by itself:
 
 What the wait does to the runs, the scheduler, the brake, and the recurring
 tasks is in [operations](operations.md#waiting-out-a-provider-nobody-can-reach).
+
+### A recurring task failing before its first turn
+
+A provider nobody can reach ends when it answers. This does not end by waiting.
+From 06:39Z on 2026-09-26 every development manager sweep was refused before its
+first turn — the harness held the message it had composed for the pass to the
+bound on what a person may type — six times in a row, and every triage decision
+the sweeps would have made waited a day. Nothing reached the channel; the only
+account was a line per firing in the sweep log.
+
+So a recurring task whose firings fail before their first turn twice in a row —
+a message the harness refused, a conversation that would not open, a turn that
+would not assemble — is said here from the same derivation `yoyo status` lists
+it from, [on the attention line](operations.md#reading-what-the-recurring-tasks-found):
+**once as a `warning`** when it becomes an entry, and **once more as
+`critical`**, sent to the operators directly as well, once it has stood two
+hours. It is not repeated beyond that, since the attention line carries it
+while it stands. The first firing that takes a turn clears it, and a later run
+of failures is said as a new one.
+
+> The recurring task development-manager-sweep has failed before its first turn
+> 2 times in a row since 2026-09-26T06:39:00Z: the harness refused the message
+> it composed for the pass; latest: scheduled pass's message is 47768 bytes,
+> limit is 32768 … Each of those is a failed firing rather than a partial pass:
+> nothing was asked of the role and nothing was spent, and the next firing meets
+> the same refusal until its cause is fixed. It has stood for 1h0m.
+>
+> Next: the harness's — the harness refuses what it composed for the pass, which
+> is a defect in the harness rather than anything waiting it out will end; every
+> firing meets the same refusal until the harness is fixed, and the first firing
+> that takes a turn clears this
 ### An item claimed with nothing working on it
 
 The stall reading has a blind spot, and neither state above can see it either:
@@ -1321,12 +1352,13 @@ only by naming its class — the
 state fitting neither class does not get one:
 
 - **Degraded** — the system is stopped, stale, or choosing nothing over ready
-  work: something only a person fixes. The five shipped states are the ones
+  work: something only a person fixes. The six shipped states are the ones
   above — a session running a build the harness has moved well past, the
   harness having started nothing at all while work was ready, the provider
   holding every role with nothing configured to fail over to, the brake's own
   hold handed to them by the harness at the bound on its summons-and-probe
-  loop, and an item that
+  loop, a recurring task that has failed before its first turn for two hours
+  (its critical message), and an item that
   sat claimed with nothing working on it until the harness gave it back. The
   last of those is a fix rather than a request, and it is still in this class:
   the line was quietly degraded for as long as it stood, and a second run for an

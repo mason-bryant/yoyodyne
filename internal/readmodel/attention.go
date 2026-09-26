@@ -57,6 +57,9 @@ const (
 	// AttentionDegradedService is a part of the product its supervisor has
 	// stopped restarting.
 	AttentionDegradedService AttentionKind = "degraded-service"
+	// AttentionFailingTask is a recurring task whose firings have failed before
+	// their first turn more than once in a row.
+	AttentionFailingTask AttentionKind = "failing-task"
 	// AttentionHold is one of the switches over what the harness does: the
 	// operator's hold over everything, the intake hold over what it chooses for
 	// itself, and the provider holding every role at once. The entry's ID says
@@ -85,6 +88,7 @@ func AttentionKinds() []AttentionKind {
 		AttentionOwedStep,
 		AttentionPublication,
 		AttentionDegradedService,
+		AttentionFailingTask,
 		AttentionHold,
 		AttentionDirective,
 		AttentionOutage,
@@ -259,7 +263,8 @@ func (m Mover) Possessive() string {
 type Attention struct {
 	Kind AttentionKind `json:"kind"`
 	// ID is the identifier of the record the entry is about: an amendment's
-	// id, a directive's, a run's, a work item's, a service's name, or the
+	// id, a directive's, a run's, a work item's, a service's name, a recurring
+	// task's name, or the
 	// switch an AttentionHold entry names. It is empty on the two entries that
 	// are about a set rather than a record — the report pile and held work —
 	// and on the stall and the outage it is the stall's reason and the
@@ -293,6 +298,9 @@ type Attention struct {
 	// Service is the supervisor's record of the part it left down, on an
 	// AttentionDegradedService entry.
 	Service *runstate.SupervisedChild `json:"service,omitempty"`
+	// FailingTask is the task, its cause, and how many firings in a row, on an
+	// AttentionFailingTask entry; the task is the ID.
+	FailingTask *FailingTask `json:"failing_task,omitempty"`
 	// OwedStep is where the run stopped, on an AttentionOwedStep entry; the
 	// run is the ID and its item is WorkItemID.
 	OwedStep *OwedStep `json:"owed_step,omitempty"`
@@ -419,6 +427,10 @@ func (a Attention) What() string {
 		if a.Service != nil {
 			return fmt.Sprintf("the %s service is degraded: %s", a.Service.Service, singleLine(a.Service.Reason, maxRefusalBytes))
 		}
+	case AttentionFailingTask:
+		if a.FailingTask != nil {
+			return a.FailingTask.Says()
+		}
 	case AttentionHeldWork:
 		if a.HeldWork != nil {
 			counted := count(a.HeldWork.Count, "admitted item")
@@ -486,6 +498,11 @@ func (a Attention) Whose() string {
 		}
 	case AttentionDegradedService:
 		return a.Mover.Possessive() + " — the supervisor has stopped restarting it; fix the cause, then `yoyo stop` and `yoyo start` bring it back, or start the part by hand and the supervisor takes it back"
+	case AttentionFailingTask:
+		if a.Mover == MoverOperator {
+			return a.Mover.Possessive() + " — nothing is asked of the role until its conversation opens; fix what stops it opening, and the first firing that takes a turn clears this"
+		}
+		return a.Mover.Possessive() + " — the harness refuses what it composed for the pass, which is a defect in the harness rather than anything waiting it out will end; every firing meets the same refusal until the harness is fixed, and the first firing that takes a turn clears this"
 	case AttentionHeldWork:
 		if a.HeldWork != nil && a.HeldWork.Awaiting == HeldAwaitingCarryOut {
 			return a.Mover.Possessive() + " — the decision is made, and what is outstanding is the harness acting on it"

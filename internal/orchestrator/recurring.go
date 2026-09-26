@@ -166,6 +166,31 @@ type Turn struct {
 // it is worth recording about the firing is different.
 var ErrRoleUnreachable = errors.New("the role's conversation could not be opened")
 
+// NotStartedError reports a turn that failed before it was put to the
+// provider, for a reason in the harness or its configuration rather than in
+// the provider: a message the harness's own bound refused, a conversation
+// nothing could open, a turn whose input would not assemble. It is its own
+// error because it does not go away by waiting — the next firing composes the
+// same message into the same conversation — so a firing that meets it is
+// recorded as a failed firing with its cause, and a run of them is raised on
+// the attention line rather than left as a line in the sweep log.
+//
+// A provider refusing the turn is not this: that is the provider's wait, and
+// the outage and usage-limit records already say it.
+type NotStartedError struct {
+	Cause runstate.PreTurnCause
+	Err   error
+}
+
+func (e *NotStartedError) Error() string {
+	if e.Err == nil {
+		return e.Cause.Describe()
+	}
+	return e.Err.Error()
+}
+
+func (e *NotStartedError) Unwrap() error { return e.Err }
+
 // Fired is one task this pass woke, and what came back. It reports a firing that
 // did not happen as carefully as one that did.
 type Fired struct {
@@ -194,6 +219,8 @@ type Fired struct {
 	Summoned string `json:"summoned,omitempty"`
 	// Problem is what stopped or spoiled the firing.
 	Problem string `json:"problem,omitempty"`
+	// NotStarted is why the firing failed before its first turn, where it did.
+	NotStarted runstate.PreTurnCause `json:"not_started,omitempty"`
 }
 
 // RecurringSweep is what one pass did about the schedule. A pass that found
@@ -508,6 +535,24 @@ func (t Trigger) run(ctx context.Context, name, pass string, task config.Recurri
 			recorded.ConversationID = conversation
 		}
 		if err != nil {
+			// A firing whose first turn never reached the provider is a failed
+			// firing, and the record says so by its cause rather than leaving it
+			// to read as a partial pass: nothing was asked, and nothing about the
+			// next firing will be different.
+			var notStarted *NotStartedError
+			if turn == 0 && errors.As(err, &notStarted) && notStarted.Cause.Valid() {
+				recorded.NotStarted = notStarted.Cause
+				fired.NotStarted = notStarted.Cause
+				// No turn ran on anything, so the record names no model: the one the
+				// conversation would have asked for is not what the pass ran on.
+				recorded.Model, fired.Model = "", ""
+				// The refusal's own words lead, because they are what a line
+				// about the firing is cut down to.
+				problems = append(problems, fmt.Sprintf(
+					"%v; this is a failed firing of the recurring task %s rather than a partial pass: %s before its first turn, nothing was asked of the %s, and the next firing meets the same refusal until its cause is fixed",
+					err, name, notStarted.Cause.Describe(), task.Role))
+				break
+			}
 			problems = append(problems, describeFailedTurn(name, task.Role, turn+1, err))
 			break
 		}
@@ -957,6 +1002,8 @@ func (s RecurringSweep) Render() string {
 	}
 	for _, fired := range s.Fired {
 		switch {
+		case fired.NotStarted != "":
+			fmt.Fprintf(&rendered, "the recurring task %s failed before its first turn: %s\n", fired.Task, fired.NotStarted.Describe())
 		case fired.Turns == 0:
 			fmt.Fprintf(&rendered, "the recurring task %s did not reach the %s\n", fired.Task, fired.Role)
 		case fired.Findings == 0:

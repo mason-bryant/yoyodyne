@@ -213,6 +213,65 @@ type Sweep struct {
 	// cadence fired, which is nearly every pass, and it is on the record so a
 	// reader of the log can tell a summoned pass from the hourly one beside it.
 	Summoned string `json:"summoned,omitempty"`
+	// NotStarted is why the firing failed before its first turn was put to the
+	// provider, where it did: the harness refused its own message, could not
+	// open the role's conversation, or could not assemble what the turn would
+	// have carried. Such a firing is a failed firing rather than a partial pass —
+	// nothing was asked, nothing was spent, and the next firing fails the same way
+	// until somebody changes something — and a run of them is what the attention
+	// line reads to say so. It is absent on every firing that took a turn, and on
+	// one the provider refused, which is the provider's own wait rather than this.
+	NotStarted PreTurnCause `json:"not_started,omitempty"`
+}
+
+// PreTurnCause is why a recurring task's firing failed before its first turn.
+// The set is closed, because each cause is somebody's move and a cause nobody
+// named is one no surface can say whose.
+type PreTurnCause string
+
+const (
+	// PreTurnMessageRefused is the harness refusing the message it composed for
+	// the pass, before sending it: on 2026-09-26 every development manager sweep
+	// was refused as "operator message is 47768 bytes, limit is 32768", six times
+	// in a row.
+	PreTurnMessageRefused PreTurnCause = "message-refused"
+	// PreTurnConversationUnopened is the role's conversation not opening at all:
+	// no agent fills the role, its record will not load, or another process holds
+	// it.
+	PreTurnConversationUnopened PreTurnCause = "conversation-unopened"
+	// PreTurnContextUnassembled is the turn's input refusing to assemble: what
+	// the turn would carry is past the bound on one turn, or the picture it rests
+	// on could not be measured.
+	PreTurnContextUnassembled PreTurnCause = "context-unassembled"
+)
+
+// PreTurnCauses is the whole vocabulary.
+func PreTurnCauses() []PreTurnCause {
+	return []PreTurnCause{PreTurnMessageRefused, PreTurnConversationUnopened, PreTurnContextUnassembled}
+}
+
+// Valid reports whether a cause is one of the vocabulary's.
+func (c PreTurnCause) Valid() bool {
+	for _, known := range PreTurnCauses() {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Describe is the cause in the words a sentence about the firing uses.
+func (c PreTurnCause) Describe() string {
+	switch c {
+	case PreTurnMessageRefused:
+		return "the harness refused the message it composed for the pass"
+	case PreTurnConversationUnopened:
+		return "the role's conversation could not be opened"
+	case PreTurnContextUnassembled:
+		return "what the turn would carry could not be assembled"
+	default:
+		return "it failed before its first turn for a reason the record does not name"
+	}
 }
 
 // ForgeNotice is one open pull request the harness noticed a reason to report:
@@ -341,6 +400,18 @@ func (s Sweep) Validate() error {
 	}
 	if len(s.Model) > MaxSweepModelBytes {
 		problems = append(problems, fmt.Errorf("model is %d bytes, limit is %d", len(s.Model), MaxSweepModelBytes))
+	}
+	if s.NotStarted != "" {
+		if !s.NotStarted.Valid() {
+			problems = append(problems, fmt.Errorf("not started %q is not one of %v", s.NotStarted, PreTurnCauses()))
+		}
+		// A firing that took a turn started, whatever went wrong after it.
+		if s.Turns != 0 {
+			problems = append(problems, fmt.Errorf("a firing that failed before its first turn took %d turn(s)", s.Turns))
+		}
+		if strings.TrimSpace(s.Problem) == "" {
+			problems = append(problems, errors.New("a firing that failed before its first turn must say what stopped it"))
+		}
 	}
 	// A noticed request is stated as a finding, so a record naming requests and
 	// carrying no account would be one whose findings are nowhere to be read.

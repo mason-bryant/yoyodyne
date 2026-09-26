@@ -84,6 +84,22 @@ const MaxOperatorMessageBytes = 32 << 10
 // TestAPassMessageBoundSitsAboveTheDocketItCarries compares them.
 const MaxPassMessageBytes = 256 << 10
 
+// ErrMessageRefused and ErrTurnUnassembled are what a message refused before
+// the provider was asked anything unwraps to: the message itself past its
+// bound, or the turn it would have made unable to assemble. A caller that has
+// to tell a turn that never started from one the provider failed — a scheduled
+// pass, whose next firing would meet the same refusal — matches on these rather
+// than on the words.
+var (
+	ErrMessageRefused  = errors.New("the message was refused before the provider was asked anything")
+	ErrTurnUnassembled = errors.New("the turn could not be assembled, so the provider was asked nothing")
+)
+
+// errTurnInputTooLarge is a turn past MaxTurnInputBytes. It is kept apart from
+// ErrTurnUnassembled because the check runs on every round of a message, and
+// only on the first round has the provider been asked nothing.
+var errTurnInputTooLarge = errors.New("the turn's input is past its bound")
+
 // maxPendingNotices and maxNoticeBytes bound the account of harness activity
 // one turn carries. The product manager is told what the operator did, not
 // handed an unbounded log of it. The count is the bound the durable record holds
@@ -1200,7 +1216,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		limit, what = MaxPassMessageBytes, "scheduled pass's message"
 	}
 	if len(trimmed) > limit {
-		return Reply{}, fmt.Errorf("%s is %d bytes, limit is %d", what, len(trimmed), limit)
+		return Reply{}, fmt.Errorf("%s is %d bytes, limit is %d: %w", what, len(trimmed), limit, ErrMessageRefused)
 	}
 
 	var reply Reply
@@ -1232,7 +1248,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	reply.Picture = picture
 	if err != nil {
 		reply.Evidence = s.Evidence()
-		return reply, err
+		return reply, fmt.Errorf("%w: %w", ErrTurnUnassembled, err)
 	}
 	// Where the harness could not bring the picture current, the reply says so
 	// in its own text, ahead of whatever the role goes on to say: the caveat on
@@ -1269,8 +1285,11 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// is the one built around it. The rounds after it are the harness handing back
 	// what that round asked for, and record nothing as the operator's.
 	operatorMessage := trimmed
-	for {
+	for round := 0; ; round++ {
 		answer, err := s.takeTurn(ctx, prompt, operatorMessage)
+		if round == 0 && errors.Is(err, errTurnInputTooLarge) {
+			err = fmt.Errorf("%w: %w", ErrTurnUnassembled, err)
+		}
 		operatorMessage = ""
 		// The invocation is charged to the exchange whose answer it was carrying,
 		// before anything is decided about what it said: it was paid for either way.
@@ -1585,7 +1604,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	// the way out rather than only in what comes back.
 	prompt = execution.NewRedactor(s.options.RedactValues...).Redact(prompt)
 	if inputBytes := len(systemPrompt) + len(prompt); inputBytes > MaxTurnInputBytes {
-		return "", fmt.Errorf("conversation turn is %d bytes, limit is %d", inputBytes, MaxTurnInputBytes)
+		return "", fmt.Errorf("conversation turn is %d bytes, limit is %d: %w", inputBytes, MaxTurnInputBytes, errTurnInputTooLarge)
 	}
 	// The operator's side goes into the record here, after the checks that would
 	// refuse the turn without asking anybody and before the invocation whose
