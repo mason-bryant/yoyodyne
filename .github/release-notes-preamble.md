@@ -25,5 +25,5 @@ in the repository and [Claude Code](https://code.claude.com/docs) installed and
 authenticated before a run can do anything. Publishing pull requests needs a Git
 remote and an authenticated [`gh`](https://cli.github.com) on top of that.
 
-See [the README](https://github.com/stigmergent/yoyodyne#getting-started) for
+See [the README](https://github.com/mason-bryant/yoyodyne#getting-started) for
 the three steps a new project follows.
