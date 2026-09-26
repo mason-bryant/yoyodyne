@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -793,7 +792,7 @@ func (s *ConversationStore) take(ctx context.Context, identity ConversationIdent
 	// stamped is refused rather than taken: what it would otherwise buy is a turn
 	// that runs while every surface reports the machine idle, which is the one
 	// answer the standing status exists to prevent.
-	if err := s.stampHolder(holder); err != nil {
+	if err := stampHolder(s.root, holder, fmt.Sprintf("%s conversation", identity)); err != nil {
 		return nil, errors.Join(err, lease.Release())
 	}
 	lease.holder = holder
@@ -809,105 +808,14 @@ func (s *ConversationStore) take(ctx context.Context, identity ConversationIdent
 // hit that instant.
 //
 // What it reads instead is the stamp the holder wrote, which is checked against
-// the process named in it rather than trusted. A holder killed outright leaves
-// its stamp behind, and the answer has to match the operating system's, which
-// dropped that holder's lock as it died.
-//
-// Two things it cannot see are worth stating. A stamp whose process identifier
-// has been reused by an unrelated process reads as held until the next hold
-// rewrites it, which is a conversation reported busy rather than a conversation
-// anybody is locked out of. And a holder from a build older than the stamp
-// wrote none, so its turn reads as free until it ends.
+// the process named in it rather than trusted; holderRunning says what that
+// cannot see.
 func (s *ConversationStore) InFlight(identity ConversationIdentity) (bool, error) {
 	path, err := s.holderFile(identity)
 	if err != nil {
 		return false, err
 	}
-	holder, err := s.readHolder(path, identity)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	running, err := processIsRunning(holder.PID)
-	if err != nil {
-		return false, fmt.Errorf("ask whether the %s conversation's holder is running: %w", identity, err)
-	}
-	return running, nil
-}
-
-// conversationHolder is what a process holding a conversation writes down beside
-// the lease so the hold can be observed without being taken.
-type conversationHolder struct {
-	// PID is the process that took the hold. It is what makes the stamp
-	// self-correcting: a holder that exits without releasing leaves the file
-	// behind, and a reader that finds no such process reports what the operating
-	// system already decided when it dropped the lock.
-	PID int `json:"pid"`
-	// HeldAt is when the hold was taken. Nothing decides from it — how long a turn
-	// has been going is read from the conversation record — and it is written so
-	// that a state directory somebody is reading by hand says when.
-	HeldAt time.Time `json:"held_at"`
-}
-
-// stampHolder writes this process's stamp for a conversation it now holds. It is
-// replaced by rename rather than written in place, so a reader sees the whole of
-// one stamp or none of it and never half of one.
-func (s *ConversationStore) stampHolder(path string) error {
-	temporary, err := os.CreateTemp(s.root, ".holder-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary conversation holder: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return fmt.Errorf("secure temporary conversation holder: %w", err)
-	}
-	holder := conversationHolder{PID: os.Getpid(), HeldAt: time.Now().UTC()}
-	if err := writeJSONFile(temporary, "conversation holder", holder); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary conversation holder: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace conversation holder: %w", err)
-	}
-	return syncDirectory(s.root)
-}
-
-// readHolder is one stamp as it sits on disk. A file that is not there is
-// reported as ErrNotExist for the caller to read as an unheld conversation; a
-// file that is there and will not decode is a failure to answer, because a
-// reader that guessed at it would be inventing whether somebody is mid-turn.
-//
-// That is why this is the strict door and stays there while the listings beside
-// it move to the tolerant one. A stamp carrying something this build does not
-// know is a stamp a different build wrote, and what the field might say is
-// exactly what this has to decide from; the caller reports the refusal rather
-// than being handed an answer about who is talking to the agent.
-func (s *ConversationStore) readHolder(path string, identity ConversationIdentity) (conversationHolder, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return conversationHolder{}, fmt.Errorf("open the %s conversation holder: %w", identity, err)
-	}
-	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var holder conversationHolder
-	if err := decoder.Decode(&holder); err != nil {
-		return conversationHolder{}, fmt.Errorf("decode the %s conversation holder: %w", identity, err)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return conversationHolder{}, fmt.Errorf("decode the %s conversation holder: %w", identity, err)
-	}
-	if holder.PID <= 0 {
-		return conversationHolder{}, fmt.Errorf("the %s conversation holder names no process", identity)
-	}
-	return holder, nil
+	return holderRunning(path, fmt.Sprintf("%s conversation", identity))
 }
 
 // ConversationHold is a claim on an agent's conversation that its holder may

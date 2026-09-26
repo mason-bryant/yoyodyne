@@ -37,6 +37,10 @@ type coverageRuns struct{ *scheduleHarness }
 
 func (coverageRuns) Outstanding() ([]runstate.State, error) { return nil, nil }
 
+// Held shadows the harness's intake hold, which shares the name: no run here is
+// over with its landing unfinished, so none is ever asked about.
+func (coverageRuns) Held(string) (bool, error) { return false, nil }
+
 type coverageQuiet struct{}
 
 func (coverageQuiet) Recorded() ([]runstate.Conversation, error) { return nil, nil }

@@ -344,7 +344,40 @@ func (s *Store) takeLease(ctx context.Context, runID string) (*Lease, bool, erro
 		file.Close()
 		return nil, false, nil
 	}
-	return &Lease{label: "run", file: file}, true, nil
+	lease := &Lease{label: "run", file: file}
+	// The stamp is written under the lock, so what a reader of Held sees was
+	// written by the process that actually owns the run. A hold that cannot be
+	// stamped is refused rather than taken, for the reason a conversation's is:
+	// what it would otherwise buy is a run whose landing checks go on for hours
+	// while the standing status reads it as ended and sends the operator to
+	// settle it.
+	holder, err := s.holderPath(runID)
+	if err != nil {
+		return nil, false, errors.Join(err, lease.Release())
+	}
+	if err := stampHolder(s.root, holder, "run "+runID); err != nil {
+		return nil, false, errors.Join(err, lease.Release())
+	}
+	lease.holder = holder
+	return lease, true, nil
+}
+
+// Held reports whether a live process holds a run's lease right now, and takes
+// nothing to answer it: it reads the stamp the holder wrote beside the lease and
+// asks whether the process it names is running. A reading of the standing
+// status asks it of a run that is over and still owes a step, which is the
+// question that tells a landing whose checks a process is running from one
+// whose process died — and taking the lease to ask would, for the instant it
+// lasted, refuse the sweep that settles the second.
+//
+// holderRunning says what it cannot see. The one that matters here is a holder
+// from a build older than the stamp, whose run reads as unheld until it ends.
+func (s *Store) Held(runID string) (bool, error) {
+	path, err := s.holderPath(runID)
+	if err != nil {
+		return false, err
+	}
+	return holderRunning(path, "run "+runID)
 }
 
 // acquireLease takes the exclusive lock on an open lease file, retrying within
@@ -859,6 +892,15 @@ func (s *Store) leasePath(runID string) (string, error) {
 		return "", errors.New("run id is invalid")
 	}
 	return filepath.Join(s.root, runID+".lease"), nil
+}
+
+// holderPath names the stamp beside a run's lease. It is not a `.json` file,
+// so what the listings read stays the runs themselves.
+func (s *Store) holderPath(runID string) (string, error) {
+	if !runIDPattern.MatchString(runID) {
+		return "", errors.New("run id is invalid")
+	}
+	return filepath.Join(s.root, runID+".holder"), nil
 }
 
 // releasePath names where an operator's release of one run's usage-limit wait
