@@ -337,17 +337,25 @@ func (d Docketer) lookAgain(entries []triage.Entry, recorded []runstate.State) {
 		byID[state.RunID] = state
 	}
 	for index := range entries {
-		entry := &entries[index]
-		if entry.Artifacts.Branch == "" && entry.Artifacts.WorktreePath == "" {
-			continue
+		d.lookAt(&entries[index], byID)
+		// What was folded beneath the entry is decided from too, so it is looked at
+		// again as well.
+		for earlier := range entries[index].Earlier {
+			d.lookAt(&entries[index].Earlier[earlier], byID)
 		}
-		state, known := byID[entry.RunID]
-		if !known {
-			continue
-		}
-		found := d.look(state)
-		entry.Artifacts.Found = &found
 	}
+}
+
+func (d Docketer) lookAt(entry *triage.Entry, byID map[string]runstate.State) {
+	if entry.Artifacts.Branch == "" && entry.Artifacts.WorktreePath == "" {
+		return
+	}
+	state, known := byID[entry.RunID]
+	if !known {
+		return
+	}
+	found := d.look(state)
+	entry.Artifacts.Found = &found
 }
 
 // look is what the repository holds of one run's change, asked now.

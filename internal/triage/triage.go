@@ -1072,36 +1072,22 @@ type Entry struct {
 	// log, and for the sharpest version of the same reason: the attempt is made
 	// after the decision, which is made after the entry.
 	CarryOut *CarryOut `json:"carry_out,omitempty"`
-	// Earlier is what the same stopped run was docketed for before this entry,
-	// oldest first, where that is still open. Like the closure it is joined where
-	// the docket is read rather than written into the log: the docket holds one
-	// live entry per stopped run, and a run docketed again — a stoppage a sweep then
-	// found its publication stuck behind, a stoppage re-derived after its decision
-	// lapsed — is that entry with the newer account on top, rather than a second
-	// entry beside it. See Fold.
-	Earlier []Earlier `json:"earlier,omitempty"`
+	// Earlier is every other open docketing of the same stopped run, oldest first,
+	// each whole: its blocker or failure, findings, failing check, branch and
+	// worktree, session, integration stop, publication, counters, decision, and
+	// carry-out, exactly as it would read listed on its own. Like the closure it is
+	// joined where the docket is read rather than written into the log: the docket
+	// holds one live entry per stopped run, and a run docketed again — a stoppage a
+	// sweep then found its publication stuck behind, a role's escalation beside the
+	// stoppage it ended the run on — is that entry with the newer account on top and
+	// the earlier evidence beneath it, rather than a second entry beside it. See
+	// Fold.
+	Earlier []Entry `json:"earlier,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
 	// unreadable record into a second decision nobody meant to make.
 	CountersProblem string `json:"counters_problem,omitempty"`
-}
-
-// Earlier is one earlier docketing of a stopped run, kept beneath the entry that
-// now stands for the run. It carries what that docketing said and what was
-// decided about it, and not the rest of its evidence: the entry above it holds
-// the run's current account, and the log still holds the whole of this one.
-type Earlier struct {
-	Key        string    `json:"key"`
-	Class      Class     `json:"class"`
-	RecordedAt time.Time `json:"recorded_at"`
-	// Says is what stopped the run in that docketing's own words: its blocker, the
-	// failure of a death that recorded none, a role's escalation, or the
-	// publication's outstanding account.
-	Says string `json:"says,omitempty"`
-	// Closed is a decision that was made about it and has since lapsed, which is
-	// the only decided entry that is still open to fold.
-	Closed *Closure `json:"closed,omitempty"`
 }
 
 // Fold makes the open docket one live entry per stopped run. Entries of one run
@@ -1111,7 +1097,8 @@ type Earlier struct {
 // class, and before this a window of sixty-two entries held thirty-eight items.
 //
 // The entry recorded last stands, in its own place in the order, with the
-// others beneath it as Earlier. Entries that name no run are left as they are:
+// others beneath it as Earlier, each carrying all of its own evidence: the
+// fold changes what is listed, never what can be read. Entries that name no run are left as they are:
 // an unready item and an attempt that never became a run are keyed to the item,
 // and each is already one entry per finding.
 //
@@ -1130,13 +1117,13 @@ func Fold(entries []Entry) []Entry {
 			latest[run] = index
 		}
 	}
-	earlier := make(map[string][]Earlier, len(latest))
+	earlier := make(map[string][]Entry, len(latest))
 	for index, entry := range entries {
 		run := strings.TrimSpace(entry.RunID)
 		if run == "" || latest[run] == index {
 			continue
 		}
-		earlier[run] = append(earlier[run], entry.earlier())
+		earlier[run] = append(earlier[run], entry)
 	}
 	if len(earlier) == 0 {
 		return entries
@@ -1148,36 +1135,12 @@ func Fold(entries []Entry) []Entry {
 			continue
 		}
 		if beneath := earlier[run]; run != "" && len(beneath) > 0 {
-			slices.SortStableFunc(beneath, func(a, b Earlier) int { return a.RecordedAt.Compare(b.RecordedAt) })
+			slices.SortStableFunc(beneath, func(a, b Entry) int { return a.RecordedAt.Compare(b.RecordedAt) })
 			entry.Earlier = append(slices.Clone(entry.Earlier), beneath...)
 		}
 		folded = append(folded, entry)
 	}
 	return folded
-}
-
-// earlier is this entry as it is kept beneath a later docketing of its run.
-func (e Entry) earlier() Earlier {
-	return Earlier{Key: e.Key, Class: e.Class, RecordedAt: e.RecordedAt, Says: e.says(), Closed: e.Closed}
-}
-
-// says is what stopped the run in this entry's own words, whichever field its
-// class carries them in.
-func (e Entry) says() string {
-	switch {
-	case strings.TrimSpace(e.Blocker) != "":
-		return e.Blocker
-	case strings.TrimSpace(e.Failure) != "":
-		return e.Failure
-	case e.Escalation != nil:
-		return e.Escalation.Reason
-	case e.Publication != nil && strings.TrimSpace(e.Publication.Message) != "":
-		return e.Publication.Message
-	case e.Publication != nil:
-		return fmt.Sprintf("pull request %d unmerged since %s", e.Publication.Number, e.Publication.ApprovedAt.UTC().Format(time.RFC3339))
-	default:
-		return ""
-	}
 }
 
 // Key names the durable event an entry is about. It is derived rather than
@@ -1618,21 +1581,22 @@ func (e Entry) Render() string {
 	return rendered.String()
 }
 
-// renderEarlier says what the same run was docketed for before this entry, beneath
-// everything the entry says now. It is one decision's worth of evidence: a
-// decision about this entry settles these too, so nothing below is a question of
-// its own.
+// renderEarlier puts every earlier docketing of the same run beneath everything
+// this entry says now, each rendered whole and indented under it, so what the
+// decision is made from is all of it and not only the newest account. A decision
+// about this entry settles these too, so nothing below is a question of its own.
 func (e Entry) renderEarlier() string {
 	if len(e.Earlier) == 0 {
 		return ""
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Docketed %d time(s) before for this run; one decision here settles all of it:\n", len(e.Earlier))
+	fmt.Fprintf(&rendered, "      Docketed %d time(s) before for this run; one decision here settles all of it, and each earlier docketing follows in full:\n", len(e.Earlier))
 	for _, earlier := range e.Earlier {
-		label := fmt.Sprintf("Earlier [%s] %s", earlier.Class.Title(), earlier.RecordedAt.UTC().Format(time.RFC3339))
-		rendered.WriteString(indented(label, earlier.Says))
-		if earlier.Closed != nil {
-			rendered.WriteString(indented("Decided", earlier.Closed.Describe()))
+		for _, line := range strings.SplitAfter(earlier.Render(), "\n") {
+			if line == "" {
+				continue
+			}
+			rendered.WriteString("      " + line)
 		}
 	}
 	return rendered.String()

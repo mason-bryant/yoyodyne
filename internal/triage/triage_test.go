@@ -1426,8 +1426,16 @@ func TestFoldKeepsOneLiveEntryPerRun(t *testing.T) {
 	if len(earlier) != 2 || earlier[0].Class != ClassStoppedRun || earlier[1].Class != ClassEscalation {
 		t.Fatalf("earlier = %#v, want the stoppage then the escalation beneath", earlier)
 	}
-	if earlier[0].Closed == nil || earlier[0].Closed.Decision != "wait" || earlier[1].Says != "the criteria contradict the design" {
-		t.Fatalf("earlier = %#v, want each docketing's own words and decision kept", earlier)
+	if earlier[0].Closed == nil || earlier[0].Closed.Decision != "wait" || earlier[1].Escalation == nil {
+		t.Fatalf("earlier = %#v, want each docketing kept whole, its decision with it", earlier)
+	}
+	// Folded is not summarized: the stoppage's own evidence renders beneath the
+	// live entry exactly as it would listed on its own.
+	rendered := folded[1].Render()
+	for _, want := range []string{stopped.Blocker, "the criteria contradict the design", "Docketed 2 time(s) before"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered live entry is missing %q:\n%s", want, rendered)
+		}
 	}
 	if again := Fold([]Entry{stopped}); len(again) != 1 || again[0].Earlier != nil {
 		t.Fatalf("Fold of one entry = %#v, want it untouched", again)

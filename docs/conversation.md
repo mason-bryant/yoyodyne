@@ -1596,8 +1596,10 @@ the same stoppage — it stops on a blocker, and a later scan finds the
 publication it left sitting unmerged behind it; a role's escalation and the
 stoppage it ended the run on — and those are one question. So the docket she
 reads holds one live entry for the run: the account recorded last, with every
-other open docketing of that run kept beneath it in its own words and with what
-was decided about it, rather than listed beside it. One decision settles the
+other open docketing of that run kept beneath it whole — its blocker, findings,
+failing check, branch and worktree, session, and what was decided about it,
+everything the entry would carry listed on its own — rather than listed beside
+it. One decision settles the
 whole entry, including what is folded beneath it. The log keeps every record, and
 the fold is made wherever the docket is built, so the sweep folds the repeats
 already standing the first time it runs. On 2026-09-25 the docket held 62 open
