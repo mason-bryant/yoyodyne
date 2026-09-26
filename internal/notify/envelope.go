@@ -334,6 +334,17 @@ const (
 	// the line had stopped and is owed being told it carried on — and because the
 	// remedy is the harness's own: nothing was released and nothing was restarted.
 	KindProviderRestored Kind = "provider.restored"
+	// A recurring task whose firings keep failing before their first turn: the
+	// harness refusing the message it composed for the pass, a conversation
+	// nothing can open, a turn that will not assemble. From 06:39Z on 2026-09-26
+	// every development manager sweep failed that way six times in a row, every
+	// triage decision waited a day, and the only account was a line per firing
+	// in the sweep log. It does not end by waiting — the next firing meets the
+	// same refusal — so it is said from the second failure in a row, once as a
+	// warning and once more as critical once it has stood two hours, and not
+	// again: the attention line carries it while it stands, and the first firing
+	// that takes a turn ends it.
+	KindRecurringTaskFailing Kind = "recurring.failing"
 	// A claim the harness gave back because nothing was working on it. It is the
 	// same reading as the stall above, taken from the other end: that one asks
 	// whether anything has started and this one asks whether what the tracker says
@@ -453,6 +464,7 @@ func Kinds() []Kind {
 		KindCapacityHold,
 		KindProviderOutage,
 		KindProviderRestored,
+		KindRecurringTaskFailing,
 		KindClaimReleased,
 		KindBundleImprovement,
 		KindBundleImprovements,
@@ -482,7 +494,7 @@ func (k Kind) Valid() bool {
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindWatchRedeploying, KindWatchReadRetrying, KindLineWaiting, KindResidentStale, KindStallNoticed,
 		KindProviderWindow, KindCapacityHold, KindProviderOutage, KindProviderRestored,
-		KindClaimReleased,
+		KindRecurringTaskFailing, KindClaimReleased,
 		KindBundleImprovement, KindBundleImprovements, KindCatchUpDigest, KindLogLineSkipped:
 		return true
 	default:

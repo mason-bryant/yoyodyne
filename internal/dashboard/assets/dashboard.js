@@ -342,6 +342,7 @@
     { attention: "owed-step", title: "A run that still owes a step" },
     { attention: "publication", title: "A promotion the forge has not published" },
     { attention: "degraded-service", title: "A part of the product left down" },
+    { attention: "failing-task", title: "A recurring task failing before its first turn" },
     { attention: "hold", title: "A hold over the harness" },
     { attention: "directive", title: "An unresolved directive" },
     { attention: "outage", title: "The provider answering nobody" },
@@ -1599,6 +1600,19 @@
         add("Died", named(service.died_at) ? dayAndClock(service.died_at) : "");
         add("Failures", service.failures === undefined ? "" : String(service.failures));
         add("Log", service.log, "card-field-id");
+        break;
+      case "failing-task":
+        var failing = entry.failing_task;
+        add("Task", entry.id);
+        if (!failing) {
+          break;
+        }
+        add("Role", failing.role);
+        add("Cause", failing.cause);
+        add("Failures in a row", String(failing.failures));
+        add("First failed", dayAndClock(failing.first_at));
+        add("Latest", dayAndClock(failing.latest_at));
+        add("What stopped it", failing.problem, "card-field-prose");
         break;
       case "hold":
         var hold = entry.operator_hold || entry.intake_hold || entry.capacity_hold;

@@ -213,7 +213,7 @@ type roleConversation struct {
 func (r roleConversation) Wake(ctx context.Context, role domain.AgentRole, pass, model, message string) (orchestrator.Turn, error) {
 	session, lease, err := r.opener()(ctx, role, model)
 	if err != nil {
-		return orchestrator.Turn{}, fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
+		return orchestrator.Turn{}, passNotOpened(err)
 	}
 	defer lease.Release()
 	session.ForPass(pass)
@@ -285,11 +285,35 @@ func readSweep(role domain.AgentRole, reply string) (*sweep.Result, string) {
 // rather than being retried at once against a provider that is still out of
 // capacity.
 func notWoken(err error) error {
+	// A message the harness refused, or a turn it could not assemble, never
+	// reached the provider either — and unlike the refusals below it is not
+	// waited out: the next firing composes the same message and meets the same
+	// refusal, so the firing is recorded as failed with its cause.
+	switch {
+	case errors.Is(err, chat.ErrMessageRefused):
+		return &orchestrator.NotStartedError{Cause: runstate.PreTurnMessageRefused, Err: err}
+	case errors.Is(err, chat.ErrTurnUnassembled):
+		return &orchestrator.NotStartedError{Cause: runstate.PreTurnContextUnassembled, Err: err}
+	}
 	var held *chat.OperatorHoldError
 	if errors.Is(err, chat.ErrProviderCapacity) || errors.Is(err, chat.ErrProviderAway) || errors.As(err, &held) || errors.Is(err, chat.ErrTurnAbandoned) {
 		return fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
 	}
 	return err
+}
+
+// passNotOpened is a conversation that could not be opened for the turn. It is
+// always unreachable — nothing was asked — and it is a firing that failed
+// before its first turn as well, unless what stopped the opening was the
+// provider answering nobody or the operator's pause, which are waits with
+// records of their own rather than something the next firing will meet again.
+func passNotOpened(err error) error {
+	unreachable := fmt.Errorf("%w: %w", orchestrator.ErrRoleUnreachable, err)
+	var held *chat.OperatorHoldError
+	if errors.Is(err, chat.ErrProviderCapacity) || errors.Is(err, chat.ErrProviderAway) || errors.As(err, &held) || errors.Is(err, chat.ErrTurnAbandoned) || errors.Is(err, context.Canceled) {
+		return unreachable
+	}
+	return &orchestrator.NotStartedError{Cause: runstate.PreTurnConversationUnopened, Err: unreachable}
 }
 
 func (r roleConversation) opener() func(context.Context, domain.AgentRole, string) (*chat.Session, *runstate.ConversationHold, error) {
@@ -485,6 +509,12 @@ func renderSweep(recorded runstate.Sweep) string {
 	if recorded.Summoned != "" {
 		fmt.Fprintf(&rendered, "  summoned ahead of its schedule by %s\n", recorded.Summoned)
 	}
+	// A firing that never reached its first turn is said as the failed firing it
+	// is, ahead of anything else: it is not a pass that found less, and it is not
+	// partial, and the next firing will meet the same refusal.
+	if recorded.NotStarted != "" {
+		fmt.Fprintf(&rendered, "  FAILED FIRING: it failed before its first turn — %s\n", recorded.NotStarted.Describe())
+	}
 	if recorded.Result == nil {
 		fmt.Fprintf(&rendered, "  no account of this pass was recorded: %s\n", nonEmptySweepProblem(recorded.Problem))
 		return rendered.String()
@@ -545,10 +575,15 @@ pull requests the forge is holding for work that is closed, or for a branch the
 target already carries. Each is stated once, as left, and closing it is
 somebody's decision rather than the harness's.
 
-Three outcomes look alike and are not: a pass that found nothing shows its own
+Four outcomes look alike and are not: a pass that found nothing shows its own
 summary and no findings, which on a healthy harness is most of them; a pass that
-produced no account says so and names what stopped it; and a pass stopped by its
-turn bound is recorded as partial, so it is never mistaken for a finished one.
+produced no account says so and names what stopped it; a pass stopped by its
+turn bound is recorded as partial, so it is never mistaken for a finished one;
+and a firing that failed before its first turn -- a message the harness
+refused, a conversation that would not open, a turn that would not assemble --
+is marked FAILED FIRING with its cause. A task that fails that way twice in a
+row is also on "yoyo status"'s needs-a-human line and said in the channel, and
+the first firing that takes a turn clears it.
 
 A pass the intake brake summoned ahead of its schedule says so under its header,
 naming what tripped the brake. It is the development manager's sweep fired the

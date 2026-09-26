@@ -2318,7 +2318,9 @@ Needs a human (3):
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), a
   part of the product [its supervisor has left down](#starting-the-product-and-stopping-it)
-  as degraded, with the reason, and a
+  as degraded, with the reason, a
+  [recurring task whose firings keep failing before their first turn](#reading-what-the-recurring-tasks-found),
+  with the failure and how many in a row, and a
   [pile of collected reports](reporting.md#whether-the-pile-is-draining) whose
   oldest undecided entry has been waiting more than a week. A stall over an empty
   queue is not listed: it is a state of the machine rather than something waiting
@@ -2480,16 +2482,17 @@ where the queue could not be read.
 Each entry under `standing.needs_human` is the thing waiting rather than a
 sentence about it: its `kind`, from a closed set — `amendment`,
 `conversation-carried-item`, `report`, `owed-step`, `publication`,
-`degraded-service`, `hold`, `directive`, `outage`, `stall`, `held-work` — the
-`id` of the record it is about (an amendment's, a directive's, a run's, a work
-item's, a service's name, or which switch a hold is: `operator`, `intake`, or
-`capacity`), the `mover` whose move it is, in the same closed vocabulary the
+`degraded-service`, `failing-task`, `hold`, `directive`, `outage`, `stall`,
+`held-work` — the `id` of the record it is about (an amendment's, a
+directive's, a run's, a work item's, a service's name, a recurring task's
+name, or which switch a hold is: `operator`, `intake`, or `capacity`), the
+`mover` whose move it is, in the same closed vocabulary the
 page counts by (`operator`, a role such as `architect` or
 `development-manager`, `harness`, `forge`, `provider`, `nobody`, or
 `unnamed-role`), and
 the record itself, whole, under a field named for the kind — `amendment`,
-`directive`, `outage`, `stall`, `reports`, `service`, `owed_step`,
-`publication`, `held_work`, and for a hold `operator_hold`, `intake_hold`, or
+`directive`, `outage`, `stall`, `reports`, `service`, `failing_task`,
+`owed_step`, `publication`, `held_work`, and for a hold `operator_hold`, `intake_hold`, or
 `capacity_hold`, whichever switch the `id` names. An `amendment` carries the
 target document, the proposer's role, agent, run, and work item, the proposed
 change, and why, none of it cut to a line. An entry about one admitted work
@@ -3771,20 +3774,62 @@ time as `pull_requests` on the record, by number, which is what the next pass
 reads to know what was already said. [Recurring
 tasks](configuration.md#recurring-tasks) says when the reading is taken.
 
-Three outcomes look similar in a listing and are not the same thing:
+Five outcomes look similar in a listing and are not the same thing:
 
 - **A pass that found nothing** shows its own summary and no findings. On a
   healthy harness that is most of them, and a run of passes that keeps finding
   things is itself a signal about the harness rather than about the sweep.
 - **A pass that produced no account** says so and names what stopped it — a
-  conversation nothing could open, a turn that failed, a role that answered in
-  prose without the block the harness reads. It is never shown as a quiet pass.
+  turn the provider failed, a role that answered in prose without the block the
+  harness reads. It is never shown as a quiet pass.
 - **A pass stopped by its turn bound** is recorded as partial, naming the bound,
   so a truncated pass is never mistaken for a finished one.
+- **A firing that failed before its first turn** is recorded as a failed firing,
+  not a partial pass, and its header says `FAILED FIRING` with the cause:
+  the harness refused the message it composed for the pass, the role's
+  conversation could not be opened, or what the turn would carry could not be
+  assembled. Nothing was asked of the role and nothing was spent, and the record
+  keeps the refusal's own words — `scheduled pass's message is 47768 bytes,
+  limit is 32768`, say. `--json` carries the cause as `not_started`
+  (`message-refused`, `conversation-unopened`, or `context-unassembled`). A
+  firing the provider refused, or one the
+  [outage wait](#waiting-out-a-provider-nobody-can-reach) recorded, is not one
+  of these: waiting ends those, and nothing waiting does ends this.
 - **A pass whose reply carried more than one block** shows the last block as its
   account and says beside it that more than one was sent. It is an account, not
   a lost pass: the role slipped on the one-block contract, and the decisions it
   took are on the record rather than thrown away over the shape of the reply.
+
+**A task that fails before its first turn twice in a row is raised rather than
+left in this log.** From 06:39Z on 2026-09-26 every development manager sweep
+was refused before its first turn, six times in a row, and every triage
+decision those sweeps would have made waited a day; the only account was one
+line per firing here, and it was found by somebody reading the log. So from the
+second such firing in a row — counted back to the last firing that took a turn,
+with firings the provider refused neither counting nor resetting the count —
+the task is an entry on `yoyo status`'s "Needs a human" line naming the task,
+the cause, the latest refusal, and how many in a row:
+
+```text
+Needs a human (1):
+  the recurring task development-manager-sweep has failed before its first turn 2 times in a row since 2026-09-26T06:39:00Z: the harness refused the message it composed for the pass; latest: scheduled pass's message is 47768 bytes, limit is 32768; … — the harness's — the harness refuses what it composed for the pass, which is a defect in the harness rather than anything waiting it out will end; every firing meets the same refusal until the harness is fixed, and the first firing that takes a turn clears this
+```
+
+Whose move it is follows the cause. A message the harness refused, or a turn it
+could not assemble, is **the harness's**: it composed what it then refused. A
+conversation that would not open is **the operator's**: what stops it is a role
+no agent fills, a conversation record that will not load, or a session somebody
+else is holding. `--json` carries the entry with kind `failing-task`, the task
+as its `id`, and the record under `failing_task`: the task, role, cause, latest
+problem, the count as `failures`, and `first_at`, `raised_at` (the second
+failure), and `latest_at`. The dashboard's list of what waits on a person opens
+the same record.
+
+[The channel](reporting.md#a-recurring-task-failing-before-its-first-turn) says
+it once as a `warning` when it becomes an entry, and once more as `critical`,
+sent to the operators directly as well, once it has stood two hours. It is not
+said again beyond that. The first firing that takes a turn clears the entry and
+ends the messages, and a later run of failures is said as a new one.
 
 One turn may report at most twenty findings and five questions, and a whole
 firing holds what its turns come to. A pass that ran past even that says so in

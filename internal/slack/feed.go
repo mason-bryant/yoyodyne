@@ -315,6 +315,10 @@ type HarnessFeed struct {
 	// is said as critical rather than as a warning. Zero takes
 	// DefaultStallEscalation.
 	StallEscalation time.Duration
+	// FailingTaskEscalation is how long a recurring task may stand failing
+	// before its first turn before it is said again as critical. Zero takes
+	// DefaultFailingTaskEscalation.
+	FailingTaskEscalation time.Duration
 	// Stalls is the durable record of this product having gone quiet — nothing
 	// started, over work the tracker calls ready, with nothing accounting for it.
 	// It is read here and never written: what notices and records a stall is
@@ -601,6 +605,10 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	if switched {
 		batch.Deliveries = append(batch.Deliveries, f.outageDeliveries(ctx, cursors.Streams[providerStream], held, batch.Streams)...)
 	}
+	// A recurring task whose firings keep failing before their first turn, from
+	// the sweep log the standing reads it from, so the channel says it exactly
+	// when the attention line lists it.
+	batch.Deliveries = append(batch.Deliveries, f.failingTaskDeliveries(cursors.Streams[failingTaskStream], batch.Streams)...)
 	// The claims the harness gave back, said beside the stall above because the two
 	// answer one question from opposite ends: that one asks whether anything has
 	// started, and this one asks whether what the tracker calls started actually

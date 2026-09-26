@@ -46,6 +46,16 @@ func attentionOfEveryKind(t *testing.T) map[AttentionKind]struct {
 	what  string
 } {
 	t.Helper()
+	failingTask := FailingTask{
+		Task:     "development-manager-sweep",
+		Role:     domain.RoleDevelopmentManager,
+		Cause:    runstate.PreTurnMessageRefused,
+		Problem:  "scheduled pass's message is 47768 bytes, limit is 32768",
+		Failures: 2,
+		FirstAt:  time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC),
+		RaisedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		LatestAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+	}
 	brake := runstate.IntakeHold{
 		SchemaVersion: runstate.IntakeHoldSchemaVersion, ProductID: "yoyodyne", HeldAt: moment.Add(-2 * time.Hour),
 		HeldBy: runstate.IntakeHolderBrake,
@@ -85,6 +95,8 @@ func attentionOfEveryKind(t *testing.T) map[AttentionKind]struct {
 			"run run-queued promoted yoyodyne-ifd.411 into main and the forge has not published it: pull request #567 https://forge.example/pr/567"},
 		AttentionDegradedService: {degradedServiceAttention(child),
 			"the scheduler service is degraded: died 6 times in 10 minutes"},
+		AttentionFailingTask: {failingTaskAttention(failingTask),
+			"the recurring task development-manager-sweep has failed before its first turn 2 times in a row since 2026-08-30T09:00:00Z: the harness refused the message it composed for the pass; latest: scheduled pass's message is 47768 bytes, limit is 32768"},
 		AttentionHold: {intakeHoldAttention(brake),
 			"intake is held, since 2026-08-30T10:00:00Z: " + singleLine(brake.Account(), maxRefusalBytes)},
 		AttentionDirective: {directiveAttention(paused),
@@ -156,6 +168,7 @@ func TestEveryAttentionKindCarriesItsRecordAndDerivesItsSentence(t *testing.T) {
 		AttentionOwedStep:        "run-owed",
 		AttentionPublication:     "run-queued",
 		AttentionDegradedService: "scheduler",
+		AttentionFailingTask:     "development-manager-sweep",
 		AttentionHold:            HoldIntake,
 		AttentionDirective:       "directive-4f2c",
 		AttentionOutage:          string(domain.ProviderUnauthenticated),
