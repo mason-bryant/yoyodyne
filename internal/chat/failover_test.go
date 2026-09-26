@@ -71,6 +71,58 @@ func TestATurnRefusedForCapacityIsServedByThePermittedAlternate(t *testing.T) {
 	}
 }
 
+// A turn the alternate served is evidence about the alternate and nothing else.
+// The configured model was refused on that very turn, so recording it as served
+// would lift the refusal the provider is still enforcing — for this
+// conversation, for a parked run, and for the watch session's hold on intake.
+func TestATurnTheAlternateServedIsRecordedAsTheAlternateAndLiftsNoRefusalOfThePrimary(t *testing.T) {
+	t.Parallel()
+
+	resetsAt := time.Date(2026, 9, 27, 3, 0, 0, 0, time.UTC)
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{IsError: true, StopReason: "usage_limit", UsageLimit: &backendapi.UsageLimit{Kind: "seven_day", ResetsAt: resetsAt}},
+		{SessionID: "session-1", FinalText: "Served by the alternate."},
+	}}
+	limits := newTestUsageLimits(t)
+	served, err := runstate.NewCapacityServedStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewCapacityServedStore() error = %v", err)
+	}
+	options := testOptions(t, provider)
+	options.Model = "fable"
+	options.FailoverModel = "opus"
+	options.UsageLimits = limits
+	options.CapacityServed = served
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "what is next?"); err != nil {
+		t.Fatalf("Send() error = %v, want the turn served by the alternate", err)
+	}
+	listed, err := served.List()
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("served = %#v, %v; want the one served turn recorded", listed, err)
+	}
+	if listed[0].Model != "opus" {
+		t.Fatalf("served model = %q, want the alternate that answered rather than the configured model it refused", listed[0].Model)
+	}
+
+	// The primary's refusal still stands, whatever the served record says, and
+	// so would a refusal of it recorded a moment before the served turn.
+	later := listed[0]
+	later.At = later.At.Add(time.Hour)
+	primaryRefused := runstate.UsageLimitExhaustion{At: listed[0].At, Model: "fable", AccountAlias: options.AccountAlias, ResetsAt: &resetsAt}
+	if later.Lifts(primaryRefused) {
+		t.Fatalf("served %#v lifts %#v, want a turn the alternate served to lift no refusal of the primary", later, primaryRefused)
+	}
+	recorded, err := limits.List()
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("refusals = %#v, %v; want the substitution recorded", recorded, err)
+	}
+	if later.Lifts(recorded[0]) {
+		t.Fatalf("served %#v lifts the recorded refusal %#v of the primary", later, recorded[0])
+	}
+}
+
 // Each attempt is priced against the model that attempt actually asked for. That
 // is what putting the failover outside the cost meter buys, and it is the whole
 // of the claim docs/configuration.md makes about what a substitution costs: a

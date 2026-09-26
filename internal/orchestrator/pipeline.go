@@ -3165,12 +3165,15 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		}
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
-		// An attempt served on the developer's model is also the provider saying
-		// that model's window is open on this account, whatever reset an earlier
-		// refusal of it quoted.
-		if err == nil && providerResult.ProviderOutage == nil && !refusedForLimit && !refusedForOverload {
+		// An attempt served is also the provider saying the window of the model it
+		// asked for is open on this account, whatever reset an earlier refusal of it
+		// quoted. The model is the one this invocation recorded asking for, as
+		// attemptDevelopment wrote it, rather than the configuration: nothing in a
+		// run moves an attempt onto another model, and if anything ever does, what
+		// the invocation asked for is still what served it.
+		if servedCleanly(providerResult, err) {
 			what := fmt.Sprintf("a developer attempt of run %s of %s", a.state.RunID, a.state.WorkItemID)
-			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.developerModel(), what); servedErr != nil {
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ProviderModel, what); servedErr != nil {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
 			}
 		}
@@ -6332,11 +6335,14 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
 			}
 		}
-		// A review that came back with a verdict was served on the reviewer's
-		// model, which is the provider saying that model's window is open.
-		if err == nil {
+		// A review that came back with a verdict, and with no refusal reported
+		// beside it, was served on the model it asked for, which is the provider
+		// saying that model's window is open. The model is the one the invocation
+		// recorded asking for — the reviewer's RequestedModel, written to the run
+		// by attemptReview — rather than the configuration.
+		if err == nil && reported.usageLimit == nil && reported.serverOverload == nil && reported.providerOutage == nil {
 			what := fmt.Sprintf("a review of run %s of %s", a.state.RunID, a.state.WorkItemID)
-			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.pipeline.reviewer().Model, what); servedErr != nil {
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ReviewModel, what); servedErr != nil {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
 			}
 		}

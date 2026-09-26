@@ -120,6 +120,14 @@ type CapacityServedRecorder interface {
 	Record(served runstate.CapacityServed) error
 }
 
+// servedCleanly reports an invocation the provider answered with no refusal
+// reported anywhere on it. A limit, an overload, or an outage reported beside an
+// answer is still not recorded as served: that answer is not evidence a window
+// is open, and a block cleared on it would be cleared on a guess.
+func servedCleanly(result backend.RunResult, err error) bool {
+	return err == nil && result.ProviderOutage == nil && result.UsageLimit == nil && result.ServerOverload == nil
+}
+
 // noticeCapacityServed records that the provider served this account and
 // model, which every reading of the provider's refusals takes as the window
 // having lifted for every refusal of that account and model recorded before it.
