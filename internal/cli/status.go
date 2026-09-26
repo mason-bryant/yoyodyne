@@ -600,6 +600,11 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewUsageLimitStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.UsageLimits = store
 	}
+	// What the provider has served since, which reads a refusal of the same
+	// account and model as lifted before the reset it quoted.
+	if store, err := runstate.NewCapacityServedStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.CapacityServed = store
+	}
 	if store, err := runstate.NewProviderOutageStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.ProviderOutages = store
 	}
@@ -716,6 +721,19 @@ func programManagerInstances(cfg config.Config) []readmodel.ProgramManagerInstan
 	}
 	sort.Slice(instances, func(first, second int) bool { return instances[first].Agent < instances[second].Agent })
 	return instances
+}
+
+// pullConversations is the product's conversation records, for a watching pull
+// to tell a role's current conversation from one it has replaced. A store that
+// cannot be opened is none rather than a typed nil, so the pull reads every
+// conversation as current — which holds intake on its refusals rather than
+// releasing it on a guess.
+func pullConversations(parts components) readmodel.Conversations {
+	store, err := runstate.NewConversationStore(parts.stateRoot, parts.config.Product.ID)
+	if err != nil {
+		return nil
+	}
+	return store
 }
 
 // developerEndpoints is every endpoint a developer run's turn can be asked of:

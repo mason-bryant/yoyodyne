@@ -376,6 +376,10 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	capacityServed, err := runstate.NewCapacityServedStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	store, err := slack.NewStore(stateRoot, productID)
 	if err != nil {
 		return nil, "", err
@@ -444,6 +448,10 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// while it stands, through these same sources, and the lines carry it as
 		// their banner — one derivation, said in two places.
 		UsageLimits: usageLimits,
+		// And what the provider has served since, so a hold a served turn has
+		// disproved is not said again: the channel reads the same lifted refusals
+		// the terminal and the dashboard read.
+		CapacityServed: capacityServed,
 		// And whether the provider is answering anybody at all, which the lines
 		// carry as their banner and the feed says once when it begins and once
 		// when it ends.

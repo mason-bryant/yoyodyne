@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -4962,6 +4963,145 @@ func TestRunBoundsItsTotalUsageLimitWaitAcrossConsecutivePauses(t *testing.T) {
 	// actually waited rather than the span to a deadline the run never reached.
 	if stopped.UsageLimitPausedSeconds != int64(30*time.Minute/time.Second) {
 		t.Fatalf("recorded pause total = %ds, want the thirty minutes actually waited", stopped.UsageLimitPausedSeconds)
+	}
+}
+
+// recordedServed is every served invocation the pipeline wrote down, in order.
+type recordedServed struct {
+	mu     sync.Mutex
+	served []runstate.CapacityServed
+}
+
+func (r *recordedServed) Record(served runstate.CapacityServed) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.served = append(r.served, served)
+	return nil
+}
+
+func (r *recordedServed) forModel(model string) []runstate.CapacityServed {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var matched []runstate.CapacityServed
+	for _, served := range r.served {
+		if served.Model == model {
+			matched = append(matched, served)
+		}
+	}
+	return matched
+}
+
+// A developer attempt that ended in error with no limit classified on it — a
+// terminal api_error the dialect could not name, which may be a limit the
+// provider is enforcing — returned no Go error and is still not a served
+// attempt. Recording it would lift every refusal of its account and model and
+// reopen intake into a window the provider never reopened.
+func TestADeveloperAttemptEndingInErrorRecordsNothingServed(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			IsError: true, StopReason: "api_error", FinalText: "API Error: 429 rate_limit_error",
+			Process:   execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+			LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	served := &recordedServed{}
+	pipeline.CapacityServed = served
+
+	_, _ = pipeline.Run(context.Background(), tracker.item.ID)
+	if len(provider.requestsForRole(domain.RoleDeveloper)) == 0 {
+		t.Fatal("no developer attempt was made, so the test proves nothing")
+	}
+	served.mu.Lock()
+	defer served.mu.Unlock()
+	if len(served.served) != 0 {
+		t.Fatalf("served = %#v, want nothing recorded for an attempt that ended in error", served.served)
+	}
+}
+
+// A review the provider refused is recorded as nothing served, and the review
+// it then answers is recorded on the model that review asked for, after the
+// refusal. A served record written for the refused review would lift the very
+// refusal the run is waiting out.
+func TestARefusedReviewRecordsNothingServedAndTheAnsweredOneRecordsItsModel(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(45 * time.Minute)
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	reviews := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleDeveloper {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				ResolvedModel: developerResolved, FinalText: "implemented the work item",
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		reviews++
+		if reviews == 1 {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				IsError: true, StopReason: "usage_limit",
+				UsageLimit: &backend.UsageLimit{Kind: "seven_day", ResetsAt: resetsAt},
+				Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:  request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+	const reviewerModel = "sonnet"
+	reviewer := pipeline.Config.Agents["reviewer"]
+	reviewer.Model = reviewerModel
+	pipeline.Config.Agents["reviewer"] = reviewer
+	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: reviewerModel}
+	served := &recordedServed{}
+	pipeline.CapacityServed = served
+
+	var refusedAt time.Time
+	servedDuringPause := -1
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		if loaded.UsageLimitPausedSince != nil {
+			refusedAt = *loaded.UsageLimitPausedSince
+		}
+		servedDuringPause = len(served.forModel(reviewerModel))
+	}
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if servedDuringPause != 0 {
+		t.Fatalf("served records for %s while the refused review was waited out = %d, want none", reviewerModel, servedDuringPause)
+	}
+	answered := served.forModel(reviewerModel)
+	if len(answered) != 1 {
+		t.Fatalf("served records for %s = %#v, want the one review that answered", reviewerModel, answered)
+	}
+	refusal := runstate.UsageLimitExhaustion{At: refusedAt, Model: reviewerModel, AccountAlias: answered[0].AccountAlias}
+	if refusedAt.IsZero() || !answered[0].Lifts(refusal) {
+		t.Fatalf("served %#v does not lift the refusal at %s, want the answered review recorded after it", answered[0], refusedAt)
 	}
 }
 

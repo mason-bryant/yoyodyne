@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
@@ -108,6 +109,42 @@ func (p Pipeline) noticeProviderServed() error {
 	}
 	if _, _, err := p.ProviderOutages.Clear(); err != nil {
 		return fmt.Errorf("record that the provider is answering again: %w", err)
+	}
+	return nil
+}
+
+// CapacityServedRecorder is where a served invocation is written down as the
+// evidence that a usage window it names has lifted. It is satisfied by
+// *runstate.CapacityServedStore.
+type CapacityServedRecorder interface {
+	Record(served runstate.CapacityServed) error
+}
+
+// servedCleanly reports an invocation the provider genuinely served — see
+// backend.RunResult.ServedCleanly — that also returned no error to the caller.
+// An invocation that ended IsError, whose process did not succeed, or that
+// reported any refusal is not recorded as served: none of them is evidence a
+// window is open, and a block cleared on one would be cleared on a guess.
+func servedCleanly(result backend.RunResult, err error) bool {
+	return err == nil && result.ServedCleanly()
+}
+
+// noticeCapacityServed records that the provider served this account and
+// model, which every reading of the provider's refusals takes as the window
+// having lifted for every refusal of that account and model recorded before it.
+// Like the outage it is asked after every served invocation, and it reports
+// only what went wrong: a run the provider served is not failed over a record.
+func (p Pipeline) noticeCapacityServed(account, model, what string) error {
+	if p.CapacityServed == nil || strings.TrimSpace(model) == "" {
+		return nil
+	}
+	if err := p.CapacityServed.Record(runstate.CapacityServed{
+		AccountAlias: account,
+		Model:        model,
+		At:           p.clock().Now(),
+		What:         what,
+	}); err != nil {
+		return fmt.Errorf("record that the provider served %s: %w", model, err)
 	}
 	return nil
 }

@@ -127,6 +127,41 @@ func TestARecordedWindowLiftsAtItsResetWithNothingReleased(t *testing.T) {
 	}
 }
 
+// A turn served on the refused model after the refusal is the provider saying
+// the window lifted, whatever reset it quoted: on 2026-09-24 the operator added
+// capacity a day into a seven_day window, and intake held on that window would
+// have held until 09-27 over a provider serving every turn. The session pulls
+// at its first poll, with nothing released.
+func TestARecordedWindowAServedTurnDisprovedHoldsNothing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	refused := time.Date(2026, 9, 23, 6, 53, 0, 0, time.UTC)
+	harness := newScheduleHarness(readyItems("yoyodyne-ifd.401")...)
+	harness.now = now
+	harness.usageLimits = recordSevenDay(t, refused, time.Date(2026, 9, 27, 3, 0, 0, 0, time.UTC))
+	harness.developers = []readmodel.AgentEndpoint{{Name: "developer", Provider: "claude-code", Model: "opus"}}
+	served, err := runstate.NewCapacityServedStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewCapacityServedStore() error = %v", err)
+	}
+	if err := served.Record(runstate.CapacityServed{Model: "opus", At: refused.Add(26 * time.Hour), What: "a turn of the product manager conversation"}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	harness.capacityServed = served
+
+	schedule, err := Scheduler{Open: harness.open, Now: harness.clock}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped == ScheduleProviderWindow || len(schedule.Started) != 1 {
+		t.Fatalf("schedule = stopped %q, started %#v; want the item pulled over a window a served turn disproved", schedule.Stopped, schedule.Started)
+	}
+	if schedule.UsageWindowResetsAt != nil {
+		t.Fatalf("schedule window reset = %v, want none", schedule.UsageWindowResetsAt)
+	}
+}
+
 // A window closed on one model holds nothing while a developer turn can end on
 // another the provider still serves: a label mapped to sonnet is work that can
 // run, and a hold over it would be the harness idling on its own misreading.
