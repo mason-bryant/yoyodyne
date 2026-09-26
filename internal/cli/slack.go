@@ -376,6 +376,10 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	divergences, err := runstate.NewDivergedTargetStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	store, err := slack.NewStore(stateRoot, productID)
 	if err != nil {
 		return nil, "", err
@@ -448,6 +452,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		// carry as their banner and the feed says once when it begins and once
 		// when it ends.
 		ProviderOutages:   outages,
+		DivergedTargets:   divergences,
 		Supervision:       supervision,
 		Agents:            agentEndpoints(resolved.Config),
 		UnknownResetPause: resolved.Config.Execution.UsageLimitUnknownResetPause.Duration(),
@@ -508,6 +513,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			Watch:         watch,
 			UsageLimits:   usageLimits,
 			Outages:       outages,
+			Divergences:   divergences,
 			// A held or idle line with work ready to pull says so again while it
 			// stands, because the message that said it began is hours stale by the
 			// time somebody reads it and silence has to keep meaning nothing to do.

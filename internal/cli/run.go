@@ -147,6 +147,12 @@ type components struct {
 	// one have no run between them to write it on, and every surface that names
 	// the wait reads it from here.
 	outages *runstate.ProviderOutageStore
+	// divergences is the product's record of the target branches the harness
+	// will not catch up to the remote's: written by the run whose promotion is
+	// refused on one, read by a watching session that chooses nothing while one
+	// stands, and lifted by the convergence sweep that finds the branches
+	// converged.
+	divergences *runstate.DivergedTargetStore
 	// spend is the cost log every provider invocation this process makes lands
 	// in. It is built under the product beside the usage limits, and for the
 	// mirror-image reason: that log says when the harness could not spend, and
@@ -302,6 +308,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	divergences, err := runstate.NewDivergedTargetStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	spendLog, err := runstate.NewSpendStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -350,6 +360,7 @@ func buildComponents(configPath string) (components, error) {
 		releasedClaims:  releasedClaims,
 		usageLimits:     usageLimits,
 		outages:         outages,
+		divergences:     divergences,
 		spend:           spendLog,
 		worktrees:       worktrees,
 		redactValues:    execution.SensitiveEnvironmentValues(os.Environ()),
@@ -504,6 +515,10 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// wired here so a run's wait is one every surface can name, and so the
 		// operator is told what ends it rather than sent to release a hold.
 		ProviderOutages: parts.outages,
+		// A promotion refused because the target branch will not catch up to the
+		// remote's is recorded against the product, so a watching session stops
+		// pulling items into the same refusal until the branches are settled.
+		DivergedTargets: parts.divergences,
 		// A change an agent proposes to a document it may not edit is recorded
 		// here, for the same reason and in the same way: the run that argued the
 		// design was wrong is over long before anybody decides what to do about it,
@@ -643,6 +658,9 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 		// The claims the audit gave back, so a release that did not say its run's
 		// change was still on a branch is corrected on the item by the sweep.
 		Releases: releasesOf(parts),
+		// A target this sweep finds converged lifts the divergence recorded on it,
+		// which is what lets a line held on that divergence choose again.
+		Divergences: parts.divergences,
 	}
 }
 

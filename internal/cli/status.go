@@ -603,6 +603,9 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewProviderOutageStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.ProviderOutages = store
 	}
+	if store, err := runstate.NewDivergedTargetStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.DivergedTargets = store
+	}
 	// The product's supervisor and its record of the parts, so a part the
 	// supervisor has left down is said here with its reason.
 	if store, err := runstate.NewSupervisionStore(stateRoot, cfg.Product.ID); err == nil {

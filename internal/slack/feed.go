@@ -274,6 +274,10 @@ type HarnessFeed struct {
 	// message the 2026-09-17 outage needed: the operator told the moment it
 	// happened, and told when it ended.
 	Outages *runstate.ProviderOutageStore
+	// Divergences is the product's record of the target branches the harness
+	// will not catch up to the remote's. It is optional in the same sense, and a
+	// feed assembled without one never says the line is standing still on one.
+	Divergences *runstate.DivergedTargetStore
 	// Backlog is how much admitted work the tracker calls ready, and it is read
 	// for one purpose: telling a line that is waiting on somebody from one that is
 	// honestly quiet. It is optional, and a feed assembled without one says
@@ -761,6 +765,13 @@ func (f *HarnessFeed) switches() (switches, error) {
 			return switches{}, fmt.Errorf("read whether the provider is answering: %w", err)
 		}
 		read.outage, read.away = outage, away
+	}
+	if f.Divergences != nil {
+		diverged, err := f.Divergences.Standing()
+		if err != nil {
+			return switches{}, fmt.Errorf("read whether a target branch stands diverged: %w", err)
+		}
+		read.diverged = diverged
 	}
 	return read, nil
 }

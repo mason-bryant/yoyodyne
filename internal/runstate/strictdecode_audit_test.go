@@ -87,6 +87,7 @@ var strictSites = map[string]strictSite{
 	"internal/runstate/hold.go:(*OperatorHoldStore).Held":                 {strictValidator, "a hold nobody can read is never spent through as though it were absent; the read model reports it as a problem and the sink reads it past"},
 	"internal/runstate/intake.go:(*IntakeHoldStore).Held":                 {strictValidator, "an intake hold nobody can read is never taken for a clear one; the read model reports it and the sink reads it past"},
 	"internal/runstate/provideroutage.go:(*ProviderOutageStore).Standing": {strictValidator, "an outage nobody can read is never started through; the read model reports it and the sink reads it past"},
+	"internal/runstate/divergedtarget.go:(*DivergedTargetStore).Standing": {strictWriter, "a divergence nobody can read is never pulled through as though absent, and the same read precedes every write of the record"},
 	"internal/runstate/conversation.go:(*ConversationStore).readHolder":   {strictValidator, "who is mid-turn with an agent is refused rather than guessed at from part of a record"},
 	"internal/runstate/stop.go:(*Store).StopRequested":                    {strictValidator, "a run acts on a stop request, and one it cannot read fails its step rather than being ignored"},
 	"internal/runstate/release.go:(*Store).ReleasedWait":                  {strictValidator, "a run acts on the operator's release of a wait, and one it cannot read fails its step rather than being ignored"},

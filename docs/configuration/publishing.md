@@ -237,7 +237,9 @@ why:
 - **A remote that has diverged from your local branch** — a history somebody
   rewrote, or work that reached the remote another way. Which of the two is
   right is your answer rather than the harness's, so it is reported and nothing
-  moves.
+  moves. A promotion refused on one records it against the product, and the line
+  [chooses no work](../operations.md#unwedging-a-target-branch-that-diverged-from-the-forge)
+  until a `yoyo reconcile` finds the branches converged.
 
 A merge that landed after its run had finished, and any catch-up that was held,
 are swept by `yoyo reconcile`, which also removes the leftover local branches of

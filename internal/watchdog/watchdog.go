@@ -77,6 +77,11 @@ type Checker struct {
 	// a checker built without it reads as it did before the wait was named, and
 	// what it costs is a page for a machine waiting correctly.
 	Outages readmodel.ProviderOutages
+	// Divergences is the product's record of the target branches the harness
+	// will not catch up to the remote's, read because a watching session chooses
+	// nothing while one stands, on purpose and saying why. Optional for the
+	// reason Outages is.
+	Divergences readmodel.DivergedTargets
 	// Backlog is asked only where nothing else accounts for the quiet, which is
 	// what keeps a healthy idle product from spawning a tracker process on every
 	// check.
@@ -158,6 +163,14 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 		}
 	}
 
+	var diverged []runstate.DivergedTarget
+	if c.Divergences != nil {
+		diverged, err = c.Divergences.Standing()
+		if err != nil {
+			return Reading{}, fmt.Errorf("read whether a target branch stands diverged: %w", err)
+		}
+	}
+
 	activity := readmodel.Activity{
 		// Dated from the last moment a slot was held rather than the last start,
 		// so a batch of runs ending just before the pull that refills the slots
@@ -176,6 +189,7 @@ func (c Checker) Check(ctx context.Context) (Reading, error) {
 		ProviderWindow: readmodel.WaitingOnProvider(sessions),
 		ProviderOutage: outage,
 		ProviderAway:   providerAway,
+		Diverged:       diverged,
 		// A dispatch waiting out the tracker before it claims anything, as the
 		// session that started it recorded: it holds a slot with no run to say so,
 		// and for up to the recovery window looks from here like a session that hung.

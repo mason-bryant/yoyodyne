@@ -411,6 +411,9 @@ func checkForStall(ctx context.Context, parts components, threshold time.Duratio
 		Holds:    parts.holds,
 		Intake:   parts.intake,
 		Outages:  parts.outages,
+		// A diverged target is a line held on purpose and said on the attention
+		// line, so it accounts for the quiet as the outage does.
+		Divergences: parts.divergences,
 		// The tracker's own count of what a developer run could actually be started
 		// for, which is the same reading the sink's heartbeat takes: work marked for
 		// a conversation and work the product manager parked are ready to the tracker
@@ -507,6 +510,16 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 	if convergence.Registrations.Failure != "" {
 		failed = true
 	}
+	// A divergence that could not be lifted leaves a line holding on branches
+	// that have converged, which nothing else will lift.
+	if convergence.DivergenceProblem != "" {
+		failed = true
+	}
+	for _, lift := range convergence.Divergences {
+		if lift.Failure != "" {
+			failed = true
+		}
+	}
 	// A promotion whose request could not be looked up or written is a record
 	// still saying nothing about a change the forge holds, which is the state
 	// this sweep exists to end; one left where it stands for a reason is not.
@@ -594,6 +607,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		}
 		if output.Convergence.Registrations.Unfinished == nil {
 			output.Convergence.Registrations.Unfinished = []gitworktree.UnfinishedRegistration{}
+		}
+		if output.Convergence.Divergences == nil {
+			output.Convergence.Divergences = []orchestrator.DivergenceLift{}
 		}
 		if err != nil {
 			output.Error = err.Error()
@@ -839,6 +855,20 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case target.Held != "":
 			fmt.Fprintf(stderr, "%s not caught up: %s\n", target.TargetBranch, target.Held)
 		}
+	}
+	// A lifted divergence is said because it is what resumes the line: the
+	// watching session held on it chooses again at its next poll.
+	for _, lift := range convergence.Divergences {
+		switch {
+		case lift.Failure != "":
+			fmt.Fprintf(stderr, "%s\n", lift.Failure)
+		case lift.Lifted != nil:
+			fmt.Fprintf(stdout, "%s has converged with the remote's, and the divergence recorded on it since %s is lifted; the line chooses work for it again\n",
+				lift.TargetBranch, lift.Lifted.Since.UTC().Format(time.RFC3339))
+		}
+	}
+	if convergence.DivergenceProblem != "" {
+		fmt.Fprintf(stderr, "%s\n", convergence.DivergenceProblem)
 	}
 	for _, worktree := range convergence.Worktrees {
 		switch {

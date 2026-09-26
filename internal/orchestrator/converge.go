@@ -73,6 +73,14 @@ type Convergence struct {
 	// is not per run because what it removes is exactly what no run record
 	// names any more.
 	Registrations RegistrationSweep `json:"registrations"`
+	// Divergences is every recorded divergence this sweep lifted because it found
+	// its target converged with the remote's, and every one it could not lift.
+	// A divergence still standing is not listed: its target is in Targets with
+	// the catch-up's reason for holding.
+	Divergences []DivergenceLift `json:"divergences"`
+	// DivergenceProblem is the record of divergences not being readable, in
+	// which case none was lifted and the watching session's hold stands.
+	DivergenceProblem string `json:"divergence_problem,omitempty"`
 }
 
 // WorktreeSweep is one settled run's leftover checkout and what became of it.
@@ -180,9 +188,19 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 		Worktrees:     make([]WorktreeSweep, 0),
 		Branches:      make([]BranchSweep, 0),
 		Registrations: RegistrationSweep{Pruned: make([]string, 0), Unfinished: make([]gitworktree.UnfinishedRegistration, 0)},
+		Divergences:   make([]DivergenceLift, 0),
 	}
-	for _, target := range recordedTargets(recorded) {
+	targets, divergenceProblem := r.divergedTargetsToCatchUp(recordedTargets(recorded))
+	for _, target := range targets {
 		convergence.Targets = append(convergence.Targets, r.catchUp(ctx, target))
+	}
+	// A target found converged lifts the divergence recorded on it, which is what
+	// lets a watching session held on that divergence choose again at its next
+	// poll with nothing released. It is the only thing that lifts one: the
+	// branches converging is the whole of what the hold waits on.
+	convergence.DivergenceProblem = divergenceProblem
+	if divergenceProblem == "" {
+		convergence.Divergences = r.liftDivergences(convergence.Targets)
 	}
 	for _, state := range sweepableWorktrees(recorded) {
 		sweep, swept := r.sweepWorktree(ctx, state)

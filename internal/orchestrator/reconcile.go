@@ -137,7 +137,12 @@ type Reconciler struct {
 	// change was still on a branch. Optional: a sweep wired without it corrects
 	// nothing and converges exactly as it did.
 	Releases ReconcileReleases
-	Clock    execution.Clock
+	// Divergences is the product's record of the target branches the harness
+	// would not catch up to the remote's. The convergence sweep lifts the record
+	// on every target it finds converged. Optional: a sweep wired without it
+	// converges exactly as it did and lifts nothing.
+	Divergences ReconcileDivergences
+	Clock       execution.Clock
 	// Sleep is the wait between two attempts at a boundary that failed on
 	// something a later attempt may survive. It is here for the reason the
 	// pipeline's is: a test must be able to take the backoff without taking the

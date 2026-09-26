@@ -74,6 +74,14 @@ const (
 	// It is read ahead of a full machine because the runs holding the slots are
 	// waiting on the same provider.
 	ReasonProviderAway Reason = "provider-away"
+	// ReasonDivergedTarget is a target branch the harness will not catch up to
+	// the remote's, recorded by the run whose promotion was refused on it. It is
+	// distinct from the intake hold because nobody placed it and `yoyo release`
+	// does not lift it, and distinct from the brake because it counts nothing: a
+	// person settling the branches is what ends it, and the convergence sweep
+	// that finds them settled lifts it with nothing to release. It is read ahead
+	// of a full machine because every run holding a slot will stop on it too.
+	ReasonDivergedTarget Reason = "diverged-target"
 	// ReasonProviderWindow is a live session waiting out the provider's usage
 	// window. It is distinct from an idle session because an operator does nothing
 	// at all about it: the window lifts on the provider's clock, and a surface that
@@ -116,6 +124,7 @@ func Reasons() []Reason {
 		ReasonOperatorHold,
 		ReasonIntakeHold,
 		ReasonProviderAway,
+		ReasonDivergedTarget,
 		ReasonNoCapacity,
 		ReasonProviderWindow,
 		ReasonTrackerWait,
@@ -145,6 +154,8 @@ func (r Reason) Whose() string {
 		return "the operator's for a hold they placed, and the development manager's or the harness's for one the brake placed — nothing new is chosen until it is released, and `yoyo release` lifts either"
 	case ReasonProviderAway:
 		return "the operator's — log in to the provider, or wait for the network; the harness resumes on its own once it answers, and nothing is released or restarted"
+	case ReasonDivergedTarget:
+		return "the operator's — " + runstate.DivergedTargetRecovery
 	case ReasonNoCapacity:
 		return "nobody's — a slot frees as a run in flight finishes"
 	case ReasonProviderWindow:
@@ -176,6 +187,9 @@ type Conditions struct {
 	// the rest of the answer.
 	ProviderOutage runstate.ProviderOutage
 	ProviderAway   bool
+	// Diverged is every target branch recorded as one the harness will not catch
+	// up to the remote's. A caller that never read the record leaves it empty.
+	Diverged []runstate.DivergedTarget
 	// Running is how many developer runs are in flight, read against Capacity. A
 	// caller that has already decided a run in flight is not a stalled line leaves
 	// both at zero and gets the rest of the answer.
@@ -271,7 +285,7 @@ func (s Stall) Refusal() string {
 // problem they chose.
 func (s Stall) Waiting() (Attention, bool) {
 	switch s.Reason {
-	case ReasonSessionIdle, ReasonNoWatchSession, ReasonProviderAway:
+	case ReasonSessionIdle, ReasonNoWatchSession, ReasonProviderAway, ReasonDivergedTarget:
 		// All three are the operator's: the two session states because a queue
 		// with ready work and nothing pulling it is a stall rather than a rest,
 		// and the provider answering nobody because it is waiting on a person in
@@ -330,6 +344,10 @@ func WhyNothingStarts(conditions Conditions) Stall {
 			Says:   conditions.ProviderOutage.Says(),
 			Since:  conditions.ProviderOutage.Since,
 		}
+	case len(conditions.Diverged) > 0:
+		// The first recorded is the one said; the attention line names every
+		// other beside it.
+		return divergedTargetStall(conditions.Diverged[0])
 	case conditions.Capacity > 0 && conditions.Running >= conditions.Capacity:
 		return Stall{
 			Reason: ReasonNoCapacity,
@@ -421,4 +439,23 @@ func whichSession(sessions []runstate.WatchTransition, now time.Time) Stall {
 		Clears: "`yoyo work --watch` starts one",
 		Since:  stopped.At,
 	}
+}
+
+// divergedTargetStall is a diverged target as the stall says it: the record's
+// own sentence, with the recovery as what clears it.
+func divergedTargetStall(diverged runstate.DivergedTarget) Stall {
+	return Stall{
+		Reason: ReasonDivergedTarget,
+		Says:   diverged.Says(),
+		Clears: runstate.DivergedTargetRecovery,
+		Since:  diverged.Since,
+	}
+}
+
+// divergedTargetAttention is a diverged target as the attention line carries it
+// where it is not what stops the choosing: the same stall entry, so the line
+// says it in the words it would have used either way.
+func divergedTargetAttention(diverged runstate.DivergedTarget) Attention {
+	stall := divergedTargetStall(diverged)
+	return Attention{Kind: AttentionStall, ID: string(ReasonDivergedTarget), Mover: MoverOperator, Stall: &stall}
 }
