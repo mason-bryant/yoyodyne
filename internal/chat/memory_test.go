@@ -346,3 +346,15 @@ func TestTheMemoryContractStatesTheBoundsTheHarnessHolds(t *testing.T) {
 		t.Errorf("the contract's live budget does not match MaxMemoryLiveBytes = %d", runstate.MaxMemoryLiveBytes)
 	}
 }
+
+func TestAMemoryBlockNamedForAWorkItemIsRead(t *testing.T) {
+	t.Parallel()
+
+	writes, err := decodeMemoryWrites(`{"memories":[{"action":"remember","memory":"372-owes-rerun-decision","text":"372 owes a rerun decision."}]}`)
+	if err != nil {
+		t.Fatalf("decodeMemoryWrites() = %v, want the write read", err)
+	}
+	if len(writes) != 1 || writes[0].Memory != "372-owes-rerun-decision" {
+		t.Fatalf("decodeMemoryWrites() = %+v", writes)
+	}
+}

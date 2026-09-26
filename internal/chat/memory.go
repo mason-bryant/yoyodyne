@@ -179,7 +179,7 @@ func (w MemoryWrite) validate() error {
 	if _, known := memoryActions[w.Action]; !known {
 		problems = append(problems, fmt.Errorf("%q is not a memory action; the actions are %q, %q, and %q", w.Action, memoryRemember, memoryCompact, memoryRetire))
 	}
-	if err := domain.ValidateIdentifier("memory", w.Memory); err != nil {
+	if err := domain.ValidateMemoryName(w.Memory); err != nil {
 		problems = append(problems, err)
 	}
 	if strings.TrimSpace(w.Text) == "" {
