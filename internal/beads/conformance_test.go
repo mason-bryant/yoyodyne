@@ -756,6 +756,98 @@ func TestListedNotesConformance(t *testing.T) {
 	}
 }
 
+// TestUnfilteredListingConformance pins what the readers of closed work rest on
+// and which only a scripted listing had ever answered: that a listing asked for
+// no status carries closed work, and that a listing of closed work is all of it.
+//
+// The first is what the docket window decides dead entries from, and what the
+// duplicate guard judges an admission against: both list with no status because
+// closed work is what they are looking for. bd's own listing given no status
+// leaves closed work out, so until everyStatus was passed both read every item
+// as unfinished — every docket entry live, no admission a duplicate of landed
+// work — and nothing failed. The item is closed the way the harness closes one,
+// so the status under test is one this project actually writes.
+//
+// The second is what the reconcile sweep's closure pass rests on: it lists
+// closed work and sweeps the entries on it, and an entry on an item that fell
+// past a page is never swept. So there are more closed items here than bd's
+// default page of fifty. They are imported closed rather than closed one at a
+// time, because closing sixty items through bd takes minutes and what is under
+// test is the listing rather than the close.
+func TestUnfilteredListingConformance(t *testing.T) {
+	t.Parallel()
+
+	project := newTracker(t)
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	finished, err := client.Create(ctx, NewWorkItem{
+		Title:       "The run that stopped here landed after all",
+		Description: "Its docket entry is dead.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := client.Complete(ctx, finished.ID, "landed"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	unfinished, err := client.Create(ctx, NewWorkItem{
+		Title:       "The run that stopped here is still somebody's",
+		Description: "Its docket entry is live.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	listed, err := client.List(ctx, "")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	closed, found := itemIn(listed, finished.ID)
+	if !found {
+		t.Fatalf("List() with no status = %#v, want the closed item %s among them; the docket window and the duplicate "+
+			"guard read closed work off this listing, and without it every entry reads as live", listed, finished.ID)
+	}
+	if closed.Status != closedDependencyStatus {
+		t.Fatalf("List() with no status gives %s as %q, want closed", finished.ID, closed.Status)
+	}
+	// The control, without which the listing above could be a listing of closed
+	// work only and pass.
+	if open, found := itemIn(listed, unfinished.ID); !found || open.Status != statusOpen {
+		t.Fatalf("List() with no status gives %s as %#v (found = %v), want it listed open", unfinished.ID, open, found)
+	}
+
+	const pastThePage = 60
+	var rows strings.Builder
+	for i := range pastThePage {
+		fmt.Fprintf(&rows, `{"title":"Closed work %d","description":"d","issue_type":"task","priority":2,"status":"closed","closed_at":"2026-09-01T00:00:00Z"}`+"\n", i)
+	}
+	imported := filepath.Join(t.TempDir(), "closed.jsonl")
+	if err := os.WriteFile(imported, []byte(rows.String()), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runCommand(t, project, "bd", "import", imported)
+
+	for _, status := range []string{"", closedDependencyStatus} {
+		listed, err := client.List(ctx, status)
+		if err != nil {
+			t.Fatalf("List(%q) error = %v", status, err)
+		}
+		var closedCount int
+		for _, item := range listed {
+			if item.Status == closedDependencyStatus {
+				closedCount++
+			}
+		}
+		if want := pastThePage + 1; closedCount != want {
+			t.Fatalf("List(%q) carries %d closed items, want all %d; a listing cut at a page leaves the entries on "+
+				"everything past it unswept and live", status, closedCount, want)
+		}
+	}
+}
+
 // blocksEdge is the bd relation that makes one item wait for another. It is
 // spelled again here rather than taken from the client, because a check of what
 // bd answers that named the relation the way the reading under test names it

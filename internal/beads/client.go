@@ -447,9 +447,19 @@ func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 // line rather than left to bd's reading of whether its output is a terminal.
 const unboundedListing = "--limit=0"
 
+// everyStatus is what bd is told so that a listing narrowed to no status is
+// every item it holds. `bd list` given no status leaves closed work out by
+// default, and the readers that ask for no status ask precisely because closed
+// work is what they need to see: which docket entries are on closed work, and
+// whether a creation duplicates work that has already landed. Against a bare
+// listing both read every item as unfinished and nothing fails.
+// TestUnfilteredListingConformance pins it against bd itself.
+const everyStatus = "--all"
+
 // List reports the work items Beads currently holds, optionally narrowed to one
 // status. It is read-only: nothing about listing work claims, changes, or
-// closes any of it. It reads the whole set: see unboundedListing.
+// closes any of it. It reads the whole set: see unboundedListing. No status is
+// every status, closed included: see everyStatus.
 //
 // The flag was checked against one bd release, and a bd without it refuses
 // every listing before it opens the store — the scheduler's selection among
@@ -464,6 +474,8 @@ func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
 			return nil, fmt.Errorf("invalid Beads status %q", status)
 		}
 		filter = append(filter, "--status="+trimmed)
+	} else {
+		filter = append(filter, everyStatus)
 	}
 	data, err := c.run(ctx, append([]string{"list", "--json", unboundedListing}, filter...)...)
 	if err != nil && refusedFlag(err, unboundedListing) {
