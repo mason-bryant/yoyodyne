@@ -285,15 +285,20 @@ func ReadSilence(activity Activity) Silence {
 // two transitions whose mark says the state alone would be read backwards: a stop
 // that is a restart, which reads as a session somebody has to start again, and an
 // idle poll that could not read the store at all, which reads as a queue with
-// nothing in it for as long as the outage lasts.
+// nothing in it for as long as the outage lasts. A session draining to restart
+// has the drain and its bound added to whichever of those it is.
 func SessionSays(transition runstate.WatchTransition) string {
+	said := string(transition.State)
 	switch {
 	case transition.Restarting:
-		return "stopped to restart into the build deployed over it"
+		said = "stopped to restart into the build deployed over it"
 	case transition.RetryingRead():
-		return "retrying a failed read of the harness's store"
+		said = "retrying a failed read of the harness's store"
 	}
-	return string(transition.State)
+	if transition.Draining != nil {
+		said += ", " + transition.Draining.Says()
+	}
+	return said
 }
 
 // LastWord is what the sessions that choose work last said about themselves, as

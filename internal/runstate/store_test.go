@@ -2058,6 +2058,54 @@ func TestStoreRoundTripsAStoppedProviderAndRefusesItOnATerminalRun(t *testing.T)
 	}
 }
 
+// A run stopped for its hosting session's redeploy has to survive that session
+// for the same reason a stopped provider does: the marker is what the session
+// that comes back re-adopts the run from, at the phase it records.
+func TestStoreRoundTripsARedeployStopAndRefusesItOnATerminalRun(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseChecking
+	state.ProviderSessionID = "developer-session"
+	stoppedAt := time.Date(2026, 9, 19, 7, 50, 0, 0, time.UTC)
+	state.RedeployStop = &RedeployStop{At: stoppedAt, Phase: PhaseChecking, BoundSeconds: 900, SessionID: "watch-before"}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.RedeployStop == nil || loaded.RedeployStop.Phase != PhaseChecking || loaded.RedeployStop.Bound() != 15*time.Minute ||
+		!loaded.RedeployStop.At.Equal(stoppedAt) || loaded.RedeployStop.SessionID != "watch-before" || !loaded.Outstanding() {
+		t.Fatalf("Load() = %#v, want the recorded stop on an outstanding run", loaded)
+	}
+
+	// A stop is an instruction to continue later, so a terminal run must not be
+	// able to carry one: it would promise a continuation nothing will make.
+	terminal := loaded
+	terminal.Status = StatusCancelled
+	completedAt := terminal.UpdatedAt
+	terminal.CompletedAt = &completedAt
+	if err := terminal.Validate(); err == nil || !strings.Contains(err.Error(), "redeploy_stop requires a run that is still in flight") {
+		t.Fatalf("Validate() error = %v, want a terminal run carrying a stop to be refused", err)
+	}
+	// And one that cannot say what the run is owed is refused too.
+	unknown := loaded
+	unknown.RedeployStop = &RedeployStop{At: stoppedAt, Phase: "wandering"}
+	if err := unknown.Validate(); err == nil || !strings.Contains(err.Error(), "redeploy_stop") {
+		t.Fatalf("Validate() error = %v, want a stop at no phase a run reaches to be refused", err)
+	}
+}
+
 // What a run changed has to outlive the worktree it changed it in: cleanup
 // removes the tree and the branch, so a summary nobody recorded is one nobody
 // can be shown afterwards.

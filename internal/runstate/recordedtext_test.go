@@ -88,6 +88,8 @@ var structuredStrings = map[string]string{
 	"directive_pause.kind":                                          "the directive's kind, from a fixed vocabulary",
 	"dependency_pause.blockers[]":                                   "work item identifiers",
 	"tracker_pause.boundary":                                        "a boundary from the harness's fixed vocabulary",
+	"redeploy_stop.phase":                                           "an enumeration",
+	"redeploy_stop.session_id":                                      "a watch session identifier, validated as one",
 	"integration.target_branch":                                     "a local branch name",
 	"integration.source_commit":                                     "a commit",
 	"integration.target_commit":                                     "a commit",

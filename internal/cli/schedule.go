@@ -162,6 +162,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		sessions = opened
 		scheduler.Sessions = sessions
+		scheduler.SessionID = sessionID
 		// This loop is the harness's own, so it is one of the two places the stall
 		// reading is taken. Failing to assemble it does not stop the session: a
 		// watchdog that could not be built is a session with no watchdog, which is
@@ -200,7 +201,7 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if !schedule.Redeploying() || binary == nil {
 		return code
 	}
-	return takeUpTheDeploy(ctx, binary, sessions, watching, stderr, code, *budget, schedule.SpentUSD, *limit, len(schedule.Started))
+	return takeUpTheDeploy(ctx, binary, sessions, watching, stderr, code, *budget, schedule.SpentUSD, *limit, schedule.Chosen())
 }
 
 // deployedBinary is what taking up a deploy needs of the file this session is
@@ -239,8 +240,9 @@ const takeoverDeadline = time.Minute
 // back.
 func takeUpTheDeploy(ctx context.Context, binary deployedBinary, sessions orchestrator.WatchSessions, watching *runstate.Lease, stderr io.Writer, code int, budget, spent float64, limit, started int) int {
 	// The watch goes first, before either branch below. The scheduler has stopped
-	// the session and waited out every run it started, so nothing after this
-	// chooses work again — and the build this restarts into takes the same lease
+	// the session and either waited out every run it started or stopped and
+	// preserved the ones its drain bound cut off, so nothing after this chooses
+	// work again — and the build this restarts into takes the same lease
 	// as it starts, which a process still holding it would refuse. It is dropped
 	// here rather than left to the operating system closing the descriptor as the
 	// image is replaced, because that would make the restart depend on a flag on
@@ -633,6 +635,10 @@ func (w watchSessionLog) Record(transition orchestrator.SessionState) error {
 		// A dispatch holding a slot while it waits out the tracker before it has
 		// claimed anything, which no run record exists yet to say.
 		DispatchWait: transition.DispatchWait,
+		// The drain and its bound, on every line the session writes while it
+		// waits out its runs to restart, so a reader is told what stops the wait
+		// rather than left to time it.
+		Draining: transition.Draining,
 	})
 }
 
@@ -769,6 +775,10 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 			Repository: parts.repository,
 			Product:    parts.config.Product,
 		},
+		// How long a session that has found a build deployed over it waits out the
+		// runs it hosts before it restarts anyway, with those runs stopped and
+		// preserved for the session that comes back.
+		RedeployDrainLimit: parts.config.Execution.RedeployDrainLimit.Duration(),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
@@ -1003,11 +1013,19 @@ capacity of zero, a --budget with nothing to price it -- which is a decision
 about the configuration rather than a reading that failed.
 
 A watching session also takes up a build deployed over it. When the yoyo it is
-running is written over -- installed, rebuilt -- it stops choosing, waits out
-every run it already started, and restarts into what was deployed. A run in
-flight is never interrupted for it, so a fix you build reaches the session at the
-gap after the run that is going now rather than when somebody remembers to
-restart it. That stop is recorded as a restart rather than as an ending, so
+running is written over -- installed, rebuilt -- it drains: it restarts into
+what was deployed the moment it hosts no run, and until then it carries on
+polling, pulling into free seats, and firing its recurring tasks, because the
+drain is about the runs it hosts and not about its other duties. The drain is
+bounded by execution.redeploy_drain_limit (fifteen minutes by default): past
+it the session restarts anyway, and each run it still hosts is stopped where it
+is and preserved -- worktree, branch, claim, developer session, every counter --
+for the session that comes back to re-adopt at its first pull, ahead of anything
+new. A run at its promotion is the one exception and is waited out. A pull the
+session declines because the bound is less than a poll away says so, and the
+drain and its bound are on every line the session writes while it lasts. Either
+way the session restarts into what was deployed, and that stop is recorded as a
+restart rather than as an ending, so
 "yoyo status" and the Slack sink say a session is coming back rather than telling
 you to start one. The queue is re-read from scratch on the way back in, exactly as it
 is at every poll, and the bounds you gave the session cross the restart reduced
