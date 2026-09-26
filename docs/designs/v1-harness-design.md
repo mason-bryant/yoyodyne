@@ -94,6 +94,18 @@ revisions:
       by: architect
       at: 2026-09-25T04:00:00Z
       reason: approved amendment 16e163f9 from yoyodyne-ifd.429.5 - a protected target lands through its pull request and the local branch follows; the stranded-main stalls of 2026-09-20 and 09-24 are why
+    - action: amended
+      by: architect
+      at: 2026-09-25T09:00:00Z
+      reason: yoyodyne-ifd.265 companion - the recovery section points at the recoverable-and-terminal-failures design as the owner of the per-boundary taxonomy and the retry bounds
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:56:31Z
+      reason: yoyodyne-ifd.434.2 - the state root becomes a machine-local key with an explicit precedence under the environment variable, a checkout-local marker refusing two processes on two roots, and the two surfaces that report it
+    - action: amended
+      by: architect
+      at: 2026-09-26T07:00:00Z
+      reason: yoyodyne-ifd.429.23 - a replay is re-reviewed whatever its diff, because review evidence is bound to the candidate revision and a byte-identical patch on a moved base is a new one; the ruling the configuration guide left to the architect is recorded
 approvals:
     - revision: 0
       by: operator
@@ -339,7 +351,7 @@ The harness uses the `bd` CLI through a narrow adapter in v1. Domain code must n
 
 ### Runtime state
 
-Provider event streams, process metadata, locks, caches, and temporary run state live outside the product repository under an operating-system-appropriate state directory. Durable outcomes are summarized into Beads. Worktrees also live outside the primary checkout by default. Secrets and provider credentials remain managed by the provider CLIs — including the forge CLI publishing uses — and are never copied into Beads, into project Markdown, or into an agent's prompt or context bundle. That is a statement about what the harness puts in front of an agent; it is not a claim that the credentials are unreachable from a process the harness started. See [what the Git model enforces](#what-is-enforced-and-what-is-not).
+Provider event streams, process metadata, locks, caches, and temporary run state live outside the product repository under an operating-system-appropriate state directory. Durable outcomes are summarized into Beads. Worktrees also live outside the primary checkout by default. Where that state directory is may be set for the machine: `state_root` in the machine-local `machine.yaml` under the configurations home, and never in the project file, which is committed and describes no machine — a `state_root` in a project configuration is refused at load by name. Resolution is `YOYODYNE_STATE_HOME`, then the machine key, then `XDG_STATE_HOME/yoyodyne`, then the platform default, in that order, the variable winning as the explicit instruction it already is. Every process that opens the root records the root it resolved in `.git/yoyodyne/state-root` of the primary checkout, and a process resolving a different root refuses to start naming both, so one product's state is never split across two roots by two layers; moving it is stopping the product, moving the directory, changing the setting, and removing the marker. `yoyo config show --origins` names the layer the root came from, and `yoyo doctor` reports the root, its origin, and whether the marker agrees. Secrets and provider credentials remain managed by the provider CLIs — including the forge CLI publishing uses — and are never copied into Beads, into project Markdown, or into an agent's prompt or context bundle. That is a statement about what the harness puts in front of an agent; it is not a claim that the credentials are unreachable from a process the harness started. See [what the Git model enforces](#what-is-enforced-and-what-is-not).
 
 All durable records include `ProductID` and, where applicable, `RepositoryID`, even though v1 configures exactly one of each.
 
@@ -460,6 +472,8 @@ What limits the damage is that the authoritative branch is the local one. Work a
 
 One run means one worktree outside the primary checkout and one branch created for it, from exactly the branch the work will be promoted into. That target is fixed before any work starts and recorded, so a resumed run promotes into the branch it was written against rather than whatever happens to be checked out later. Promotion is a fast-forward and nothing else: the target must still be at the recorded base commit, and the update is a compare-and-swap onto exactly the commit the harness made. Nothing is forced, rebased, or reset.
 
+A change replayed onto a target that moved is a new candidate revision, and it is re-reviewed whatever its diff looks like. A byte-identical patch on a new base is not the change the reviewer approved: the reviewer judged a diff in the code around it, and that code is what moved, so the review evidence is invalid by the same rule that invalidates the check evidence. An exception for a diff that compares equal would be a second notion of sameness the evidence model does not have, decided by a comparison that cannot see a renamed function or a changed caller. The fresh verdict costs one invocation and charges the item no review round; what removes the cost is a queue that removes the race, never a cheaper gate.
+
 ### Remotes and pull requests
 
 Publishing is off by default, and a project turns it on under `approvals.publishing` the way it turns on automatic integration. It is a separate opt-in because it has the wider blast radius of the two: integration moves a branch on the operator's machine, while publishing puts the work somewhere other people see. `execution.remote` names the remote, defaulting to `origin`.
@@ -519,6 +533,8 @@ Every orchestration transition has a durable correlation ID and is safe to recon
 - check, review, and integration outcomes.
 
 It then resumes an eligible run, marks an external process outcome, or raises a durable blocker. It never starts a second developer for an item merely because the original process handle was lost.
+
+Which failures at a boundary are waited out, which are answers handed on at once, and which are ambiguous and re-read before anything is asked again — and what a retry may never do to a lease, a budget, or a promotion — is governed by [recoverable-and-terminal-failures](recoverable-and-terminal-failures.md).
 
 A merge the forge queued is the one thing a *finished* run can still owe, and it is settled the same way. Reconciliation asks the forge what became of it, and there are three answers. If the forge merged, the publication finishes exactly as it would have inside the run: the remote target is confirmed to carry the promotion, the merge commit is recorded, the local target is caught up onto it under the target branch's promotion lease, and the branch the merge consumed is deleted on both sides. If the forge is still holding the merge, nothing is decided and a later sweep asks again. If the forge dropped it, the harness never merges past what stopped it: administrator override is never used, and a requirement only a person can satisfy is never re-asked — that becomes an *outstanding publication* named on the work item, for a person. A drop whose cause was transient — a required check that never finished, an auto-merge race lost — is the one case where the merge request may be repeated: once per publication, under the development manager's triage, the identical already-authorized request is repeated — the same pull request by the same method, verified unchanged first, meaning the request's head is still the integrated commit and the remote target still passes the same pre-merge content check the original gate ran — with the durable once-per-publication counter incremented before the request is made. Repeating an identical request over a transient drop is not merging past a requirement, because the forge's requirement machinery runs again in full; a second drop is never repeated and is recorded as an escalation on the item. Reconciliation itself still only asks the forge about a pull request and has no way to merge one — repeating the request is the development manager's triage action, not reconciliation's. Reconciliation also converges local state as it settles: each target branch owed a catch-up is caught up under its lease, and settled runs' merged branches are removed.
 

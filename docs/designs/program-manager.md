@@ -18,6 +18,10 @@ revisions:
       by: architect
       at: 2026-09-26T19:54:03Z
       reason: tool-interface companion - the program manager's capabilities are tools under the tool interface; the set stays fixed in code
+    - action: amended
+      by: architect
+      at: 2026-09-26T07:00:00Z
+      reason: yoyodyne-ifd.437.5 - the admissions trigger's cursor reads the tracker's item export by creation time, since the interactions log records no creations; the three cursor streams are named per trigger class; lands approved amendment 898ae03f from yoyodyne-ifd.430.13.4
 ---
 
 # The program manager: one role type, one lane per instance, requests batched to the product manager
@@ -79,7 +83,7 @@ The lane is enforced where every conversation authority is enforced, in Go at th
 
 A pass is a recurring-task firing, and every rule the recurring-task design states holds unchanged: the intake hold does not stop it, the spending pause does, budgets are committed before spend, it skips when a turn is in flight on the instance's conversation, at most one task fires per scheduler pull, and every pass ends in a durable record `yoyo sweeps` reads. An instance's `triggers` block names its schedule as `every` and its events as `on`, from a closed set: `landings` (a run integrated or a merge confirmed), `admissions` (items created), and `stoppages` (a docket entry opened). A trigger class decides when the instance gets an opportunity to judge, never what it concludes.
 
-**A burst wakes an instance once.** Each instance keeps a durable cursor per event stream — the run records and the tracker's interactions log, the two the freshness measurement already reads. An event past the cursor arms one wake; the wake is taken at the next pull only once the stream has been quiet for a settle window of two minutes, or the schedule is due, whichever comes first; and the pass is handed everything between the cursor and the moment it was taken, after which the cursor moves. A product manager admitting thirty items in one turn produces one pass carrying thirty admissions. A pass that fails leaves the cursor where it was, so the next pass carries the same events rather than losing them, and the failure is on the pass record as it is for any recurring task.
+**A burst wakes an instance once.** Each instance keeps a durable cursor per event stream, one stream per trigger class: the run records for `landings`, the tracker's item export (`.beads/issues.jsonl`) read by each item's recorded creation time for `admissions`, and the docket records for `stoppages`. The tracker's interactions log is not among them: Beads writes an entry there for a status, priority, or assignee change and none for an item's creation, so an admissions trigger reading it would never fire. The export is a dump the tracker refreshes rather than its live store, so an admission reaches the trigger when the export next carries it; the schedule's `every` bounds how late that can be. An event past the cursor arms one wake; the wake is taken at the next pull only once the stream has been quiet for a settle window of two minutes, or the schedule is due, whichever comes first; and the pass is handed everything between the cursor and the moment it was taken, after which the cursor moves. A product manager admitting thirty items in one turn produces one pass carrying thirty admissions. A pass that fails leaves the cursor where it was, so the next pass carries the same events rather than losing them, and the failure is on the pass record as it is for any recurring task.
 
 **Models.** A pass asks for the task's `model` where the trigger block names one and the agent's `model` otherwise; an operator's turn in the instance's conversation asks for the agent's. That is the mechanism yoyodyne-ifd.420 shipped and it adds no key.
 

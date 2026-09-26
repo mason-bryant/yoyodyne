@@ -42,6 +42,14 @@ revisions:
       by: architect
       at: 2026-09-26T19:54:03Z
       reason: tool-interface companion - a conversation-invoked action is a tool, per the tool-interface design; one registry, two invokers
+    - action: amended
+      by: architect
+      at: 2026-09-25T09:00:00Z
+      reason: yoyodyne-ifd.209.19 - the interrupted-review path is a transition the built-in definitions carry, review to check on the outcome interrupted with a trace behind it, rather than an expected divergence; the killed-integration class stays recorded until reconciliation converts
+    - action: amended
+      by: architect
+      at: 2026-09-25T04:56:31Z
+      reason: yoyodyne-ifd.339 companion - the architect's pass named as the third recurring-task consumer, pointing at its design
 ---
 
 # Configurable workflows: a declarative runtime over trusted actions
@@ -70,6 +78,8 @@ Evidence is a typed fact bound to a revision — protected paths accepted for ca
 
 One durable transition at a time: load the instance and its pinned definition; take the instance lease; re-read holds, directives, cancellation, and subject revision at the boundary; create or recover the step-attempt record and idempotency key; invoke; persist outcome, evidence, cost, and side-effect identifiers; resolve the transition from the *pinned* definition; atomically record the next step before releasing the lease; emit the canonical event the read model consumes. Reconciliation after a death reads the attempt and side-effect evidence and adopts, safely re-executes under the same key, or records an operator-visible ambiguity — it never assumes an unrecorded action did nothing. Instances are pinned to workflow ID, revision, schema version, and content digest before the first action; edits apply to new instances through an explicit reload boundary; deleting a file strands nothing because the pinned definition is durable; V1 performs no automatic migration.
 
+A resumed run re-earns the gate, and the definitions say so. A run interrupted after its change was last written and before a verdict resumes at the checks whatever step it was interrupted in, because check and verdict evidence bound to the candidate is not carried across an interruption nobody witnessed. That is a path the pipeline takes, so the built-in definitions carry it rather than recording it as a divergence: `candidate.review` produces the outcome `interrupted`, whose destination is `candidate.check`, and the parity trace behind it is the recorded interrupted-review path. The separation rule is unchanged by it, since every route to the promotion still crosses the checks and a verdict after the last write. A process killed inside `candidate.integrate` and settled by reconciliation remains a recorded divergence until the reconciliation slice converts, because reconciliation is not yet an action a definition can name.
+
 ## The authority model
 
 Sequenced as the brief's authority workstream, with its guard binding: the authority inventory and the capability registry land before anything is configurable; the five roles are expressed as shipped default bundles that reproduce current behavior exactly, checked against the inventory; authorization call sites convert from role names to capability-and-scope checks, with separation policy (reviewer independence, no self-approval, no evidence self-minting) as runtime rules a static bundle cannot prove; only then do protected operator-defined bundles load; and the closed role-name type is removed last, with compatibility decoding for durable records. Every invocation pins the role-contract revision and digest that authorized it; **authority changes never apply to an in-flight step attempt** — new invocations only, no exceptions, no migration of authority ever.
@@ -92,7 +102,7 @@ A recurring task is a schedule-triggered instance of a named agent's bounded tas
 
 Runtime behavior, from the proven interim shim: an instance **skips when a turn is in flight** on the agent's conversation — the conversation lease is the test — rather than queueing behind it; each run produces a **durable dated report**; and anything the task decides to do is a **carry-out listed for execution through the agent's existing typed action paths** — the tracker actions, proposals, and requests that role already has — never a new mutation path. One instance per task per window, deduplicated durably; every instance passes the standing gates — intake hold where it applies, the spending pause always, budgets committed before spend.
 
-First consumers: the development manager's hourly sweep (find, fix, file, report, under its item's constraints) and the product manager's twice-daily coherence scan.
+First consumers: the development manager's hourly sweep (find, fix, file, report, under its item's constraints), the product manager's twice-daily coherence scan, and the architect's daily pass, specified in [architect-loop](architect-loop.md).
 
 ### Agent memory
 
