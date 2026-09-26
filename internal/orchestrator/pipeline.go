@@ -5254,6 +5254,13 @@ func (a *activeRun) runLandingChecks(ctx context.Context) {
 			Env:       []string{checks.Narrowing{Whole: true, Reason: "a landing runs the whole suite"}.Env()},
 			Timeout:   budget,
 			Unbounded: true,
+			// Which check the landing is on goes onto the record as each begins,
+			// so the running line can say it while a live process runs the suite.
+			Started: func(command string, _ time.Duration) {
+				began := p.clock().Now()
+				landed.Command, landed.CommandStartedAt = command, &began
+				a.saveLanding(landed)
+			},
 		}, a.sink)
 		a.state.LastSequence = lastSequence
 		if removeErr := p.Landings.RemoveCheckout(ctx, path); removeErr != nil {

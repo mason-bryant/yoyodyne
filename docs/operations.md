@@ -1399,7 +1399,8 @@ leaves a run that is over with a landing the record says is still running, and
 the checkout the checks ran in — `landing-<run>` under the worktree root —
 still registered. Such a run owes a step, so `yoyo reconcile` takes it up:
 where the process is really gone (a live one still holds the run's lease and is
-left alone) the landing is settled as unverified, saying the process died —
+left alone, and is listed on `yoyo status`'s running line as landing rather than
+as owing a step) the landing is settled as unverified, saying the process died —
 and, for one that was still waiting its turn behind another landing, that it
 died waiting before its checks started — and the checkout is removed. A checkout the sweep could not remove is named on the
 run for somebody to remove by hand. A run killed inside its per-run checks is
@@ -2181,6 +2182,24 @@ Needs a human (3):
   same derivation the scheduler fills the free slots from, so the slot this
   line calls free is the slot the scheduler will fill. Where no slot prefers a
   label the line reads exactly as above.
+  A run that is over and whose [landing checks](#what-a-check-stage-may-cost-and-where-the-whole-suite-runs)
+  a live process is still running is on this line too, counted apart from the
+  developer runs because it holds no slot — `Running (2 developer runs, 1
+  landing):` — with the check it is on and for how long, or how long it has
+  waited its turn behind another landing:
+
+  ```text
+    yoyodyne-ifd.401 — landing, on make race for 14m of its 120m bound, 52m into the landing checks
+    yoyodyne-ifd.402 — landing, waiting 5m behind another landing on main
+  ```
+
+  Whether a process holds it is read the way a conversation's hold is: the run's
+  lease has its holder write down which process it is, and the reading checks
+  that process is still there. A landing whose process has died is not here; it
+  is on the attention line as a run that ended still owing a step, because
+  `yoyo reconcile` is what settles it. One whose holder could not be read is
+  there too, with the question said under this line, and so is one whose
+  process was started by a build older than the stamp.
 - **Working** is the persona conversations with a turn in flight, which nothing
   counted before this: a conversation is not a run, so a machine spending money
   on six persona turns used to report nothing running at all. The advisory hold
@@ -2274,8 +2293,9 @@ Needs a human (3):
   is the development manager's or the harness's rather than yours until she
   escalates it, and names the probe run while one is in flight — an unresolved
   directive, a
-  proposed change nobody has decided, a run that ended still owing a step, a
-  promotion the forge has not published, work
+  proposed change nobody has decided, a run that ended still owing a step — but
+  not one whose landing checks a live process is running, which is on the
+  running line instead — a promotion the forge has not published, work
   marked for a conversation rather than for a run, a queue nothing is pulling
   from — a session sitting idle over it, or no session at all — while admitted
   work waits behind that, the provider holding every role at once (below), a

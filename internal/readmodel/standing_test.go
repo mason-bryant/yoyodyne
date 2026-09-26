@@ -37,10 +37,18 @@ type fakeRuns struct {
 	outstanding []runstate.State
 	recorded    []runstate.State
 	prices      map[string]runstate.ItemPrice
+	// held is the runs a live process holds, and failHeld the runs whose holder
+	// could not be read.
+	held     map[string]bool
+	failHeld map[string]error
 	failIncomplete,
 	failOutstanding,
 	failRecorded,
 	failPrice error
+}
+
+func (f fakeRuns) Held(runID string) (bool, error) {
+	return f.held[runID], f.failHeld[runID]
 }
 
 func (f fakeRuns) Incomplete() ([]runstate.State, error) {
@@ -995,6 +1003,86 @@ func TestAnOutstandingRunNeedsAHuman(t *testing.T) {
 	}
 	if !strings.Contains(standing.NeedsHuman[0].Whose(), "yoyo reconcile") {
 		t.Fatalf("whose = %q, want the command that settles it", standing.NeedsHuman[0].Whose())
+	}
+}
+
+// A run that is over with its landing checks unfinished owes a step on the
+// record whether a process is still running the checks or died inside them, and
+// only the second is anybody's to settle. The one a live process holds is on
+// the running line, as a landing with the check it is on and how long; the one
+// nobody holds stays on the attention line with the operator's move; and one
+// whose holder cannot be read stays there too, with the question said.
+func TestALandingALiveProcessRunsIsRunningAndOnlyADeadOneOwesAStep(t *testing.T) {
+	t.Parallel()
+	landing := func(runID string) runstate.State {
+		checkBegan := moment.Add(-14 * time.Minute)
+		completed := moment.Add(-time.Hour)
+		return runstate.State{
+			RunID:       runID,
+			WorkItemID:  "item-" + runID,
+			Status:      runstate.StatusSucceeded,
+			Phase:       runstate.PhaseComplete,
+			CompletedAt: &completed,
+			Integration: &runstate.Integration{TargetBranch: "main", TargetCommit: "0123456789abcdef"},
+			LandingChecks: &runstate.LandingChecks{
+				Commit:           "0123456789abcdef",
+				StartedAt:        moment.Add(-52 * time.Minute),
+				BoundSeconds:     7200,
+				TargetBranch:     "main",
+				Command:          "make race",
+				CommandStartedAt: &checkBegan,
+			},
+		}
+	}
+	live, dead, unread := landing("run-live"), landing("run-dead"), landing("run-unread")
+	sources := quietSources()
+	sources.Runs = fakeRuns{
+		prices:      map[string]runstate.ItemPrice{},
+		outstanding: []runstate.State{dead, live, unread},
+		held:        map[string]bool{"run-live": true},
+		failHeld:    map[string]error{"run-unread": errors.New("the holder stamp is torn")},
+	}
+	standing := ReadStanding(context.Background(), sources)
+
+	if len(standing.Landing) != 1 || standing.Landing[0].RunID != "run-live" {
+		t.Fatalf("landing = %+v, want only the run a live process holds", standing.Landing)
+	}
+	if len(standing.Running) != 0 {
+		t.Fatalf("running = %+v, want a landing kept out of the developer runs, which hold slots", standing.Running)
+	}
+	owed := map[string]bool{}
+	for _, waiting := range standing.NeedsHuman {
+		if waiting.Kind == AttentionOwedStep {
+			owed[waiting.ID] = true
+		}
+	}
+	if owed["run-live"] {
+		t.Fatalf("needs a human = %+v, want the landing a live process runs kept off it", standing.NeedsHuman)
+	}
+	if !owed["run-dead"] || !owed["run-unread"] || len(owed) != 2 {
+		t.Fatalf("owed steps = %v, want the unheld landing and the one whose holder could not be read", owed)
+	}
+	if !strings.Contains(standing.LandingProblem, "run-unread") || !strings.Contains(standing.LandingProblem, "the holder stamp is torn") {
+		t.Fatalf("landing problem = %q, want the unread holder named", standing.LandingProblem)
+	}
+
+	rendered := standing.Render()
+	for _, want := range []string{
+		"Running (1 landing):\n",
+		"  item-run-live — landing, on make race for 14m of its 120m bound, 52m into the landing checks\n",
+		"run run-dead of item-run-dead ended still owing a step",
+		"run run-unread of item-run-unread ended still owing a step",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered status lacks %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "run run-live of") {
+		t.Fatalf("rendered status names the live landing as owing a step:\n%s", rendered)
+	}
+	// The brief rendering keeps the head, so an hourly message counts it too.
+	if brief := standing.RenderBrief(); !strings.Contains(brief, "Running (1 landing)\n") {
+		t.Fatalf("brief status lacks the landing in its head:\n%s", brief)
 	}
 }
 

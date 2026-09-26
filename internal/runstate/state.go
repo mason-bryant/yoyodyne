@@ -630,6 +630,12 @@ type LandingChecks struct {
 	// The landing has no stage bound; its checks together may take the sum.
 	BoundSeconds int64                `json:"bound_seconds"`
 	Checks       []LandingCheckResult `json:"checks,omitempty"`
+	// Command is the check the landing is on, or the last one it began, and
+	// CommandStartedAt when it began. They are written as each check starts,
+	// because the results above are written only once the last check ends, and
+	// a landing two hours into its suite has to be able to say where it is.
+	Command          string     `json:"command,omitempty"`
+	CommandStartedAt *time.Time `json:"command_started_at,omitempty"`
 	// Ran reports the checks ran to a verdict of their own — every one of them
 	// passed or failed on its own exit — and Green that every one of them
 	// passed. Both are meaningful once FinishedAt is set. A landing whose checks
@@ -714,6 +720,37 @@ func (l *LandingChecks) CloseInterrupted(now time.Time) {
 		return
 	}
 	l.Problem = strings.TrimPrefix(l.Problem+"; the process running the landing checks died before they ended", "; ")
+}
+
+// Progress says where a landing whose checks have not ended stands as of a
+// moment: which check it is on and for how long, against the bound each check
+// runs under, and how long the landing has been going — or, for one waiting
+// its turn, how long it has waited and behind which branch's landing. It is
+// what the running line says for a run whose landing a live process holds.
+func (l LandingChecks) Progress(now time.Time) string {
+	if l.Waiting() {
+		return fmt.Sprintf("waiting %s behind another landing on %s",
+			describeSpan(spentSince(now, *l.WaitingSince)), nonEmptyBranch(l.TargetBranch))
+	}
+	began := l.StartedAt
+	if l.AdmittedAt != nil {
+		began = *l.AdmittedAt
+	}
+	if l.Command == "" || l.CommandStartedAt == nil {
+		return fmt.Sprintf("%s into the landing checks, each bounded at %s",
+			describeSpan(spentSince(now, began)), describeSpan(l.Bound()))
+	}
+	return fmt.Sprintf("on %s for %s of its %s bound, %s into the landing checks",
+		l.Command, describeSpan(spentSince(now, *l.CommandStartedAt)), describeSpan(l.Bound()), describeSpan(spentSince(now, began)))
+}
+
+// spentSince is the span from a moment to now, and none for a moment still
+// ahead, which a clock stepped backwards can leave a record holding.
+func spentSince(now, since time.Time) time.Duration {
+	if spent := now.Sub(since); spent > 0 {
+		return spent
+	}
+	return 0
 }
 
 // Waiting reports a landing that found another landing on its branch running

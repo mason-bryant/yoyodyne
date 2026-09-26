@@ -85,11 +85,17 @@ const maxRefusalBytes = 160
 // settled after a dropped merge owes no step and is not in flight, and its
 // publication is still not on the remote.
 //
+// Held is asked of a run that is over and still owes a step while its landing
+// checks read as unfinished: whether a live process holds it, which is what
+// tells a landing somebody is running from one whose process died. It is
+// observed rather than taken, for the reason a conversation's hold is.
+//
 // It is satisfied by *runstate.Store.
 type Runs interface {
 	Incomplete() ([]runstate.State, error)
 	Outstanding() ([]runstate.State, error)
 	Recorded() ([]runstate.State, error)
+	Held(runID string) (bool, error)
 	Price(workItemID string) (runstate.ItemPrice, error)
 }
 
@@ -328,6 +334,19 @@ type RunningRun struct {
 	SlotPrefers []string `json:"slot_prefers,omitempty"`
 }
 
+// LandingRun is a run that is over and whose landing checks a live process is
+// running: the run, its item, the landing record whole, and where the landing
+// stands in the record's own words.
+type LandingRun struct {
+	RunID      string                 `json:"run_id"`
+	WorkItemID string                 `json:"work_item_id"`
+	Title      string                 `json:"title,omitempty"`
+	Checks     runstate.LandingChecks `json:"landing_checks"`
+	// Says is runstate.LandingChecks.Progress at the reading: the check it is
+	// on and for how long, or how long it has waited its turn.
+	Says string `json:"says"`
+}
+
 // DeveloperSlotStanding is one configured developer slot as the standing status
 // names it: its number, what it prefers, and the run in it where one is. It is
 // carried only where some configured slot prefers a label, for the surfaces
@@ -431,6 +450,16 @@ type Standing struct {
 	// under the line rather than in place of it: the runs above were read.
 	Dispatching        []DispatchWait `json:"dispatching,omitempty"`
 	DispatchingProblem string         `json:"dispatching_problem,omitempty"`
+	// Landing is every run that is over and whose landing checks a live process
+	// is still running, which can be hours: the run succeeded and its item is
+	// closed, so it is not a developer run and holds no slot, and the process
+	// running its suite is working, so it is not a step anybody owes. It is said
+	// on the running line because that is what it is, and it is kept off the
+	// attention line, where a run owing a step sends the operator to settle it.
+	// LandingProblem is a landing whose holder could not be read, said under the
+	// line; that run stays on the attention line as a run owing a step.
+	Landing        []LandingRun `json:"landing,omitempty"`
+	LandingProblem string       `json:"landing_problem,omitempty"`
 	// DeveloperSlots is every configured developer slot with the run in it, in
 	// slot order, where some slot prefers a label; nil otherwise. The running
 	// line names the free ones with their preference under itself, and a run's
@@ -542,6 +571,11 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	running, runningProblem := readRunning(sources, now)
 	standing.Running, standing.RunningProblem = running, runningProblem
 	standing.Dispatching, standing.DispatchingProblem = readDispatching(sources, now)
+	// The runs that owe a step are read once and split once, so a landing is on
+	// the running line or on the attention line in one reading and never on both
+	// or neither.
+	owed := readOutstanding(sources, now)
+	standing.Landing, standing.LandingProblem = owed.landing, owed.landingProblem
 	// Which slot each run occupies, and which slots are free, from the reading
 	// the scheduler makes. It is read only where a slot prefers a label, and
 	// only where the runs could be read: a slot said to be free over runs
@@ -604,7 +638,7 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 
 	standing.Reports, standing.ReportsProblem = readReports(sources, now)
 
-	needs, needsProblem := readNeedsHuman(sources, switches)
+	needs, needsProblem := readNeedsHuman(sources, switches, owed)
 	// The provider answering nobody is on the attention line whatever the queue
 	// holds, because what ends it is a person: it is added here where the stall
 	// did not already carry it, which is a stall over an empty queue.
@@ -1233,6 +1267,77 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 	return report.Summarize(reports, handlings, now), ""
 }
 
+// outstanding is the runs that owe a step, split by whether a live process is
+// running the step: the landings a process holds, for the running line, and
+// every other run, for the attention line.
+type outstanding struct {
+	landing        []LandingRun
+	landingProblem string
+	states         []runstate.State
+	problem        string
+}
+
+// readOutstanding reads the runs that owe a step and takes out the ones whose
+// landing checks a live process is running.
+//
+// A run that is over with its landing checks unfinished owes a step whichever
+// of two things is true: the process running them still holds the run, and the
+// suite is working — for up to its bound per check, hours in all — or that
+// process died and the landing is unverified with its checkout standing. Only
+// the second is something anybody has to act on, and the line that names the
+// operator's move has to be right about which it is: `yoyo reconcile` over the
+// first is refused by the run's lease and does nothing, and the line that sent
+// the operator to run it was wrong. So the run's holder is asked, and a run
+// nobody can say is held stays on the attention line with the question said
+// under the running line, which is the direction that never hides a step owed.
+func readOutstanding(sources Sources, now time.Time) outstanding {
+	if sources.Runs == nil {
+		return outstanding{}
+	}
+	states, err := sources.Runs.Outstanding()
+	if err != nil {
+		return outstanding{
+			problem:        fmt.Sprintf("the runs that owe a step could not be read: %v", err),
+			landingProblem: fmt.Sprintf("the runs whose landing checks are running could not be read: %v", err),
+		}
+	}
+	owed := outstanding{states: make([]runstate.State, 0, len(states))}
+	var unanswered []string
+	for _, state := range states {
+		if !state.Status.Terminal() || state.LandingChecks == nil || state.LandingChecks.Finished() {
+			owed.states = append(owed.states, state)
+			continue
+		}
+		held, err := sources.Runs.Held(state.RunID)
+		if err != nil {
+			unanswered = append(unanswered, fmt.Sprintf("%s (%v)", state.RunID, err))
+			owed.states = append(owed.states, state)
+			continue
+		}
+		if !held {
+			owed.states = append(owed.states, state)
+			continue
+		}
+		owed.landing = append(owed.landing, LandingRun{
+			RunID:      state.RunID,
+			WorkItemID: state.WorkItemID,
+			Title:      state.WorkItemTitle,
+			Checks:     *state.LandingChecks,
+			Says:       state.LandingChecks.Progress(now),
+		})
+	}
+	if len(unanswered) > 0 {
+		owed.landingProblem = "whether a process still holds these landings could not be read, so they are listed as owing a step: " + strings.Join(unanswered, "; ")
+	}
+	sort.SliceStable(owed.landing, func(first, second int) bool {
+		if !owed.landing[first].Checks.StartedAt.Equal(owed.landing[second].Checks.StartedAt) {
+			return owed.landing[first].Checks.StartedAt.Before(owed.landing[second].Checks.StartedAt)
+		}
+		return owed.landing[first].RunID < owed.landing[second].RunID
+	})
+	return owed
+}
+
 // readNeedsHuman is everything waiting on a person, with whose move it is.
 //
 // What is here and what is not is the whole of the line's value. A switch
@@ -1245,7 +1350,7 @@ func readReports(sources Sources, now time.Time) (report.Pile, string) {
 // Held work is the one entry here whose mover can be the harness rather than a
 // person, and it is on this line for exactly that reason: an operator scanning
 // for what is waiting on him has to be able to see which of it is not.
-func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
+func readNeedsHuman(sources Sources, held switches, owed outstanding) ([]Attention, string) {
 	attention := make([]Attention, 0, 4)
 	if held.operatorHeld {
 		attention = append(attention, operatorHoldAttention(held.operator))
@@ -1284,13 +1389,11 @@ func readNeedsHuman(sources Sources, held switches) ([]Attention, string) {
 	// A run that owes a step and a promotion the forge has not published are two
 	// entries where one run is both — a merge the forge still has queued — because
 	// they are two different waits: the step is the harness's to take, and the
-	// publication is whoever's the entry names.
-	if outstanding, err := sources.Runs.Outstanding(); err != nil {
-		problem = joinProblems(problem, fmt.Sprintf("the runs that owe a step could not be read: %v", err))
-	} else {
-		for _, state := range outstanding {
-			attention = append(attention, owedStepAttention(state))
-		}
+	// publication is whoever's the entry names. A run whose landing a live process
+	// holds is not among these: it is on the running line.
+	problem = joinProblems(problem, owed.problem)
+	for _, state := range owed.states {
+		attention = append(attention, owedStepAttention(state))
 	}
 	// What is awaiting the forge is read by the record's own predicate, over every
 	// recorded run, because it is the same reading the channel's heartbeat counts:

@@ -143,15 +143,25 @@ func (s Standing) renderRunning() string {
 	if len(s.Dispatching) > 0 {
 		waiting = dispatches(len(s.Dispatching)) + " waiting out a tracker failure before claiming anything"
 	}
+	// A landing a live process is running is counted in the head beside the
+	// developer runs rather than among them: it holds no developer slot, and a
+	// reader counting slots from the head must not count it as one.
+	var counted []string
+	if len(s.Running) > 0 {
+		counted = append(counted, count(len(s.Running), "developer run"))
+	}
+	if len(s.Landing) > 0 {
+		counted = append(counted, count(len(s.Landing), "landing"))
+	}
 	switch {
-	case len(s.Running) == 0 && waiting == "":
+	case len(counted) == 0 && waiting == "":
 		rendered.WriteString("Running: nothing\n")
-	case len(s.Running) == 0:
+	case len(counted) == 0:
 		fmt.Fprintf(&rendered, "Running: no run yet, and %s:\n", waiting)
 	case waiting == "":
-		fmt.Fprintf(&rendered, "Running (%s):\n", count(len(s.Running), "developer run"))
+		fmt.Fprintf(&rendered, "Running (%s):\n", strings.Join(counted, ", "))
 	default:
-		fmt.Fprintf(&rendered, "Running (%s, and %s):\n", count(len(s.Running), "developer run"), waiting)
+		fmt.Fprintf(&rendered, "Running (%s, and %s):\n", strings.Join(counted, ", "), waiting)
 	}
 	if len(s.Running) > 0 {
 		listed, further := bound(len(s.Running))
@@ -160,6 +170,16 @@ func (s Standing) renderRunning() string {
 				run.WorkItemID, phaseOf(run), age(run.Elapsed), spendOf(run), slotOf(run))
 		}
 		rendered.WriteString(remainder(further, "developer run"))
+	}
+	if len(s.Landing) > 0 {
+		listed, further := bound(len(s.Landing))
+		for _, landing := range s.Landing[:listed] {
+			fmt.Fprintf(&rendered, "  %s — landing, %s\n", landing.WorkItemID, landing.Says)
+		}
+		rendered.WriteString(remainder(further, "landing"))
+	}
+	if s.LandingProblem != "" {
+		fmt.Fprintf(&rendered, "%s%s\n", partialRead, s.LandingProblem)
 	}
 	listed, further := bound(len(s.Dispatching))
 	for _, wait := range s.Dispatching[:listed] {
