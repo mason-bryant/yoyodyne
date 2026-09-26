@@ -14,6 +14,7 @@ package runstate
 // unknown rather than zero when the evidence is gone.
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -303,8 +304,12 @@ type RunSummary struct {
 	// a proposal never made.
 	ReportProblem    string `json:"report_problem,omitempty"`
 	AmendmentProblem string `json:"amendment_problem,omitempty"`
-	PublishFailure   string `json:"publish_failure,omitempty"`
-	CleanupFailure   string `json:"cleanup_failure,omitempty"`
+	// Amendments is every proposal the run's agents made, raised or dropped as a
+	// restatement of one already raised. A drop is on no other record, so this is
+	// where a fold the comparison got wrong is found.
+	Amendments     []RunAmendment `json:"amendments,omitempty"`
+	PublishFailure string         `json:"publish_failure,omitempty"`
+	CleanupFailure string         `json:"cleanup_failure,omitempty"`
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
@@ -502,6 +507,7 @@ func (s *Store) summarize(state State) RunSummary {
 		Failure:             state.Failure,
 		ReportProblem:       state.ReportProblem,
 		AmendmentProblem:    state.AmendmentProblem,
+		Amendments:          slices.Clone(state.Amendments),
 		PublishFailure:      state.PublishFailure,
 		CleanupFailure:      state.CleanupFailure,
 

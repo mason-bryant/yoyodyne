@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -896,6 +897,80 @@ type AmendmentRefusal struct {
 	Problem string `json:"problem"`
 }
 
+// MaxRunAmendments bounds how many proposals, raised and dropped together, a
+// run's record keeps. One reply proposes at most amendment.MaxProposalsPerReply
+// changes, so this is several times what a run's attempts ordinarily produce; it
+// is here so a provider proposing on every reply cannot grow the record without
+// limit. Past it nothing is dropped as a restatement, because a drop the record
+// cannot hold is an argument lost with nothing anybody can find: the proposal is
+// raised instead, which costs its owner a second copy at worst.
+const MaxRunAmendments = 32
+
+// RunAmendment is one proposal a run's agent made, and what the harness did with
+// it: raised it, or dropped it as a restatement of one this run had already
+// raised.
+//
+// It is on the run's record for two reasons. It is the memory a restatement is
+// compared against, so a run continued in a second process — a usage-limit pause
+// that exited on its in-process bound, a repair re-entering a stopped run —
+// folds a restatement made there exactly as the first process would have. And a
+// dropped restatement is written down with what it was folded into and how alike
+// the two read, so a pair the comparison folded wrongly loses its second argument
+// somewhere somebody can find it rather than nowhere.
+type RunAmendment struct {
+	// Role is the contract the proposer was working under.
+	Role domain.AgentRole `json:"role"`
+	// Artifact is the document the change is to, and Change is what it asks for,
+	// in the proposer's own words — which is what the next proposal is compared
+	// against, and what somebody reading a dropped one needs to judge the fold.
+	Artifact string `json:"artifact"`
+	Change   string `json:"change"`
+	// ID is the recorded proposal, for one that was raised. It is empty for a
+	// dropped one, which was never recorded and has no id anybody could look up.
+	ID string `json:"id,omitempty"`
+	// FoldedInto is the raised proposal a dropped one was read as restating, and
+	// Likeness is the share of content words the two have in common, the score the
+	// comparison folded it on. Both are empty for a raised proposal.
+	FoldedInto string  `json:"folded_into,omitempty"`
+	Likeness   float64 `json:"likeness,omitempty"`
+}
+
+// Dropped reports whether the proposal was folded into one already raised
+// rather than raised itself.
+func (a RunAmendment) Dropped() bool {
+	return a.FoldedInto != ""
+}
+
+// Validate reports every contract violation in the recorded proposal at once.
+func (a RunAmendment) Validate() error {
+	var problems []error
+	if err := domain.ValidateIdentifier("role", string(a.Role)); err != nil {
+		problems = append(problems, err)
+	}
+	if strings.TrimSpace(a.Artifact) == "" {
+		problems = append(problems, errors.New("artifact is required"))
+	}
+	if strings.TrimSpace(a.Change) == "" {
+		problems = append(problems, errors.New("change is required"))
+	}
+	if len(a.Change) > amendment.MaxTextBytes {
+		problems = append(problems, fmt.Errorf("change is %d bytes, which exceeds the %d byte bound", len(a.Change), amendment.MaxTextBytes))
+	}
+	switch {
+	case a.ID == "" && a.FoldedInto == "":
+		problems = append(problems, errors.New("a proposal is either raised, with an id, or dropped, with the id it was folded into"))
+	case a.ID != "" && a.FoldedInto != "":
+		problems = append(problems, errors.New("a raised proposal is not folded into another"))
+	}
+	if a.Likeness < 0 || a.Likeness > 1 {
+		problems = append(problems, fmt.Errorf("likeness %v is outside 0 to 1", a.Likeness))
+	}
+	if a.FoldedInto == "" && a.Likeness != 0 {
+		problems = append(problems, errors.New("likeness is recorded only for a dropped proposal"))
+	}
+	return errors.Join(problems...)
+}
+
 // Validate reports every contract violation in the carried refusal at once.
 func (a AmendmentRefusal) Validate() error {
 	var problems []error
@@ -1446,6 +1521,9 @@ func (s *State) recordedTexts() []recordedText {
 	}
 	for index := range s.RefusedAmendments {
 		nested("refused_amendments[].problem", at("refused_amendments", index, "problem"), &s.RefusedAmendments[index].Problem, MaxAmendmentRefusalBytes)
+	}
+	for index := range s.Amendments {
+		nested("amendments[].change", at("amendments", index, "change"), &s.Amendments[index].Change, amendment.MaxTextBytes)
 	}
 	// What the gate was told the change touches is a list of packages as long as
 	// the change is wide, so it is held to the ordinary bound; the check the stage
@@ -2329,6 +2407,14 @@ type State struct {
 	// proposal nothing was holding — a false claim that outlived the run, which
 	// only `yoyo amendment list` disproved.
 	RefusedAmendments []AmendmentRefusal `json:"refused_amendments,omitempty"`
+	// Amendments is every proposal this run's agents made, in the order they were
+	// made: each one raised with the id it was recorded under, and each one
+	// dropped as a restatement with the raised proposal it was folded into and
+	// the likeness it was folded on. It is the memory a restatement is compared
+	// against, read back by whichever process continues the run, and it is the
+	// record of a drop — which nothing else keeps, since a dropped proposal
+	// reaches neither the amendment log nor the channel's problems.
+	Amendments []RunAmendment `json:"amendments,omitempty"`
 	// ReportProblem and AmendmentProblem are the run's whole account of what its
 	// two side channels could not keep: every report that could not be read or
 	// collected, and every proposal that could not be read or recorded, each in
@@ -2890,6 +2976,14 @@ func (s State) Validate() error {
 	for index, refused := range s.RefusedAmendments {
 		if err := refused.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("refused_amendments[%d]: %w", index, err))
+		}
+	}
+	if len(s.Amendments) > MaxRunAmendments {
+		problems = append(problems, fmt.Errorf("%d proposals are recorded, which exceeds the bound of %d", len(s.Amendments), MaxRunAmendments))
+	}
+	for index, proposed := range s.Amendments {
+		if err := proposed.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("amendments[%d]: %w", index, err))
 		}
 	}
 	for _, field := range s.recordedTexts() {

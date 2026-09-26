@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
@@ -15,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -210,7 +212,7 @@ func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
 	}
 	recorder := &fakeAmendments{}
 	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
-	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
 	pipeline.Amendments = recorder
 
 	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
@@ -230,6 +232,170 @@ func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
 	}
 	if outcome.AmendmentProblem != "" {
 		t.Fatalf("a dropped restatement was reported as a lost proposal: %q", outcome.AmendmentProblem)
+	}
+	// Dropped is not the same as gone. The restatement is on the run's record with
+	// the proposal it was folded into and the score it was folded on, so a pair the
+	// comparison folded wrongly still has its second argument somewhere to find.
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(recorded.Amendments) != 2 {
+		t.Fatalf("recorded proposals = %#v, want the raised one and the dropped one", recorded.Amendments)
+	}
+	raised, dropped := recorded.Amendments[0], recorded.Amendments[1]
+	if raised.Dropped() || raised.ID != recorder.appended[0].ID || raised.Change != rewordedGrantShapeArgument {
+		t.Fatalf("raised proposal = %#v, want the one in the log", raised)
+	}
+	if !dropped.Dropped() || dropped.FoldedInto != raised.ID || dropped.Change != rewordedGrantShapeRestatement || dropped.Role != domain.RoleDeveloper {
+		t.Fatalf("dropped proposal = %#v, want the restatement folded into %s", dropped, raised.ID)
+	}
+	// The score is the comparison's own, so it is the one this pair is measured at
+	// below rather than a number the record made up.
+	want := amendmentLikeness(amendmentArgumentOf(amendment.Proposal{Artifact: "v1-design", Change: rewordedGrantShapeArgument}),
+		amendmentArgumentOf(amendment.Proposal{Artifact: "v1-design", Change: rewordedGrantShapeRestatement}))
+	if dropped.Likeness != want || dropped.Likeness < amendmentRestatementLikeness {
+		t.Fatalf("likeness = %v, want %v", dropped.Likeness, want)
+	}
+}
+
+// The comparison memory is the run's record rather than the process's, so a run
+// continued in a second process folds a restatement made there exactly as the
+// first process would have. The first process here raises the argument, is
+// handed back a failing check, and exits on its in-process bound when the
+// provider refuses the repair for want of capacity; the second picks the same
+// run up once the window has reset, and its developer restates the argument in
+// other words. One argument is one proposal, whichever process heard it.
+func TestARestatementMadeInAnotherProcessIsOneProposal(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	writeDesignArtifact(t, repository)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(2 * time.Hour)
+	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	argue := func(change, why string) string {
+		return "worked on it\n\n" + amendmentBlock(fmt.Sprintf(`{"artifact":"v1-design","change":%q,"why":%q}`, change, why))
+	}
+
+	// The first process: an attempt that argues and leaves the check failing, then
+	// a repair the provider refuses until a reset this process will not wait for.
+	first := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
+	firstAttempts := 0
+	first.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role != domain.RoleDeveloper {
+			return backend.RunResult{}, fmt.Errorf("unexpected role %q in the first process", request.Role)
+		}
+		firstAttempts++
+		if firstAttempts == 1 {
+			// A change short of the work, so the check fails on it and the repair the
+			// second process continues has something to continue.
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "draft.txt"), []byte("started\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     first.DeveloperSession,
+				ResolvedModel: developerResolved,
+				FinalText:     argue(rewordedGrantShapeArgument, "the implementation had to settle a shape to ship at all"),
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend:    domain.BackendClaudeCode,
+			SessionID:  first.DeveloperSession,
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: limit,
+			Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+			LastEvent:  request.LastSequence,
+		}, nil
+	}
+	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{command}), first),
+		&pausingClock{now: baseTime}, 6*time.Hour, time.Minute)
+	// A store over one root, built afresh for each process, is what two processes
+	// share: the log on disk and nothing either of them holds in memory.
+	firstLog, err := runstate.NewAmendmentStore(filepath.Join(worktreeRoot, "..", "amendments"), firstPipeline.Config.Product.ID)
+	if err != nil {
+		t.Fatalf("NewAmendmentStore() error = %v", err)
+	}
+	firstPipeline.Amendments = firstLog
+	paused, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
+	if err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	if !paused.Paused || paused.Status != runstate.StatusRunning || len(paused.Amendments) != 1 {
+		t.Fatalf("first outcome = %#v, want a paused run that raised one proposal", paused)
+	}
+
+	// The second process: the same run, continued once the window has reset, whose
+	// developer writes the argument again from scratch and does the work.
+	second := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
+	second.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
+		switch request.Role {
+		case domain.RoleDeveloper:
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     second.DeveloperSession,
+				ResolvedModel: developerResolved,
+				FinalText:     argue(rewordedGrantShapeRestatement, "the field set is a trust boundary rather than a formatting choice"),
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		case domain.RoleReviewer:
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     second.ReviewerSession,
+				ResolvedModel: reviewerResolved,
+				FinalText:     approveVerdict,
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		default:
+			return backend.RunResult{}, fmt.Errorf("unexpected role %q", request.Role)
+		}
+	}
+	secondPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{command}), second),
+		&pausingClock{now: resetsAt.Add(time.Minute)}, 6*time.Hour, time.Minute)
+	secondLog, err := runstate.NewAmendmentStore(filepath.Join(worktreeRoot, "..", "amendments"), secondPipeline.Config.Product.ID)
+	if err != nil {
+		t.Fatalf("NewAmendmentStore() error = %v", err)
+	}
+	secondPipeline.Amendments = secondLog
+	outcome, err := secondPipeline.Run(context.Background(), tracker.Item.ID)
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if outcome.RunID != paused.RunID || outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("second outcome = %#v, want run %s continued to success", outcome, paused.RunID)
+	}
+	if len(second.RequestsForRole(domain.RoleDeveloper)) != 1 {
+		t.Fatalf("the second process asked the developer %d time(s), want the one continued repair", len(second.RequestsForRole(domain.RoleDeveloper)))
+	}
+
+	listed, err := secondLog.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	// Read the way `yoyo amendment list` reads it, which is what the owner sees.
+	records := amendment.Pending(listed)
+	if len(records) != 1 || records[0].Change != rewordedGrantShapeArgument {
+		t.Fatalf("one argument heard by two processes produced %d proposal(s): %#v", len(records), records)
+	}
+	if len(outcome.Amendments) != 0 || outcome.AmendmentProblem != "" {
+		t.Fatalf("the second process raised or lost a proposal: %#v, %q", outcome.Amendments, outcome.AmendmentProblem)
+	}
+	recorded, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(recorded.Amendments) != 2 || !recorded.Amendments[1].Dropped() || recorded.Amendments[1].FoldedInto != records[0].ID {
+		t.Fatalf("recorded proposals = %#v, want the restatement folded into %s", recorded.Amendments, records[0].ID)
 	}
 }
 

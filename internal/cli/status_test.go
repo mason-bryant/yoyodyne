@@ -448,6 +448,43 @@ func TestStatusNamesWhatARunCouldNotKeepOfItsReportsAndProposals(t *testing.T) {
 	}
 }
 
+// A restatement the amendment channel dropped is kept on the run's record and
+// nowhere else, so it is printed under the run with what it was folded into and
+// how alike the two read — the raised proposal beside it is not, since that one
+// is in the amendment log already.
+func TestStatusNamesTheRestatementsARunDropped(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 26, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  1,
+		Recorded: 1,
+		Runs: []runstate.RunSummary{{
+			RunID:       "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:  "yoyodyne-ifd.429.19",
+			Status:      runstate.StatusSucceeded,
+			Outcome:     runstate.OutcomeSucceeded,
+			Phase:       runstate.PhaseComplete,
+			StartedAt:   completedAt,
+			CompletedAt: &completedAt,
+			Integrated:  true,
+			Amendments: []runstate.RunAmendment{
+				{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "say which ordering holds", ID: "amendment-0123456789abcdef0123456789abcdef"},
+				{Role: domain.RoleDeveloper, Artifact: "v1-design", Change: "state which of the orderings holds", FoldedInto: "amendment-0123456789abcdef0123456789abcdef", Likeness: 0.5},
+			},
+		}},
+	}, "", false)
+	rendered := out.String()
+	want := "  restatement dropped: the developer's change to v1-design was folded into amendment-0123456789abcdef0123456789abcdef (likeness 0.50): state which of the orderings holds\n"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("rendered = %q, want %q", rendered, want)
+	}
+	if strings.Count(rendered, "restatement dropped:") != 1 {
+		t.Fatalf("the raised proposal was printed as a dropped one: %q", rendered)
+	}
+}
+
 // A stale blocked status the claim cleared is said on the run whichever way the
 // clear ended, in the read model's own words, because the ending that matters
 // is the one the reason line alone reads as a run that died at the claim: no
