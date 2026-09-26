@@ -106,6 +106,10 @@ revisions:
       by: architect
       at: 2026-09-26T07:00:00Z
       reason: yoyodyne-ifd.429.23 - a replay is re-reviewed whatever its diff, because review evidence is bound to the candidate revision and a byte-identical patch on a moved base is a new one; the ruling the configuration guide left to the architect is recorded
+    - action: amended
+      by: architect
+      at: 2026-09-26T16:00:00Z
+      reason: yoyodyne-ifd.375 - the harness may cut a release the product manager decided under the delegated cadence, as the opt-in approvals.releases defaulting to human, performed by the supervisor's pass and never an agent; the notes and readiness stamp land through the release item's reviewed run, so the cut writes nothing to main and pushes the tag alone
 approvals:
     - revision: 0
       by: operator
@@ -490,6 +494,12 @@ When publishing is enabled:
 - **The merge method is a merge commit, deliberately.** The three methods produce different remote histories, and only one of them puts the reviewed commit itself on the base. A squash replaces it with a commit that was never reviewed, and GitHub's rebase always updates committer information and mints new SHAs — even for a request that sits directly on its base — so both leave the remote carrying a *copy* of the work, which the authoritative local branch does not have and can never fast-forward onto. A merge commit keeps the promoted commit intact as its second parent. The method is recorded on the run and on the work item, along with the commit the merge produced, because it is what decides the shape of the remote history.
 - **A refusal is reported as a refusal.** A protected branch declining even to queue the merge — because the request conflicts with its base, or the repository forbids the merge method — is the repository's rules being applied, not the harness failing, so the run reports which requirement was unmet: the forge's merge state and its own message, rather than a generic failure. A required check that has not finished is no longer one of these; it is what the queue waits for.
 - **The pull request body is governed or computed, never model output.** It names the run, the branch, the base, and the method the request will be merged by, and carries the work item's own description and acceptance criteria and the computed diffstat and changed-file list. Nothing unreviewed reaches it — not because the body is evidence-only, but because every source is governed or computed: item text arrives through the product manager's gated actions, and the diffstat is the harness's own arithmetic. Model output is still not republished through it.
+
+### The release tag
+
+A release the product manager has decided under a cadence the operator delegated is cut by the harness, and its tag is the one ref besides run branches the harness pushes. The decision is the product manager's recorded act: the release item admitted under the delegated cadence, which the operator recorded as a directive. The cut is the supervisor's periodic pass and nothing else — never an agent, never a conversation, never a developer run. Agents push no tags, and that is unchanged.
+
+It is an opt-in, `approvals.releases`, defaulting to `human`, for the reason publishing is one: a tag is visible outside the machine. Under `human` the cut stays a person's, and a release item's done condition says so. Under `automatic` the pass cuts when every gate the cut already holds is green — the release's notes on `main` carrying a readiness stamp whose verdict and pinned definition match a fresh reading of the commit to be tagged, the adoption walkthrough and `make check` green, `HEAD` at `origin/main` — and when the operator's pause is not placed; the intake hold does not apply, because a cut selects no work. The cut writes nothing to `main`: the notes and their stamp land through the release item's own reviewed run, which drafts the notes and stamps them with `yoyo conformance --notes` in its worktree, so the one path into the target branch stays a run's reviewed promotion. A cut that finds the notes absent or the stamp stale refuses as it does today and hands the release item back to the product manager rather than opening a pull request of its own. The tag is pushed under the harness's own identity, recorded on the release item and on the pass record, and said in the channel at warning severity, because a release is visible outside the machine. A release is not a deploy: the operations goal that a deploy happens only with the operator's explicit approval is untouched by any of this.
 
 ### How the two approvals compose
 

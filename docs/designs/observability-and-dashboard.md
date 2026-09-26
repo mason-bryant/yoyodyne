@@ -22,6 +22,10 @@ revisions:
       by: architect
       at: 2026-09-25T04:00:00Z
       reason: 'yoyodyne-ifd.430.6 companion, also landing approved amendment 7b674d9e from yoyodyne-ifd.432.9 - the read model gains the program-manager query and the page a section projecting it; the section list is restated as shipped, with spend in its own box under the status band and throughput reporting endings only'
+    - action: amended
+      by: architect
+      at: 2026-09-26T16:00:00Z
+      reason: yoyodyne-ifd.432.7 - a dashboard session is bound to a person by a fourth operators-mapping namespace, dashboard_token, a keychain or file reference; two acts each behind a grant held by the person, recorded as the resolved human; what a session may never do stated
 ---
 
 # One observability read model, and the read-only dashboard that projects it
@@ -62,6 +66,12 @@ The bind address and the allowed hosts are configuration; the defaults are loopb
 - The content-security policy stays restrictive and CDN-free; all user-, model-, repository-, and Slack-supplied text stays untrusted and escaped; nothing secret, credential, or private-identifier enters the read model or the page.
 - **What a wider bind exposes is a read-only projection.** The dashboard has no write path at any bind address; the opt-in widens who can read observability data, never who can direct work.
 - **Transport is plain HTTP in V1.** A non-loopback bind sends the token and the page in clear over the operator's network; TLS termination is deferred, and the opt-in is for networks the operator trusts. Binding to a specific interface address is preferred over a wildcard, which reaches every interface the machine has.
+
+## Acting from the dashboard: who a session is
+
+The shared token reads and acts on nothing, because it resolves to nobody. A person who acts from the page binds a fourth identifier namespace in the operators mapping, `dashboard_token`, a reference to a per-person token in the keychain (`yoyo-dashboard.<product>.<operator>`) or the token file under the state root, written by `yoyo operator token <name>` and refused to agent processes. A session presenting that token is that person while the tab holds it: proof is possession, the same layer as the forge's push authentication. It reads everything the shared token reads, travels only as a bearer header under the rules above, and pays the same plain-HTTP cost.
+
+Two acts exist and each needs a grant held by the person, never by the token: settling an owed step needs `direct-work`; deciding an amendment needs `decide-amendments`, and an amendment against a product document needs `own-intent` beside it. An act records the resolved human — name, the `dashboard` namespace, a digest prefix of the token — on the same record the terminal writes, in place of `by: operator`. A session may never direct work, never reach anything an agent could, never read more than the shared token reads, and never write anything but those two records; every other method and path is refused as today.
 
 ## Process shape
 
