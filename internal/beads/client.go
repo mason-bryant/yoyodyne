@@ -1402,6 +1402,17 @@ func (c Client) Reopen(ctx context.Context, id, reason string, parking domain.Wo
 	return c.confirmWritten(ctx, item, appendedNote(reason))
 }
 
+// maxBDOutputBytes is how much of one bd invocation's output this client keeps.
+// It is far above the process runner's general default of 8 MiB because a bd
+// listing is one JSON document that has to be read whole, and it grows with the
+// tracker: on 2026-09-26 a listing of every item including closed ones (719 of
+// them, --all since yoyodyne-ifd.433.7) reached 8.7 MiB, the runner kept the
+// first 8, and every listing-backed path failed at once, the admission guard
+// among them, so no role could admit work. At roughly 12 KiB an item this bound
+// is some twenty thousand items away; outgrowing it is refused by name below,
+// never decoded as a half.
+const maxBDOutputBytes = 256 << 20
+
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 	runner := c.Runner
 	if runner == nil {
@@ -1416,13 +1427,21 @@ func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 		timeout = defaultTimeout
 	}
 	result, err := runner.Run(ctx, execution.Command{
-		Name:    binary,
-		Args:    args,
-		Dir:     c.Dir,
-		Timeout: timeout,
+		Name:           binary,
+		Args:           args,
+		Dir:            c.Dir,
+		Timeout:        timeout,
+		MaxOutputBytes: maxBDOutputBytes,
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("run bd %s: %w", args[0], err)
+	}
+	// A cut copy of bd's output is not bd's answer, whatever it decodes to. The
+	// runner marks a copy it had to cut, and this refuses it in those words
+	// rather than handing half a listing to a JSON decoder, whose complaint
+	// about a stray bracket named nothing anybody could act on.
+	if result.OutputTruncation != "" {
+		return nil, fmt.Errorf("bd %s wrote more than the %d bytes this client retains, so its output was cut and is not read: %s", args[0], maxBDOutputBytes, result.OutputTruncation)
 	}
 	if result.Status != execution.ProcessSucceeded {
 		message := strings.TrimSpace(result.Stderr)
