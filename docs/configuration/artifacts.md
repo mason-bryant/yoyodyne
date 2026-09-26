@@ -583,7 +583,8 @@ count.** A run refused despite an item that plainly names the path is usually
 this. Both the refusal and the blocker name the fields a grant is read from.
 
 **The paths a grant does not reach.** A grant is an exception to *this harness's*
-refusal, and to nothing else's. Claude Code refuses an agent's writes to its own
+default-deny, and to nothing else's — and one directory of this harness's own
+is beyond it too, below. Claude Code refuses an agent's writes to its own
 settings files above anything yoyodyne permits — the editing tools are denied
 there however the run is configured, and the shell sandbox names the file and
 cannot be disabled by policy — so an item that grants one of them has admitted
@@ -631,10 +632,12 @@ paths for the case no gate can catch — an item that describes the work without
 granting anything, whose developer would otherwise spend attempts looking for a
 way in.
 
-The list is short and evidenced rather than a guess at everything a provider's
-sandbox refuses: an entry refuses work at admission, so a path added on suspicion costs
-items nobody needed to refuse. It grows the same way it started — something meets
-the wall and reports it.
+The provider rows are short and evidenced rather than a guess at everything a
+provider's sandbox refuses: an entry refuses work at admission, so a path added on
+suspicion costs items nobody needed to refuse. They grow the same way they started —
+something meets the wall and reports it. The role-definitions row is not one of
+them: it is this harness's own refusal, decided in the design rather than met by a
+run, and it is absolute by that decision.
 
 **A done-condition is never written against one of these homes.** The gate
 above refuses a diff; what it cannot refuse is an item whose *done-condition*
