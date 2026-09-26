@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -26,13 +27,13 @@ func TestADirectiveRecordedDuringARunPausesItAtTheGateAndResolvingItResumesTheRu
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	directives := newDirectiveStore(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 
 	// The directive is recorded from inside the developer's invocation, which is
 	// exactly when an operator gives one: the work is already under way, so
 	// nothing the run checked before it started could have seen this.
 	var held directive.Directive
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -42,7 +43,7 @@ func TestADirectiveRecordedDuringARunPausesItAtTheGateAndResolvingItResumesTheRu
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Directives = directives
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -57,17 +58,17 @@ func TestADirectiveRecordedDuringARunPausesItAtTheGateAndResolvingItResumesTheRu
 	if paused.PausedByDirective.Unresolved != held.Unresolved {
 		t.Fatalf("unresolved = %q, want %q", paused.PausedByDirective.Unresolved, held.Unresolved)
 	}
-	if paused.Integration != nil || tracker.closed || tracker.blocked {
-		t.Fatalf("the pause promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", paused, tracker.closed, tracker.blocked)
+	if paused.Integration != nil || tracker.Closed || tracker.Blocked {
+		t.Fatalf("the pause promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", paused, tracker.Closed, tracker.Blocked)
 	}
-	if !tracker.claimed {
+	if !tracker.Claimed {
 		t.Fatal("the pause gave up the claim on the work item")
 	}
 	// What the item records has to say which directive and what about it, so an
 	// operator reading a claimed item that has gone quiet can act on it.
 	for _, wanted := range []string{held.ID, held.Unresolved, "paused"} {
-		if !strings.Contains(tracker.notes, wanted) {
-			t.Fatalf("item notes = %q, want them to mention %q", tracker.notes, wanted)
+		if !strings.Contains(tracker.Notes, wanted) {
+			t.Fatalf("item notes = %q, want them to mention %q", tracker.Notes, wanted)
 		}
 	}
 
@@ -87,14 +88,14 @@ func TestADirectiveRecordedDuringARunPausesItAtTheGateAndResolvingItResumesTheRu
 
 	// While the directive is unresolved the work stays paused, and nothing starts
 	// a second attempt at it.
-	stillPaused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	stillPaused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("second Run() error = %v", err)
 	}
 	if !stillPaused.Paused || stillPaused.PausedByDirective == nil {
 		t.Fatalf("outcome = %#v, want the work still paused for the directive", stillPaused)
 	}
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Fatalf("developer invocations = %d, want the paused run not to have been re-developed", developed)
 	}
 
@@ -103,22 +104,22 @@ func TestADirectiveRecordedDuringARunPausesItAtTheGateAndResolvingItResumesTheRu
 	if _, err := directives.Resolve(held.ID, "the goal keeps its original wording", time.Now()); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	resumed, err := pipeline.Run(context.Background(), tracker.item.ID)
+	resumed, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
 	if resumed.RunID != paused.RunID {
 		t.Fatalf("resumed run = %q, want the paused run %q continued rather than a new one", resumed.RunID, paused.RunID)
 	}
-	if resumed.Paused || resumed.Integration == nil || !tracker.closed {
-		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.closed)
+	if resumed.Paused || resumed.Integration == nil || !tracker.Closed {
+		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.Closed)
 	}
 	// The gate was re-earned rather than skipped, and the developer was not asked
 	// for a second attempt it did not need.
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Fatalf("developer invocations = %d, want the resumed run to continue at the gate", developed)
 	}
-	if reviewed := len(provider.requestsForRole(domain.RoleReviewer)); reviewed != 1 {
+	if reviewed := len(provider.RequestsForRole(domain.RoleReviewer)); reviewed != 1 {
 		t.Fatalf("reviewer invocations = %d, want the change reviewed once after the pause", reviewed)
 	}
 	finished, err := store.Load(resumed.RunID)
@@ -141,7 +142,7 @@ func TestADirectiveRecordedDuringARepairAttemptStopsTheRunBeforeItPromotes(t *te
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	directives := newDirectiveStore(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 
 	// The first attempt is judged as needing repair, and the directive lands
 	// during the repair attempt the findings bought. The reviewer would approve
@@ -149,7 +150,7 @@ func TestADirectiveRecordedDuringARepairAttemptStopsTheRunBeforeItPromotes(t *te
 	// promote against intent the operator was in the middle of withdrawing.
 	var held directive.Directive
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -162,23 +163,23 @@ func TestADirectiveRecordedDuringARepairAttemptStopsTheRunBeforeItPromotes(t *te
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Directives = directives
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !paused.Paused || paused.PausedByDirective == nil || paused.PausedByDirective.ID != held.ID {
 		t.Fatalf("outcome = %#v, want the run paused for the directive recorded mid-repair", paused)
 	}
-	if paused.Integration != nil || tracker.closed {
-		t.Fatalf("the run promoted work a directive had already paused: %#v (closed=%t)", paused, tracker.closed)
+	if paused.Integration != nil || tracker.Closed {
+		t.Fatalf("the run promoted work a directive had already paused: %#v (closed=%t)", paused, tracker.Closed)
 	}
 	// The repair attempt that was already under way is not taken away from the
 	// run, and no further round is bought: the pause is where the next one would
 	// have begun.
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 2 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 2 {
 		t.Fatalf("developer invocations = %d, want the attempt in flight finished and no further round", developed)
 	}
-	if reviewed := len(provider.requestsForRole(domain.RoleReviewer)); reviewed != 1 {
+	if reviewed := len(provider.RequestsForRole(domain.RoleReviewer)); reviewed != 1 {
 		t.Fatalf("reviewer invocations = %d, want the repaired change not reviewed while paused", reviewed)
 	}
 	pausedState, err := store.Load(paused.RunID)
@@ -200,12 +201,12 @@ func TestADirectiveStopsWorkFromStartingAtAll(t *testing.T) {
 	repository := pipelineRepository(t)
 	directives := newDirectiveStore(t)
 	held := pausingDirective(t, directives, directive.KindAmbiguous, nil)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Directives = directives
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -215,10 +216,10 @@ func TestADirectiveStopsWorkFromStartingAtAll(t *testing.T) {
 	if outcome.RunID != "" || outcome.WorktreePath != "" {
 		t.Fatalf("outcome = %#v, want nothing started for a paused item", outcome)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Fatal("the item was claimed for work the directive paused")
 	}
-	if invoked := len(provider.requests); invoked != 0 {
+	if invoked := len(provider.Requests); invoked != 0 {
 		t.Fatalf("provider invocations = %d, want none", invoked)
 	}
 }
@@ -232,8 +233,8 @@ func TestAScopedDirectivePausesOnlyTheWorkItNames(t *testing.T) {
 	repository, _, _ := restartableFixture(t)
 	directives := newDirectiveStore(t)
 	pausingDirective(t, directives, directive.KindAmbiguous, []string{"yoyodyne-other"})
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -243,7 +244,7 @@ func TestAScopedDirectivePausesOnlyTheWorkItNames(t *testing.T) {
 	pipeline = automatic(pipeline, provider)
 	pipeline.Directives = directives
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -263,8 +264,8 @@ func TestAResolvedDirectiveStopsNothing(t *testing.T) {
 	if _, err := directives.Resolve(held.ID, "the design keeps its current shape", time.Now()); err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -274,7 +275,7 @@ func TestAResolvedDirectiveStopsNothing(t *testing.T) {
 	pipeline = automatic(pipeline, provider)
 	pipeline.Directives = directives
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -303,8 +304,8 @@ func TestAnOperationalDirectivePausesNothing(t *testing.T) {
 	if err := directives.Record(recorded); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -314,7 +315,7 @@ func TestAnOperationalDirectivePausesNothing(t *testing.T) {
 	pipeline = automatic(pipeline, provider)
 	pipeline.Directives = directives
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -331,11 +332,11 @@ func TestReconciliationLeavesADirectivePausedRunResumable(t *testing.T) {
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	directives := newDirectiveStore(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// Recorded while the developer works, so the run reaches the gate with a
 	// worktree and a claim to leave behind rather than never starting.
 	var held directive.Directive
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -345,7 +346,7 @@ func TestReconciliationLeavesADirectivePausedRunResumable(t *testing.T) {
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 	pipeline.Directives = directives
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -387,12 +388,12 @@ func TestAPipelineWithNoDirectiveRecordRefusesToRun(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Directives = nil
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil ||
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil ||
 		!strings.Contains(err.Error(), "durable user directives are required") {
 		t.Fatalf("Run() error = %v, want a refusal naming the missing directive record", err)
 	}

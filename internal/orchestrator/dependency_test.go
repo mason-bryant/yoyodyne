@@ -10,6 +10,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -31,21 +32,21 @@ func TestADependencyLinkedDuringARunPausesItAtTheGateAndClearingItResumesTheRun(
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 
 	// The link is applied from inside the developer's invocation, which is when a
 	// development manager triaging the queue applies one: the work is already
 	// under way, so nothing the run read before it started could have seen it.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
-		tracker.item.Dependencies = blockedBy("yoyodyne-blocker")
+		tracker.Item.Dependencies = blockedBy("yoyodyne-blocker")
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -55,22 +56,22 @@ func TestADependencyLinkedDuringARunPausesItAtTheGateAndClearingItResumesTheRun(
 	if paused.PausedByDependency == nil || paused.PausedByDependency.Summary() != "yoyodyne-blocker" {
 		t.Fatalf("the paused outcome does not name what it waits on: %#v", paused.PausedByDependency)
 	}
-	if paused.Integration != nil || tracker.closed || tracker.blocked {
-		t.Fatalf("the pause promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", paused, tracker.closed, tracker.blocked)
+	if paused.Integration != nil || tracker.Closed || tracker.Blocked {
+		t.Fatalf("the pause promoted, closed, or blocked the work: %#v (closed=%t blocked=%t)", paused, tracker.Closed, tracker.Blocked)
 	}
-	if !tracker.claimed {
+	if !tracker.Claimed {
 		t.Fatal("the pause gave up the claim on the work item")
 	}
 	// The reviewer is the round the missing gate burned, so it is the assertion
 	// that says the gate is doing its job rather than merely reporting.
-	if reviewed := len(provider.requestsForRole(domain.RoleReviewer)); reviewed != 0 {
+	if reviewed := len(provider.RequestsForRole(domain.RoleReviewer)); reviewed != 0 {
 		t.Fatalf("reviewer invocations = %d, want the change not judged while the item waits on other work", reviewed)
 	}
 	// What the item records has to name the work it waits on, so an operator
 	// reading a claimed item that has gone quiet can act on it.
 	for _, wanted := range []string{"yoyodyne-blocker", "paused"} {
-		if !strings.Contains(tracker.notes, wanted) {
-			t.Fatalf("item notes = %q, want them to mention %q", tracker.notes, wanted)
+		if !strings.Contains(tracker.Notes, wanted) {
+			t.Fatalf("item notes = %q, want them to mention %q", tracker.Notes, wanted)
 		}
 	}
 
@@ -91,36 +92,36 @@ func TestADependencyLinkedDuringARunPausesItAtTheGateAndClearingItResumesTheRun(
 	// While the item still waits, the work stays paused and nothing starts a
 	// second attempt at it. This is the "replayed sequence dispatches nothing"
 	// half: the link is now in place before the run starts, and it stops it.
-	stillPaused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	stillPaused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("second Run() error = %v", err)
 	}
 	if !stillPaused.Paused || stillPaused.PausedByDependency == nil {
 		t.Fatalf("outcome = %#v, want the work still paused for what it waits on", stillPaused)
 	}
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Fatalf("developer invocations = %d, want the paused run not to have been re-developed", developed)
 	}
 
 	// Closing what it waited on is what releases the work: the same run continues
 	// from the gate it stopped at and finishes.
-	tracker.item.Dependencies = []beads.Dependency{{ID: "yoyodyne-blocker", Type: blocksDependency, Status: "closed"}}
-	resumed, err := pipeline.Run(context.Background(), tracker.item.ID)
+	tracker.Item.Dependencies = []beads.Dependency{{ID: "yoyodyne-blocker", Type: blocksDependency, Status: "closed"}}
+	resumed, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
 	if resumed.RunID != paused.RunID {
 		t.Fatalf("resumed run = %q, want the paused run %q continued rather than a new one", resumed.RunID, paused.RunID)
 	}
-	if resumed.Paused || resumed.Integration == nil || !tracker.closed {
-		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.closed)
+	if resumed.Paused || resumed.Integration == nil || !tracker.Closed {
+		t.Fatalf("the resumed run did not finish: %#v (closed=%t)", resumed, tracker.Closed)
 	}
 	// The gate was re-earned rather than skipped, and the developer was not asked
 	// for a second attempt it did not need.
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 1 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 1 {
 		t.Fatalf("developer invocations = %d, want the resumed run to continue at the gate", developed)
 	}
-	if reviewed := len(provider.requestsForRole(domain.RoleReviewer)); reviewed != 1 {
+	if reviewed := len(provider.RequestsForRole(domain.RoleReviewer)); reviewed != 1 {
 		t.Fatalf("reviewer invocations = %d, want the change reviewed once after the pause", reviewed)
 	}
 	finished, err := store.Load(resumed.RunID)
@@ -141,41 +142,41 @@ func TestADependencyLinkedDuringARepairAttemptStopsTheRunBeforeItPromotes(t *tes
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 
 	// The first attempt is judged as needing repair, and the link lands during the
 	// repair attempt the findings bought. The reviewer would approve the next
 	// change it was shown, so a run that failed to ask again here would promote
 	// work a development manager had just made wait on something else.
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
 		attempts++
 		if attempts == 2 {
-			tracker.item.Dependencies = blockedBy("yoyodyne-blocker")
+			tracker.Item.Dependencies = blockedBy("yoyodyne-blocker")
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, repairVerdict, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !paused.Paused || paused.PausedByDependency == nil || paused.PausedByDependency.Summary() != "yoyodyne-blocker" {
 		t.Fatalf("outcome = %#v, want the run paused for the dependency linked mid-repair", paused)
 	}
-	if paused.Integration != nil || tracker.closed {
-		t.Fatalf("the run promoted work a dependency had already paused: %#v (closed=%t)", paused, tracker.closed)
+	if paused.Integration != nil || tracker.Closed {
+		t.Fatalf("the run promoted work a dependency had already paused: %#v (closed=%t)", paused, tracker.Closed)
 	}
 	// The repair attempt already under way is not taken away from the run, and no
 	// further round is bought: the pause is where the next one would have begun.
-	if developed := len(provider.requestsForRole(domain.RoleDeveloper)); developed != 2 {
+	if developed := len(provider.RequestsForRole(domain.RoleDeveloper)); developed != 2 {
 		t.Fatalf("developer invocations = %d, want the attempt in flight finished and no further round", developed)
 	}
-	if reviewed := len(provider.requestsForRole(domain.RoleReviewer)); reviewed != 1 {
+	if reviewed := len(provider.RequestsForRole(domain.RoleReviewer)); reviewed != 1 {
 		t.Fatalf("reviewer invocations = %d, want the repaired change not reviewed while paused", reviewed)
 	}
 	pausedState, err := store.Load(paused.RunID)
@@ -195,17 +196,17 @@ func TestReconciliationLeavesADependencyPausedRunResumable(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
-		tracker.item.Dependencies = blockedBy("yoyodyne-blocker")
+		tracker.Item.Dependencies = blockedBy("yoyodyne-blocker")
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	paused, err := pipeline.Run(context.Background(), tracker.item.ID)
+	paused, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

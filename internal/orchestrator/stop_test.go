@@ -15,6 +15,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -26,8 +27,8 @@ func TestARunStopsAtItsNextProviderCallWhenTheOperatorAsksIt(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		// The operator stops the run mid-attempt, from a process that holds
 		// nothing: this is the file they write beside the run.
 		if err := store.RecordStop(runstate.StopRequest{
@@ -44,7 +45,7 @@ func TestARunStopsAtItsNextProviderCallWhenTheOperatorAsksIt(t *testing.T) {
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() error = nil, want the stop reported as what ended the run")
 	}
@@ -55,12 +56,12 @@ func TestARunStopsAtItsNextProviderCallWhenTheOperatorAsksIt(t *testing.T) {
 	if outcome.Status != runstate.StatusCancelled {
 		t.Fatalf("status = %q, want a stopped run recorded as cancelled", outcome.Status)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("a stopped run promoted its work: %#v (closed=%t)", outcome.Integration, tracker.closed)
+	if outcome.Integration != nil || tracker.Closed {
+		t.Fatalf("a stopped run promoted its work: %#v (closed=%t)", outcome.Integration, tracker.Closed)
 	}
 	// The reviewer was never asked. Buying a verdict on a change nobody is going
 	// to take is exactly what stopping at the boundary avoids.
-	if reviews := countRoleRequests(provider.requests, "reviewer"); reviews != 0 {
+	if reviews := countRoleRequests(provider.Requests, "reviewer"); reviews != 0 {
 		t.Fatalf("reviewer invocations = %d, want the stop to have landed before the review", reviews)
 	}
 	stopped, err := store.Load(outcome.RunID)
@@ -78,8 +79,8 @@ func TestARunStopsAtItsNextProviderCallWhenTheOperatorAsksIt(t *testing.T) {
 	if _, err := os.Stat(stopped.WorktreePath); err != nil {
 		t.Fatalf("the stopped run's worktree did not survive: %v", err)
 	}
-	if !strings.Contains(tracker.notes, "the operator stopped this run") {
-		t.Fatalf("the work item was not told why it stopped: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "the operator stopped this run") {
+		t.Fatalf("the work item was not told why it stopped: %q", tracker.Notes)
 	}
 }
 
@@ -90,11 +91,11 @@ func TestAStopAlreadyAskedForEndsAResumedRunRatherThanContinuingIt(t *testing.T)
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	holds := newOperatorHoldStore(t)
 	// A hold is the simplest way to leave a run in flight with a process that has
 	// gone: the run parks, records why, and the invocation returns.
-	first := roleBackend(func(request backend.RunRequest) error {
+	first := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if _, err := holds.Hold(baseTime); err != nil {
 			return err
 		}
@@ -104,7 +105,7 @@ func TestAStopAlreadyAskedForEndsAResumedRunRatherThanContinuingIt(t *testing.T)
 		&pausingClock{now: baseTime}, 6*time.Hour, 0)
 	firstPipeline.Holds = holds
 
-	parked, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	parked, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("parked Run() error = %v", err)
 	}
@@ -118,7 +119,7 @@ func TestAStopAlreadyAskedForEndsAResumedRunRatherThanContinuingIt(t *testing.T)
 		SchemaVersion: runstate.StopSchemaVersion,
 		ProductID:     "yoyodyne",
 		RunID:         parked.RunID,
-		WorkItemID:    tracker.item.ID,
+		WorkItemID:    tracker.Item.ID,
 		RequestedAt:   baseTime.Add(time.Hour),
 		Reason:        "we are doing something else first",
 	}); err != nil {
@@ -128,10 +129,10 @@ func TestAStopAlreadyAskedForEndsAResumedRunRatherThanContinuingIt(t *testing.T)
 		t.Fatalf("Release() error = %v", err)
 	}
 
-	second := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	second := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	secondPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
 	secondPipeline.Holds = holds
-	outcome, err := secondPipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := secondPipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("resumed Run() error = nil, want the stop honored")
 	}
@@ -140,11 +141,11 @@ func TestAStopAlreadyAskedForEndsAResumedRunRatherThanContinuingIt(t *testing.T)
 	}
 	// Nothing was asked of the provider. A run somebody stopped must not spend
 	// one more invocation on its way to being stopped.
-	if len(second.requests) != 0 {
-		t.Fatalf("the provider was invoked resuming a stopped run: %#v", second.requests)
+	if len(second.Requests) != 0 {
+		t.Fatalf("the provider was invoked resuming a stopped run: %#v", second.Requests)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("a stopped run promoted its work: %#v (closed=%t)", outcome.Integration, tracker.closed)
+	if outcome.Integration != nil || tracker.Closed {
+		t.Fatalf("a stopped run promoted its work: %#v (closed=%t)", outcome.Integration, tracker.Closed)
 	}
 }
 
@@ -155,8 +156,8 @@ func TestHeldIntakeStartsNothingTheHarnessChose(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	intake := newIntakeHoldStore(t)
 	pipeline.Intake = intake
@@ -170,7 +171,7 @@ func TestHeldIntakeStartsNothingTheHarnessChose(t *testing.T) {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
 	}
@@ -183,11 +184,11 @@ func TestHeldIntakeStartsNothingTheHarnessChose(t *testing.T) {
 	if outcome.RunID != "" || outcome.WorktreePath != "" {
 		t.Fatalf("outcome = %#v, want nothing reserved behind a held intake", outcome)
 	}
-	if tracker.claimed {
-		t.Fatalf("a held intake claimed the work item: calls=%v", tracker.calls)
+	if tracker.Claimed {
+		t.Fatalf("a held intake claimed the work item: calls=%v", tracker.Calls)
 	}
-	if len(provider.requests) != 0 {
-		t.Fatalf("the provider was invoked while intake was held: %#v", provider.requests)
+	if len(provider.Requests) != 0 {
+		t.Fatalf("the provider was invoked while intake was held: %#v", provider.Requests)
 	}
 	incomplete, err := store.Incomplete()
 	if err != nil {
@@ -205,8 +206,8 @@ func TestHeldIntakeStillRunsAnItemTheOperatorNames(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	intake := newIntakeHoldStore(t)
 	pipeline.Intake = intake
@@ -215,7 +216,7 @@ func TestHeldIntakeStillRunsAnItemTheOperatorNames(t *testing.T) {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -249,8 +250,8 @@ func TestHeldIntakeLetsOnlyTheRecordedProbeThrough(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	intake := newIntakeHoldStore(t)
 	pipeline.Intake = intake
@@ -264,12 +265,12 @@ func TestHeldIntakeLetsOnlyTheRecordedProbeThrough(t *testing.T) {
 	}
 
 	// The hold names no probe yet, so a selection claiming to be one is refused.
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
 	}
-	if !outcome.Paused || outcome.PausedByIntake == nil || tracker.claimed {
-		t.Fatalf("outcome = %#v (claimed=%t), want a self-declared probe refused by the hold", outcome, tracker.claimed)
+	if !outcome.Paused || outcome.PausedByIntake == nil || tracker.Claimed {
+		t.Fatalf("outcome = %#v (claimed=%t), want a self-declared probe refused by the hold", outcome, tracker.Claimed)
 	}
 	// The hold names another item as its probe: still refused.
 	if _, err := intake.ReviseBrake(func(brake *runstate.IntakeBrake) error {
@@ -278,22 +279,22 @@ func TestHeldIntakeLetsOnlyTheRecordedProbeThrough(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReviseBrake() error = %v", err)
 	}
-	outcome, err = pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err = pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want a pause rather than a failure", err)
 	}
-	if !outcome.Paused || tracker.claimed {
-		t.Fatalf("outcome = %#v (claimed=%t), want a probe of another item refused for this one", outcome, tracker.claimed)
+	if !outcome.Paused || tracker.Claimed {
+		t.Fatalf("outcome = %#v (claimed=%t), want a probe of another item refused for this one", outcome, tracker.Claimed)
 	}
 	// The hold names this item as its probe: the run goes through, with the
 	// brake recorded as what chose it.
 	if _, err := intake.ReviseBrake(func(brake *runstate.IntakeBrake) error {
-		brake.Probe = &runstate.IntakeProbe{WorkItemID: tracker.item.ID, StartedAt: baseTime}
+		brake.Probe = &runstate.IntakeProbe{WorkItemID: tracker.Item.ID, StartedAt: baseTime}
 		return nil
 	}); err != nil {
 		t.Fatalf("ReviseBrake() error = %v", err)
 	}
-	outcome, err = pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err = pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -316,11 +317,11 @@ func TestARunWithNoStatedSelectionRecordsNoReason(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

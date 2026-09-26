@@ -22,6 +22,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -54,14 +55,14 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	docket := &memoryDocket{}
 
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, docket)
 
 	// The development manager's decision, which spends the item's repair budget
 	// before anything acts on it.
-	if _, err := store.Triage().GrantRepair(context.Background(), tracker.item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
+	if _, err := store.Triage().GrantRepair(context.Background(), tracker.Item.ID, triageDecided(runstate.TriageDecisionRepair, stopped.RunID), 2, docketedNow, handbackCaps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 
@@ -70,7 +71,7 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 	// the only moment the question can be asked.
 	var handedTo backend.RunRequest
 	var handedFiles []string
-	second := roleBackend(func(request backend.RunRequest) error {
+	second := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		handedTo = request
 		handedFiles = presentHandbackFiles(request.WorkingDirectory)
 		return nil
@@ -101,8 +102,8 @@ func TestARepairHandbackCarriesThePreservedChange(t *testing.T) {
 	}
 	// It is the same developer carrying on rather than a new one, which is the
 	// other half of continuing a change instead of re-deriving it.
-	if handedTo.SessionID != second.developerSession {
-		t.Fatalf("the repair ran in session %q, want the recorded developer session %q", handedTo.SessionID, second.developerSession)
+	if handedTo.SessionID != second.DeveloperSession {
+		t.Fatalf("the repair ran in session %q, want the recorded developer session %q", handedTo.SessionID, second.DeveloperSession)
 	}
 	// And it was handed the findings it is a repair of, not a fresh work item.
 	if !strings.Contains(handedTo.Prompt, "add the missing file") {
@@ -119,7 +120,7 @@ func TestAResumedRepairRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 
 	// The failure this item was filed for, in the state it leaves on disk: the
@@ -130,16 +131,16 @@ func TestAResumedRepairRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	// records before the pipeline is asked to continue it.
 	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseDeveloping)
 
-	second := roleBackend(func(request backend.RunRequest) error {
+	second := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a developer was invoked for a repair of a change that is not in %s", request.WorkingDirectory)
 		return nil
 	}, approveVerdict)
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
 
-	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+	if _, err := continuing.Run(context.Background(), tracker.Item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
 		t.Fatalf("Run() error = %v, want the handback refused for holding none of its change", err)
 	}
-	if invocations := len(second.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+	if invocations := len(second.RequestsForRole(domain.RoleDeveloper)); invocations != 0 {
 		t.Fatalf("developer invocations = %d, want the refusal to have spent nothing on a provider", invocations)
 	}
 	// It refuses loudly: the run ends carrying a blocker that says what happened,
@@ -152,13 +153,13 @@ func TestAResumedRepairRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	if !refused.Status.Terminal() || refused.Blocker == "" {
 		t.Fatalf("refused run = %#v, want it ended on a durable blocker", refused)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "holds none of the change") {
-		t.Fatalf("item blocked = %t, reason = %q", tracker.blocked, tracker.blockReason)
+	if !tracker.Blocked || !strings.Contains(tracker.BlockReason, "holds none of the change") {
+		t.Fatalf("item blocked = %t, reason = %q", tracker.Blocked, tracker.BlockReason)
 	}
 	// The reason says the change may still be on the branch, because a reader who
 	// concluded the work was gone would replan work that still exists.
-	if !strings.Contains(tracker.blockReason, "nothing was deleted") {
-		t.Fatalf("blocker does not say where the preserved work is: %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "nothing was deleted") {
+		t.Fatalf("blocker does not say where the preserved work is: %q", tracker.BlockReason)
 	}
 }
 
@@ -171,21 +172,21 @@ func TestAResumedReviewRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	emptyPreservedWorktree(t, stopped.WorktreePath)
 	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseReviewing)
 
-	second := roleBackend(func(request backend.RunRequest) error {
+	second := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a developer was invoked from %s, which a review-phase resume never does", request.WorkingDirectory)
 		return nil
 	}, approveVerdict)
 	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
 
-	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+	if _, err := continuing.Run(context.Background(), tracker.Item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
 		t.Fatalf("Run() error = %v, want the re-entry refused for holding none of its change", err)
 	}
-	if invocations := len(second.requests); invocations != 0 {
+	if invocations := len(second.Requests); invocations != 0 {
 		t.Fatalf("provider invocations = %d, want the reviewer never asked to judge an empty diff", invocations)
 	}
 }
@@ -198,20 +199,20 @@ func TestAFreshRunIsRefusedWhereARepairIsOwed(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
 	// Somebody puts the item back, which is what lets a fresh run past every
 	// other gate and says nothing about whether starting over is right.
-	tracker.item.Status = "open"
+	tracker.Item.Status = "open"
 
-	fresh := roleBackend(func(request backend.RunRequest) error {
+	fresh := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a fresh run reached a developer in %s, in place of the repair run %s is owed", request.WorkingDirectory, stopped.RunID)
 		return nil
 	}, approveVerdict)
 	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, fresh, []string{"exit 0"}), fresh)
 	starting.NewRunID = runstate.NewRunID
 
-	_, err := starting.Run(context.Background(), tracker.item.ID)
+	_, err := starting.Run(context.Background(), tracker.Item.ID)
 	if !errors.Is(err, ErrHandbackSubstituted) {
 		t.Fatalf("Run() error = %v, want the fresh run refused as a substituted handback", err)
 	}
@@ -222,8 +223,8 @@ func TestAFreshRunIsRefusedWhereARepairIsOwed(t *testing.T) {
 			t.Fatalf("refusal = %v, is missing %q", err, want)
 		}
 	}
-	if len(fresh.requests) != 0 {
-		t.Fatalf("provider invocations = %d, want nothing spent", len(fresh.requests))
+	if len(fresh.Requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(fresh.Requests))
 	}
 	// Nothing was reserved and nothing was created: the stoppage is exactly as it
 	// was, so carrying out either decision afterwards costs it nothing.
@@ -244,28 +245,28 @@ func TestAClaimedReRunStartsFreshWhereARepairIsOwed(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
-	tracker.item.Status = "open"
+	tracker.Item.Status = "open"
 
 	if _, err := store.Reruns().Claim(context.Background(), runstate.Rerun{
 		DocketKey:  triage.Key(triage.ClassStoppedRun, stopped.RunID),
 		PriorRunID: stopped.RunID,
-		WorkItemID: tracker.item.ID,
+		WorkItemID: tracker.Item.ID,
 		Reason:     "the ground under this change moved, so it is the item that needs running again rather than the change that needs repairing",
 	}); err != nil {
 		t.Fatalf("Claim() error = %v", err)
 	}
 
 	var startedIn string
-	fresh := roleBackend(func(request backend.RunRequest) error {
+	fresh := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		startedIn = request.WorkingDirectory
 		return writeHandbackChange(request.WorkingDirectory)
 	}, approveVerdict)
 	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, fresh, []string{"exit 0"}), fresh)
 	starting.NewRunID = runstate.NewRunID
 
-	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	outcome, err := starting.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want the claimed re-run started", err)
 	}
@@ -321,7 +322,7 @@ func reEnterAt(t *testing.T, store *runstate.Store, tracker recordingTracker, ru
 // durable blocker with its branch and worktree preserved.
 func stopWithPreservedChange(t *testing.T, repository, worktreeRoot string, store *runstate.Store, tracker recordingTracker, docket *memoryDocket) Outcome {
 	t.Helper()
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeHandbackChange(request.WorkingDirectory)
 	}, repairVerdict)
 	stopping := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -91,14 +92,14 @@ func TestADeveloperThatEndedOnInterimProgressIsAskedForTheAccount(t *testing.T) 
 	t.Parallel()
 
 	tracker := newOutcomeTracker()
-	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalTextByAttempt = []string{
+	provider := orchestratortest.RoleBackend(writeFeature, approveVerdict)
+	provider.DeveloperFinalTextByAttempt = []string{
 		"the check is running; I'll report when it lands",
 		"Added feature.txt and ran the configured check, which passes. No risk outstanding.",
 	}
 	pipeline, _ := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -108,7 +109,7 @@ func TestADeveloperThatEndedOnInterimProgressIsAskedForTheAccount(t *testing.T) 
 	if outcome.Summary != "Added feature.txt and ran the configured check, which passes. No risk outstanding." {
 		t.Fatalf("summary = %q, want the account rather than the interim line", outcome.Summary)
 	}
-	requests := provider.requestsForRole(domain.RoleDeveloper)
+	requests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(requests) != 2 {
 		t.Fatalf("the developer was invoked %d time(s), want the first attempt and one re-ask", len(requests))
 	}
@@ -123,7 +124,7 @@ func TestADeveloperThatEndedOnInterimProgressIsAskedForTheAccount(t *testing.T) 
 	if !strings.Contains(reasked.Prompt, "The work you already did is untouched") {
 		t.Fatalf("the re-ask does not say the change is not what was refused:\n%s", reasked.Prompt)
 	}
-	if reasked.SessionID != provider.developerSession {
+	if reasked.SessionID != provider.DeveloperSession {
 		t.Fatalf("the re-ask ran in session %q, want the session that did the work", reasked.SessionID)
 	}
 	// A missing account is not something a repair attempt fixes, and spending one
@@ -141,11 +142,11 @@ func TestARunEndsWhenItsDeveloperNeverAccountsForTheWork(t *testing.T) {
 	t.Parallel()
 
 	tracker := newOutcomeTracker()
-	provider := roleBackend(writeFeature, approveVerdict)
-	provider.developerFinalText = "the check is running; I'll report when it lands"
+	provider := orchestratortest.RoleBackend(writeFeature, approveVerdict)
+	provider.DeveloperFinalText = "the check is running; I'll report when it lands"
 	pipeline, store := newAutomaticPipeline(t, pipelineRepository(t), tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "without accounting for the work") {
 		t.Fatalf("Run() error = %v, want a run that failed naming the unaccounted reply", err)
 	}
@@ -155,17 +156,17 @@ func TestARunEndsWhenItsDeveloperNeverAccountsForTheWork(t *testing.T) {
 	if outcome.Summary != "" {
 		t.Fatalf("summary = %q, want an interim line recorded as no account at all", outcome.Summary)
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("an item closed against work nothing accounted for; calls = %v", tracker.calls)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("an item closed against work nothing accounted for; calls = %v", tracker.Calls)
 	}
 	// Asked once and no more: the third invocation would be the largest thing the
 	// harness buys, spent on the same question.
-	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations != 2 {
+	if invocations := len(provider.RequestsForRole(domain.RoleDeveloper)); invocations != 2 {
 		t.Fatalf("the developer was invoked %d time(s), want the attempt and one re-ask", invocations)
 	}
 	// And what a person reads afterwards says which failure this was.
-	if !strings.Contains(tracker.notes, "accounting for the work") {
-		t.Fatalf("the recorded failure does not name the unaccounted reply: %q", tracker.notes)
+	if !strings.Contains(tracker.Notes, "accounting for the work") {
+		t.Fatalf("the recorded failure does not name the unaccounted reply: %q", tracker.Notes)
 	}
 	recorded := onlyRecordedRun(t, store)
 	if recorded.Outcome != runstate.OutcomeFailed {
