@@ -92,13 +92,13 @@ const MaxProductBytes = ShippedDocumentationCeiling + productContextReserve
 const maxProductWorkItems = 200
 
 // maxDocketEntries bounds how many docket entries one context lists, and
-// maxTriageDocketBytes bounds what the section may cost whatever it lists. The
+// MaxTriageDocketBytes bounds what the section may cost whatever it lists. The
 // docket is evidence about what has stopped, not an export of everything that
 // ever did, and one entry carries a blocker, a reviewer's findings, and a
 // check's output — so the count alone would not bound the section.
 const (
 	maxDocketEntries     = 25
-	maxTriageDocketBytes = 48 << 10
+	MaxTriageDocketBytes = 48 << 10
 )
 
 // maxWorkItemTitleBytes keeps one tracker-supplied title to one line.
@@ -1709,7 +1709,7 @@ func renderTriageDocket(request ProductRequest) (string, *triage.WindowPosition)
 			section += fmt.Sprintf("      This run has waited since %s, when it was first docketed.\n",
 				standing.Since.UTC().Format(time.RFC3339))
 		}
-		if spent+len(section) > maxTriageDocketBytes-maxDocketTrailerBytes {
+		if spent+len(section) > MaxTriageDocketBytes-maxDocketTrailerBytes {
 			return false
 		}
 		rendered.WriteString(section)
