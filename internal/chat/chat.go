@@ -67,6 +67,23 @@ const MaxTurnInputBytes = 3 << 20
 // prose and small enough that a mis-piped file is refused rather than sent.
 const MaxOperatorMessageBytes = 32 << 10
 
+// MaxPassMessageBytes bounds the message a scheduled pass puts into a role's
+// conversation. That message is not something a person typed: the harness
+// composes it from the task's prompt and what the pass hands the role, the
+// development manager's triage docket above all, so the operator's bound is the
+// wrong one for it.
+//
+// From 2026-09-26 06:39Z every development manager sweep was refused before its
+// first turn with "operator message is 47768 bytes, limit is 32768": 428.30 put
+// the docket into the sweep's message, the docket section may be
+// contextbundle.MaxTriageDocketBytes (48 KiB), and the message carrying it was
+// held to the 32 KiB a person may type. No stoppage was decided all day, and the
+// only account was a partial pass in the sweep log.
+//
+// It is sized from the docket's own bound plus room for the task's prompt, and
+// TestAPassMessageBoundSitsAboveTheDocketItCarries compares them.
+const MaxPassMessageBytes = 256 << 10
+
 // maxPendingNotices and maxNoticeBytes bound the account of harness activity
 // one turn carries. The product manager is told what the operator did, not
 // handed an unbounded log of it. The count is the bound the durable record holds
@@ -1176,8 +1193,14 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	if trimmed == "" {
 		return Reply{}, errors.New("an operator message is required")
 	}
-	if len(trimmed) > MaxOperatorMessageBytes {
-		return Reply{}, fmt.Errorf("operator message is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
+	// A pass's message is composed by the harness and bounded as one; anything
+	// else is what a person said.
+	limit, what := MaxOperatorMessageBytes, "operator message"
+	if s.pass != "" {
+		limit, what = MaxPassMessageBytes, "scheduled pass's message"
+	}
+	if len(trimmed) > limit {
+		return Reply{}, fmt.Errorf("%s is %d bytes, limit is %d", what, len(trimmed), limit)
 	}
 
 	var reply Reply

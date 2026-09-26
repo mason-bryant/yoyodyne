@@ -506,6 +506,27 @@ func TestSendRejectsEmptyAndOversizedOperatorMessages(t *testing.T) {
 	}
 }
 
+func TestAPassMessageIsBoundedAsComposedNotAsTyped(t *testing.T) {
+	t.Parallel()
+
+	docketSized := strings.Repeat("x", 48<<10)
+	session := openTestSession(t, testOptions(t, &fakeBackend{}))
+	session.ForPass("development-manager-sweep#1")
+	if _, err := session.Send(context.Background(), docketSized); err != nil && strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("a pass carrying a docket-sized message was refused on size: %v", err)
+	}
+	if _, err := session.Send(context.Background(), strings.Repeat("x", MaxPassMessageBytes+1)); err == nil ||
+		!strings.Contains(err.Error(), "scheduled pass's message") {
+		t.Fatalf("Send() oversized pass message error = %v", err)
+	}
+
+	typed := openTestSession(t, testOptions(t, &fakeBackend{}))
+	if _, err := typed.Send(context.Background(), docketSized); err == nil ||
+		!strings.Contains(err.Error(), "operator message is") {
+		t.Fatalf("a typed message of the same size was not refused: %v", err)
+	}
+}
+
 func TestConverseTakesTurnsUntilTheOperatorEndsIt(t *testing.T) {
 	t.Parallel()
 

@@ -23,7 +23,7 @@ const systemPromptAllowance = 128 << 10
 // were chosen in different packages and nothing compared them. This compares
 // them.
 func TestTheTurnBackstopSitsAboveWhatItBackstops(t *testing.T) {
-	needed := contextbundle.MaxProductBytes + MaxOperatorMessageBytes + systemPromptAllowance
+	needed := contextbundle.MaxProductBytes + max(MaxOperatorMessageBytes, MaxPassMessageBytes) + systemPromptAllowance
 	if MaxTurnInputBytes < needed {
 		t.Fatalf("a turn may carry %d bytes, but the product context alone may be %d, "+
 			"an operator message %d, and the system prompt needs about %d: %d bytes short. "+
@@ -45,5 +45,20 @@ func TestThePendingPictureBoundSitsAboveTheBundleItKeeps(t *testing.T) {
 		t.Fatalf("a picture may wait as %d bytes beside the record, but an assembled product context may be %d: "+
 			"a refresh of an ordinary bundle would be refused, and the re-read taken for it discarded.",
 			runstate.MaxPendingPictureBytes, contextbundle.MaxProductBytes)
+	}
+}
+
+// passPromptAllowance is what a recurring task's own prompt may add to the
+// message beside the docket. The sweep prompts in this repository are a few KiB.
+const passPromptAllowance = 16 << 10
+
+// TestAPassMessageBoundSitsAboveTheDocketItCarries is the regression test for
+// 2026-09-26, when the development manager's sweep carried a docket its message
+// bound could not hold and every pass was refused before its first turn.
+func TestAPassMessageBoundSitsAboveTheDocketItCarries(t *testing.T) {
+	if needed := contextbundle.MaxTriageDocketBytes + passPromptAllowance; MaxPassMessageBytes < needed {
+		t.Fatalf("a pass's message may be %d bytes, but the docket alone may be %d and the task's prompt about %d: "+
+			"a sweep given a docket at its bound would be refused every pass",
+			MaxPassMessageBytes, contextbundle.MaxTriageDocketBytes, passPromptAllowance)
 	}
 }
