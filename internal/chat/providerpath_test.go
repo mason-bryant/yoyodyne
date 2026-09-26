@@ -129,3 +129,52 @@ func TestTheContractsNameEveryPathBeyondAGrant(t *testing.T) {
 		}
 	}
 }
+
+// A role definition is beyond a grant for this harness's own reason rather than
+// a provider's, and it is refused at the same three doors through the same
+// predicate: a run that could write one could widen its own authority.
+func TestAGrantOfTheRoleDefinitionsIsRefusedAtEveryDoorIntoTheQueue(t *testing.T) {
+	t.Parallel()
+
+	roleGrant := "\n\n" + protectedpath.GrantMarker + " " + protectedpath.RoleDefinitions + "/developer.yaml\n"
+	for door, err := range map[string]error{
+		"create": TrackerAction{
+			Action:      actionCreate,
+			Title:       "Give the developer a new capability",
+			Description: "The developer's role definition needs one more capability." + roleGrant,
+			Goal:        recordedGoal,
+			Reason:      "the developer needs it",
+		}.Validate(),
+		"update": TrackerAction{
+			Action:      actionUpdate,
+			ID:          "yoyodyne-ifd.429.29",
+			Description: "The developer's role definition needs one more capability." + roleGrant,
+			Reason:      "the item needed the path",
+		}.Validate(),
+		"proposal": Proposal{
+			Title:       "Give the developer a new capability",
+			Description: "The developer's role definition needs one more capability." + roleGrant,
+			Rationale:   "the developer needs it",
+			Goal:        recordedGoal,
+		}.Validate(),
+	} {
+		if err == nil {
+			t.Fatalf("%s carrying a grant of the role definitions = nil error, want it refused", door)
+		}
+		for _, want := range []string{protectedpath.RoleDefinitions, "no grant reaches", "operator"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s refusal %q never names %q", door, err, want)
+			}
+		}
+	}
+}
+
+func TestTheContractsNameTheRoleDefinitionsAsBeyondAGrant(t *testing.T) {
+	t.Parallel()
+
+	for who, text := range map[string]string{"product manager": productManagerContract, "development manager": developmentManagerContract} {
+		if !strings.Contains(text, protectedpath.RoleDefinitions+"/") {
+			t.Fatalf("the %s contract never names %q, which the harness refuses a grant of", who, protectedpath.RoleDefinitions)
+		}
+	}
+}

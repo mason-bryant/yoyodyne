@@ -112,12 +112,20 @@ func (s Set) Directories() []string {
 // directory covers what is inside it, and a grant naming a file covers that file
 // alone, which is what lets an item admit one design document without admitting
 // the design home.
+//
+// The role definitions are the exception no grant reaches: a changed path inside
+// them is refused whatever the item grants, including a grant of the directory
+// itself or of the configuration directory around it (see roles.go).
 func (s Set) Refused(changed, granted []string) []string {
 	grants := normalizeAll(granted)
 	var refused []string
 	for _, candidate := range changed {
 		clean, ok := normalize(candidate)
 		if !ok {
+			continue
+		}
+		if isRoleDefinition(clean) {
+			refused = appendUnique(refused, clean)
 			continue
 		}
 		if !within(clean, s.directories) && !within(clean, s.exports) {

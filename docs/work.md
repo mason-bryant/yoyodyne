@@ -504,8 +504,8 @@ check existed, is refused at the start of the run rather than parked at the end
 of it, and nothing is spent — no worktree, no claim, no attempt. The refusal
 says the same thing admission's does, quoting the clause, so what a run refuses
 and what admission would have refused cannot come apart. Neither check reaches
-`.claude/settings.json` or `.claude/settings.local.json`, which stay
-[beyond any grant](configuration.md#protected-paths-in-a-developers-change)
+`.claude/settings.json`, `.claude/settings.local.json`, or `.yoyodyne/roles/`,
+which stay [beyond any grant](configuration.md#protected-paths-in-a-developers-change)
 whatever an item says.
 
 ## What a landing claims

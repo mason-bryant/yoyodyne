@@ -349,6 +349,10 @@ var expresses = map[string]expression{
 		question: "none: this reports which grants reach provider-refused paths",
 		gap:      "the same paths outside this harness's authority, read from the other end",
 	},
+	"protectedpath.role-definitions": {
+		question: "none: no role holds authority to write a role definition, and no grant confers it",
+		gap:      "an absolute refusal is the absence of a capability rather than a capability some bundle lacks; a person writes a role definition and the operator activates it",
+	},
 	"protectedpath.grant-problems": {
 		question: "the roles asked are the ones that put work in the queue",
 		asks:     []capability.Capability{capability.BacklogAdmit, capability.WorkDecompose},

@@ -7340,7 +7340,7 @@ That boundary is enforced rather than trusted. The project's configuration direc
 
 The same gate refuses the work tracker's export where your worktree carries one. The harness copies it in from the checkout your worktree was cut from, so you read the work around your own rather than the copy your base commit carried, and holds it out of your change: it is derived from a store outside Git that nothing you write reaches, and every run is given its own copy, so the same file in two changes is a merge conflict between runs rather than a contribution. Read it and leave it alone. A change containing it is handed back to you whatever became of the bit that holds it.
 
-A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
+A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one. The same holds of this harness's own ".yoyodyne/roles/": a role definition says what a role may do, so the harness refuses a change touching that directory whatever the work item grants, and refuses an item whose text grants it before a run starts. A person changes a role definition and the operator activates it; say in your summary what it should say.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
@@ -7454,6 +7454,9 @@ func pathRefusalRepairPrompt(invariants, scratchDirectory string, checks []strin
 	// out of.
 	if len(protected.HeldExportsAmong(refusal.Paths)) > 0 {
 		prompt.WriteString("\n" + protectedpath.ExportInstruction + "\n")
+	}
+	if len(protectedpath.RoleDefinitionsAmong(refusal.Paths)) > 0 {
+		prompt.WriteString("\n" + protectedpath.RoleInstruction + "\n")
 	}
 	prompt.WriteString("\nRestore each refused path to what it held before your change, finish the work you were assigned within the paths that are yours, and finish with a concise summary of what you changed. The harness applies this gate again afterwards; the checks, review, and integration stay out of reach until the change touches nothing it was not granted.")
 	return prompt.String()
@@ -7611,6 +7614,12 @@ func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit i
 	if held := refused.set.HeldExportsAmong(refused.refusal.Paths); len(held) > 0 {
 		lines = append(lines, "Held out of every run's change by the harness: "+strings.Join(held, ", "),
 			"That is a derived export the harness refreshes into each worktree and holds out of its change, so a change carrying one is a lifted hold rather than a missing grant.")
+	}
+	// A role definition is the other refusal no grant would have settled, so the
+	// note says so rather than leaving "missing a grant" as a reading of it.
+	if roles := protectedpath.RoleDefinitionsAmong(refused.refusal.Paths); len(roles) > 0 {
+		lines = append(lines, "Role definitions: "+strings.Join(roles, ", "),
+			"No grant reaches "+protectedpath.RoleDefinitions+"/, so a change carrying one is a change to take back out rather than a missing grant; a person changes a role definition by hand and the operator activates it.")
 	}
 	if len(refused.refusal.Grants) > 0 {
 		lines = append(lines, "Granted by this work item: "+strings.Join(refused.refusal.Grants, ", "))
