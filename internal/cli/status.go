@@ -322,6 +322,7 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	// true now, and everything below is what became of attempts that are over.
 	if standing != nil {
 		fmt.Fprint(stdout, standing.Render())
+		fmt.Fprint(stdout, standing.RenderProgramManagers())
 		fmt.Fprintln(stdout)
 	}
 	printWatch(stdout, watched)
@@ -599,12 +600,9 @@ func standingSources(configPath string) readmodel.Sources {
 	if store, err := runstate.NewSupervisionStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Supervision = store
 	}
-	// The program manager instances and their open restart requests, which
-	// nothing acts on until the supervisor's periodic pass does.
-	sources.ProgramManagers = programManagerAgents(cfg)
-	if store, err := runstate.NewRestartRequestStore(stateRoot, cfg.Product.ID); err == nil {
-		sources.RestartRequests = store
-	}
+	// The program manager instances, and everything their status is derived
+	// from.
+	programManagerSources(&sources, cfg, stateRoot)
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
 	if err != nil {
 		sources.Tracker = unreadableTracker{fmt.Errorf("resolve product repository: %w", err)}
@@ -639,17 +637,43 @@ func agentEndpoints(cfg config.Config) []readmodel.AgentEndpoint {
 	return endpoints
 }
 
-// programManagerAgents is every configured agent on the program manager role,
-// sorted by name.
-func programManagerAgents(cfg config.Config) []string {
-	var names []string
+// programManagerSources wires what the read model derives each program manager
+// instance from: the configured instances, their restart requests, their lane
+// reports, the pass records, and the exchanges. The reports, the amendments,
+// and the conversations a status also reads are wired by the caller, because
+// the four lines read them too. A store that cannot be built is left unwired,
+// which the reading says rather than reporting what it could not read as none.
+func programManagerSources(sources *readmodel.Sources, cfg config.Config, stateRoot string) {
+	sources.ProgramManagers = programManagerInstances(cfg)
+	if store, err := runstate.NewRestartRequestStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.RestartRequests = store
+	}
+	if store, err := runstate.NewLaneReportStore(stateRoot, cfg.Product.ID, readmodel.CheckLaneReportMover); err == nil {
+		sources.LaneReports = store
+	}
+	if store, err := runstate.NewSweepStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Passes = store
+	}
+	if store, err := runstate.NewExchangeStore(stateRoot, cfg.Product.ID); err == nil {
+		sources.Exchanges = store
+	}
+}
+
+// programManagerInstances is every configured agent on the program manager
+// role, with its lane and its schedule, sorted by name.
+func programManagerInstances(cfg config.Config) []readmodel.ProgramManagerInstance {
+	var instances []readmodel.ProgramManagerInstance
 	for name, agent := range cfg.Agents {
 		if agent.Role == domain.RoleProgramManager {
-			names = append(names, name)
+			instances = append(instances, readmodel.ProgramManagerInstance{
+				Agent: name,
+				Lane:  cfg.AgentLane(name),
+				Every: agent.Triggers.Every.Duration(),
+			})
 		}
 	}
-	sort.Strings(names)
-	return names
+	sort.Slice(instances, func(first, second int) bool { return instances[first].Agent < instances[second].Agent })
+	return instances
 }
 
 // developerEndpoints is every endpoint a developer run's turn can be asked of:

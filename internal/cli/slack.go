@@ -455,6 +455,9 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Slots:             resolved.Config.Execution.DeveloperSlots,
 		TrackerTimeout:    chatTrackerTimeout,
 	}
+	// The program manager instances, so the hourly line counts the stale ones
+	// from the derivation `yoyo status` prints them from.
+	programManagerSources(standing, resolved.Config, stateRoot)
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,
 		// What the project configured is the picture beside each name and nothing
