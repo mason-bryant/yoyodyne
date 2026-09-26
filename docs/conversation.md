@@ -1123,18 +1123,33 @@ that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
 Work carved out of a run that failed is the one decomposition the harness adds
-a dependency to. Such a child is written against the change that run made, and
-that change is on the branch the run preserved rather than on the branch a fresh
+to. Such a child may be written against the change that run made, and that
+change is on the branch the run preserved rather than on the branch a fresh
 worktree is cut from — so an item assuming files that exist only there is not
 ready, however clean it reads, and the run that pulled it would start in a
 worktree without them. Where the harness's own run records say the parent's
-change never reached the integration target, a creation under it is linked to
-wait for the parent, the child's notes say which run made that change, which
-branch it is on and which pull request published it, and the result of the
-creation says so to you and to the development manager. The child comes free
-however the change lands: the preserved branch cherry-picked, the pull request
-revived, or the substrate rebuilt from nothing. Which of those is cheapest is
-your decision and the product manager's — the development manager says what it
+change never reached the integration target, a creation under it records in
+the child's notes which run made that change, which branch and commit it is on,
+and which pull request published it, as guidance. The child is left open, and
+the result of the creation says whether it is held, to you and to the
+development manager.
+
+What holds it is the child's own text. A child that says in its title,
+description, design, or acceptance criteria that it builds on its parent's
+change — "builds on the parent's change", or the parent named, as in "builds on
+yoyodyne-ifd.100's files" — is held by the scheduler, which reads that at every
+pull, and listed as waiting on the parent's change rather than as held for a
+person. It comes free however the change lands: a later run of the parent
+promoting it, which the run records then say, or the parent closing — the
+preserved branch cherry-picked, the pull request revived, or the substrate
+rebuilt from nothing. A child that supersedes the parent's change rather than
+building on its files says nothing of the kind and is not held at all. Nothing
+links a child to wait on its own parent, because the tracker refuses that link
+when the child already hangs on the parent, and nothing sets one blocked in its
+place: on 2026-09-25 that fallback blocked all six children of
+yoyodyne-ifd.429.13, which superseded the parent's pull request 757, with a
+blocker nobody cleared. Which vehicle lands the parent's change is your
+decision and the product manager's — the development manager says what it
 thinks and records none of it as scope. Decomposition of work whose change is on
 the target branch is untouched, and so is the dependency structure the
 development manager records itself.

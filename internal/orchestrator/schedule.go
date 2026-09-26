@@ -3461,7 +3461,7 @@ func passedOverReason(entry backlog.Entry) (string, bool) {
 		return conversationExecutedReason(entry.Executor), true
 	case entry.Parking.Parked():
 		return parkedReason(entry.Parking), true
-	case entry.Awaiting != "":
+	case entry.Awaiting != "" && !entry.AwaitingLanding:
 		return heldReason(entry.Awaiting, entry.AwaitingCarryOut), true
 	default:
 		return "", false
@@ -3487,9 +3487,11 @@ func unreadyClass(entry backlog.Entry) runstate.PassedOverClass {
 		return runstate.PassedOverParked
 	case entry.AwaitingCarryOut:
 		return runstate.PassedOverAwaitingCarryOut
-	case entry.Awaiting != "":
+	case entry.Awaiting != "" && !entry.AwaitingLanding:
 		return runstate.PassedOverAwaitingDecision
 	default:
+		// A child waiting on its parent's change to land is waiting on other work,
+		// exactly as one waiting on a dependency is: it clears by itself.
 		return runstate.PassedOverWaitingOnOtherWork
 	}
 }

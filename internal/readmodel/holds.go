@@ -287,7 +287,52 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		carryOut, problem := decided(workItemID, run.RunID)
 		reasons[workItemID] = heldFor(mergedPublication(run), carryOut, problem)
 	}
-	return backlog.ReadHolds(reasons)
+	return backlog.ReadHolds(reasons).OnUnlandedParents(unlandedChanges(runs))
+}
+
+// unlandedChanges is every item whose own change the harness recorded and never
+// saw reach the integration target, with where that change is, walked the way a
+// creation under one of them walks it (runstate.Unlanded). It holds nothing
+// itself: it is what a child that says it builds on one of these items is held
+// for, until the change lands.
+func unlandedChanges(runs []runstate.State) map[string]string {
+	perItem := make(map[string][]runstate.State)
+	for _, run := range runs {
+		if run.WorkItemID != "" {
+			perItem[run.WorkItemID] = append(perItem[run.WorkItemID], run)
+		}
+	}
+	unlanded := make(map[string]string)
+	for workItemID, itemRuns := range perItem {
+		runstate.NewestFirst(itemRuns)
+		if run, found := runstate.Unlanded(itemRuns); found {
+			unlanded[workItemID] = UnlandedAccount(run)
+		}
+	}
+	return unlanded
+}
+
+// UnlandedAccount says where one item's unlanded change is: the run that made it,
+// the branch and commit it is on, and the pull request that published it, where
+// each was recorded. It is the account the queue gives for a child held on the
+// change and the guidance a creation under the item records on the child, so the
+// two name the same branch in the same words.
+func UnlandedAccount(run runstate.State) string {
+	target := strings.TrimSpace(run.TargetBranch)
+	if target == "" {
+		target = "the integration target"
+	}
+	account := fmt.Sprintf("the change run %s made for %s never reached %s", run.RunID, run.WorkItemID, target)
+	if branch := strings.TrimSpace(run.Branch); branch != "" {
+		account += ", and is on " + branch
+	}
+	if commit := strings.TrimSpace(run.HarnessCommit); commit != "" {
+		account += " at commit " + commit
+	}
+	if run.PullRequest != nil && run.PullRequest.Number > 0 {
+		account += fmt.Sprintf(", published as pull request #%d", run.PullRequest.Number)
+	}
+	return account
 }
 
 // StoppageMover is who moves next on one stopped run: the harness where it is

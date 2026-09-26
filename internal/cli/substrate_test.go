@@ -40,7 +40,7 @@ func TestAStoppedRunsUnmergedChangeIsReportedAsUnlanded(t *testing.T) {
 	if !found {
 		t.Fatal("a stopped run's unmerged change was not reported as unlanded")
 	}
-	if unlanded.Branch != substrateBranch(1) || unlanded.TargetBranch != "main" || unlanded.PullRequest != 174 {
+	if unlanded.Branch != substrateBranch(1) || unlanded.Commit != substrateCommit || unlanded.TargetBranch != "main" || unlanded.PullRequest != 174 {
 		t.Fatalf("unlanded = %#v", unlanded)
 	}
 }

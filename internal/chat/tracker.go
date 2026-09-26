@@ -1721,13 +1721,15 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// that happened rather than as one that did not: the item is in the queue
 		// either way, and saying otherwise would be worse than saying nothing.
 		s.recordDirectiveOutcome(ctx, outcome, prompting, creation, created)
-		// A child of work whose change is still on a preserved branch waits for
-		// that change, whatever the role decomposing believed about where the
-		// substrate is. It is added here rather than left to be linked afterwards
-		// for the reason the executor is set here: an item is selectable the moment
-		// it is in the queue, so a gate a second action would add is a window in
-		// which the item reads as the next thing to pull.
-		gating := s.gateOnParentSubstrate(ctx, action.parent(), created.ID)
+		// A child of work whose change is still on a preserved branch is told where
+		// that change is, whatever the role decomposing believed about where the
+		// substrate is, and the result says whether the child is held for it. The
+		// child is read as it was authored, since the hold reads the child's own
+		// words and a tracker's echo of a creation need not carry them.
+		authored := created
+		authored.Title = strings.TrimSpace(action.Title)
+		authored.Description = strings.TrimSpace(action.Description)
+		gating := s.gateOnParentSubstrate(ctx, action.parent(), authored)
 		answering := outcome.answeringClause()
 		// Work admitted parked says so where the admission is reported. An item in
 		// the backlog that nothing will pull is a different thing to have admitted
