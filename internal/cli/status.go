@@ -657,6 +657,35 @@ func programManagerSources(sources *readmodel.Sources, cfg config.Config, stateR
 	if store, err := runstate.NewExchangeStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Exchanges = store
 	}
+	if store := observeProgramManagers(cfg, stateRoot, time.Now()); store != nil {
+		sources.FirstSeen = store
+	}
+}
+
+// observeProgramManagers records now as the moment each configured program
+// manager instance was first seen, for every one this load carries that the
+// record does not hold yet, and returns the store. Every load of the
+// configuration that builds the harness or reads its standing makes it, so an
+// instance is recorded at the first load that carries it whether or not the
+// scheduler ever wakes it — which is what lets a scheduler that never does be
+// read as stale. A record that cannot be written is not a reason to refuse the
+// load: the reading reads the record back and says when it cannot, and the
+// next load tries the write again.
+func observeProgramManagers(cfg config.Config, stateRoot string, now time.Time) *runstate.FirstSeenStore {
+	store, err := runstate.NewFirstSeenStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return nil
+	}
+	instances := programManagerInstances(cfg)
+	if len(instances) == 0 {
+		return store
+	}
+	agents := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		agents = append(agents, instance.Agent)
+	}
+	_, _ = store.Observe(agents, now)
+	return store
 }
 
 // programManagerInstances is every configured agent on the program manager

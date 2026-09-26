@@ -2326,10 +2326,17 @@ is derived by the read model, and nothing an instance writes sets it:
   the same here, which is the point: it is the sign that the watcher is not
   watching, and it is plain Go over the pass records with no provider call on
   the path, held there by the sweep in `internal/watchdog` that holds the stall
-  reading to the same. An instance that has never completed a pass is stale from
-  twice its schedule after its first conversation was opened — the configuration
-  records no moment an instance was added, so an instance nothing has ever woken
-  is not called stale — and one with no `every` is never stale.
+  reading to the same. An instance that has never completed a pass is measured
+  from when the harness first saw it in the loaded configuration: the first load
+  that carries an instance — `yoyo status`, the dashboard, the Slack sink, or
+  any verb that builds the harness — records that moment under the state root at
+  `products/<product>/program-managers/first-seen.json`, and no later load moves
+  it. So an instance the scheduler has never woken reads stale twice its
+  schedule after it was first seen, which is the dead scheduler this word is
+  for; the line says `first seen in the configuration at …`. Where its first
+  conversation is earlier — an instance configured before the record existed —
+  that is the moment instead, said as `first woken at …`. One with no `every`
+  is never stale.
 - **Working** is neither. Stale outranks blocked in the word, and both are
   carried.
 

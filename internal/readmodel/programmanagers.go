@@ -69,6 +69,12 @@ type Exchanges interface {
 	List() ([]exchange.Exchange, error)
 }
 
+// FirstSeen is when each instance was first seen in the loaded configuration.
+// It is satisfied by *runstate.FirstSeenStore.
+type FirstSeen interface {
+	FirstSeen() (map[string]time.Time, error)
+}
+
 // ProgramManagerInstance is one configured program manager instance, as the
 // configuration names it: the agent, the lane it owns, and its schedule.
 type ProgramManagerInstance struct {
@@ -351,15 +357,18 @@ func deriveProgramManager(sources Sources, instance ProgramManagerInstance, reco
 
 // staleness is whether an instance has gone without a completed pass for twice
 // its schedule, measured from its last completed pass, or from when it was
-// activated where none has completed. Activation is the first durable trace
-// the instance left — its first conversation — because the configuration keeps
-// no record of when an instance was added; an instance that has left none has
-// never been woken, and is not called stale until it has been.
+// activated where none has completed. Activation is the earliest durable trace
+// of the instance: the moment the harness first saw it in the loaded
+// configuration, or its first conversation where that is earlier — an instance
+// configured before the first-seen record existed has only its conversation to
+// go on. So an instance the scheduler has never woken is still measured from
+// the load that first carried it, and reads stale twice its schedule after,
+// which is the dead scheduler the reading exists to catch.
 //
 // A pass log that could not be read decides nothing: an instance called stale
 // over a file nobody could open would be a confident answer about nothing, and
 // the problem says so instead.
-func staleness(instance ProgramManagerInstance, last time.Time, completed bool, activated time.Time, readable bool, now time.Time) (bool, string) {
+func staleness(instance ProgramManagerInstance, last time.Time, completed bool, activated activation, readable bool, now time.Time) (bool, string) {
 	if instance.Every <= 0 || !readable {
 		return false, ""
 	}
@@ -371,17 +380,28 @@ func staleness(instance ProgramManagerInstance, last time.Time, completed bool, 
 		}
 		return false, ""
 	}
-	if activated.IsZero() || now.Sub(activated) <= bound {
+	if activated.at.IsZero() || now.Sub(activated.at) <= bound {
 		return false, ""
 	}
-	return true, fmt.Sprintf("no pass has ever completed, and it was first woken at %s on a schedule of every %s",
-		activated.UTC().Format(time.RFC3339), instance.Every)
+	how := "first woken"
+	if activated.seen {
+		how = "first seen in the configuration"
+	}
+	return true, fmt.Sprintf("no pass has ever completed, and it was %s at %s on a schedule of every %s",
+		how, activated.at.UTC().Format(time.RFC3339), instance.Every)
+}
+
+// activation is the earliest trace of an instance, and whether it is the
+// configuration's first-seen record rather than a conversation.
+type activation struct {
+	at   time.Time
+	seen bool
 }
 
 // completedPasses is every instance's last completed pass and first trace.
 type completedPasses struct {
 	last      map[string]time.Time
-	activated map[string]time.Time
+	activated map[string]activation
 	// readable is whether both the pass log and the conversations were read, so
 	// that the absence of a pass means none was recorded.
 	readable bool
@@ -394,7 +414,16 @@ type completedPasses struct {
 // backstop rejected, and a pass that answered without the block all end with
 // none, and all look the same here, which is the point.
 func readCompletedPasses(sources Sources) completedPasses {
-	passes := completedPasses{last: map[string]time.Time{}, activated: map[string]time.Time{}, readable: true}
+	passes := completedPasses{last: map[string]time.Time{}, activated: map[string]activation{}, readable: true}
+	if sources.FirstSeen != nil {
+		seen, err := sources.FirstSeen.FirstSeen()
+		if err != nil {
+			passes.problems = append(passes.problems, fmt.Sprintf("when the program managers were first seen in the configuration could not be read, so one that has never been woken is not called stale: %v", err))
+		}
+		for agent, at := range seen {
+			passes.activated[agent] = activation{at: at, seen: true}
+		}
+	}
 	if sources.Passes == nil || sources.Conversations == nil {
 		passes.readable = false
 		passes.problems = append(passes.problems, "nothing was wired to read the program managers' passes, so none of them is called stale")
@@ -413,8 +442,8 @@ func readCompletedPasses(sources Sources) completedPasses {
 			agent = string(conversation.Role)
 		}
 		agentOf[conversation.ConversationID] = agent
-		if first, seen := passes.activated[agent]; !seen || conversation.StartedAt.Before(first) {
-			passes.activated[agent] = conversation.StartedAt
+		if first, seen := passes.activated[agent]; !seen || conversation.StartedAt.Before(first.at) {
+			passes.activated[agent] = activation{at: conversation.StartedAt}
 		}
 	}
 	recorded, unreadable, err := sources.Passes.List()

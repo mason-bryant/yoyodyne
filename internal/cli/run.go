@@ -265,6 +265,7 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	observeProgramManagers(cfg, stateRoot, time.Now())
 	docket, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
