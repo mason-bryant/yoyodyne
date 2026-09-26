@@ -2419,8 +2419,8 @@ is derived by the read model, and nothing an instance writes sets it:
 
 - **Blocked** is a blocker in the instance's latest
   [lane report](conversation.md#a-program-managers-lane-report) whose `cites`
-  names a record of the instance's own that is still open: a report the product
-  manager has not handled, an amendment nobody has decided, an exchange still
+  names a record of the instance's own that is still open: a report the Lead Product
+  Manager has not handled, an amendment nobody has decided, an exchange still
   open, or a restart request nothing has answered. A citation that names
   nothing, names another instance's record, or names one already decided blocks
   nothing; it is carried as a claim, with the reason, and the line counts them.
@@ -2474,7 +2474,7 @@ each running run's `stage` is its phase folded onto `developing`, `reviewing`,
 or `integrating`. Both are there for the dashboard's pipeline, so it reads the
 model's count and the model's fold rather than making its own. Beside the
 counts, `standing.admitted_items` and `standing.startable_items` name the
-items each count counts, by id and title, in the product manager's order — so
+items each count counts, by id and title, in the Lead Product Manager's order — so
 the page's pop-up on a grouping lists what the figure counted rather than a
 list assembled from the other lines — and both are absent, like the refusals,
 where the queue could not be read.
@@ -2827,7 +2827,7 @@ them is the same either way, so neither line hands you a chore.
 The other thing a pull closes for you is work no run ever carried. An item
 admitted for a role's conversation — `executor: conversation:architect` — lands
 as a revision in a document that role owns, and until 2026-09-20 nothing read
-that revision back to the tracker: the product manager closed such items on
+that revision back to the tracker: the Lead Product Manager closed such items on
 evidence some turns later, and one of them had a developer run spent on it
 first. Now every pull reads the documents each marked role owns, and an item
 whose identifier opens the reason of a revision in one of them, made by that
@@ -3174,7 +3174,7 @@ figures, rather than going blank on one dropped request.
    in words when it is nothing. That last tile counts per mover, in the read
    model's own vocabulary for who each entry is waiting on: its figure is what
    waits on the operator, and beside it, out of the line's whole count — the
-   figure the terminal prints — what waits on the product manager, the
+   figure the terminal prints — what waits on the Lead Product Manager, the
    architect, the development manager, and the harness, in the model's order
    and each named only where it is not zero. The tile asks for attention when
    something waits on the operator, not when sixty things wait on a role. Its

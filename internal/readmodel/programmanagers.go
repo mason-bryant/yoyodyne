@@ -550,7 +550,7 @@ func (c citable) resolve(agent, cites string) (CitedRecord, string) {
 			return "", fmt.Sprintf("it cites report %s, which %s filed rather than this instance", cites, nameOrNobody(filed.Agent))
 		}
 		if handling, handled := c.handled[cites]; handled {
-			return "", fmt.Sprintf("it cites report %s, which the %s handled at %s", cites, handling.Role, handling.RecordedAt.UTC().Format(time.RFC3339))
+			return "", fmt.Sprintf("it cites report %s, which the %s handled at %s", cites, handling.Role.Title(), handling.RecordedAt.UTC().Format(time.RFC3339))
 		}
 		return CitedReport, ""
 	}

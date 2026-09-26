@@ -190,11 +190,13 @@ REASON = "Reason:"
 # it, and the reporter's own words. A test in internal/chat, in
 # releasenotes_test.go, reads these two lines out of this file and holds them
 # against what those writers actually produce, so a change to either wording
-# fails there by name rather than dropping the Requested-by line quietly.
+# fails there by name rather than dropping the Requested-by line quietly. A
+# role is named as a sentence names it, which is in capitals for the Lead
+# Product Manager, so the role is read in either case.
 # (Bash reads this whole heredoc for quotes before python does, so a comment
 # here keeps its apostrophes paired.)
-DECOMPOSED = re.compile(r"^Created under (\S+), decomposing it by the ([a-z][a-z ]*?) in conversation ")
-REPORTED = re.compile(r'^Admitted from report \S+, filed at "[^"]*" by the ([a-z][a-z ]*?): ?(.*)$')
+DECOMPOSED = re.compile(r"^Created under (\S+), decomposing it by the ([A-Za-z][A-Za-z ]*?) in conversation ")
+REPORTED = re.compile(r'^Admitted from report \S+, filed at "[^"]*" by the ([A-Za-z][A-Za-z ]*?): ?(.*)$')
 
 
 def placement(item):

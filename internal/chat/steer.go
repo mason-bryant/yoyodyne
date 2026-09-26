@@ -25,7 +25,7 @@ import (
 // else is still a sentence to the product manager.
 const commandHelp = `Commands the harness carries out for you:
   /status                     what is in flight, claimed, blocked, available, and done, with what the done work cost
-  /backlog                    the admitted work in the product manager's order, and what is next
+  /backlog                    the admitted work in the Lead Product Manager's order, and what is next
   /show <beads-id>            one work item in full, as the tracker holds it, and what each run for it cost
   /diff [beads-id]            what a run changed, from the run's own record
   /reports                    what agents have reported without it stopping their work

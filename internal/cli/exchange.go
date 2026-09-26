@@ -483,12 +483,13 @@ Options:
   --json           emit machine-readable JSON
 
 An exchange is one role asking another something through the harness: the
-product manager asking the architect what a goal costs, the architect asking the
-product manager whether a trade-off is one a user would accept. It moves opinion
-and never evidence -- both sides are toolless -- and it carries no authority, so
-nothing in one admits work, orders a backlog, or edits a document. It is
-recorded so that two roles can never say anything to each other that you cannot
-read afterwards, with what each one cost beside the rounds it took.
+Lead Product Manager asking the architect what a goal costs, the architect
+asking the Lead Product Manager whether a trade-off is one a user would accept.
+It moves opinion and never evidence -- both sides are toolless -- and it carries
+no authority, so nothing in one admits work, orders a backlog, or edits a
+document. It is recorded so that two roles can never say anything to each other
+that you cannot read afterwards, with what each one cost beside the rounds it
+took.
 
 An exchange that reaches its round limit closes as unresolved and is reported to
 you, because two roles deferring to each other for ever is the one way this can

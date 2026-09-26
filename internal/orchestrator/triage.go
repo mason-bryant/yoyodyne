@@ -777,7 +777,7 @@ func (d Docketer) RecordUnreadyItem(item beads.WorkItem, unmet []readiness.Unmet
 	// pull that finds the same entry standing records nothing and reports nothing,
 	// and one the pull took off and then found again is a new entry and news.
 	if err := d.reportUnready(entry, unmet); err != nil {
-		return true, fmt.Errorf("docketed %s as unready and could not report it to the product manager: %w", item.ID, err)
+		return true, fmt.Errorf("docketed %s as unready and could not report it to the Lead Product Manager: %w", item.ID, err)
 	}
 	return true, nil
 }

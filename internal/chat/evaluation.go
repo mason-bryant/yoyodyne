@@ -37,7 +37,7 @@ type EvaluationError struct {
 }
 
 func (e *EvaluationError) Error() string {
-	return "the product manager recorded an evaluation the harness cannot keep: " + e.Err.Error()
+	return "the Lead Product Manager recorded an evaluation the harness cannot keep: " + e.Err.Error()
 }
 
 func (e *EvaluationError) Unwrap() error { return e.Err }

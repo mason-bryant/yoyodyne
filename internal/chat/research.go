@@ -57,7 +57,7 @@ type ResearchError struct {
 }
 
 func (e *ResearchError) Error() string {
-	return "the product manager asked for research the harness cannot read: " + e.Err.Error()
+	return "the Lead Product Manager asked for research the harness cannot read: " + e.Err.Error()
 }
 
 func (e *ResearchError) Unwrap() error { return e.Err }

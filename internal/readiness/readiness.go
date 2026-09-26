@@ -112,13 +112,13 @@ const maxClauseBytes = 160
 // the item because the work is done — is the product manager's. It also clears
 // itself, which is the difference between this and the one below: the item
 // becomes pullable the moment the code it names is in the tree.
-const admitter = "the product manager, who admitted the citation"
+const admitter = "the Lead Product Manager, who admitted the citation"
 
 // sequencer is who releases a prerequisite the item states about itself. The
 // sentence is the item's own, so amending it is the product manager's; recording
 // the dependency it names, where the work it waits for is admitted, is the
 // development manager's. Nothing clears a sentence on its own.
-const sequencer = "the product manager, or the development manager who records the dependency"
+const sequencer = "the Lead Product Manager, or the development manager who records the dependency"
 
 // Unmet is one prerequisite the item states that the tree does not meet.
 type Unmet struct {
@@ -409,7 +409,7 @@ func statedIn(field authoredField) []Unmet {
 	sort.Slice(matched, func(i, j int) bool { return matched[i].at < matched[j].at })
 	where := "its " + field.name
 	if FieldOutOfReach(field.name) {
-		where += ", which the product manager's update does not rewrite,"
+		where += ", which the Lead Product Manager's update does not rewrite,"
 	}
 	var (
 		unmet []Unmet

@@ -61,14 +61,14 @@ func (s *Session) refuseOutsideLane(authority Authority, action TrackerAction) e
 		return &AuthorityError{
 			Role:    authority.Role,
 			Refused: fmt.Sprintf("the lane label %q removed from an item", lane),
-			Reason:  "the lane label is never removed by the lane's owner; taking an item out of a lane is the product manager's or the development manager's act, so ask them",
+			Reason:  "the lane label is never removed by the lane's owner; taking an item out of a lane is the Lead Product Manager's or the development manager's act, so ask them",
 		}
 	}
 	if action.Action == actionCreate && strings.TrimSpace(action.Directive) != "" {
 		return &AuthorityError{
 			Role:    authority.Role,
 			Refused: "a creation carrying out a directive",
-			Reason:  "directives, and what carries them out, are the operator's and the product manager's; admit the work without the directive and say which one you think it answers",
+			Reason:  "directives, and what carries them out, are the operator's and the Lead Product Manager's; admit the work without the directive and say which one you think it answers",
 		}
 	}
 	return nil
@@ -133,7 +133,7 @@ func outsideLane(lane, id string, item *beads.WorkItem, unread string) string {
 	if slices.Contains(item.Labels, lane) {
 		return ""
 	}
-	return fmt.Sprintf("%s does not carry the lane label %q as the tracker holds it now, so it is outside this program manager's lane and nothing was changed; ask the product manager for anything outside it", id, lane)
+	return fmt.Sprintf("%s does not carry the lane label %q as the tracker holds it now, so it is outside this program manager's lane and nothing was changed; ask the Lead Product Manager for anything outside it", id, lane)
 }
 
 // laneLabels is what a lane creation is labelled with: the lane label first,
@@ -273,16 +273,16 @@ const laneTrackerClause = `The state you were given lists work items by title on
 ]}
 ` + "```" + `
 
-That example lists every action you have. There is no close and no retire: closing is the harness's when work lands, and withdrawing admitted scope is the product manager's, so ask the product manager. One block carries only the actions you want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each takes only the arguments shown for it. "reason" is required on everything but "read" and "survey". "read" and "survey" reach the whole tracker; every other action is held to your lane, by these rules:
+That example lists every action you have. There is no close and no retire: closing is the harness's when work lands, and withdrawing admitted scope is the Lead Product Manager's, so ask the Lead Product Manager. One block carries only the actions you want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each takes only the arguments shown for it. "reason" is required on everything but "read" and "survey". "read" and "survey" reach the whole tracker; every other action is held to your lane, by these rules:
 
-- A "create" is admitted into your lane: the harness puts your lane label on it in the same write, whether or not "labels" names it, and other labels may go beside it. Its notes record your lane and this instance. A parent it names must itself carry your lane label. It names no "directive": carrying a directive out is the product manager's.
+- A "create" is admitted into your lane: the harness puts your lane label on it in the same write, whether or not "labels" names it, and other labels may go beside it. Its notes record your lane and this instance. A parent it names must itself carry your lane label. It names no "directive": carrying a directive out is the Lead Product Manager's.
 - Every other action is refused unless the item carries your lane label at the moment the action runs, read from the tracker as it runs. A listing or survey that showed the label earlier is not the item as it stands, so read before you act on anything you have not just seen.
-- You never remove your own lane label: a "label" removing it is refused, and taking an item out of your lane is the product manager's or the development manager's act.
+- You never remove your own lane label: a "label" removing it is refused, and taking an item out of your lane is the Lead Product Manager's or the development manager's act.
 - A "link" may make your lane item wait on any item, inside the lane or out. Making an item outside your lane wait on one of yours is refused.
 - A "reparent" needs the item and its new parent both to carry your lane label.
 - "priority" is yours to set freely inside your lane, and a "create" that names one is placed at it.
 
-A refused action changes nothing and its result says why; report it as refused, and ask the product manager for anything outside your lane. The harness carries out your actions, records each one, tells the operator, and then tells you what each actually did; never describe any of it as done before you have been told that it was.`
+A refused action changes nothing and its result says why; report it as refused, and ask the Lead Product Manager for anything outside your lane. The harness carries out your actions, records each one, tells the operator, and then tells you what each actually did; never describe any of it as done before you have been told that it was.`
 
 // laneAdmissionClause is what a program manager is told about admitting into its
 // lane, which is the same door the product manager's admission goes through and
@@ -292,7 +292,7 @@ func laneAdmissionClause(admission Admission) string {
 		return `This project asks the operator about every work item before it is admitted, and your lane is no exception. A "create" is not refused for it: the harness puts it to the operator as a proposal naming your lane, and admits it into the lane only if they approve. Say that is what you did rather than describing the work as admitted.` +
 			exemptionClause(admission)
 	}
-	return `This project admits work that traces to a goal the operator approved, without asking them again, and a "create" in your lane is admitted on that basis, exactly as the product manager's own admission is. Work naming a goal that resolves to nothing is refused; work naming a goal whose document nobody approved, or one amended since it was approved, is put to the operator as a proposal naming your lane rather than admitted.`
+	return `This project admits work that traces to a goal the operator approved, without asking them again, and a "create" in your lane is admitted on that basis, exactly as the Lead Product Manager's own admission is. Work naming a goal that resolves to nothing is refused; work naming a goal whose document nobody approved, or one amended since it was approved, is put to the operator as a proposal naming your lane rather than admitted.`
 }
 
 // proposalLabels is what an approved proposal is created with: its lane label,

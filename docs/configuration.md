@@ -230,7 +230,7 @@ agents:
   # ... architect, development-manager, developer, and reviewer, the same shape
 ```
 
-Five agents — product manager, architect, development manager, developer, and
+Five agents — Lead Product Manager, architect, development manager, developer, and
 reviewer — each with a role, a backend, a model selector, the [provider
 account](#provider-accounts) it runs under, an instance count, and a persona file
 that is in the repository beside the configuration. Change one by
@@ -525,13 +525,13 @@ Up to three layers produce the effective configuration, later ones winning:
    behavior**, and it is worth being plain about rather than leaving to be
    discovered. `publishing: human` is exactly what a file written before it got:
    the harness publishes nothing. `work_items: human` is not, because before this
-   key existed the product manager could admit work to the backlog **directly**,
+   key existed the Lead Product Manager could admit work to the backlog **directly**,
    through its `create` action, and you were told afterwards rather than asked.
    That direct admission is now refused at `human`, so a project that upgrades
-   and leaves the key alone has a product manager that proposes work instead of
+   and leaves the key alone has a Lead Product Manager that proposes work instead of
    admitting it. Nothing is lost when it does — the proposal is put to you and
    approving it creates the item — and the trade is deliberate: a `human` setting
-   that left this door open would be a gate the product manager could walk around
+   that left this door open would be a gate the Lead Product Manager could walk around
    by choosing the other one. An operator who wants the old behavior back sets
    `work_items: automatic`, which admits directly again against goals they have
    approved. See [what reaches the queue](#what-reaches-the-queue).
@@ -554,7 +554,7 @@ prevent.
 
 ## Product specifications
 
-The product manager builds its picture of product intent from the specifications
+The Lead Product Manager builds its picture of product intent from the specifications
 in one configured directory:
 
 ```yaml
@@ -607,7 +607,7 @@ not traceable to anything. A specification that does not follow it — no goals,
 introduction before them, or an empty goals section — is **reported and still
 read**. `yoyo chat` names it on stderr when the conversation opens — and in the
 conversation itself when `/refresh` reads the specifications again — and it is
-listed for the product manager alongside the specifications themselves. Refusing
+listed for the Lead Product Manager alongside the specifications themselves. Refusing
 to load it would silently lose intent somebody wrote down, which is worse than
 loading intent in the wrong shape and saying so.
 
@@ -630,13 +630,13 @@ about identity still counts as one. Goals stated in the brief's own `Goals`
 section count as the goals when there is no goals document — that is where the
 shape above already puts them, and a project that wrote them there has written
 them; once a goals document exists, that document is what the goals are read
-from and the brief's section is not named beside it. What the product manager
+from and the brief's section is not named beside it. What the Lead Product Manager
 does with that signal is the [persona's](#personas) — the built-in one opens a
 project with no brief or goals by asking what the product is for and offering to
 draft them, and a project that wants something else replaces that guidance like
 any other part of the persona.
 
-### What the product manager sees besides them, and what it does not
+### What the Lead Product Manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
 product ships today.** That last part is the documentation your project names,
@@ -675,7 +675,7 @@ written down here, rather than that the repository holds no documentation.
 Yoyodyne's own documentation layout is eight generic paths (`docs/work.md`,
 `docs/reporting.md`, `docs/operations.md`, and five more), and a repository
 that happens to hold a file at one of them means something else by it. Handing
-those to an adopting project's product manager labeled "what the product
+those to an adopting project's Lead Product Manager labeled "what the product
 ships" is a stranger's prose arriving as description of your product, so the
 harness does not do it: **that set applies only to Yoyodyne's own repository**,
 which it identifies by the Go module that repository declares, and every other
@@ -692,13 +692,13 @@ deliberately narrower than the README's [further-reading
 index](../README.md#further-reading): the provider-plugin format, the
 coined-term register, the Slack setup, the release notes, the setup skill, and
 the design are all reachable from there and none of them is carried here. So
-adding a document to that index does not thereby show it to the product
-manager — the set has to name it, and a test holds the set to documents this
+adding a document to that index does not thereby show it to the Lead Product
+Manager — the set has to name it, and a test holds the set to documents this
 repository actually has, because a path that stops resolving is a surface the
-product manager silently stops being given.
+Lead Product Manager silently stops being given.
 
 **The set has a ceiling, and a margin under it that warns.** The eight
-documents are carried in full — that is the product manager's decision, taken
+documents are carried in full — that is the Lead Product Manager's decision, taken
 on yoyodyne-ifd.240 and kept on yoyodyne-ifd.403 — and what they add up to is
 measured against `ShippedDocumentationCeiling` in the same file, which is set
 well above what they are today and marks the point at which the briefing's
@@ -720,33 +720,33 @@ that.
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
 shipped-surface section revises that, however emphatically it is written. Where
-the two disagree, the product manager **reports the conflict** rather than
+the two disagree, the Lead Product Manager **reports the conflict** rather than
 resolving it silently or repeating either side as settled product fact. That is
 what makes documentation safe to hand to the role that is authoritative about
 intent: it arrives as an answer to *what exists*, never to *what is wanted*.
 
-**This reverses half of an earlier trade, openly.** Until 2026-08-18 the product
-manager saw the specifications and the tracker and nothing else, narrowed on
+**This reverses half of an earlier trade, openly.** Until 2026-08-18 the Lead Product
+Manager saw the specifications and the tracker and nothing else, narrowed on
 2026-08-16 after a stale sentence in `README.md` reached the operator as a
 statement about the product. What that bought is real and is kept: description
 does not arrive labeled as intent, and it never will again while the section
-carries its label. What it cost was underestimated. On 2026-08-18 the product
-manager did not know `bin/yoyo-status` or `yoyo cost` existed until the operator
+carries its label. What it cost was underestimated. On 2026-08-18 the Lead Product
+Manager did not know `bin/yoyo-status` or `yoyo cost` existed until the operator
 described them, drafted a work item that mis-assumed which surfaces existed, and
 could not evaluate a formatting question about two real outputs it had never
 seen — three failures in one day of the operator's routine interface needing the
 operator to stand in as its eyes.
 
 What is still given up is also real. Reading all of `docs/` is what let the
-product manager notice a contradiction between documentation and reality, and
+Lead Product Manager notice a contradiction between documentation and reality, and
 what it reads now is narrower than that: the design document and the decision
 records are not there, because they say how the product is built and are the
 half of `docs/` that made description reachable as intent in the first place.
 Reconciling accumulated documentation against the code belongs to a role that
 reads the code, and the harness still does not have one. What it has since
 gained is narrower: a management role can [read one named path at a recorded
-commit](#reading-the-repository-from-a-conversation), which lets the product
-manager check a document before it advises about it rather than sweep the tree
+commit](#reading-the-repository-from-a-conversation), which lets the Lead Product
+Manager check a document before it advises about it rather than sweep the tree
 for contradictions. Point `specifications` at a wider directory if you would
 rather have the breadth than the authority; the confinement rule is the only
 limit on where it points.
@@ -992,20 +992,20 @@ or by upgrading the executable. The bundle states `human` at the same value the
 harness default holds, so `automatic` never arrives on its own.
 
 **Upgrading does move one thing, and it moves toward asking you.** Before this
-key existed the product manager could admit work to the backlog directly, and you
+key existed the Lead Product Manager could admit work to the backlog directly, and you
 were told afterwards rather than asked; `human` refuses that direct admission, so
-a project that upgrades and leaves the key alone has a product manager that
+a project that upgrades and leaves the key alone has a Lead Product Manager that
 proposes work instead of admitting it. That is the whole of the change, it is in
 the direction of more consent rather than less, and the work is not lost — the
 proposal is put to you, and approving it creates the item. Set `work_items` to
 `automatic` to have it admit directly again, against goals you approved.
 
 **Approval moved up a level; it did not disappear.** Three things still stop and
-ask, and they are exactly what the product manager escalates rather than
+ask, and they are exactly what the Lead Product Manager escalates rather than
 proposes: work it can attach to no goal, work it says would cut against one, and
 work that fits the goals and that it judges to be against what the product is
 for. A change to the goals themselves is yours and reaches the queue through
-nothing at all — the product manager argues for one in prose and cannot make one.
+nothing at all — the Lead Product Manager argues for one in prose and cannot make one.
 
 **Nothing is admitted without asking until a goal is actually approved.** The
 attribution has to resolve to a goal an active document states, and that
@@ -1020,7 +1020,7 @@ goals has nothing for it to rest on, so the combination is refused rather than
 left to be discovered as a queue that never fills. That refusal only ever names a
 key you wrote, because `automatic` is never inherited.
 
-**Both ways work reaches the queue are governed by it.** The product manager can
+**Both ways work reaches the queue are governed by it.** The Lead Product Manager can
 admit work to the backlog directly as well as propose it, and `human` refuses the
 direct admission with a pointer at the proposal it should have made instead — a
 setting that governed proposals while work arrived through the other door would
@@ -1061,7 +1061,7 @@ up for, and with no way to say so the policy stays a sentence nothing enforces.
 
 **The class is the agent's claim about its own work, and the exemption is yours.**
 A proposal or a `create` may carry `class: diagnosis`, and it means nothing at all
-in a project that has not exempted that class — the product manager is told about
+in a project that has not exempted that class — the Lead Product Manager is told about
 a class only where you have exempted it, precisely so it is never invited to claim
 one that would change nothing. What keeps the claim honest is that the exempted
 class is work that changes nothing: an item claiming to be diagnosis and then
@@ -1117,7 +1117,7 @@ weaken.
 
 | Kind | Owner | Every other role |
 | --- | --- | --- |
-| `brief`, `goals`, `non-goals` | Product manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
+| `brief`, `goals`, `non-goals` | Lead Product Manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 | `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 
 The development manager appears in neither row, because it owns no repository
@@ -1408,8 +1408,8 @@ yoyo amendment decline <id> --reason ...  # turn it down, keeping why
 
 **Every decision is yours, whoever owns the document.** An owning role that runs
 is shown what has been proposed against its documents and argues for or against
-it — proposals against the brief and the goals are carried into the product
-manager's conversation, and proposals against the designs, the specifications,
+it — proposals against the brief and the goals are carried into the Lead Product
+Manager's conversation, and proposals against the designs, the specifications,
 and the decision records are carried into the architect's, each told in so many
 words that it cannot decide one and cannot edit anything. Both owners can now be
 asked directly: `yoyo agent chat architect` is where the argument about a design
@@ -1421,7 +1421,7 @@ one the same argument arrives to make again.
 
 An owning role recording its own decision is vocabulary the record already has
 and nothing produces: what would make it real is a decision the harness carries
-out for a role from its own reply, the way it carries out the product manager's
+out for a role from its own reply, the way it carries out the Lead Product Manager's
 tracker actions. Until something does that, read "under the architect's
 authority" on a decision as your judgement standing in for the role, taken after
 hearing it rather than instead of hearing it.
@@ -1429,7 +1429,7 @@ hearing it rather than instead of hearing it.
 The reviewer is deliberately not given this block. What it finds wrong with a
 change is a finding, which decides whether the change is repaired; a reviewer
 that could also propose amendments would have two ways to say one thing. The
-product manager raises what it cannot place under a goal as a concern, which
+Lead Product Manager raises what it cannot place under a goal as a concern, which
 stops and asks you, for the same reason.
 
 A developer that could not be talked out of its argument makes it again on every
@@ -1478,7 +1478,7 @@ raised.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The
-product manager's work-item proposals live in the conversation that raised them,
+Lead Product Manager's work-item proposals live in the conversation that raised them,
 in memory, decided inside a turn. A proposed amendment has to survive the run
 that raised it, is addressed to an owning role rather than to you alone, and is
 decided from the command line days later — so what carries over is the shape
@@ -1565,7 +1565,7 @@ them would be exactly the guess identity exists to remove.
 
 Only a `goals` artifact is read this way. A brief or a design with a `Goals`
 heading of its own states no goals work may be attributed to — the goals are the
-product manager's document, and reading intent out of anything with the right
+Lead Product Manager's document, and reading intent out of anything with the right
 heading is how a design comes to authorize its own work.
 
 The `Goals` heading is the heading whose **whole text** is `Goals`, at any
@@ -1727,7 +1727,7 @@ and a rule that failed every one of them would stop a backlog to close a gap tha
 has cost nothing yet. An item that lost the goal it recorded fails for the
 opposite reason — it passed the check, and what is wrong is that the record of it
 was written over. Attributing one is a judgement about what the work is for, so it
-is the product manager's to make in conversation and there is no command here that
+is the Lead Product Manager's to make in conversation and there is no command here that
 makes it.
 
 Work that has closed is held to one half of that rule. `lost` fails there like
@@ -1744,7 +1744,7 @@ be attributed**: until they are, `yoyo goals attribution` reports most of the
 queue as naming no goal, and that is the queue's real state rather than a
 reporting artefact. Grandfathering is what keeps the work running while the pass
 is outstanding; it is not a substitute for making it. The pass is made by the
-product manager in conversation, working from `yoyo goals attribution` and using
+Lead Product Manager in conversation, working from `yoyo goals attribution` and using
 the `attribute` action on each item — which appends, so nothing already recorded
 is lost.
 
@@ -2531,7 +2531,7 @@ eleven in the same order, and a test fails when the two lists differ:
 4. **A conversation executor** withholds an item whose `executor` names a
    persona conversation from every developer run; nothing clears it, and what
    moves the item is somebody opening the conversation it names.
-5. **Parking** withholds an item the product manager parked however far the
+5. **Parking** withholds an item the Lead Product Manager parked however far the
    queue drains, and only her `unpark` releases it.
 6. **A hold** withholds an item whose stopped run left its change on a branch,
    or whose publication did not finish, until the development manager's
@@ -2617,7 +2617,7 @@ setting that has to move with it.
 Each unit of `max_concurrent_developers` is a **developer slot**: the capacity
 one developer run takes. By default every slot pulls in the order you set. A
 slot can instead prefer a **label** — the tracker's own labels, which the
-product manager and the development manager put on work items — and then it
+Lead Product Manager and the development manager put on work items — and then it
 pulls the ready work carrying that label first, wherever that sits in the
 order, and the rest of the backlog only when none of its label's work is ready.
 On 2026-09-19 the operator directed that one of Yoyodyne's own developer
@@ -2643,7 +2643,7 @@ keeps the system from stalling, and anything that keeps the system from making
 mistakes. The admission practice that goes with it, from the same day: every
 item admitted under the reliability directive, every bug, and every stall or
 mistake fix carries the `reliability` label from admission, put on by the
-product manager's `labels` field in the same write that admits the item, so the
+Lead Product Manager's `labels` field in the same write that admits the item, so the
 item never exists unlabelled. The [conversation guide](conversation.md#backlog-state-that-has-stopped-being-true)
 states the same practice where it describes the `labels` and `label` actions,
 in the section on an item's tracker state.
@@ -4197,9 +4197,9 @@ nothing has been promoted yet and there is nothing outstanding to report.
 
 ## How long one role may ask another
 
-Roles can put a question to each other through the harness — the product manager
+Roles can put a question to each other through the harness — the Lead Product Manager
 asking the architect what a goal costs before it orders the backlog, the
-architect asking the product manager whether a trade-off is one a user would
+architect asking the Lead Product Manager whether a trade-off is one a user would
 accept before it settles a design. Every exchange is recorded where you can read
 it with `yoyo exchange`, both halves are toolless so an ask moves opinion and
 never evidence, and no authority moves through one. What is configurable is how
@@ -4237,7 +4237,7 @@ thread may run.
 
 ## How far behind a conversation's picture may fall
 
-The product manager, the architect, and the development manager are briefed
+The Lead Product Manager, the architect, and the development manager are briefed
 once, when a conversation opens, and every later turn resumes a session that
 already holds that briefing. Before each reply the harness counts the landings
 on the target branch since the picture was taken and records the count on the
@@ -4303,7 +4303,7 @@ A value that is neither word is refused at load, naming the two that are.
 `yoyo agent list` says which agents hold side threads.
 
 **Where the choice is made.** A single message — `yoyo chat --message` for the
-product manager, `yoyo agent chat <name> --message` for any agent — that finds
+Lead Product Manager, `yoyo agent chat <name> --message` for any agent — that finds
 the agent's conversation mid-turn is the moment the knob decides. An agent that
 queues has the message wait for the turn, which is what every message did before
 the key existed. An agent that holds side threads has it answered beside the busy
@@ -4352,10 +4352,10 @@ is.
 
 ## Research sources
 
-The product manager can have the harness find something out for it, so an idea
+The Lead Product Manager can have the harness find something out for it, so an idea
 you bring it is evaluated against evidence rather than against what a model
 remembers. **The capability is off until you name a source**, and a project that
-names none has a product manager that says it could not check rather than
+names none has a Lead Product Manager that says it could not check rather than
 answering from memory as though it had.
 
 ```yaml
@@ -4405,14 +4405,14 @@ it takes the default — and a negative number is refused. One further bound is 
 harness's rather than yours: one thing you say sets off at most two rounds of
 gathering, so a message cannot spend itself searching its way around a question.
 
-What the product manager does with the evidence is an evaluation, which is
+What the Lead Product Manager does with the evidence is an evaluation, which is
 advice and nothing else: recording one admits no work, changes no document, and
 approves nothing. That path, and how to read the evaluations back, is described
 in [the conversation guide](conversation.md#bringing-it-an-idea-rather-than-a-work-item).
 
 ## Reading the repository from a conversation
 
-The three management roles — product manager, architect, development manager —
+The three management roles — Lead Product Manager, architect, development manager —
 and the program manager can have the harness read one repository path for them, or list the names one
 directory holds, at a recorded commit. It is here beside research because it is
 the same shape and the opposite arrangement: research is evidence from outside
@@ -4452,8 +4452,8 @@ that leaves it. The content is redacted with the same values every other
 provider-facing path is redacted with, and each read is recorded on the
 conversation as the commit, the path, and the time.
 
-**What the product manager is handed is labelled as description, never intent**
-— the same label its [shipped documentation](#what-the-product-manager-sees-besides-them-and-what-it-does-not)
+**What the Lead Product Manager is handed is labelled as description, never intent**
+— the same label its [shipped documentation](#what-the-lead-product-manager-sees-besides-them-and-what-it-does-not)
 carries, applied on every delivery, with the same rule: where a file contradicts
 a specification, the conflict is reported rather than resolved. The
 specifications remain the only statement of what the product is for.
@@ -5339,7 +5339,7 @@ These are all errors, reported before any work is claimed:
   and is not one, for the same reason — leaving it out is what says your run
   branches go to `execution.remote`;
 - a `product.specifications` that is empty, absolute, or climbs out of the
-  repository, since it decides what the product manager reads; and the same of
+  repository, since it decides what the Lead Product Manager reads; and the same of
   `product.invariants`, `product.designs`, and `product.decisions`, since they
   decide which documents the harness treats as canonical artifacts and which
   paths a developer's change may not touch. This is the check on the text; the
@@ -5348,7 +5348,7 @@ These are all errors, reported before any work is claimed:
   refusal at the point of the write rather than at load;
 - a `product.shipped_documentation` entry that is empty, absolute, climbs out of
   the repository, or is not a Markdown file, since every entry is read into the
-  product manager's context as a description of what the product ships;
+  Lead Product Manager's context as a description of what the product ships;
 - a program manager's `remit` path that fails any of the persona rules below, in
   the same words; a `lane`, `remit`, or `triggers` on an agent of any other role;
   a `lane` the tracker would not carry, or one two agents name; a
@@ -5804,7 +5804,7 @@ hold the authority, and Slack is not a boundary they can reach it through.
 
 An instruction from somebody on that list is recorded as a directive against the
 item whose thread it was said in, and reaches the work exactly as one typed at a
-terminal does; a question from them is answered by the product manager in the
+terminal does; a question from them is answered by the Lead Product Manager in the
 same thread and recorded as nothing. A reply from a human this mapping names who is not on it is
 answered in the thread saying it was not acted on, naming the grant they are
 missing — visibly, because a channel that silently ignores some people looks
@@ -6024,7 +6024,7 @@ recurring_tasks:
       Sweep for unresolved issues: stoppages nobody has decided, claims on work
       nothing is running, deliveries that have stopped moving. Fix what your
       authority allows, ask the architect where a ruling is needed, and file
-      root-cause work with the product manager for every fix you make.
+      root-cause work with the Lead Product Manager for every fix you make.
 ```
 
 **Configuration decides which role is woken, when, and on which model, and
@@ -6214,7 +6214,7 @@ outlive the session that produced them and are written once and never revised.
 
 The other standing loop worth configuring is the one that drains the
 [collected reports](reporting.md#who-reads-them-and-what-became-of-each-one).
-Every role files what it noticed into one pile, the product manager is the only
+Every role files what it noticed into one pile, the Lead Product Manager is the only
 role that can record what became of a report, and until something wakes it for
 that the pile is worked only when you happen to open a conversation. Reports
 arrive at twenty to forty-five a day in this project, which is more than that

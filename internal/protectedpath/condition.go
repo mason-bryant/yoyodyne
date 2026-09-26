@@ -319,7 +319,7 @@ type Condition struct {
 // says the run's summary is how the owner learns what to record, because that
 // is the path the three incidents above were each fixed along.
 const ConditionInstruction = "No developer run may write there, so a run handed this condition spends itself and parks on it. " +
-	"Either take the clause out of the done-condition and say that the document's owner — the architect for a design or a decision record, the product manager for a product artifact — amends the document through the governed path, with the run's summary naming what there is to record; " +
+	"Either take the clause out of the done-condition and say that the document's owner — the architect for a design or a decision record, the Lead Product Manager for a product artifact — amends the document through the governed path, with the run's summary naming what there is to record; " +
 	"or, where a grant is permitted for that path because the change behind it is already decided, carry one on a line beginning \"" + GrantMarker + "\" that names it."
 
 // executorInstruction is the third fix, named where the document has an owner

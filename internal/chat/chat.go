@@ -2603,7 +2603,7 @@ const (
 	// A concern is not a decision, so its prompt asks for words rather than a
 	// yes: there is nothing here to create, and what the operator says is the
 	// instruction the product manager stopped to ask for.
-	answerPrompt = "answer %s? [what you say reaches the product manager; empty leaves the question open] "
+	answerPrompt = "answer %s? [what you say reaches the Lead Product Manager; empty leaves the question open] "
 )
 
 // decisionPrompt is what the operator decides proposals under. One proposal is
@@ -3175,7 +3175,7 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 	// that puts it above the composing region, and anywhere else it is the stream
 	// it always was.
 	var out io.Writer = screen
-	fmt.Fprintf(out, "The product manager will not propose %d thing(s) until you answer. Nothing here was proposed or created.\n\n", len(concerns))
+	fmt.Fprintf(out, "The Lead Product Manager will not propose %d thing(s) until you answer. Nothing here was proposed or created.\n\n", len(concerns))
 	for _, concern := range concerns {
 		// A concern is dressed as what it is: the question in it gets the colour
 		// questions get, the whole of it is weighted by what its kind asks for, and
@@ -3194,7 +3194,7 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 		}
 		answer := strings.TrimSpace(line)
 		if answer == "" {
-			fmt.Fprintf(out, "%s is still open; the product manager has not been answered.\n\n", concern.ID)
+			fmt.Fprintf(out, "%s is still open; the Lead Product Manager has not been answered.\n\n", concern.ID)
 			continue
 		}
 		if err := s.Answer(concern.ID, answer); err != nil {
@@ -3207,7 +3207,7 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 		if err := s.record(); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "answered %s; what you said reaches the product manager when you next say something.\n\n", concern.ID)
+		fmt.Fprintf(out, "answered %s; what you said reaches the Lead Product Manager when you next say something.\n\n", concern.ID)
 	}
 	return nil
 }
@@ -3249,7 +3249,7 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 	// A proposal is dressed as its own kind of thing until it has been decided:
 	// it is not the conversation, it is something waiting on the operator, and
 	// what says so when the colour is gone is the text itself.
-	fmt.Fprint(out, s.theme.Proposal(fmt.Sprintf("The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))))
+	fmt.Fprint(out, s.theme.Proposal(fmt.Sprintf("The Lead Product Manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))))
 	// refused is what the tracker would not create while this batch was being
 	// decided. Those proposals are still awaiting a decision and are named as
 	// such when the conversation ends; what they are not is asked about again
@@ -3956,7 +3956,7 @@ func (o Options) newID() (string, error) {
 // conversation carries. It is a Go constant rather than configuration because a
 // configured persona may specialize how the product manager works but must
 // never be able to widen what it is allowed to do.
-const productManagerContract = `You are the product manager for this product, in a direct conversation with the operator who owns it.
+const productManagerContract = `You are the Lead Product Manager for this product, in a direct conversation with the operator who owns it.
 
 You own product intent: the product brief, the goals derived from it, and the queue of tracked work that serves them. You do not own designs or implementation. Downstream agents may propose changes to the brief or goals; they may not make them, and you evaluate such a proposal on its merits rather than adopting it silently.
 

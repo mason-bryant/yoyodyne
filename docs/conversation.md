@@ -3,7 +3,7 @@
 *For an operator driving work from `yoyo chat`. Part of
 [yoyo's documentation](../README.md#further-reading).*
 
-The product manager reads the product specifications — every Markdown file under
+The Lead Product Manager reads the product specifications — every Markdown file under
 `product.specifications`, which defaults to `docs/product` — plus the open Beads
 items, and discusses product intent with you. It owns the queue that serves that
 intent, and it manages it directly rather than dictating changes for you to
@@ -14,7 +14,7 @@ yoyo chat
 yoyo chat --message "What is missing from the brief?" --json
 ```
 
-That queue is a backlog with an order, and the order is the product manager's.
+That queue is a backlog with an order, and the order is the Lead Product Manager's.
 What is admitted to it and what comes before what are product decisions — the
 same intent it already owns, expressed as what to do next — while decomposition,
 dependencies, and assignment stay a development manager's, which takes work from
@@ -23,12 +23,12 @@ with the ordering proposes a change to it exactly as it would propose a change
 to a goal; none of them reorders it or admits work to it. The order is written
 down as Beads priority — 0 first, 4 last — so there is one place it lives rather
 than a second copy that could disagree with the tracker, and items left at the
-same priority are in no order anybody decided: the product manager says which
+same priority are in no order anybody decided: the Lead Product Manager says which
 comes first by giving it a higher one. Admitting work says where it goes as part
 of admitting it, because a new item has no identifier until the tracker answers
 and an ordering left for a later step is an item sitting at the tracker's
 default in the meantime — including for an item you approved from a proposal,
-which is admitted at that default until the product manager places it.
+which is admitted at that default until the Lead Product Manager places it.
 `/backlog` shows it to you in order, with what is holding each unready item back
 and what would be pulled next.
 
@@ -54,7 +54,7 @@ A specification opens with an introduction saying what the thing is and why it
 exists, and states the goals that serve it after that introduction. That shape
 is the contract, and the harness checks it: one that has no goals, no
 introduction before them, or an empty goals section is named on stderr when the
-conversation opens and listed for the product manager alongside the
+conversation opens and listed for the Lead Product Manager alongside the
 specifications themselves — and still read, because refusing to load it would
 silently lose intent somebody wrote down. A directory index and a non-goals
 document are not held to that shape, because neither states goals: the index is
@@ -67,8 +67,8 @@ documents intent is written in — the brief saying what the product is and who 
 is for, and the goals that serve it — naming each with roughly how much prose it
 carries, and calling one that carries almost none a placeholder. That is what
 makes the first conversation on a fresh repository the intended opening move
-rather than a confusing silence: with no brief and no goals to read, the product
-manager says so, offers to draft both from your answers, and starts asking what
+rather than a confusing silence: with no brief and no goals to read, the Lead Product
+Manager says so, offers to draft both from your answers, and starts asking what
 only you can answer — what this is, who it is for, what finished looks like. It
 asks them one at a time. The opening reply says there are three, says which order
 they come in and why that order, and then asks the first, because a paragraph
@@ -90,16 +90,16 @@ the help every command prints. It is labeled as exactly that — a description o
 the implementation as built, never authority about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist
 without you having to tell it. Where that description and a specification
-disagree, the product manager reports the conflict rather than settling it.
+disagree, the Lead Product Manager reports the conflict rather than settling it.
 
 Not the source, not the design document, and no way to run a command: those say
 how the product is built rather than what it is for or what it ships. Nor
 everything [Further reading](../README.md#further-reading) reaches, which is
 more than these eight — the set is named one document at a time, so adding one
-to that index does not thereby show it to the product manager. The eight are
+to that index does not thereby show it to the Lead Product Manager. The eight are
 named, and the narrowing this partially undoes is described with what it bought
 and what it cost, in the
-[configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+[configuration guide](configuration.md#what-the-lead-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf — the tracker below, [a read of
@@ -211,7 +211,7 @@ confident review demanding code that had already merged.
 
 ## Bringing it an idea rather than a work item
 
-Most of what you say to the product manager is intent: build this, do that
+Most of what you say to the Lead Product Manager is intent: build this, do that
 first, stop doing the other. Some of it is not. "What if we did X", "is Y worth
 it", "should we move to Z" is a question, and the answer to it is usually
 neither yes nor no — it is what the evidence says, what the product is already
@@ -231,7 +231,7 @@ command you wrote — see
 [research sources](configuration.md#research-sources) — so what the harness may
 reach is exactly what you named and nothing else. Only the question leaves your
 machine, redacted and bounded on the way out; a project that configured no source
-has the capability off, and the product manager is told so and says it could not
+has the capability off, and the Lead Product Manager is told so and says it could not
 check rather than answering from memory as though it had.
 
 What comes back is untrusted. A search result is a stranger's prose arriving
@@ -251,7 +251,7 @@ the recommendation reflects that, rather than answering confidently anyway.
 
 `yoyo evaluation list` and `yoyo evaluation show <id>` read them back, and the
 record keeps what the harness actually retrieved — from which source, at what
-moment — beside the sources the product manager cited. The two are different
+moment — beside the sources the Lead Product Manager cited. The two are different
 claims: one is what it says it read, the other is what was fetched.
 
 **An evaluation is advice and the harness treats it as nothing else.** Recording
@@ -264,7 +264,7 @@ the architect's, through `yoyo amendment`. That separation is the point. Researc
 that could quietly turn an idea into approved work would be a way to approve work
 by asking a model to look something up.
 
-The brief and the goals stay yours. The product manager proposes a change to a
+The brief and the goals stay yours. The Lead Product Manager proposes a change to a
 goal and says plainly that it is yours to make; it cannot make one, and with no
 way to write a file it could not if it tried.
 
@@ -293,8 +293,8 @@ ordering decision to start from one.
 Acting is checked at the moment it acts, too. The harness reads the item an action
 names as it carries the action out, so an action aimed at work that has moved on
 says so where the reasoning that aimed it is still happening: the result names the
-state the tracker holds the item in whenever that is not open, and the product
-manager reconciles it in the same reply rather than never. An action that would
+state the tracker holds the item in whenever that is not open, and the Lead Product
+Manager reconciles it in the same reply rather than never. An action that would
 mean nothing on work that has already left the backlog — reordering it, closing it
 again, retiring it — is refused for that reason, and the refusal names the
 closure. Recording a note on finished work still means something, so that is
@@ -304,7 +304,7 @@ and what could not be read is said.
 
 ## Proposals, and deciding them in batches
 
-The product manager can propose a Beads work item instead of creating one, when
+The Lead Product Manager can propose a Beads work item instead of creating one, when
 the decision is yours rather than its. What becomes of a proposal is
 [`approvals.work_items`](configuration.md#what-reaches-the-queue) to decide,
 and until you say otherwise every one of them is put to you: shown as a numbered
@@ -327,7 +327,7 @@ and must never answer one thing by deciding another.
 **Two shapes decide, and everything else is speech.** A message decides when it
 names a proposal by its identifier — `approve 3.1`, `decline 3.1 too vague` —
 or when it is nothing but decision words: `y`, `no`, `decline all`, `approve 1,3`.
-Anything else is said to the product manager and leaves every proposal exactly
+Anything else is said to the Lead Product Manager and leaves every proposal exactly
 where it was, including a reply that happens to open with one of those words:
 `no, let's look at the resolver instead` is a sentence, not a decline. That is
 narrower than the prompt, deliberately. A prompt has just asked you, so the words
@@ -354,7 +354,7 @@ this arrangement cannot afford.
 [`approvals.work_item_exemptions`](configuration.md#what-reaches-the-queue)
 lists classes of work the per-item gate is not asking about, and there is one:
 `diagnosis`, work that only reads what is already there and produces findings
-rather than a change. It is empty until you write it, the product manager is told
+rather than a change. It is empty until you write it, the Lead Product Manager is told
 about a class only where you have exempted it, and work admitted under one still
 names a goal the repository records. It is for the operator who wants to be asked
 before the product changes and does not want to be asked before something counts
@@ -413,7 +413,7 @@ when it starts with a number: `decline 2 3 weeks out` turns down card 2 for
 being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
-one you approved. Every proposal, and every item the product manager admits
+one you approved. Every proposal, and every item the Lead Product Manager admits
 itself where [`approvals.work_items`](configuration.md#what-reaches-the-queue)
 lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
@@ -433,8 +433,8 @@ it, and it is reported as unattributed wherever the queue is read, because a
 rule that failed every item admitted before attributions were checked would stop
 all work to close a gap that has cost nothing yet. Grandfathering keeps that
 work running until it is attributed; it does not mean it stays unattributed.
-Attributing one is a judgement about what the work is for, so the product
-manager makes it in the conversation and the harness never guesses: `attribute`
+Attributing one is a judgement about what the work is for, so the Lead Product
+Manager makes it in the conversation and the harness never guesses: `attribute`
 records a goal on an item already in the backlog,
 appended to what the item records rather than replacing it, so the goal an item
 was admitted under is never rewritten. An item that names no goal and one whose
@@ -445,7 +445,7 @@ reads both from outside the conversation.
 ### Backlog state that has stopped being true
 
 Three things about admitted work go stale on their own, and correcting them is
-the product manager's rather than a person's. A status is written when work stops
+the Lead Product Manager's rather than a person's. A status is written when work stops
 and is never rewritten when what stopped it clears, so an item whose blocker
 landed reads as blocked forever. A dependency records that one item waits for
 another and goes on recording it after that other item closes. And an attribution
@@ -464,7 +464,7 @@ of them used to wait for somebody to notice.
 blocked status where every link the item records is one the tracker says is
 finished, `dependency` retires a link on work the tracker holds as closed, and
 `attribution` re-attributes an item whose recorded goal no longer resolves. The
-staleness is the harness's judgement rather than the product manager's assertion
+staleness is the harness's judgement rather than the Lead Product Manager's assertion
 — it reads the item, the admitted queue, the goals, and the work behind any link
 the queue does not account for, all as the act runs, and refuses the correction
 where they still say the old state is right, so a repair asked for over a listing
@@ -488,7 +488,7 @@ triage blocks an item in order to escalate it and leaves no dependency behind, s
 an escalated item reads as a blocked status with nothing at all standing behind
 it, and the hold is the whole of what separates the two. The preserved branch is
 the one that was misread. On 2026-09-19 the survey listed yoyodyne-ifd.372 under
-the state a repair corrects, the product manager cleared its blocked status as
+the state a repair corrects, the Lead Product Manager cleared its blocked status as
 "no longer held behind a preserved run", and the item's own notes still said the
 stopped run's branch and worktree were checked and there: the hold had been read
 off the run's removal flags. So whether a stopped run's change is still there is
@@ -569,7 +569,7 @@ the item then says about itself. A parked item keeps its place in your order and
 is never selected however far the queue drains; it is listed as parked wherever
 the queue is shown, so you can see what you parked rather than inferring it; and
 `unpark` puts it back. `parked` on a creation admits work already parked, which
-matters because a creation's identifier does not reach the product manager until
+matters because a creation's identifier does not reach the Lead Product Manager until
 its next turn.
 
 You are not the only one that parks. A run whose change is evidence rather than
@@ -634,7 +634,7 @@ answers are the same numbered list and you type the number instead of moving a
 marker; typing anything else there is that answer, so a numbered prompt never
 costs you a sentence you had already written. What is recorded either way is the
 answer itself, in the words it was offered in, and that is what reaches the
-product manager. Offering answers never narrows what you may say, which is why
+Lead Product Manager. Offering answers never narrows what you may say, which is why
 your own words are on every list there is. `--message` has nobody standing at a
 prompt, so it prints the questions with the answers that were on offer, named by
 their own identifiers, and proposes nothing; the answer arrives as its own
@@ -651,7 +651,7 @@ of the answers it offered, recorded in the words it was offered in; the
 `answer` in front is optional, because the identifier is the thing nobody types
 by accident. A bare `yes` or `no` answers the question where it is the only
 thing the conversation is waiting on, which is the same rule a lone proposal is
-approved by. Anything else is said to the product manager and leaves the
+approved by. Anything else is said to the Lead Product Manager and leaves the
 question open, so a sentence about the question reaches it as a sentence and
 the question is still listed for you to answer.
 
@@ -679,7 +679,7 @@ as unanswered at the end of a conversation it was never asked in.
 ## Steering the work from the conversation
 
 A line that begins with a slash is a command the harness carries out for you;
-everything else is said to the product manager:
+everything else is said to the Lead Product Manager:
 
 ```text
 /status                  what is in flight, claimed, blocked, available, and done, with prices
@@ -707,7 +707,7 @@ everything else is said to the product manager:
 ```
 
 A slash means the same thing in `yoyo chat --message`: the harness carries the
-command out and the product manager is never asked, because it cannot carry out
+command out and the Lead Product Manager is never asked, because it cannot carry out
 a command and a turn spent trying is a turn you paid for. The four that only
 mean something inside a conversation — `/work`, `/wait`, a bare `/stop`, and `/exit` with its alias `/quit`,
 each of which starts or acts on a run the conversation's own process owns — are
@@ -715,9 +715,9 @@ refused there and say what to reach for instead, rather than being half carried
 out by a process that is about to exit. `/stop <beads-id>` is not one of them: it
 reads durable state and asks whichever process holds the run, so it means exactly
 the same thing in a single message. With `--json` what the command printed
-is a field of its own, so nothing reads as something the product manager said.
+is a field of its own, so nothing reads as something the Lead Product Manager said.
 
-`/backlog` shows the ordering the product manager set, which is the one thing a
+`/backlog` shows the ordering the Lead Product Manager set, which is the one thing a
 development manager pulls from: the admitted work that is not finished, in
 priority order, each unready item saying what is holding it, and the item that
 would be pulled next named at the end. Like `/status` it is a report rather than
@@ -725,7 +725,7 @@ an export — the first twenty entries are listed and the rest are counted, so a
 long backlog says how much of itself you are not looking at, and the item that
 would be pulled next is named even when it falls outside the listed part. It is
 assembled from the same tracker `/status` reads rather than stored anywhere, so
-it cannot drift from the priorities the product manager actually set.
+it cannot drift from the priorities the Lead Product Manager actually set.
 
 Whether an item can be pulled is the tracker's answer rather than one the
 harness works out, and that is a deliberate choice about what a listing can be
@@ -773,7 +773,7 @@ durable record rather than from the process executing it, so what you are told
 is what somebody reading that record afterwards would be told, and each is said
 once: a crossing is a transition rather than a state, because an event log
 scrolling past the conversation is what the activity line exists not to be. The
-product manager is told the same things as harness activity, so the next thing
+Lead Product Manager is told the same things as harness activity, so the next thing
 it says about the work is not answering about a run it believes is still
 developing.
 
@@ -847,7 +847,7 @@ hides the others.
 
 `/show` prints one work item in full — its status, priority, parent,
 dependencies, description, design, acceptance criteria, and notes — through the
-same tracker capability the product manager reads items with. What you see is
+same tracker capability the Lead Product Manager reads items with. What you see is
 what the agent discussing it could see, which is the point: the two of you are
 reading the same item rather than two accounts of it. Beneath the item it prints
 what the item cost, broken down by the runs it took.
@@ -914,7 +914,7 @@ names exactly one directive.
 
 An operational directive has nothing to resolve — it applied from the
 moment it was recorded and held nothing up — so what settles one is somebody
-carrying it out. Where that means admitting work, the product manager names the
+carrying it out. Where that means admitting work, the Lead Product Manager names the
 directive as it admits the item: the item's notes record which directive it
 answers and in your words, and the directive's own record is told which item it
 became. `/directives` then shows it as carried out, with the identifier of the
@@ -954,7 +954,7 @@ a Slack thread the directive was asked for in is answered in the voice of, when
 the withdrawal is said there.
 
 From the command line the same records are reachable, which is how a directive
-you gave to an agent other than the product manager gets written down:
+you gave to an agent other than the Lead Product Manager gets written down:
 
 ```text
 ./bin/yoyo directive list
@@ -986,7 +986,7 @@ therefore pauses all of it, which is the safe reading rather than a clever one.
 recorded from the conversation names none, so it pauses everything and reports
 the work in flight and claimed as what it just stopped.
 
-Only you reach any of this. The product manager owns what the queue says and the
+Only you reach any of this. The Lead Product Manager owns what the queue says and the
 order it is in; running, stopping, and redirecting the work itself stays yours,
 so nothing it writes starts or stops anything — a reply that contains `/work` is
 prose. What it does get is an account of what you had the harness do, carried
@@ -997,7 +997,7 @@ A conversation is durable. It is recorded outside the repository under the
 operating system's state directory, so leaving and running `yoyo chat` again
 resumes the same conversation; `--new` starts a fresh one instead. The record
 keeps the requested model selector, the model the provider reported serving, the
-provider session identifier, any action results the product manager has not been
+provider session identifier, any action results the Lead Product Manager has not been
 told about yet, the work item it last ran, which proposed changes to its own
 documents it has already been shown, and when its picture of the
 repository and tracker was gathered and against what commit, and the normalized
@@ -1010,7 +1010,7 @@ the agent last received, which is what a later refresh is compared against.
 
 ## Talking to the other agents
 
-`yoyo chat` is the product manager, because product intent is where the work
+`yoyo chat` is the Lead Product Manager, because product intent is where the work
 comes from. Every other configured agent is reachable the same way:
 
 ```text
@@ -1031,7 +1031,7 @@ names none, so it takes the agent filling the product-manager role.
 answers a turn is started for that turn and gone afterwards; what survives it is
 one conversation record per agent, with its own provider session, its own turn
 count, and its own picture of the repository. Talking to the architect never
-resumes what the product manager was told, and where two agents fill one role
+resumes what the Lead Product Manager was told, and where two agents fill one role
 neither resumes the other: they are two identities with two sessions, and the
 lease that stops a second process taking a turn with one of them leaves the
 other free.
@@ -1043,7 +1043,7 @@ else wanting a turn waits behind.
 nearly all of its life waiting for you to type, and while it waits it puts the
 conversation down: `yoyo chat --message` in another terminal, the harness's own
 deliveries, and a second `yoyo chat` you leave open beside the first all reach
-the same product manager without you closing anything. What they take turns over
+the same Lead Product Manager without you closing anything. What they take turns over
 is the turn itself.
 
 A command you typed queues behind a turn already in flight rather than being
@@ -1091,19 +1091,19 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Reads the repository by path | Its own documents |
 | --- | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | yes, [labelled as description](#reading-the-repository-at-a-recorded-commit) | brief and goals: proposes, never writes |
+| Lead Product Manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, labels, parks and releases, closes, retires, [repairs stale state](#backlog-state-that-has-stopped-being-true) | yes, [labelled as description](#reading-the-repository-at-a-recorded-commit) | brief and goals: proposes, never writes |
 | architect | yes | nothing | yes | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; updates and labels items; records triage decisions on stopped work | yes | none |
 | developer, reviewer | yes | nothing | no | none |
 | [program manager](designs/program-manager.md) | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), attributes, updates, labels, reparents, orders, parks and releases, and links **only inside its own lane** — [the lane label, read off the item as each action runs](#a-program-managers-lane); never closes, retires, or records triage | yes | none; it rewrites [its lane report](#a-program-managers-lane-report), which is kept under the state root rather than in the repository |
 
-The product manager's admitting is the one row a setting moves, and it moves in
+The Lead Product Manager's admitting is the one row a setting moves, and it moves in
 one direction only. `approvals.work_items` decides what may reach the queue
 without you, and at `human` — the shipped value — it refuses the direct
 admission as well as the automatic one, because a gate the proposals held while
-this door stood open would be no gate at all: the product manager reaches both,
+this door stood open would be no gate at all: the Lead Product Manager reaches both,
 and work would arrive through whichever asked less. So a project that leaves the
-setting alone has a product manager that proposes work rather than admitting it,
+setting alone has a Lead Product Manager that proposes work rather than admitting it,
 and nothing reaches the backlog that you did not approve. Set `work_items` to
 `automatic` and it admits directly again, against a goal you approved. Ordering,
 attributing, repairing stale state, closing, and retiring are untouched either
@@ -1111,14 +1111,14 @@ way: those tidy work you already agreed to rather than adding any.
 
 The development manager is the one worth reading twice, because it is where a
 design becomes tracked work. It decomposes: every item it creates hangs under an
-item the product manager already admitted, and the harness refuses a creation
+item the Lead Product Manager already admitted, and the harness refuses a creation
 that names no parent. It cannot admit work, cannot reorder the backlog, and has
 no close or retire — so a decomposition can never quietly become new scope, and
-the backlog's order stays the product manager's. What it created is recorded as
+the backlog's order stays the Lead Product Manager's. What it created is recorded as
 what it was: the item's own notes say it was created under its parent,
 decomposing it, rather than admitted to the backlog, so the two acts stay
 distinguishable long after the conversation that made one of them is gone. Work it discovers that belongs
-elsewhere it says to you, for the product manager to admit. It is also the role
+elsewhere it says to you, for the Lead Product Manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
@@ -1149,7 +1149,7 @@ when the child already hangs on the parent, and nothing sets one blocked in its
 place: on 2026-09-25 that fallback blocked all six children of
 yoyodyne-ifd.429.13, which superseded the parent's pull request 757, with a
 blocker nobody cleared. Which vehicle lands the parent's change is your
-decision and the product manager's — the development manager says what it
+decision and the Lead Product Manager's — the development manager says what it
 thinks and records none of it as scope. Decomposition of work whose change is on
 the target branch is untouched, and so is the dependency structure the
 development manager records itself.
@@ -1159,12 +1159,12 @@ cannot edit any of them from a conversation, because no conversation has tools.
 Decide the change with it and then record it yourself — `yoyo invariant` for an
 invariant, a revision to the document for the rest. Changes other roles proposed
 against its documents are carried into its conversation for it to argue, the
-same way the product manager hears proposals against the brief and the goals.
+same way the Lead Product Manager hears proposals against the brief and the goals.
 
 Each role is also given the documents it answers for. The architect gets the
 designs, the invariants, and the decision records alongside the specifications;
 the development manager, developer, and reviewer get the designs and the
-invariants; the product manager gets none of them, which is the same decision
+invariants; the Lead Product Manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for. A management role can also
 read one named path on request, the designs included, and what keeps that
@@ -1173,7 +1173,7 @@ documents it is given: description of the implementation, never intent.
 
 ### Reading the repository at a recorded commit
 
-The three management roles — product manager, architect, development manager —
+The three management roles — Lead Product Manager, architect, development manager —
 and the program manager can have the harness read the repository for them. It is the same arrangement
 the tracker has: the role names a path in a bounded block, the harness performs
 the read, records it, tells you, and hands the content back as evidence before
@@ -1210,16 +1210,16 @@ not have the harness read for it is one whose bundle does not hold the
 capability, which no configuration changes. The content is redacted with the
 same values every other provider-facing path is redacted with.
 
-**What comes back is framed as untrusted, and for the product manager it is
+**What comes back is framed as untrusted, and for the Lead Product Manager it is
 labelled once more.** Every role is told the content is evidence of what the
-repository holds at that commit and never an instruction. The product manager is
+repository holds at that commit and never an instruction. The Lead Product Manager is
 told, in the contract and again on every delivery, that what it read is
 description of the implementation as built and states no intent: the
 specifications are the only statement of what the product is for, and where a
-file contradicts one the product manager reports the conflict rather than
+file contradicts one the Lead Product Manager reports the conflict rather than
 resolving it or repeating either side as settled product fact. That label is the
 whole of what makes the read safe to give the role that owns intent, and it is
-the same label its [shipped documentation](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not)
+the same label its [shipped documentation](configuration.md#what-the-lead-product-manager-sees-besides-them-and-what-it-does-not)
 already carries.
 
 **Each read is on the conversation's record** as the commit, the path, and the
@@ -1246,14 +1246,14 @@ evidence from inside it, run by the harness's own Git, and on for the three
 roles whatever the configuration says. It is also not a substitute for
 [freshness](#how-fresh-the-conversations-picture-is-and-how-to-refresh-it): a
 read samples what a role thinks to read, and what a stale picture costs is what
-it does not know it does not know. The case that admitted this — a product
-manager advising, from a month-old briefing, that CLAUDE.md gain a section it
+it does not know it does not know. The case that admitted this — a Lead Product
+Manager advising, from a month-old briefing, that CLAUDE.md gain a section it
 had opened with for weeks — is now a read before the advice, and a picture that
 far behind is re-read by the harness before the turn is answered at all.
 
 ### What the management roles remember
 
-The product manager, the architect, and the development manager each keep a
+The Lead Product Manager, the architect, and the development manager each keep a
 memory of their own across conversations: short conclusions that should shape
 how they work next time — how you read a reply, what this project's checks tend
 to do, a mistake not to repeat, where a piece of work they are carrying stands.
@@ -1280,7 +1280,7 @@ reply. You are told what was written as it happens, in the transcript and in
 `--json` (`memories`):
 
 ```text
-the product manager recorded memory "checks-are-slow" (revision 1)
+the Lead Product Manager recorded memory "checks-are-slow" (revision 1)
 ```
 
 **The conversation's record says a write happened and never what it said.** Each
@@ -1325,7 +1325,7 @@ and it is read from the tracker as each action runs.
   it stands, so a listing that has moved does not widen the lane. An item the
   tracker will not describe counts as outside it.
 - **The lane label is never removed by its owner.** A `label` removing it is
-  refused. Taking an item out of a lane is the product manager's or the
+  refused. Taking an item out of a lane is the Lead Product Manager's or the
   development manager's act.
 - **A lane item may be linked to wait on any item.** Linking an item outside the
   lane to wait on a lane item is refused.
@@ -1334,7 +1334,7 @@ and it is read from the tracker as each action runs.
 
 A lane admission is an admission, so it goes through
 [`approvals.work_items`](configuration.md#what-reaches-the-queue) exactly as the
-product manager's does. At `human` the creation is not admitted. It is put to
+Lead Product Manager's does. At `human` the creation is not admitted. It is put to
 you as a proposal with the lane named on the card, and approving it creates the
 item in the lane. A proposal carries the title, description, goal, parent, and
 class. Anything else the creation named, such as its priority, is listed in the
@@ -1404,9 +1404,9 @@ block.
 
 A question one role cannot answer itself used to cost you one of two things:
 relaying it between two conversations by hand, or a whole work-item cycle. Now
-the role asks directly and the harness carries it. The product manager asking the
+the role asks directly and the harness carries it. The Lead Product Manager asking the
 architect *what does this goal cost, and what am I missing?* before it orders the
-backlog, and the architect asking the product manager *if we sacrifice some
+backlog, and the architect asking the Lead Product Manager *if we sacrifice some
 performance, is that an unacceptable trade-off from the user's standpoint?*
 before it settles a design, are the two cases it exists for. They are one
 mechanism with the parties swapped, and everything below holds identically in
@@ -1438,7 +1438,7 @@ for:
 ```
 
 The channel runs between the three roles that hold judgement about the product —
-the product manager, the architect, and the development manager — and the
+the Lead Product Manager, the architect, and the development manager — and the
 [program manager](designs/program-manager.md), whose requests to the architect
 and the development manager are asks rather than acts. Each end is its own
 capability, `exchange.ask` to put a question and `exchange.answer` to be put one,
@@ -1533,7 +1533,7 @@ queues, or a lane, and the two that work inside a run are not on it.
 
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
-reaches the product manager's — carried in the context rather than by you
+reaches the Lead Product Manager's — carried in the context rather than by you
 noticing something went quiet. What she is shown is a window onto it, described
 below: the live entries, one per stopped run, oldest stoppage first with
 anything critical ahead, and a count of what did not fit.
@@ -1686,8 +1686,8 @@ one: an unfinished publication asks about a merge the forge holds rather than
 about the item, which closes as its change is integrated while the merge can
 still be dropped or stuck afterwards. So that entry stays until the publication
 settles or the development manager decides it, `rearm` included. A run whose
-change lands, and the product manager's `close` and `retire`, close the item's
-entries in the same act, and the product manager is told how many. Every `yoyo
+change lands, and the Lead Product Manager's `close` and `retire`, close the item's
+entries in the same act, and the Lead Product Manager is told how many. Every `yoyo
 reconcile` sweep lists the items the tracker holds as closed and closes any
 entry still standing for one. That catches an item closed by some other hand,
 the merge a sweep settles among them, and the entries left standing from before
@@ -2214,8 +2214,8 @@ agent did.
 
 `yoyo chat` is not the only way into it. Where the
 [Slack sink](slack/setup.md#asking-the-app-directly) is running, @-mentioning the
-app in its channel reaches the same product manager, and the answer comes back in
-the thread you asked in and in the product manager's own name.
+app in its channel reaches the same Lead Product Manager, and the answer comes back in
+the thread you asked in and in the Lead Product Manager's own name.
 
 It is the same conversation and not a copy of one. There is one durable record
 per agent, and the terminal and the channel are two clients of it: the provider
@@ -2231,7 +2231,7 @@ and that is what the two rules around it are for. The channel takes the
 conversation when you say something and gives it back as soon as the answer is
 in hand — the same span your own window holds it for, so neither client is ever
 locked out for longer than one turn, and a `yoyo chat` waiting at its prompt
-holds nothing against the channel at all. Where the product manager is mid-turn
+holds nothing against the channel at all. Where the Lead Product Manager is mid-turn
 with another client when your message arrives — your terminal answering, or the
 harness delivering something to it — the thread says so rather than failing
 quietly, and rather than queueing behind it: nothing was said, and you say it
@@ -2246,20 +2246,20 @@ That bound is on your wait rather than on the turn: a turn the channel stopped
 waiting for may still be running, since a provider sleeping out a usage limit
 never hears a cancellation. It holds the conversation until it lands, and the
 thread says so plainly rather than sending you somewhere that will not answer
-either. The next thing you say from the channel is answered with the product
-manager being busy. `yoyo chat` is not refused, and it does not show you a turn
+either. The next thing you say from the channel is answered with the Lead Product
+Manager being busy. `yoyo chat` is not refused, and it does not show you a turn
 that is still being written: it queues behind that turn, says that another
 process is mid-turn and that it is waiting, and then continues the same
 conversation from wherever the turn got to. `yoyo agent list` says whether the
-product manager is still mid-turn without waiting on it, which is the reading to
+Lead Product Manager is still mid-turn without waiting on it, which is the reading to
 take before deciding whether to wait.
 
-Two things do not go to the product manager from there. Where things stand is
+Two things do not go to the Lead Product Manager from there. Where things stand is
 answered without a turn: `@yoyodyne status` is the read model's own four lines
-rather than something the product manager was asked for. And the commands above
+rather than something the Lead Product Manager was asked for. And the commands above
 are refused with where to type them: they are your authority carried out by the
-harness, so `@yoyodyne /backlog` is answered rather than read out to the product
-manager as a sentence, and costs nothing. Talking to it at all is held to the
+harness, so `@yoyodyne /backlog` is answered rather than read out to the Lead Product
+Manager as a sentence, and costs nothing. Talking to it at all is held to the
 same `direct-work` grant a thread reply is, because it admits work, reorders the
 queue, and spends your money.
 
@@ -2287,7 +2287,7 @@ nothing at all and works on a redirected stream too. `/help` says which of these
 this terminal supports rather than listing all of them at you. The price of the
 backslash is that a message ending in one cannot be typed: the backslash is what
 carries the line on. What you compose is drawn in the same region, over as many
-rows as it has lines, and reaches the product manager with its lines where you
+rows as it has lines, and reaches the Lead Product Manager with its lines where you
 put them. A message with more lines than your window has rows is drawn as the
 part of it that fits — the end of it, where you are typing, or wherever you have
 moved the cursor to — because a region drawn past the top of the window could no
@@ -2332,12 +2332,12 @@ erased when there is a reply to read, so it is never in your way and never in
 the scrollback.
 
 The reply itself arrives while it is being written rather than all at once when
-it is finished. The provider reports the product manager's message before the
+it is finished. The provider reports the Lead Product Manager's message before the
 terminal result the turn is recorded from, so the text already exists before the
 turn is over and what changed is only when you are shown it. It reads exactly as
 the finished reply reads — the same opening, the same Markdown, the same
 questions in the same colour — and it is not written a second time when the turn
-ends. The blocks the product manager writes for the harness rather than for you
+ends. The blocks the Lead Product Manager writes for the harness rather than for you
 are not shown as prose: a proposal, a tracker action, a concern, and a report
 are each reported in their own way once the turn is over, and the source of one
 arriving mid-sentence would be the protocol rather than the answer. None of this
@@ -2346,7 +2346,7 @@ touches the record: the reply that is recorded, the events, and
 watching, because the fragments are the same text the harness had already
 redacted and already written down. A turn whose provider stops before the reply
 is finished says so on the line after the prose it managed to show, because
-prose that simply stops reads as a product manager that had nothing more to say.
+prose that simply stops reads as a Lead Product Manager that had nothing more to say.
 
 Between turns that line carries what the conversation has cost: what the last
 answer was charged and what this session has spent, taken from what the provider
@@ -2358,7 +2358,7 @@ is any, because what you are waiting on is the more urgent of the two.
 
 A horizontal rule separates your turn from the answer to it, and colour tells
 apart the things you have to act on rather than read past: a question the
-product manager asks you is orange, and a proposal awaiting your decision and
+Lead Product Manager asks you is orange, and a proposal awaiting your decision and
 the harness's own answer to a command each have a colour of their own. A
 proposal is framed as a card so a batch of them reads as several things rather
 than one wall of text; the frame is decoration exactly as the rule is, and where
@@ -2373,7 +2373,7 @@ that matters. That one carries a mark as well as a colour — `!!` at the left
 margin for critical and `!` for warning, in the column before the identifier —
 so the pile can be scanned down its margin, and so the distinction is the one
 thing here that survives a terminal which cannot be dressed at all. A concern is
-marked the same way, by kind: work the product manager says would cut against a
+marked the same way, by kind: work the Lead Product Manager says would cut against a
 goal is the critical one, and the two that are questions about incomplete goals
 or about its own judgement are warnings. Colour is
 an addition to the text and never what carries the meaning — the question still
@@ -2387,7 +2387,7 @@ every one of them writes an escape or depends on there being a moment at which
 something unprompted can be written, and somebody who asked for an undecorated
 conversation asked for all of it.
 
-The product manager writes Markdown, and on a terminal you read it as Markdown:
+The Lead Product Manager writes Markdown, and on a terminal you read it as Markdown:
 headings, list markers, thematic breaks, and bold spans are shown as structure
 rather than spelled out in punctuation. That is presentation and only
 presentation. Nothing is added to the reply and nothing is taken out of it —
@@ -2412,7 +2412,7 @@ recorded is identical either way.
 
 ## How fresh the conversation's picture is, and how to refresh it
 
-The specifications and tracker the product manager reads are gathered once, when
+The specifications and tracker the Lead Product Manager reads are gathered once, when
 a conversation opens, and sent on its first turn only. Every later turn resumes a
 provider session that already holds them, so re-sending would pay to restate what
 it was already told. The consequence is worth knowing before it surprises you:
@@ -2453,7 +2453,7 @@ you to decide that the next reply decides anyway.
 
 `/refresh` re-reads the repository and the tracker into the running
 conversation. It discards nothing: what has been said stays said, and the new
-picture reaches the product manager on your next message, framed as evidence
+picture reaches the Lead Product Manager on your next message, framed as evidence
 with an account of what moved, so it reconciles what it believed rather than
 having it swapped underneath. The transcript says the refresh happened, the
 conversation's own log records it, and the durable record moves to the new
@@ -2484,7 +2484,7 @@ held what they changed.
 **A session is compacted before it outgrows the request.** Smaller turns slow a
 session's growth without bounding it, and the provider's own compaction triggers
 on its token count rather than on the request ceiling — and sends the whole
-session to do it, so on 2026-09-24 a product manager session at about 34 MB
+session to do it, so on 2026-09-24 a Lead Product Manager session at about 34 MB
 could not even be compacted. So the harness measures each provider session
 itself, as the bytes of every prompt it sent the session and every reply it got
 back, and records the measure on the conversation beside the budget it is held
@@ -2503,7 +2503,7 @@ before the harness measured sessions is compacted on its next turn, since
 nobody knows how large it is.
 
 **The harness refreshes on its own past a threshold.** The line above turned
-out not to be enough: on 2026-09-18 the product manager advised adding a
+out not to be enough: on 2026-09-18 the Lead Product Manager advised adding a
 section to CLAUDE.md that the file at HEAD had opened with for a month, from a
 picture roughly 500 landings old, and the freshness line had said so every time
 the conversation resumed. A line you have to act on is a line somebody
@@ -2595,7 +2595,7 @@ stands rather than to that opening snapshot. A management role can also
 commit `HEAD` names now, which is how it checks a document before advising about
 it rather than describing the copy in its briefing. Nothing outside those commands
 arrives on its own — an item something else created or closed reaches the
-conversation when the product manager asks, by surveying or by acting on it, and
+conversation when the Lead Product Manager asks, by surveying or by acting on it, and
 not before — and edits under `docs/product` do not reach it that way at all, since
 the tracker does not hold them. That is what `/refresh` is for, and what the
 harness's own refresh does once enough has landed; between the two, `/refresh`

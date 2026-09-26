@@ -842,9 +842,9 @@ Pulls ready work from the backlog and runs it, up to
 execution.max_concurrent_developers at once, in a worktree of its own per run.
 It returns once nothing more is ready and every run it started has ended.
 
-Items are taken in the product manager's order -- highest priority first -- and
-only where the tracker itself reports them as ready to pull, so dependencies are
-the tracker's answer rather than this command's guess. An item an unresolved
+Items are taken in the Lead Product Manager's order -- highest priority first --
+and only where the tracker itself reports them as ready to pull, so dependencies
+are the tracker's answer rather than this command's guess. An item an unresolved
 directive pauses is named and skipped, and every run records why the harness
 chose the item it did.
 

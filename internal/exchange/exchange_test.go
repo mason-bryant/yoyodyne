@@ -216,7 +216,7 @@ func TestAnExchangeReportsItsCostBesideItsRounds(t *testing.T) {
 		t.Fatalf("remaining = %d, want 8", got)
 	}
 	summary := one.Summary()
-	for _, wanted := range []string{"2/10 round(s)", "$0.7500", "product manager asked architect"} {
+	for _, wanted := range []string{"2/10 round(s)", "$0.7500", "Lead Product Manager asked architect"} {
 		if !strings.Contains(summary, wanted) {
 			t.Fatalf("summary %q is missing %q", summary, wanted)
 		}

@@ -1684,7 +1684,7 @@ func TestAnIdlePollThatCouldNotReadTheStoreIsSaidAsARetryRatherThanAsIdle(t *tes
 	if err != nil {
 		t.Fatalf("render a session retrying a read: %v", err)
 	}
-	if strings.Contains(message.Body, "started nothing") || strings.Contains(message.Body, "product manager") {
+	if strings.Contains(message.Body, "started nothing") || strings.Contains(strings.ToLower(message.Body), "product manager") {
 		t.Fatalf("body %q says the session found nothing, or hands the move to the product manager", message.Body)
 	}
 	if !strings.Contains(message.Body, "reading it again") || !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWatchReadRetrying]) {

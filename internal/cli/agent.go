@@ -618,14 +618,14 @@ main conversation's next turn reads what it concluded. "yoyo chat" documents it.
 
 An agent is a durable logical identity: the provider process that answers is
 started for a turn and gone afterwards, and what survives it is the conversation
-recorded here. Talking to the product manager is what "yoyo chat" does, and
+recorded here. Talking to the Lead Product Manager is what "yoyo chat" does, and
 "yoyo agent chat product-manager" is the same conversation reached the long way.
 
 What each role may do is fixed by the harness rather than by its persona: the
-product manager owns the backlog, the development manager decomposes admitted
-work underneath it and cannot admit or reorder any, the architect owns the
-designs and invariants and edits nothing from a conversation, and the developer
-and reviewer do their real work inside runs.`)
+Lead Product Manager owns the backlog, the development manager decomposes
+admitted work underneath it and cannot admit or reorder any, the architect owns
+the designs and invariants and edits nothing from a conversation, and the
+developer and reviewer do their real work inside runs.`)
 }
 
 // describeTriggers says what wakes an instance in one line, as configured. It

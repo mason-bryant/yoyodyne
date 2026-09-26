@@ -319,7 +319,7 @@ To claim the second, put exactly one block of this shape in your reply, ahead of
 {"outcome":"evidence","why":"what you landed instead, and what has to happen before the item can be discharged"}
 ` + "```" + `
 
-"discharged" is the ordinary landing. "evidence" is a landing worth keeping that does not discharge the item: your change integrates exactly as it would have, nothing is written down as done that was not, and the item is parked with your account of the claim as its parking reason. Parking keeps the item in the product manager's order and says why it is not to be started, so nothing selects it again until somebody releases it. Write the "why" accordingly: name what would release the item, because that sentence is what whoever considers releasing it reads.
+"discharged" is the ordinary landing. "evidence" is a landing worth keeping that does not discharge the item: your change integrates exactly as it would have, nothing is written down as done that was not, and the item is parked with your account of the claim as its parking reason. Parking keeps the item in the Lead Product Manager's order and says why it is not to be started, so nothing selects it again until somebody releases it. Write the "why" accordingly: name what would release the item, because that sentence is what whoever considers releasing it reads.
 
 Where you can name the impediment as another work item, say so and the item is left open waiting on that item instead of parked:
 

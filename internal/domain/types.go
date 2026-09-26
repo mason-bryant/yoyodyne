@@ -73,13 +73,26 @@ func (r AgentRole) Valid() bool {
 	}
 }
 
+// LeadProductManagerTitle is the name a person reads for the product-manager
+// role. The operator renamed it on 2026-09-26 so that it is not confused with
+// the program managers, who answer to it: "PM" had come to mean either. The
+// identifier stays product-manager — in configuration, agent names, persona
+// paths, and every record already written — and only the name a sentence gives
+// the role changed, which is why it is decided here and nowhere else.
+const LeadProductManagerTitle = "Lead Product Manager"
+
 // Title names a role the way somebody reading a sentence reads it, which is the
-// identifier with the hyphen a name needs taken back out. A name that is not a
-// role is given as it was written: a sentence that has to name something the
-// harness does not recognize is better off printing it than dressing it up.
+// identifier with the hyphen a name needs taken back out — except for the
+// product manager, whose name is the Lead Product Manager's, written as a title.
+// A name that is not a role is given as it was written: a sentence that has to
+// name something the harness does not recognize is better off printing it than
+// dressing it up.
 func (r AgentRole) Title() string {
 	if !r.Valid() {
 		return string(r)
+	}
+	if r == RoleProductManager {
+		return LeadProductManagerTitle
 	}
 	return strings.ReplaceAll(string(r), "-", " ")
 }

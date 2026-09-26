@@ -212,6 +212,6 @@ func (p pulledInto) reason(preferences []domain.DeveloperSlot) string {
 // is the next slot with no preference to come free, or the preferring slot once
 // its label's work is exhausted.
 func leftForAnotherSlotReason(slot developerslot.Slot, took string) string {
-	return fmt.Sprintf("%s: developer slot %d prefers %s and pulled %s ahead of it; a slot with no preference takes this item in the product manager's order, and slot %d falls back to it once none of %s's work is ready",
+	return fmt.Sprintf("%s: developer slot %d prefers %s and pulled %s ahead of it; a slot with no preference takes this item in the Lead Product Manager's order, and slot %d falls back to it once none of %s's work is ready",
 		runstate.PassedOverLeftForAnotherSlot, slot.Number, slot.Preference(), took, slot.Number, slot.Preference())
 }

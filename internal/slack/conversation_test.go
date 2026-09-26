@@ -319,10 +319,10 @@ func TestADecisionTheHarnessCouldNotCarryOutIsNotBlamedOnTheProductManager(t *te
 	if !strings.Contains(reason, "tracker is read-only") {
 		t.Fatalf("reason = %q, want the harness's own reason carried through", reason)
 	}
-	if strings.Contains(reason, "The product manager could not answer") {
+	if strings.Contains(reason, "The Lead Product Manager could not answer") {
 		t.Fatalf("reason = %q, want a failed decision not attributed to the product manager, which was never asked", reason)
 	}
-	if !strings.Contains(reason, "the product manager was not asked") {
+	if !strings.Contains(reason, "the Lead Product Manager was not asked") {
 		t.Fatalf("reason = %q, want it to say outright that no turn was taken", reason)
 	}
 }

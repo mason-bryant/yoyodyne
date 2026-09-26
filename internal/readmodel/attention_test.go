@@ -205,7 +205,7 @@ func TestAnAmendmentEntryCarriesTheProposalInFull(t *testing.T) {
 	// A document the product manager owns waits on her, in the words a reader
 	// uses for her rather than the role's identifier.
 	proposal.Owner = domain.RoleProductManager
-	if whose := amendmentAttention(proposal).Whose(); !strings.HasPrefix(whose, "the product manager's — ") {
+	if whose := amendmentAttention(proposal).Whose(); !strings.HasPrefix(whose, "the Lead Product Manager's — ") {
 		t.Fatalf("whose = %q, want the product manager named in plain words", whose)
 	}
 

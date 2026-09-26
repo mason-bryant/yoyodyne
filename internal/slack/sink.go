@@ -479,9 +479,9 @@ func (s *Sink) converses() string {
 	case s.steering == nil || s.steering.conversation == nil:
 		return "a message addressed to this app is answered with where things stand and no more: this sink was assembled without the durable conversation"
 	case len(s.steering.operators) == 0:
-		return "a message addressed to this app is answered with where things stand: no human in this project holds direct-work with a bound Slack member id, so nobody may talk to the product manager from here"
+		return "a message addressed to this app is answered with where things stand: no human in this project holds direct-work with a bound Slack member id, so nobody may talk to the Lead Product Manager from here"
 	default:
-		return fmt.Sprintf("a message addressed to this app reaches the product manager, from the %d Slack member(s) this project granted direct-work; it is the same conversation `yoyo chat` continues", len(s.steering.operators))
+		return fmt.Sprintf("a message addressed to this app reaches the Lead Product Manager, from the %d Slack member(s) this project granted direct-work; it is the same conversation `yoyo chat` continues", len(s.steering.operators))
 	}
 }
 

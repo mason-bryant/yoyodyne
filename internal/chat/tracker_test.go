@@ -420,7 +420,7 @@ func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
 	}
 	for _, required := range []string{
 		retiredWithoutBeingDone,
-		"by the product manager in conversation",
+		"by the Lead Product Manager in conversation",
 		"the operator dropped multi-repository support",
 	} {
 		if !strings.Contains(retired[1], required) {
@@ -483,10 +483,10 @@ func TestClosingOrRetiringAnItemClosesItsDocketEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	if reason := docket.closed["yoyodyne-ifd.22"]; !strings.Contains(reason, "closed as done by the product manager in conversation") {
+	if reason := docket.closed["yoyodyne-ifd.22"]; !strings.Contains(reason, "closed as done by the Lead Product Manager in conversation") {
 		t.Fatalf("closed item's entries closed with %q", reason)
 	}
-	if reason := docket.closed["yoyodyne-ifd.23"]; !strings.Contains(reason, "retired without being done by the product manager in conversation") {
+	if reason := docket.closed["yoyodyne-ifd.23"]; !strings.Contains(reason, "retired without being done by the Lead Product Manager in conversation") {
 		t.Fatalf("retired item's entries closed with %q", reason)
 	}
 	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
@@ -538,7 +538,7 @@ func TestParkingTakesWorkOutOfReachWithoutTakingItOutOfTheBacklog(t *testing.T) 
 	if !strings.Contains(parked.change.Parking.Reason(), "off the critical path by the scope decision") {
 		t.Fatalf("park reason = %q, want the action's reason stored as the parking", parked.change.Parking.Reason())
 	}
-	for _, required := range []string{"Parked", "by the product manager in conversation", "off the critical path"} {
+	for _, required := range []string{"Parked", "by the Lead Product Manager in conversation", "off the critical path"} {
 		if !strings.Contains(parked.change.AppendNotes, required) {
 			t.Fatalf("park notes = %q, want them to contain %q", parked.change.AppendNotes, required)
 		}
@@ -660,7 +660,7 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 
 	// Admission is an act with an owner, so the item records that it was admitted
 	// rather than merely that a row appeared in the tracker.
-	if len(tracker.created) != 1 || !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the product manager") {
+	if len(tracker.created) != 1 || !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the Lead Product Manager") {
 		t.Fatalf("created work items = %#v", tracker.created)
 	}
 	// Where the work is admitted travels with the admission. The identifier does

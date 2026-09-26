@@ -245,7 +245,7 @@ func TestASentenceIsNamedWithTheFieldItIsIn(t *testing.T) {
 		if unmet[0].Field != test.field || !strings.HasPrefix(unmet[0].Missing, "its "+test.field) {
 			t.Fatalf("%s: unmet = %+v, want the refusal to name the %s", test.item.ID, unmet[0], test.field)
 		}
-		if said := strings.Contains(unmet[0].Missing, "the product manager's update does not rewrite"); said != test.outOfReach {
+		if said := strings.Contains(unmet[0].Missing, "the Lead Product Manager's update does not rewrite"); said != test.outOfReach {
 			t.Fatalf("%s: missing = %q, want out of reach said only of a field her update cannot rewrite", test.item.ID, unmet[0].Missing)
 		}
 	}

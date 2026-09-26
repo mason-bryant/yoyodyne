@@ -140,7 +140,7 @@ func TestAWaitForAnotherProcessMidTurnIsSaidOutLoud(t *testing.T) {
 	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what is missing?\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
-	if !strings.Contains(out.String(), "another process is mid-turn with the product manager; waiting for it to finish.") {
+	if !strings.Contains(out.String(), "another process is mid-turn with the Lead Product Manager; waiting for it to finish.") {
 		t.Fatalf("the operator was not told what they were waiting for: %q", out.String())
 	}
 	// The wait ended in a turn rather than in a refusal.

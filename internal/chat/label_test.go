@@ -81,7 +81,7 @@ func TestAnItemAlreadyInTheQueueCanAcquireAndLoseALabel(t *testing.T) {
 	}
 	// The reason is on the item, not only in the conversation: a label whose
 	// reason exists only in a transcript is one nobody can account for later.
-	if !strings.Contains(added.AppendNotes, "Labelled reliability by the product manager") ||
+	if !strings.Contains(added.AppendNotes, "Labelled reliability by the Lead Product Manager") ||
 		!strings.Contains(added.AppendNotes, "Reason: a stall fix admitted under the reliability directive") {
 		t.Fatalf("first update notes = %q, want the label and the reason recorded on the item", added.AppendNotes)
 	}
@@ -89,7 +89,7 @@ func TestAnItemAlreadyInTheQueueCanAcquireAndLoseALabel(t *testing.T) {
 	if strings.Join(removed.RemoveLabels, " ") != "triage" || len(removed.AddLabels) != 0 {
 		t.Fatalf("second update = %#v, want exactly the one label removed", removed)
 	}
-	if !strings.Contains(removed.AppendNotes, "Label triage removed by the product manager") {
+	if !strings.Contains(removed.AppendNotes, "Label triage removed by the Lead Product Manager") {
 		t.Fatalf("second update notes = %q, want the removal recorded on the item", removed.AppendNotes)
 	}
 	// The operator reads what changed, on each item, by name.

@@ -215,11 +215,11 @@ func reportEvaluationError(stdout, stderr io.Writer, jsonOutput bool, err error)
 func printEvaluationUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo evaluation <list|show> [options]
 
-An operator brings the product manager an idea rather than a work item — "what
-if we did X", "is Y worth it" — and what it makes of one is written down here:
-the recommendation, how the idea sits against the brief and the goals, what the
-evidence states and where that came from, what was inferred rather than read,
-what is still uncertain, what argues the other way, and the reasoning.
+An operator brings the Lead Product Manager an idea rather than a work item —
+"what if we did X", "is Y worth it" — and what it makes of one is written down
+here: the recommendation, how the idea sits against the brief and the goals,
+what the evidence states and where that came from, what was inferred rather than
+read, what is still uncertain, what argues the other way, and the reasoning.
 
 Everything here is advice. Recording an evaluation admitted no work, changed no
 document, and approved nothing, and nothing in these commands does either. What
@@ -228,9 +228,9 @@ which reached it through the approval your project asks for, and a change to a
 document, which reached it through that document's owner and `+"`yoyo amendment`"+`.
 
 Each evaluation also keeps what the harness actually retrieved for it and when,
-beside the sources the product manager cited. The two are different claims and
-they are kept apart on purpose: one is what it says it read, the other is what
-was fetched.
+beside the sources the Lead Product Manager cited. The two are different claims
+and they are kept apart on purpose: one is what it says it read, the other is
+what was fetched.
 
   list [--recommendation <adopt|reject|defer|experiment>]   what has been evaluated, newest first
   show <id>                                                 one evaluation in full

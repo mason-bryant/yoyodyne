@@ -1,6 +1,6 @@
 # Team mode scope
 
-Drafted by the product manager; approved by the operator in conversation on
+Drafted by the Lead Product Manager; approved by the operator in conversation on
 2026-08-19. This document is deliberately plain prose for now, and it lives outside
 the artifact homes because the contract there is strict: every document inside
 one carries identity frontmatter, and no governed kind exists yet for a

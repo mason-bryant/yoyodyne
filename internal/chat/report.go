@@ -89,7 +89,7 @@ type ReportError struct {
 }
 
 func (e *ReportError) Error() string {
-	return "the product manager reported something the harness cannot read: " + e.Err.Error()
+	return "the Lead Product Manager reported something the harness cannot read: " + e.Err.Error()
 }
 
 func (e *ReportError) Unwrap() error { return e.Err }

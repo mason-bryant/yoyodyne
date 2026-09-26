@@ -199,7 +199,7 @@ var harnessVoice = voice{
 		KindDirectiveCarriedOut:      "That was carried out: {text}",
 		KindDirectiveRefused:         "Nothing was recorded from that reply: {why}",
 		KindDirectiveWithdrawn:       "That was withdrawn, and no longer applies: {text}",
-		KindQuestionHeard:            "Heard as a question rather than an instruction, so nothing was recorded against this item; the product manager's answer follows here.",
+		KindQuestionHeard:            "Heard as a question rather than an instruction, so nothing was recorded against this item; the Lead Product Manager's answer follows here.",
 		KindIntakeHeld:               "Intake is held for this product: {why}",
 		KindIntakeReleased:           "Intake is released for this product.",
 		KindIntakeEscalated:          "The brake's hold on intake is escalated to the operator by the harness: {why}",
@@ -276,7 +276,7 @@ var developerVoice = voice{
 		KindDirectiveCarriedOut:      "What was asked for is done: {text}. Nothing about this item was waiting on it.",
 		KindDirectiveRefused:         "That reply changed nothing about what I'm building: {why}",
 		KindDirectiveWithdrawn:       "That was taken back, so I'm no longer building under it and nothing about this item waits on it: {text}",
-		KindQuestionHeard:            "That was a question rather than direction, so nothing about what I'm building changed by it; the product manager answers it here.",
+		KindQuestionHeard:            "That was a question rather than direction, so nothing about what I'm building changed by it; the Lead Product Manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:           "Intake is open again; I'll take what I'm given.",
 		KindIntakeEscalated:          "The harness has stopped probing the line with runs like mine and handed the hold to the operator: {why}",
@@ -353,7 +353,7 @@ var reviewerVoice = voice{
 		KindDirectiveCarriedOut:      "That was carried out: {text}. It stood while I judged this and it stands now.",
 		KindDirectiveRefused:         "Nothing in that reply reaches what I judge this against: {why}",
 		KindDirectiveWithdrawn:       "That was taken back, so I no longer judge the change against it; what I judged while it stood was judged against it: {text}",
-		KindQuestionHeard:            "That was a question rather than something I judge the change against, so nothing was recorded; the product manager answers it here.",
+		KindQuestionHeard:            "That was a question rather than something I judge the change against, so nothing was recorded; the Lead Product Manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:           "Intake is open; work will reach me again.",
 		KindIntakeEscalated:          "The harness has handed the brake's hold to the operator rather than probe the line again; nothing new reaches me until it is released: {why}",
@@ -429,7 +429,7 @@ var developmentManagerVoice = voice{
 		KindDirectiveCarriedOut:      "That was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
 		KindDirectiveRefused:         "That reply is not direction anything can act on, so nothing about this item moved: {why}",
 		KindDirectiveWithdrawn:       "That was taken back, so it is no longer direction this item is under and anything it was holding moves again: {text}",
-		KindQuestionHeard:            "That was a question rather than direction, so nothing about this item moved; the product manager answers it here.",
+		KindQuestionHeard:            "That was a question rather than direction, so nothing about this item moved; the Lead Product Manager answers it here.",
 		KindIntakeHeld:               "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:           "Intake is released; I'm pulling from the top of the backlog again.",
 		KindIntakeEscalated:          "The harness escalated the brake's hold to the operator over my head — I was asked every cycle and did not — so no further probe starts and the queue waits on a person: {why}",
@@ -461,7 +461,7 @@ var developmentManagerVoice = voice{
 // The product manager: what the product is for, and what the operator needs to
 // be able to disagree with.
 var productManagerVoice = voice{
-	title:  "Product Manager",
+	title:  "Lead Product Manager",
 	avatar: ":compass:",
 	lines: map[Kind]string{
 		KindItemAdmitted:             "I've admitted this to the backlog: {title}. It serves {goal}, and that claim is the operator's to disagree with.",
@@ -583,7 +583,7 @@ var architectVoice = voice{
 		KindDirectiveCarriedOut:      "That was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
 		KindDirectiveRefused:         "The channel refused that reply rather than inferring a directive from it: {why}",
 		KindDirectiveWithdrawn:       "That was taken back and kept rather than deleted, so what was done while it stood stays explicable: {text}",
-		KindQuestionHeard:            "That was a question rather than a directive, so the record holds nothing from it; the product manager answers it here.",
+		KindQuestionHeard:            "That was a question rather than a directive, so the record holds nothing from it; the Lead Product Manager answers it here.",
 		KindIntakeHeld:               "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:           "Intake is released; selection resumes.",
 		KindIntakeEscalated:          "The brake's summons-and-probe loop reached its bound and the harness escalated the hold to the operator, which is the loop working as designed rather than standing silent: {why}",
@@ -661,7 +661,7 @@ var programManagerVoice = voice{
 		KindDirectiveCarriedOut:      "Carried out: {text}. It paused nothing, and its outcome is now on the record.",
 		KindDirectiveRefused:         "That reply was not taken as a directive, rather than one being guessed from it: {why}",
 		KindDirectiveWithdrawn:       "Withdrawn, and kept on the record, so what happened while it stood still makes sense: {text}",
-		KindQuestionHeard:            "That was a question, not a directive, so nothing is recorded from it; the product manager answers it here.",
+		KindQuestionHeard:            "That was a question, not a directive, so nothing is recorded from it; the Lead Product Manager answers it here.",
 		KindIntakeHeld:               "Intake is held: nothing new is chosen, and what is running carries on. How long the line stays held is part of what I watch: {why}",
 		KindIntakeReleased:           "Intake is released, and the line can choose work again.",
 		KindIntakeEscalated:          "The brake went round its summons-and-probe loop to the bound, and the harness put the hold in front of the operator, as it is built to: {why}",
@@ -841,7 +841,7 @@ var nextMoves = map[Kind]string{
 	// manager's: it is carried to her conversation the moment the receipt is
 	// posted, and her reply lands in the same thread. Nothing about the work
 	// waits on it, and the person who asked has nothing to do but read.
-	KindQuestionHeard: "the product manager's — the answer follows in this thread.",
+	KindQuestionHeard: "the Lead Product Manager's — the answer follows in this thread.",
 	// The operator's switches and the session that chooses work. These are about
 	// the whole line rather than one item, and every one of them is waiting on
 	// somebody by name.
@@ -858,7 +858,7 @@ var nextMoves = map[Kind]string{
 	// genuinely the act that changes the answer, which is the only case this clause
 	// is said in — see idleMove, which answers for the three states it used to be
 	// said over wrongly before it reaches this.
-	KindWatchIdle:    "the product manager's — nothing is chosen until work that is ready is admitted.",
+	KindWatchIdle:    "the Lead Product Manager's — nothing is chosen until work that is ready is admitted.",
 	KindWatchBraked:  "the operator's — choosing resumes when intake is released.",
 	KindWatchResumed: "the harness's — work is being chosen again.",
 	KindWatchStopped: "the operator's — nothing more is chosen until a session is started again.",

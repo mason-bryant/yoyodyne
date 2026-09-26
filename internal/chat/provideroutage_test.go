@@ -130,7 +130,7 @@ func TestATurnIntoAnExpiredLoginRecordsTheOutageAndAServedTurnClearsIt(t *testin
 	if readErr != nil || !away || standing.Cause != domain.ProviderUnauthenticated {
 		t.Fatalf("Standing() = %#v, %t, %v, want the login recorded on the product", standing, away, readErr)
 	}
-	if !strings.Contains(standing.Waiting, "product manager") || !strings.Contains(standing.Waiting, session.Evidence().ConversationID) {
+	if !strings.Contains(standing.Waiting, "Lead Product Manager") || !strings.Contains(standing.Waiting, session.Evidence().ConversationID) {
 		t.Fatalf("waiting = %q, want the conversation that was stopped", standing.Waiting)
 	}
 

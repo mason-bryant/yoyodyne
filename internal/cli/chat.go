@@ -1291,7 +1291,7 @@ func printOtherRoleHeader(writer io.Writer, role domain.AgentRole) {
 	fmt.Fprintln(writer, "It has no files, commands, or network, and it can read the work tracker but")
 	switch {
 	case len(authority.TrackerActions) > 2:
-		fmt.Fprintln(writer, "may only build structure underneath work the product manager has admitted:")
+		fmt.Fprintln(writer, "may only build structure underneath work the Lead Product Manager has admitted:")
 		fmt.Fprintln(writer, "it decomposes, links, and reparents, and it cannot admit work, reorder the")
 		fmt.Fprintln(writer, "backlog, close an item, or retire one. Every change it makes is reported here.")
 	default:
@@ -1509,7 +1509,7 @@ func printOpenConcerns(writer io.Writer, theme console.Theme, concerns []chat.Pe
 	if len(concerns) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "%d question(s) from the product manager were left unanswered, and the work behind them was never proposed:\n", len(concerns))
+	fmt.Fprintf(writer, "%d question(s) from the Lead Product Manager were left unanswered, and the work behind them was never proposed:\n", len(concerns))
 	for _, concern := range concerns {
 		severity := concern.Concern.Kind.Severity()
 		var one strings.Builder
@@ -1586,24 +1586,25 @@ A conversation also carries out operator commands: /backlog, /status, /show,
 once it is open.
 
 A --message that begins with a slash is carried out as one of those commands
-rather than said to the product manager. The commands that only mean something
-inside a conversation — /work, /wait, /stop, and /exit (alias /quit) — are refused there and
-say what to reach for instead.
+rather than said to the Lead Product Manager. The commands that only mean
+something inside a conversation — /work, /wait, /stop, and /exit (alias /quit) —
+are refused there and say what to reach for instead.
 
 A --message that decides a proposal this conversation is waiting on is carried
 out here too, and no turn is spent on it. Two shapes decide: one that names the
 proposal, as "approve 3.1" or "decline 3.1 <reason>", and one that is nothing but
 decision words, as "y", "no", or "approve 1,3". Everything else is said to the
-product manager as it always was and leaves every proposal where it was —
+Lead Product Manager as it always was and leaves every proposal where it was —
 including a reply that opens with one of those words, because "no, let us look at
 the resolver instead" is a sentence rather than a decline.
 
-A --message that answers a question the product manager stopped on is carried out
-the same way: "answer c3.1 <what you decide>" answers concern c3.1 with your words
-or the number of an answer it offered, and a bare "yes" or "no" answers it where
-it is the only thing waiting. With a question and a proposal both waiting, a
-message that names neither is refused with the list rather than applied to
-either, so an answer meant for the question never approves the proposal.
+A --message that answers a question the Lead Product Manager stopped on is
+carried out the same way: "answer c3.1 <what you decide>" answers concern c3.1
+with your words or the number of an answer it offered, and a bare "yes" or "no"
+answers it where it is the only thing waiting. With a question and a proposal
+both waiting, a message that names neither is refused with the list rather than
+applied to either, so an answer meant for the question never approves the
+proposal.
 
 A --message that finds the conversation mid-turn waits for it, unless the agent is
 configured with "conversations: side-threads": then it is answered beside the busy
@@ -1614,7 +1615,7 @@ it. A side thread the agent left open for a further turn is continued with
 --side-thread <id> and --message, by the agent that holds it; commands and
 decisions always reach the main conversation.
 
-This is the product manager's conversation. Every other configured agent is
+This is the Lead Product Manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same
 options; "yoyo agent list" says who there is and what each one is in the middle
 of.`)
