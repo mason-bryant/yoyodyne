@@ -31,6 +31,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -233,7 +234,7 @@ func TestARunThatEndsOffTheDefinitionRecordsThatItDid(t *testing.T) {
 	fixture := newBaselineFixture(t, baselineItem())
 	// The reviewer answers with something that is not a verdict, twice: the run
 	// asks once more and then fails on it, having bought no verdict at all.
-	provider := roleBackend(baselineImplements, "not a verdict at all", "still not a verdict")
+	provider := orchestratortest.RoleBackend(baselineImplements, "not a verdict at all", "still not a verdict")
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 
 	state, instance := observedRun(t, fixture.store)
@@ -264,7 +265,7 @@ func TestTheRollbackLeavesARunExecutingNothingDeclarative(t *testing.T) {
 	t.Parallel()
 
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	// The pipeline keeps somewhere to record instances, which is what production
 	// wires unconditionally, so what this measures is the key rather than the
 	// absence of a store.
@@ -574,8 +575,8 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 			t.Parallel()
 
 			repository, worktreeRoot, store := restartableFixture(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-			provider := roleBackend(func(request backend.RunRequest) error {
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			halting := &haltingStore{StateStore: store, at: test.haltAt}
@@ -586,7 +587,7 @@ func TestASweepRecordsTheGapAnInterruptedObservationLeaves(t *testing.T) {
 			// already recorded.
 			pipeline.Instances = store
 
-			if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+			if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 				t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 			}
 			interrupted, err := store.Load(pipelineRunID)
@@ -652,8 +653,8 @@ func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The baseline scenario's own halt: writes stop while the developer's work is
@@ -662,7 +663,7 @@ func TestASweepRecordsNoDivergenceWhereTheObservationReachedATerminal(t *testing
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"test -f feature.txt"}), provider)
 	pipeline.Instances = store
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 
@@ -723,14 +724,14 @@ func TestABlockedSettlementRecordsTheGapItsInstanceLeaves(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runstate.NewStore() error = %v", err)
 			}
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "in_progress"}}
 			now := time.Now()
 			state := runstate.State{
 				SchemaVersion:      runstate.StateSchemaVersion,
 				RunID:              "run-abcdef0123456789abcdef0123456789",
 				ProductID:          "yoyodyne",
 				RepositoryID:       "yoyodyne",
-				WorkItemID:         tracker.item.ID,
+				WorkItemID:         tracker.Item.ID,
 				Backend:            "claude-code",
 				Status:             runstate.StatusRunning,
 				Phase:              runstate.PhaseReviewing,
@@ -758,7 +759,7 @@ func TestABlockedSettlementRecordsTheGapItsInstanceLeaves(t *testing.T) {
 				t.Fatalf("CreateWorkflowInstance() error = %v", err)
 			}
 
-			result, err := Reconciler{Tracker: tracker, Store: store}.blockRun(context.Background(), state, tracker.item.Status, gitworktree.Observation{}, "interrupted while reviewing")
+			result, err := Reconciler{Tracker: tracker, Store: store}.blockRun(context.Background(), state, tracker.Item.Status, gitworktree.Observation{}, "interrupted while reviewing")
 			if err != nil {
 				t.Fatalf("blockRun() error = %v", err)
 			}
@@ -793,8 +794,8 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseCompleting}
@@ -804,7 +805,7 @@ func TestASweepRecordsNothingForARunNobodyWasObserving(t *testing.T) {
 	pipeline.Instances = store
 	pipeline.Config.Execution.DeclarativeDelivery = false
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil || !halting.halted {
 		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
 	}
 	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 {
@@ -852,7 +853,7 @@ func blockObservation(t *testing.T, pipeline Pipeline) string {
 func unobservedRunFixture(t *testing.T) (*baselineFixture, string) {
 	t.Helper()
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	refused := blockObservation(t, pipeline)
 	fixture.invoke(t, "run", pipeline)
@@ -932,7 +933,7 @@ func TestTheBaselineRecorderRefusesToFreezeARunNothingObserved(t *testing.T) {
 			what: "a run whose project rolled back",
 			drive: func(t *testing.T) *baselineFixture {
 				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
+				provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 				fixture.invoke(t, "run", automatic(fixture.legacy(t, provider, []string{"test -f feature.txt"}), provider))
 				return fixture
 			},

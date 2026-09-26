@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -30,7 +31,7 @@ func TestTheCompletionRecordingFailureIsPersistedWhenTheLateWriteLands(t *testin
 	t.Parallel()
 
 	store := &refusingSaveStore{}
-	pipeline := Pipeline{Store: store, Tracker: &fakeTracker{}}
+	pipeline := Pipeline{Store: store, Tracker: &orchestratortest.Tracker{}}
 	state := runstate.State{RunID: "run-0123456789abcdef0123456789abcdef", WorkItemID: "yoyodyne-ifd.90"}
 	cause := errors.New("save completed run state after cleanup: disk full")
 
@@ -50,7 +51,7 @@ func TestARefusedLateWriteJoinsTheErrorsRatherThanLosingOne(t *testing.T) {
 	t.Parallel()
 
 	store := &refusingSaveStore{refusals: 10}
-	pipeline := Pipeline{Store: store, Tracker: &fakeTracker{}}
+	pipeline := Pipeline{Store: store, Tracker: &orchestratortest.Tracker{}}
 	state := runstate.State{RunID: "run-0123456789abcdef0123456789abcdef", WorkItemID: "yoyodyne-ifd.90"}
 	cause := errors.New("save completed run state after cleanup: disk full")
 

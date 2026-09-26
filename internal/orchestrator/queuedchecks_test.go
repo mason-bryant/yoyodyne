@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -65,7 +66,7 @@ func (f queuedFixture) sweep(t *testing.T, forge *checkedForge, hosts bool) Reco
 	reconciler.Checks = forge
 	reconciler.Capacity = 1
 	reconciler.HostsRuns = hosts
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := publishing(automatic(newSharedPipeline(t, f.repository, f.worktreeRoot, f.store, f.tracker, provider, []string{"exit 0"}), provider), f.forge)

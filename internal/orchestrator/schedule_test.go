@@ -26,6 +26,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/readiness"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -3244,7 +3245,7 @@ func (h *realScheduleHarness) start(ctx context.Context, workItemID string, sele
 	h.selections[workItemID] = selection
 	h.mu.Unlock()
 
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		h.rendezvous()
 		return h.develop(workItemID, request.WorkingDirectory)
 	}, approveVerdict)

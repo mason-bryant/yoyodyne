@@ -5000,11 +5000,11 @@ func TestADeveloperAttemptEndingInErrorRecordsNothingServed(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		return backend.RunResult{
-			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			Backend: domain.BackendClaudeCode, SessionID: provider.DeveloperSession,
 			IsError: true, StopReason: "api_error", FinalText: "API Error: 429 rate_limit_error",
 			Process:   execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
 			LastEvent: request.LastSequence,
@@ -5014,8 +5014,8 @@ func TestADeveloperAttemptEndingInErrorRecordsNothingServed(t *testing.T) {
 	served := &recordedServed{}
 	pipeline.CapacityServed = served
 
-	_, _ = pipeline.Run(context.Background(), tracker.item.ID)
-	if len(provider.requestsForRole(domain.RoleDeveloper)) == 0 {
+	_, _ = pipeline.Run(context.Background(), tracker.Item.ID)
+	if len(provider.RequestsForRole(domain.RoleDeveloper)) == 0 {
 		t.Fatal("no developer attempt was made, so the test proves nothing")
 	}
 	served.mu.Lock()
@@ -5033,17 +5033,17 @@ func TestARefusedReviewRecordsNothingServedAndTheAnsweredOneRecordsItsModel(t *t
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	resetsAt := baseTime.Add(45 * time.Minute)
-	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	provider := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
 	reviews := 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleDeveloper {
 			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
 			}
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				Backend: domain.BackendClaudeCode, SessionID: provider.DeveloperSession,
 				ResolvedModel: developerResolved, FinalText: "implemented the work item",
 				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
 			}, nil
@@ -5051,7 +5051,7 @@ func TestARefusedReviewRecordsNothingServedAndTheAnsweredOneRecordsItsModel(t *t
 		reviews++
 		if reviews == 1 {
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				Backend: domain.BackendClaudeCode, SessionID: provider.ReviewerSession,
 				IsError: true, StopReason: "usage_limit",
 				UsageLimit: &backend.UsageLimit{Kind: "seven_day", ResetsAt: resetsAt},
 				Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
@@ -5059,7 +5059,7 @@ func TestARefusedReviewRecordsNothingServedAndTheAnsweredOneRecordsItsModel(t *t
 			}, nil
 		}
 		return backend.RunResult{
-			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			Backend: domain.BackendClaudeCode, SessionID: provider.ReviewerSession,
 			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
 			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
 		}, nil
@@ -5089,7 +5089,7 @@ func TestARefusedReviewRecordsNothingServedAndTheAnsweredOneRecordsItsModel(t *t
 		servedDuringPause = len(served.forModel(reviewerModel))
 	}
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if servedDuringPause != 0 {

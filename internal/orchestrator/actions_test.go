@@ -19,6 +19,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/rolecapability"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/separation"
@@ -314,10 +315,11 @@ func TestPerformingClaimReachesTheClaim(t *testing.T) {
 		t.Fatal(`Lookup("work-item.claim") found nothing`)
 	}
 
-	// The item the tracker holds before the claim is open, and fakeTracker's claim
-	// is what moves it to in_progress. So a run left holding an open item is a run
-	// that kept what Run read rather than what the claim returned.
-	tracker := &fakeTracker{item: beads.WorkItem{
+	// The item the tracker holds before the claim is open, and
+	// orchestratortest.Tracker's claim is what moves it to in_progress. So a run
+	// left holding an open item is a run that kept what Run read rather than what
+	// the claim returned.
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:     itemID,
 		Title:  "Action and capability registries wrapping the existing pipeline steps",
 		Status: "open",
@@ -353,7 +355,7 @@ func TestPerformingARefusedClaimReportsTheRefusal(t *testing.T) {
 	claim, _ := registry.Lookup("work-item.claim")
 	refused := errors.New("the tracker refused")
 	run := &activeRun{
-		pipeline: Pipeline{Tracker: &fakeTracker{onClaim: func() error { return refused }}},
+		pipeline: Pipeline{Tracker: &orchestratortest.Tracker{OnClaim: func() error { return refused }}},
 		state:    runstate.State{WorkItemID: "yoyodyne-ifd.209.2"},
 	}
 	err = claim.Perform(context.Background(), run)
@@ -397,8 +399,8 @@ func TestPerformingCompleteClosesAndPricesTheItem(t *testing.T) {
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
-	prices := &fakePricer{cost: beads.Cost{TotalUSD: 3.50, Runs: 1}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	prices := &orchestratortest.Pricer{Cost: beads.Cost{TotalUSD: 3.50, Runs: 1}}
 	run := &activeRun{
 		pipeline: Pipeline{Tracker: tracker, Prices: prices, Store: store},
 		claimed:  true,
@@ -412,17 +414,17 @@ func TestPerformingCompleteClosesAndPricesTheItem(t *testing.T) {
 		t.Fatalf("Perform() error = %v", err)
 	}
 
-	if want := []string{"record", "complete"}; !slices.Equal(tracker.calls, want) {
-		t.Errorf("the tracker was asked for %v, want %v", tracker.calls, want)
+	if want := []string{"record", "complete"}; !slices.Equal(tracker.Calls, want) {
+		t.Errorf("the tracker was asked for %v, want %v", tracker.Calls, want)
 	}
-	if !tracker.closed {
+	if !tracker.Closed {
 		t.Error("the promoted item was not closed")
 	}
 	if !run.outcome.WorkItemClosed {
 		t.Error("the run does not report the item as closed")
 	}
-	if want := []string{itemID}; !slices.Equal(prices.priced, want) {
-		t.Errorf("the run priced %v, want %v", prices.priced, want)
+	if want := []string{itemID}; !slices.Equal(prices.Priced, want) {
+		t.Errorf("the run priced %v, want %v", prices.Priced, want)
 	}
 	if run.outcome.Cost == nil || run.outcome.Cost.TotalUSD != 3.50 {
 		t.Errorf("the run reports the cost %v, and the ledger priced it at 3.50", run.outcome.Cost)
@@ -472,8 +474,8 @@ func TestPerformingCompleteOnAnUnpromotedChangeRecordsWithoutClosing(t *testing.
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
-	prices := &fakePricer{}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	prices := &orchestratortest.Pricer{}
 	run := &activeRun{
 		pipeline: Pipeline{Tracker: tracker, Prices: prices, Store: store},
 		claimed:  true,
@@ -482,14 +484,14 @@ func TestPerformingCompleteOnAnUnpromotedChangeRecordsWithoutClosing(t *testing.
 	if err := complete.Perform(context.Background(), run); err != nil {
 		t.Fatalf("Perform() error = %v", err)
 	}
-	if want := []string{"record"}; !slices.Equal(tracker.calls, want) {
-		t.Errorf("the tracker was asked for %v, want %v; nothing was promoted", tracker.calls, want)
+	if want := []string{"record"}; !slices.Equal(tracker.Calls, want) {
+		t.Errorf("the tracker was asked for %v, want %v; nothing was promoted", tracker.Calls, want)
 	}
-	if tracker.closed {
+	if tracker.Closed {
 		t.Error("the item was closed and nobody has promoted the change")
 	}
-	if want := []string{itemID}; !slices.Equal(prices.priced, want) {
-		t.Errorf("the run priced %v, want %v", prices.priced, want)
+	if want := []string{itemID}; !slices.Equal(prices.Priced, want) {
+		t.Errorf("the run priced %v, want %v", prices.Priced, want)
 	}
 	// There is nothing to clean up after, so this is where the run ends.
 	if run.state.Phase != runstate.PhaseComplete {
@@ -517,9 +519,12 @@ func completingRun(itemID string, phase runstate.Phase) runstate.State {
 }
 
 // cleanedWorktreeManager removes everything it is asked to. It is
-// partialWorktreeManager with the one method the cleanup step calls answered,
-// because every other method it inherits refuses and none of them is reached.
-type cleanedWorktreeManager struct{ partialWorktreeManager }
+// orchestratortest.PartialWorktreeManager with the one method the cleanup step
+// calls answered, because every other method it inherits refuses and none of
+// them is reached.
+type cleanedWorktreeManager struct {
+	orchestratortest.PartialWorktreeManager
+}
 
 func (cleanedWorktreeManager) CleanupIntegrated(context.Context, gitworktree.CleanupRequest) (gitworktree.Cleanup, error) {
 	return gitworktree.Cleanup{WorktreeRemoved: true, BranchRemoved: true}, nil
@@ -615,7 +620,7 @@ func TestPerformingCleanUpReachesTheCleanUp(t *testing.T) {
 		t.Fatal(`Lookup("run.clean-up") found nothing`)
 	}
 	run := &activeRun{
-		pipeline: Pipeline{Worktrees: partialWorktreeManager{}},
+		pipeline: Pipeline{Worktrees: orchestratortest.PartialWorktreeManager{}},
 		outcome: Outcome{Integration: &gitworktree.Integration{
 			TargetBranch: "main",
 			SourceCommit: "b0bb1e5",

@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -145,7 +146,7 @@ func landingRun(t *testing.T, root string, landings *queuedLandings, index int, 
 	}
 	pipeline := Pipeline{
 		Store:    store,
-		Tracker:  &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Task", Status: "closed"}},
+		Tracker:  &orchestratortest.Tracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: "Task", Status: "closed"}},
 		Checks:   landings,
 		Landings: landings,
 	}

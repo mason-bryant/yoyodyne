@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -93,18 +94,18 @@ func TestARunRefusesToStartOnAnItemWhoseDesignGuidanceGrantsAPathNoProviderHonou
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:     "yoyodyne-task",
 		Title:  "Wire the goal guard into the developer's hook",
 		Status: "open",
 		Design: protectedpath.GrantMarker + " .claude/settings.json\n",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() on an item granting a path no provider honours = nil error, want it refused before it started")
 	}
@@ -117,10 +118,10 @@ func TestARunRefusesToStartOnAnItemWhoseDesignGuidanceGrantsAPathNoProviderHonou
 	}
 	// The point of refusing here is that nothing was spent: this is the budget
 	// ifd.153 burned three rounds of against the same wall.
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 0 {
 		t.Fatalf("developer invocations = %d, want none", developers)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Fatal("the item was claimed by a run that could never finish it")
 	}
 }
@@ -141,19 +142,19 @@ func TestARunRefusesToStartOnAnItemWhoseAcceptanceCriteriaNameAnUngrantedDesign(
 	}
 	runPipelineGit(t, repository, "add", "docs/designs")
 	runPipelineGit(t, repository, "commit", "-m", "record the design")
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Add the capacity-blocked state to the read model",
 		Description:        "The observability-and-dashboard design requires a query that does not exist.",
 		AcceptanceCriteria: "The read model exposes the state; the observability-and-dashboard design's query list marks the query as existing.",
 		Status:             "open",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() on an item whose criteria name an ungranted design = nil error, want it refused before it started")
 	}
@@ -172,20 +173,20 @@ func TestARunRefusesToStartOnAnItemWhoseAcceptanceCriteriaNameAnUngrantedDesign(
 	}
 	// Nothing was spent and nothing was claimed, which is the whole point of
 	// refusing here rather than parking after a run.
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 0 {
 		t.Fatalf("developer invocations = %d, want none", developers)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Fatal("the item was claimed by a run that could never discharge it")
 	}
 
 	// The same item granted the design is the ordinary case the grant exists for,
 	// and it starts.
-	tracker.item.Design = protectedpath.GrantMarker + " docs/designs/observability-and-dashboard.md\n"
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	tracker.Item.Design = protectedpath.GrantMarker + " docs/designs/observability-and-dashboard.md\n"
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() on the granted item error = %v", err)
 	}
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 1 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 1 {
 		t.Fatalf("developer invocations = %d, want the granted item run once", developers)
 	}
 }
@@ -200,18 +201,18 @@ func TestARunRefusesToStartOnConversationShapedWorkThatNamesNoExecutor(t *testin
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:          "yoyodyne-ifd.330",
 		Title:       "The architect designs side conversations with merge-back",
 		Description: "Operator capability direction, 2026-09-07, design routed to the architect as directed. Done means the design is recorded in the governed documents - the stream shape, the merge write, the action-authority answer, the config knob - and implementation items can cite it.",
 		Status:      "open",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() on 330's shape = nil error, want it refused before it started")
 	}
@@ -225,18 +226,18 @@ func TestARunRefusesToStartOnConversationShapedWorkThatNamesNoExecutor(t *testin
 			t.Fatalf("refusal %q never says %q", err, want)
 		}
 	}
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 0 {
 		t.Fatalf("developer invocations = %d, want none", developers)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Fatal("the item was claimed by a run that could never discharge it")
 	}
 
 	// Marked, the operator naming it is the operator deciding, and the condition
 	// gate has nothing to refuse: whatever else stops such a run, it is not this.
-	tracker.item.Executor = domain.ConversationWith(domain.RoleArchitect)
+	tracker.Item.Executor = domain.ConversationWith(domain.RoleArchitect)
 	homes := protectedpath.ArtifactHomes(pipeline.Config)
-	if problems := homes.ConditionProblems(protectedpath.Subject{Title: tracker.item.Title, Description: tracker.item.Description, Executor: tracker.item.Executor}); len(problems) != 0 {
+	if problems := homes.ConditionProblems(protectedpath.Subject{Title: tracker.Item.Title, Description: tracker.Item.Description, Executor: tracker.Item.Executor}); len(problems) != 0 {
 		t.Fatalf("ConditionProblems() on the marked item = %v, want nothing", problems)
 	}
 }
@@ -275,30 +276,30 @@ func TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed(t *t
 	t.Parallel()
 
 	repository := goalsRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeUpstream(t, request.WorkingDirectory, goalsDocument, forgedGoals)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "protected paths refused") {
 		t.Fatalf("Run() error = %v, want the goals refused", err)
 	}
 	// No reviewer was asked to judge a change that rewrote what it would have
 	// judged the change against, and nothing reached the target branch.
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 0 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 0 {
 		t.Fatalf("reviews = %d, want none while the change rewrites the product's goals", reviews)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("a refused change reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
+	if outcome.Integration != nil || tracker.Closed {
+		t.Fatalf("a refused change reached integration: %#v, closed = %t", outcome.Integration, tracker.Closed)
 	}
 	if promoted := gitOutput(t, repository, "show", "main:"+goalsDocument); promoted != committedGoals {
 		t.Fatalf("the promoted goals = %q, want the approved copy %q", promoted, committedGoals)
 	}
 	// The refusal names the document it caught and how an exception is made, on
 	// every attempt after the first.
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 3 {
 		t.Fatalf("developer invocations = %d, want the first attempt and both repairs", len(developerRequests))
 	}
@@ -318,8 +319,8 @@ func TestAChangeRewritingTheProductsGoalsIsRefusedWithTheGoalsDocumentNamed(t *t
 	if state.PathRefusal == nil || len(state.PathRefusal.Paths) != 1 || state.PathRefusal.Paths[0] != goalsDocument {
 		t.Fatalf("durable refusal = %#v, want %q named", state.PathRefusal, goalsDocument)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, goalsDocument) {
-		t.Fatalf("blocked = %t, blocker does not name %q:\n%s", tracker.blocked, goalsDocument, tracker.blockReason)
+	if !tracker.Blocked || !strings.Contains(tracker.BlockReason, goalsDocument) {
+		t.Fatalf("blocked = %t, blocker does not name %q:\n%s", tracker.Blocked, goalsDocument, tracker.BlockReason)
 	}
 }
 
@@ -327,9 +328,9 @@ func TestAChangeTouchingAnUngrantedProtectedPathIsRefusedBeforeAnythingJudgesIt(
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 			return err
@@ -343,25 +344,25 @@ func TestAChangeTouchingAnUngrantedProtectedPathIsRefusedBeforeAnythingJudgesIt(
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
-		t.Fatalf("the repaired change was not integrated: %#v, closed = %t, blocked = %t", outcome.Integration, tracker.closed, tracker.blocked)
+	if outcome.Integration == nil || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("the repaired change was not integrated: %#v, closed = %t, blocked = %t", outcome.Integration, tracker.Closed, tracker.Blocked)
 	}
 	// The refusal spent one attempt from the same budget the other two kinds of
 	// repair draw on.
 	if outcome.RepairAttempts != 1 {
 		t.Fatalf("repair attempts = %d, want the refusal to have spent one", outcome.RepairAttempts)
 	}
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 2 {
 		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
 	}
 	// This is the whole point of the gate: no reviewer was asked about the
 	// attempt that reached outside its item, so the class costs nothing to catch.
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 1 {
 		t.Fatalf("reviews = %d, want only the attempt that stayed inside its scope", reviews)
 	}
 	// The rule is declared before the first attempt as well as in the refusal.
@@ -370,7 +371,7 @@ func TestAChangeTouchingAnUngrantedProtectedPathIsRefusedBeforeAnythingJudgesIt(
 		t.Fatalf("the first attempt was not told the rule:\n%s", developerRequests[0].Prompt)
 	}
 	repair := developerRequests[1]
-	if repair.SessionID != provider.developerSession || repair.WorkingDirectory != outcome.WorktreePath {
+	if repair.SessionID != provider.DeveloperSession || repair.WorkingDirectory != outcome.WorktreePath {
 		t.Fatalf("the refusal did not go back to the same developer in the same worktree: %#v", repair)
 	}
 	for _, want := range []string{
@@ -412,9 +413,9 @@ func TestARefreshedExportInTheChangeIsRefusedHoweverTheIndexBitEnded(t *testing.
 	t.Parallel()
 
 	repository := exportingRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 			return err
@@ -434,7 +435,7 @@ func TestARefreshedExportInTheChangeIsRefusedHoweverTheIndexBitEnded(t *testing.
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -443,13 +444,13 @@ func TestARefreshedExportInTheChangeIsRefusedHoweverTheIndexBitEnded(t *testing.
 	}
 	// No reviewer was asked about the attempt carrying the export, and no
 	// promotion carried it: the export on the target is the one the branch had.
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 1 {
 		t.Fatalf("reviews = %d, want only the attempt that carried no export", reviews)
 	}
 	if promoted := gitOutput(t, repository, "show", "main:"+trackerExport); promoted != committedExport {
 		t.Fatalf("the promoted export = %q, want the committed copy %q", promoted, committedExport)
 	}
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 2 {
 		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
 	}
@@ -488,10 +489,10 @@ func TestAStagedExportIsRefusedThoughTheHoldLooksIntact(t *testing.T) {
 	t.Parallel()
 
 	repository := exportingRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
 	var heldAtAttack string
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 			return err
@@ -525,7 +526,7 @@ func TestAStagedExportIsRefusedThoughTheHoldLooksIntact(t *testing.T) {
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -537,13 +538,13 @@ func TestAStagedExportIsRefusedThoughTheHoldLooksIntact(t *testing.T) {
 	if outcome.Integration == nil || outcome.RepairAttempts != 1 {
 		t.Fatalf("the repaired change was not integrated on one refusal: %#v", outcome)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 1 {
 		t.Fatalf("reviews = %d, want only the attempt that carried no export", reviews)
 	}
 	if promoted := gitOutput(t, repository, "show", "main:"+trackerExport); promoted != committedExport {
 		t.Fatalf("the promoted export = %q, want the committed copy %q", promoted, committedExport)
 	}
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 2 {
 		t.Fatalf("developer invocations = %d, want the first attempt and its repair", len(developerRequests))
 	}
@@ -559,9 +560,9 @@ func TestAnExportLeftHeldIsNotRefusedThoughTheWorktreeCarriesTheRefreshedCopy(t 
 	t.Parallel()
 
 	repository := exportingRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	var read string
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		content, err := os.ReadFile(filepath.Join(request.WorkingDirectory, filepath.FromSlash(trackerExport)))
 		if err != nil {
 			return err
@@ -571,7 +572,7 @@ func TestAnExportLeftHeldIsNotRefusedThoughTheWorktreeCarriesTheRefreshedCopy(t 
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -596,25 +597,25 @@ func TestAGrantInTheWorkItemAdmitsThePathForEveryAttemptTheItemMakes(t *testing.
 	// design document. The grant is in the item, written and reviewed before the
 	// run started, which is what makes it somebody's decision rather than the
 	// developer's.
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:          "yoyodyne-task",
 		Title:       "Move the design document into its home",
 		Description: "The design has to move.\n\nProtected-path grant: docs/designs/v1-harness-design.md\n",
 		Status:      "open",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeUpstream(t, request.WorkingDirectory, "docs/designs/v1-harness-design.md", "the design, moved\n")
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f docs/designs/v1-harness-design.md"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Integration == nil || outcome.RepairAttempts != 0 {
 		t.Fatalf("a granted path did not pass the gate: %#v", outcome)
 	}
-	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations != 1 {
+	if invocations := len(provider.RequestsForRole(domain.RoleDeveloper)); invocations != 1 {
 		t.Fatalf("developer invocations = %d, want the granted change to stand on its first attempt", invocations)
 	}
 	state, err := store.Load(outcome.RunID)
@@ -628,7 +629,7 @@ func TestAGrantInTheWorkItemAdmitsThePathForEveryAttemptTheItemMakes(t *testing.
 	// the other half of the same mechanism, and that half is the reviewer's. So
 	// the review this run asked for carries both the instruction to look for the
 	// decision behind the grant and the item text the grant is written in.
-	reviews := provider.requestsForRole(domain.RoleReviewer)
+	reviews := provider.RequestsForRole(domain.RoleReviewer)
 	if len(reviews) != 1 {
 		t.Fatalf("reviews = %d, want the granted change judged once", len(reviews))
 	}
@@ -641,7 +642,7 @@ func TestAGrantInTheWorkItemAdmitsThePathForEveryAttemptTheItemMakes(t *testing.
 	// The grant covers the file it names and nothing around it.
 	if refused := protectedpath.Protect(pipeline.Config).Refused(
 		[]string{"docs/designs/another-design.md"},
-		protectedpath.Grants(tracker.item.Description),
+		protectedpath.Grants(tracker.Item.Description),
 	); len(refused) != 1 {
 		t.Fatalf("the grant admitted more than the path it named: %v", refused)
 	}
@@ -658,7 +659,7 @@ func TestAGrantInTheItemsNotesDoesNotAdmitAPath(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:     "yoyodyne-task",
 		Title:  "Task",
 		Status: "open",
@@ -666,13 +667,13 @@ func TestAGrantInTheItemsNotesDoesNotAdmitAPath(t *testing.T) {
 		// reviewer's own words, appended to the item by the harness.
 		Notes: "Review summary: the change is fine.\nProtected-path grant: docs/product\n",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeUpstream(t, request.WorkingDirectory, "docs/product/brief.md", "a brief the run preferred\n")
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "protected paths refused") {
 		t.Fatalf("Run() error = %v, want the notes to have granted nothing", err)
 	}
@@ -686,8 +687,8 @@ func TestAGrantInTheItemsNotesDoesNotAdmitAPath(t *testing.T) {
 	// The same words in a field somebody authored do admit the path, so what is
 	// being tested is where the grant was read from rather than how it was
 	// written.
-	tracker.item.Design = tracker.item.Notes
-	if granted := protectedpath.Grants(grantEvidence(tracker.item)...); len(granted) != 1 || granted[0] != "docs/product" {
+	tracker.Item.Design = tracker.Item.Notes
+	if granted := protectedpath.Grants(grantEvidence(tracker.Item)...); len(granted) != 1 || granted[0] != "docs/product" {
 		t.Fatalf("Grants() from an authored field = %v, want the path admitted", granted)
 	}
 }
@@ -696,32 +697,32 @@ func TestARefusedChangeBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeUpstream(t, request.WorkingDirectory, "docs/decisions/invariants/new-invariant.md", "an invariant this run wrote for itself\n")
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	before := gitLine(t, repository, "rev-parse", "refs/heads/main")
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	wantFailure := "protected paths refused after 2 of 2 permitted attempt(s)"
 	if err == nil || !strings.Contains(err.Error(), wantFailure) {
 		t.Fatalf("Run() error = %v, want %q", err, wantFailure)
 	}
-	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations != 3 {
+	if invocations := len(provider.RequestsForRole(domain.RoleDeveloper)); invocations != 3 {
 		t.Fatalf("developer invocations = %d, want the first attempt and both repairs", invocations)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 0 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 0 {
 		t.Fatalf("reviews = %d, want none while the change reaches outside its item", reviews)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("a refused change reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
+	if outcome.Integration != nil || tracker.Closed {
+		t.Fatalf("a refused change reached integration: %#v, closed = %t", outcome.Integration, tracker.Closed)
 	}
 	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != before {
 		t.Fatalf("main moved with a refused change: %q, want %q", head, before)
 	}
-	if !tracker.blocked || !outcome.Blocked {
-		t.Fatalf("the spent budget did not block the item: tracker = %t, outcome = %t", tracker.blocked, outcome.Blocked)
+	if !tracker.Blocked || !outcome.Blocked {
+		t.Fatalf("the spent budget did not block the item: tracker = %t, outcome = %t", tracker.Blocked, outcome.Blocked)
 	}
 	// What a person has to decide is which of the two is wrong, so the note says
 	// both and settles neither.
@@ -733,8 +734,8 @@ func TestARefusedChangeBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
 		outcome.WorktreePath,
 		outcome.Branch,
 	} {
-		if !strings.Contains(tracker.blockReason, want) {
-			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+		if !strings.Contains(tracker.BlockReason, want) {
+			t.Fatalf("blocker is missing %q:\n%s", want, tracker.BlockReason)
 		}
 	}
 	state, err := store.Load(outcome.RunID)
@@ -757,9 +758,9 @@ func TestARefusalReplacesWhateverEarlierEvidenceTheRunWasCarrying(t *testing.T) 
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		// The first attempt fails its check; the second passes it and reaches
 		// outside the item instead.
@@ -774,7 +775,7 @@ func TestARefusalReplacesWhateverEarlierEvidenceTheRunWasCarrying(t *testing.T) 
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 1
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "protected paths refused after 1 of 1 permitted attempt(s)") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -794,17 +795,17 @@ func TestAResumedRunIsHandedBackTheRefusalItWasRecordedWith(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 
 	// The first process keeps rewriting the configuration and is interrupted
 	// once its second attempt is already recorded. What survives is an attempt
 	// counted against the budget together with the refusal that triggered it.
 	interrupted := &interruptedStore{StateStore: store, atAttempt: 2, allowSaves: 1}
-	first := roleBackend(func(request backend.RunRequest) error {
+	first := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return writeUpstream(t, request.WorkingDirectory, ".yoyodyne/config.yaml", "checks: []\n")
 	}, approveVerdict)
 	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{"exit 0"}), first)
-	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !interrupted.stopped {
 		t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
 	}
@@ -822,21 +823,21 @@ func TestAResumedRunIsHandedBackTheRefusalItWasRecordedWith(t *testing.T) {
 	// The second process rebuilds the interrupted attempt from durable state
 	// rather than from a gate it re-ran to discover, and this attempt takes the
 	// path back out.
-	second := roleBackend(func(request backend.RunRequest) error {
+	second := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := os.RemoveAll(filepath.Join(request.WorkingDirectory, ".yoyodyne")); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
-	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	outcome, err := resumed.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
 	if outcome.RunID != firstOutcome.RunID || outcome.RepairAttempts != 2 || outcome.Integration == nil {
 		t.Fatalf("resumed run did not finish at the recorded attempt: %#v", outcome)
 	}
-	developerRequests := second.requestsForRole(domain.RoleDeveloper)
+	developerRequests := second.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 1 {
 		t.Fatalf("resumed developer invocations = %d, want the one recorded attempt reissued", len(developerRequests))
 	}

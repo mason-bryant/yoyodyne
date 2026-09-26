@@ -19,6 +19,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -180,14 +181,14 @@ func witnessedPipeline(t *testing.T, repository, stateRoot, worktreeRoot string,
 	if err != nil {
 		t.Fatalf("runstate.NewStore() probe error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: item, Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: item, Title: "Task", Status: "open"}}
 	// Each run writes its own file, so a replayed change never conflicts with
 	// the promotion that beat it and both are visible on the target afterwards.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, item+".txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	served := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	served := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := served(request)
 		if request.Role == domain.RoleReviewer {
 			gate.arrive()
