@@ -432,6 +432,14 @@ var expresses = map[string]expression{
 		question: "no role holds either half; moving the branch without the lease is refused where the harness does it",
 		asks:     []capability.Capability{capability.PromotionLease, capability.TargetBranchMutate},
 	},
+	"landing.lease": {
+		question: "no role holds it; the harness takes it in the landing's own process",
+		gap:      "no capability names it: it serializes the landing checks the harness runs after a run is over, and it moves no branch and grants no authority, so there is nothing a role could be asked whether it holds",
+	},
+	"run.land-under-lease": {
+		question: "none: running the landing checks without the landing lease is refused where the harness runs them",
+		gap:      "the same as the lease above: queueing a landing is load control over the harness's own work rather than authority any role could hold",
+	},
 	"converge.catch-up-under-lease": {
 		question: "no role holds either half; the reconciler is the harness under the same lease",
 		asks:     []capability.Capability{capability.PromotionLease, capability.TargetBranchMutate},
