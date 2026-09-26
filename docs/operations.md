@@ -2771,7 +2771,7 @@ disagree about one run:
   [continues it at its checks](#what-a-check-stage-may-cost-and-where-the-whole-suite-runs)
   once the load allows, and the audit leaves it for that.
 
-That last shape is what this rule was written for. On 2026-09-22 run-b0b6d18d's
+The death inside a run's own process is what this rule was written for. On 2026-09-22 run-b0b6d18d's
 change on yoyodyne-ifd.436.4 was approved and then stopped at the promotion by a
 tracker read that timed out; the run ended `failed` at 04:04Z with its branch
 preserved and its pull request open, and the docket named the harness and `yoyo
@@ -2896,7 +2896,7 @@ comes from a small fixed set:
 | `succeeded` | the work landed |
 | `stopped` | it ended on a durable blocker: the item carries it, a person decides what happens next, and nothing was discarded |
 | `cancelled` | something stopped it rather than judged it — the operator, or a killed process |
-| `timed out` | the harness stopped it on time, leaving nobody anything to act on |
+| `timed out` | the harness stopped it on time; nothing judged the change, and only a check stage its bound stopped is acted on afterwards — [continued at its checks by the harness](#what-a-check-stage-may-cost-and-where-the-whole-suite-runs), then the development manager's once those continuations are spent |
 | `failed` | it ended without succeeding and without leaving anybody a blocker |
 | `pending`, `running` | it has not finished |
 
