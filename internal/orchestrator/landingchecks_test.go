@@ -316,10 +316,12 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	filer := &recordingFiler{}
 	pipeline.Filer = filer
 	// The gate's bounds are far below what the landing check takes, and the
-	// landing's own budget is what stops it.
+	// landing's own budget is what stops it. They are still seconds rather than
+	// milliseconds: the gate's own `true` has to fit inside them on a machine
+	// running the whole race suite, where spawning it alone has taken 188ms.
 	runner := pipeline.Checks.(checks.Runner)
-	runner.Timeout = 50 * time.Millisecond
-	runner.StageTimeout = 50 * time.Millisecond
+	runner.Timeout = 10 * time.Second
+	runner.StageTimeout = 10 * time.Second
 	pipeline.Checks = runner
 	// One second of the code's own timer, which is the thing under test here;
 	// the budget is recorded in whole seconds, so it is not made shorter.

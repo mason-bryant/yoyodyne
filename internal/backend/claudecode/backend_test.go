@@ -1178,6 +1178,75 @@ func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
 	}
 }
 
+// TestReadOnlyPostureIsTheContractsPostureFor pins where this backend's
+// read-only posture comes from. The authority inventory's backend.read-only-role
+// and backend.no-tools-for-read-only rows (docs/authority-inventory.md) say the
+// roles held toolless here are the ones backend.PostureFor derives as read-only,
+// the program manager among them; a table restated beside PostureFor could agree
+// with it today and drift tomorrow with nothing failing, so every role is asked
+// of both and driven through Run. The roles come from the vocabulary rather than
+// a list here, so a seventh role reaches this test without anybody adding it,
+// and one nobody has decided a posture for fails it rather than passing through.
+func TestReadOnlyPostureIsTheContractsPostureFor(t *testing.T) {
+	t.Parallel()
+
+	if posture := backendapi.PostureFor(domain.RoleProgramManager); posture != backendapi.PostureReadOnly {
+		t.Fatalf("PostureFor(program manager) = %q, want %q", posture, backendapi.PostureReadOnly)
+	}
+	if !readOnlyRole(domain.RoleProgramManager) {
+		t.Fatal("this backend does not hold the program manager read-only, though PostureFor derives that posture for it")
+	}
+	// A name nobody has decided a posture for is not read-only here either: the
+	// derivation is not "everything but the developer".
+	if readOnlyRole("security-reviewer") {
+		t.Fatal("a name with no posture is held read-only, so the posture is not the one PostureFor derives")
+	}
+
+	for _, role := range domain.Roles() {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			posture := backendapi.PostureFor(role)
+			if got, want := readOnlyRole(role), posture == backendapi.PostureReadOnly; got != want {
+				t.Fatalf("readOnlyRole(%q) = %v, but PostureFor derives %q", role, got, posture)
+			}
+			if role == domain.RoleDeveloper {
+				if posture != backendapi.PostureWorktreeWrite {
+					t.Fatalf("PostureFor(developer) = %q, want %q", posture, backendapi.PostureWorktreeWrite)
+				}
+				return
+			}
+			// Every role but the developer is a management role or the reviewer,
+			// and decides something the harness carries out for it.
+			if posture != backendapi.PostureReadOnly {
+				t.Fatalf("PostureFor(%q) = %q, want %q: decide this role's posture in PostureFor before this backend runs it", role, posture, backendapi.PostureReadOnly)
+			}
+
+			stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done"}` + "\n"
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID: testRunID, Role: role, WorkingDirectory: "/repository", Prompt: "advise",
+			}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			args := runner.commands[0].Args
+			if index := slices.Index(args, "--tools"); index < 0 || index+1 >= len(args) || args[index+1] != "" || slices.Contains(args, "--allowedTools") {
+				t.Fatalf("args = %#v, want no tools for a read-only role", args)
+			}
+
+			blocked := &fakeRunner{}
+			if _, err := (Backend{Runner: blocked}).Run(context.Background(), backendapi.RunRequest{
+				RunID: testRunID, Role: role, WorkingDirectory: "/repository", Prompt: "advise", AllowedTools: []string{"Read"},
+			}); err == nil || !strings.Contains(err.Error(), string(role)+" runs cannot be granted tools") {
+				t.Fatalf("Run() with a tool error = %v", err)
+			}
+			if len(blocked.commands) != 0 {
+				t.Fatalf("a %s run granted a tool still started %d process(es)", role, len(blocked.commands))
+			}
+		})
+	}
+}
+
 // A role this backend has decided nothing for is refused rather than served on
 // the developer's terms, which are the only terms it would otherwise have.
 func TestRunRefusesARoleItHasNoPostureFor(t *testing.T) {
