@@ -1529,7 +1529,22 @@ queues, or a lane, and the two that work inside a run are not on it.
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
-noticing something went quiet. Four things put an item on it. A run stops with
+noticing something went quiet. It is listed oldest stoppage first, one entry per
+stopped run, and a docket longer than the listing says how many entries it left
+out.
+
+**A scheduled sweep carries it too.** The context is built when her conversation
+opens, and a [recurring task](configuration.md#recurring-tasks)'s pass resumes
+that conversation rather than opening it, so the docket she held was the one
+from whenever the conversation began. Stoppages otherwise reached her one per
+delivery, and a pass between deliveries saw none: on 2026-09-25 three of her
+sweeps ran after an approved change stopped waiting on her, and decided nothing
+about it or the two that stopped after it. So every firing of a development
+manager's task — a summons from the intake brake included — builds the docket
+again and puts it in the message that wakes her, in the same listing her
+conversation carries, whether or not anything was delivered since her last turn.
+
+Four things put an item on it. A run stops with
 its change still there, an approved publication does not finish, dispatch
 declines to start an item whose stated prerequisites the tree does not meet, and
 a developer or a reviewer says the item cannot be met as it stands.
@@ -1678,9 +1693,10 @@ fires, whichever hand fires it. [Recording a decision is what causes
 it](#deciding-what-becomes-of-stopped-work) says what fires one.
 
 Finding a publication nobody merged is a scan rather than an event, because
-nothing happening is not something anything can be present for. Two things scan:
-`yoyo reconcile`, and opening a development manager conversation. There is no
-scheduled process behind either, so the configured age is a floor rather than a
+nothing happening is not something anything can be present for. Three things
+scan: `yoyo reconcile`, opening a development manager conversation, and a
+firing of one of her recurring tasks. Only the last runs on a schedule, and only
+where a project configured one, so the configured age is a floor rather than a
 promise about when the entry appears.
 
 ### Deciding what becomes of stopped work

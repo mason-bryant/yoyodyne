@@ -44,7 +44,13 @@ package orchestrator
 //
 // # One at a time, and only what nobody has judged
 //
-// A pass delivers one stoppage. A delivery is a conversation turn, and a pass
+// A pass delivers one stopped run, and a run is delivered once however many
+// entries it was docketed under: the docket she reads folds a run's entries into
+// one (triage.Fold), and this walks the same fold, so a run docketed as the
+// stoppage and as the escalation a role raised from it is put to her as one
+// question rather than one per entry.
+//
+// A delivery is a conversation turn, and a pass
 // that delivered a backlog of them at once would hold the queue closed for as
 // long as the development manager took to answer all of them — so the oldest
 // goes first, and the next pass takes the next. What that costs is that a
@@ -389,8 +395,8 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 	// The scan carries on either way, because the stoppages behind it may need
 	// saying even where none of them is being delivered.
 	delivering := true
-	for _, entry := range entries {
-		standing, err := e.standingOf(entry)
+	for _, run := range e.perRun(entries) {
+		standing, entry, err := e.runStandingOf(run)
 		if err != nil {
 			problems = append(problems, err)
 			continue
@@ -400,7 +406,7 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 			if !delivering {
 				continue
 			}
-			escalated, attempted, err := e.deliver(ctx, entry)
+			escalated, attempted, err := e.deliver(ctx, entry, run)
 			if err != nil {
 				problems = append(problems, err)
 				delivering = false
@@ -414,7 +420,7 @@ func (e Escalator) Escalate(ctx context.Context) (EscalationSweep, error) {
 			}
 			sweep.Escalated = append(sweep.Escalated, escalated)
 			delivering = false
-		case standingSettled, standingCooling, standingAbandoned:
+		case standingSettled, standingDelivered, standingCooling, standingAbandoned:
 			// Nothing to do and nothing to say. A settled stoppage is somebody
 			// else's business now, and a cooling one was reported by the pass that
 			// attempted it — saying it again on every pull between here and its next
@@ -455,7 +461,83 @@ const (
 	// person, and the surface that asks for one is the read model's account of
 	// work held for somebody rather than a line on every pull.
 	standingAbandoned
+	// standingDelivered is a stoppage already put to her and answered, or put to
+	// her with the answer not yet recorded. It is settled as far as this pass is
+	// concerned, and it is told apart from the rest of settled for one reason: a
+	// run docketed twice is one question, so either of its entries having been
+	// delivered is the run having been delivered.
+	standingDelivered
 )
+
+// perRun is the docket as this pass walks it: the open entries, one per stopped
+// run, as the docket she reads folds them (triage.Fold). A run docketed as a
+// stoppage and then as the escalation a role raised from it is one question to
+// her, and walking the entries one at a time put it to her once per entry.
+func (e Escalator) perRun(entries []triage.Entry) []triage.Entry {
+	now := e.now()
+	open := make([]triage.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Closed != nil && entry.Closed.Holds(now) {
+			continue
+		}
+		open = append(open, entry)
+	}
+	return triage.Fold(open)
+}
+
+// runStandingOf reports what one stopped run is to this pass, from every open
+// entry it was docketed under, and which of them a delivery is recorded against.
+//
+// The run is delivered once. Any of its entries delivered already settles it,
+// and any attempt still cooling or given up on holds it back, because another
+// entry of the same run delivered beside those would be the same stoppage put to
+// her a second time under a key the first delivery was not recorded on. Where
+// nothing holds it back, the delivery is recorded against the first entry owed
+// one — the latest, which is the one the docket lists it by, where that is owed
+// one — and she is shown the whole run, every entry folded beneath it.
+func (e Escalator) runStandingOf(run triage.Entry) (escalationStanding, triage.Entry, error) {
+	head := run
+	head.Earlier = nil
+	members := append([]triage.Entry{head}, run.Earlier...)
+	var awaiting *triage.Entry
+	cooling, abandoned := false, false
+	var problems []error
+	for index := range members {
+		standing, err := e.standingOf(members[index])
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		switch standing {
+		case standingDelivered:
+			return standingDelivered, members[index], nil
+		case standingCooling:
+			cooling = true
+		case standingAbandoned:
+			abandoned = true
+		case standingAwaiting:
+			if awaiting == nil {
+				awaiting = &members[index]
+			}
+		}
+	}
+	// A run whose record could not be read for one of its entries is not
+	// delivered on the others: whether that entry was already put to her is what
+	// could not be read.
+	if len(problems) > 0 {
+		return standingSettled, head, errors.Join(problems...)
+	}
+	switch {
+	case cooling:
+		return standingCooling, head, nil
+	case abandoned:
+		return standingAbandoned, head, nil
+	case awaiting != nil:
+		return standingAwaiting, *awaiting, nil
+	default:
+		return standingSettled, head, nil
+	}
+}
 
 // standingOf reports what one docket entry is to this pass.
 //
@@ -488,7 +570,7 @@ func (e Escalator) standingOf(entry triage.Entry) (escalationStanding, error) {
 		found = false
 	}
 	if found && recorded.Delivered() {
-		return standingSettled, nil
+		return standingDelivered, nil
 	}
 	state, err := e.Runs.Load(entry.RunID)
 	if err != nil {
@@ -606,7 +688,12 @@ func reviewRepairStoppage(state runstate.State) bool {
 // It reports whether an attempt was made at all, so an entry another process
 // claimed between the reading and the claim leaves this pass looking at the next
 // one rather than reporting a delivery nobody made.
-func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, bool, error) {
+//
+// The delivery is recorded against one entry and put to her as the whole run:
+// run is the run's live entry with every other open docketing of it folded
+// beneath, which is what she is asked to decide, and one decision settles all
+// of it.
+func (e Escalator) deliver(ctx context.Context, entry, run triage.Entry) (Escalated, bool, error) {
 	escalated := Escalated{WorkItemID: entry.WorkItemID, RunID: entry.RunID, DocketKey: entry.Key, Class: entry.Class}
 	attempted, err := e.Records.Attempt(ctx, runstate.Escalation{
 		DocketKey:  entry.Key,
@@ -628,7 +715,7 @@ func (e Escalator) deliver(ctx context.Context, entry triage.Entry) (Escalated, 
 		}
 		return Escalated{}, false, fmt.Errorf("record that %s is being put to the development manager: %w", putToHer(entry), err)
 	}
-	judgment, judgeErr := e.Manager.Judge(ctx, entry)
+	judgment, judgeErr := e.Manager.Judge(ctx, run)
 	// What the turn cost is carried whichever way it went, because the provider
 	// charges for a turn that failed exactly as for one that answered.
 	escalated.CostUSD = judgment.CostUSD

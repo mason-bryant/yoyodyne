@@ -1236,3 +1236,61 @@ func TestAStoppageSettledWithoutSpendingOrClosingIsDeliveredAgain(t *testing.T) 
 		t.Fatalf("sweep = %#v, want the stoppage delivered, which is what the documents say happens", sweep.Escalated)
 	}
 }
+
+// A run docketed twice is one question. A run whose reviewer still required
+// repair and whose developer then said, in the round it reached, that the item
+// cannot be met is docketed as the stoppage and as the escalation, and the
+// docket she reads folds the two into one entry. The pass walks the same fold:
+// she is put the run once, with both docketings in front of her, and a later
+// pass does not put it to her again under the entry the delivery was not
+// recorded against — even where she decided nothing, which closes neither.
+func TestARunDocketedAsAStoppageAndAnEscalationIsPutToHerOnce(t *testing.T) {
+	t.Parallel()
+
+	state := reviewStoppedState(docketedRunID, docketedItem)
+	state.LandingOutcome = runstate.LandingEscalate
+	stopped := stoppedEntry(state)
+	escalation := stopped
+	escalation.Key = triage.Key(triage.ClassEscalation, state.RunID)
+	escalation.Class = triage.ClassEscalation
+	escalation.Blocker = ""
+	escalation.Escalation = &triage.Escalation{RaisedBy: domain.RoleDeveloper, Reason: "the criteria contradict the design the item cites"}
+	escalation.RecordedAt = stopped.RecordedAt.Add(time.Minute)
+
+	docket := &memoryDocket{}
+	for _, entry := range []triage.Entry{stopped, escalation} {
+		if _, err := docket.RecordOnce(entry); err != nil {
+			t.Fatalf("RecordOnce() error = %v", err)
+		}
+	}
+	judge := &standingJudge{judgment: Judgment{ConversationID: "chat-abc"}}
+	escalator := Escalator{
+		Docket:    docket,
+		Runs:      loadableRuns{states: map[string]runstate.State{state.RunID: state}},
+		Records:   escalationRecords(t),
+		Decisions: judgedItems{},
+		Reruns:    claimedReruns{},
+		Manager:   judge,
+		Clock:     escalationClock{},
+	}
+
+	for pass := range 3 {
+		sweep, err := escalator.Escalate(context.Background())
+		if err != nil {
+			t.Fatalf("pass %d: Escalate() error = %v", pass+1, err)
+		}
+		if pass == 0 && (len(sweep.Escalated) != 1 || !sweep.Escalated[0].Delivered) {
+			t.Fatalf("first pass escalated %#v, want the run delivered", sweep.Escalated)
+		}
+		if pass > 0 && len(sweep.Escalated) != 0 {
+			t.Fatalf("pass %d escalated %#v, want the run left alone once it was put to her", pass+1, sweep.Escalated)
+		}
+	}
+	if len(judge.shown) != 1 {
+		t.Fatalf("shown %d time(s), want the run put to her once", len(judge.shown))
+	}
+	shown := judge.shown[0]
+	if shown.Class != triage.ClassEscalation || len(shown.Earlier) != 1 || shown.Earlier[0].Class != triage.ClassStoppedRun {
+		t.Fatalf("shown = %#v, want the escalation with the stoppage folded beneath it", shown)
+	}
+}

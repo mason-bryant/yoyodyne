@@ -863,7 +863,10 @@ chooses nothing -- and "yoyo release" resumes it.
 Every pull also puts stopped work in front of the development manager: a run
 that ended with its independent reviewer still requiring repair after every
 permitted attempt is delivered into her conversation by the pass, once, with the
-docket entry it is about. One stoppage per pull, oldest first, so a backlog of
+docket entry it is about. It is delivered per stopped run rather than per
+entry, so a run docketed both as that stoppage and as an escalation raised from
+it is put to her once, with both in front of her.
+One stoppage per pull, oldest first, so a backlog of
 them reaches her over several polls rather than holding the queue closed while
 she reads, and a stoppage she has already been granted a repair or a re-run for
 is passed over whether or not that decision has been carried out yet. Her
