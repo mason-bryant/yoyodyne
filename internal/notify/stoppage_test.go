@@ -64,7 +64,14 @@ func TestAStoppageIsSaidAtTheSeverityItsNextMoverAndItsCauseWarrant(t *testing.T
 		severity report.Severity
 		reach    Reach
 	}{
-		// The operator's: a cause only a person clears on the machine.
+		// The operator's: a cause only a person clears on the machine. A provider
+		// nobody can reach is the third cause the item names, and it has no case
+		// here because it never ends a run as a stoppage: a run the provider stops
+		// answering parks on runstate.PauseProviderUnauthenticated or
+		// PauseProviderUnreachable with its claim and worktree kept, spends no
+		// budget, and is never blocked (awaitProviderOutage in
+		// internal/orchestrator). The operators hear it from the provider-outage
+		// message, which is theirs directly.
 		{"a target that diverged from the remote's", approvedAndStoppedBy(runstate.CauseDivergedTarget), report.SeverityCritical, ReachChannel},
 		{"a credential the remote refused", approvedAndStoppedBy(runstate.CauseRemoteAuthRefused), report.SeverityCritical, ReachChannel},
 		{"a primary checkout carrying state the harness does not own", approvedAndStoppedBy(runstate.CauseDirtyPrimary), report.SeverityCritical, ReachChannel},
@@ -117,7 +124,10 @@ func TestAStoppageIsSaidAtTheSeverityItsNextMoverAndItsCauseWarrant(t *testing.T
 // The mover is the docket's reading of the same record: an approved change the
 // environment stopped whose branch is there is the harness's to resume, one whose
 // branch is gone is the development manager's like any other undecided
-// stoppage, and a cause only a person clears is the operator's ahead of both.
+// stoppage. A cause only a person clears does not change the mover — it is the
+// same harness's resume the docket names — and it is the severity alone that
+// makes such a stoppage the operator's; the message's Next clause still names
+// the harness, as the docket does.
 func TestAStoppagesNextMoverIsTheDocketsReadingOfIt(t *testing.T) {
 	for _, reading := range []struct {
 		name  string
@@ -129,7 +139,7 @@ func TestAStoppagesNextMoverIsTheDocketsReadingOfIt(t *testing.T) {
 			approvedAndStoppedBy(runstate.CauseTransportFailure)(state)
 			state.BranchRemoved = true
 		}, readmodel.MoverDevelopmentManager},
-		{"a resumable stop on a diverged target", approvedAndStoppedBy(runstate.CauseDivergedTarget), readmodel.MoverOperator},
+		{"a resumable stop on a diverged target", approvedAndStoppedBy(runstate.CauseDivergedTarget), readmodel.MoverHarness},
 		{"a lost race", func(state *runstate.State) {
 			state.ReviewDecision = runstate.ReviewApprove
 			state.Failure = runstate.ContendedIntegrationFailure + " after 2 of 2 permitted retry(s)"
@@ -139,10 +149,24 @@ func TestAStoppagesNextMoverIsTheDocketsReadingOfIt(t *testing.T) {
 		}, readmodel.MoverDevelopmentManager},
 	} {
 		after := stoppedRun(reading.apply)
-		resumable, _ := integrationResumable(after, nil)
-		if got := stoppageMover(after, resumable); got != reading.want {
+		if got := readmodel.StoppageMover(after, nil, false); got != reading.want {
 			t.Errorf("%s moves next by %s, want %s", reading.name, got, reading.want)
 		}
+	}
+}
+
+// The message that pages the operator for a cause only he clears names the same
+// next move the docket does, rather than a mover of its own: the harness's
+// resume, once he has cleared it.
+func TestACriticalStoppageNamesTheDocketsNextMove(t *testing.T) {
+	after := stoppedRun(approvedAndStoppedBy(runstate.CauseDivergedTarget))
+	_, notifications := crossed(t, running(), after)
+	said := only(t, notifications, KindBlockerRecorded)
+	if said.Event.Severity != report.SeverityCritical {
+		t.Fatalf("a stoppage on a diverged target is said as %s, want critical", said.Event.Severity)
+	}
+	if want := "the harness's — " + after.IntegrationStop.ResumeSays(after.RunID); said.Event.Detail.Mover != want {
+		t.Fatalf("the critical stoppage names %q as its next move, want the docket's %q", said.Event.Detail.Mover, want)
 	}
 }
 

@@ -262,7 +262,7 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		// where a worktree survives or a decision stands, closed by whose move
 		// that is — with the re-run named as the way on rather than a verb that
 		// would refuse.
-		if run.IntegrationStop != nil && triage.IntegrationResumable(&found, false) {
+		if run.IntegrationStop != nil && StoppageMover(run, &found, false) == MoverHarness {
 			reasons[workItemID] = backlog.Hold{Reason: stoppedIntegration(run, found, preserved), Decided: true}
 			continue
 		}
@@ -288,6 +288,28 @@ func heldForAPerson(runs []runstate.State, escalated []runstate.Escalation, deci
 		reasons[workItemID] = heldFor(mergedPublication(run), carryOut, problem)
 	}
 	return backlog.ReadHolds(reasons)
+}
+
+// StoppageMover is who moves next on one stopped run: the harness where it is
+// an approved change the environment stopped whose branch is still there
+// (triage.IntegrationResumable), or where a triage decision about it stands
+// that the harness has still to carry out; and the development manager
+// otherwise, because a stoppage nobody has decided about is hers. It is the
+// reading the hold above takes and the docket's next mover says
+// (triage.Entry.renderNextMover), as a token rather than a sentence, so a
+// surface that has to weigh a stoppage by who moves next — the channel's
+// severity among them — asks it here instead of deriving it again.
+//
+// found is what the repository held of the run's change, and nil where nothing
+// looked, which answers from the run's own removal flag.
+func StoppageMover(run runstate.State, found *triage.Found, awaitingCarryOut bool) Mover {
+	if run.IntegrationStop != nil && triage.IntegrationResumable(found, run.BranchRemoved) {
+		return MoverHarness
+	}
+	if awaitingCarryOut {
+		return MoverHarness
+	}
+	return MoverDevelopmentManager
 }
 
 // latestPerItem is the runs a rule matches, one per work item. One item can have

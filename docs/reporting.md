@@ -831,10 +831,12 @@ the ordinary course of things: a stoppage the environment caused and a role or
 the harness moves next — a lost race for the target, a replay the harness's
 budget killed, a tracker read that timed out, a usage window — is said as a note
 in the item's thread, because nothing was judged and nobody but that role has
-anything to do. A stoppage's next mover is read the way the docket, the pull's
-hold, and `yoyo status` read it, with the operator named ahead of the harness's
-resume or the development manager's decision where the cause is one only a
-person clears. It used to be `critical` for every
+anything to do. A stoppage's next mover is the read model's, the one the
+docket, the pull's hold, and `yoyo status` read, and its `Next:` clause names
+the same move they do. A cause only a person clears does not change that
+mover — the harness's resume or the development manager's decision still
+follows — and it is what makes the message `critical`, because neither can
+happen until somebody has cleared it. It used to be `critical` for every
 stoppage whoever decided it; on 2026-09-25 that paged the operator for an
 approved change that lost its race for main twice and waited on the development
 manager to re-run it.
