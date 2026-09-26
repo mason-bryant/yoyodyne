@@ -2509,6 +2509,9 @@ type scheduleHarness struct {
 	// test's pass reads no recorded window — which is what every pass did before.
 	usageLimits readmodel.UsageLimits
 	developers  []readmodel.AgentEndpoint
+	// capacityServed is what the provider has served since, read against the
+	// refusals above; nil for every test that does not ask, which lifts nothing.
+	capacityServed readmodel.CapacityServedRecord
 	// outstanding stands in for the decisions the development manager recorded
 	// and nobody has acted on, and carry for what firing one comes to. A pull is
 	// wired with them only where a test asks, so every other test's pass carries
@@ -2694,6 +2697,7 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 		OutageProbe:                 h.outageProbe,
 		UsageLimits:                 h.usageLimits,
 		Developers:                  h.developers,
+		CapacityServed:              h.capacityServed,
 	}, nil
 }
 

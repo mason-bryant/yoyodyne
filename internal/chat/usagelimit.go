@@ -143,7 +143,9 @@ type UsageLimits interface {
 // as a hold: whether the provider is refusing every role at once is a question
 // about which models are refused, and a refusal that named none could only be
 // attributed by guessing. Between 2026-09-08 and 09-13 every refusal in the log
-// named none.
+// named none. The account is the one the refused endpoint ran under, because a
+// later turn served on that account and model is what reads the refusal as
+// lifted before the reset it quoted.
 //
 // One limit is written down once for as long as one message is waiting it out. A
 // wait probes the same closed window at the configured interval and is refused
@@ -153,7 +155,7 @@ type UsageLimits interface {
 // stoppages rather than as one that is still going. What is new information is a
 // refusal naming a different limit or model, or the same limit with a reset that
 // has moved, and either is written down.
-func (s *Session) noteUsageLimit(result backend.RunResult, err error, model string) error {
+func (s *Session) noteUsageLimit(result backend.RunResult, err error, model, account string) error {
 	limit := refusedForUsageLimit(result, err)
 	if limit == nil || s.options.UsageLimits == nil {
 		return nil
@@ -173,6 +175,7 @@ func (s *Session) noteUsageLimit(result backend.RunResult, err error, model stri
 		Kind:           limit.Kind,
 		ConversationID: s.state.ConversationID,
 		Model:          strings.TrimSpace(model),
+		AccountAlias:   strings.TrimSpace(account),
 	}
 	if !limit.ResetsAt.IsZero() {
 		resetsAt := limit.ResetsAt.UTC()

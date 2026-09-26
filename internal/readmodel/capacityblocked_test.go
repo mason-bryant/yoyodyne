@@ -87,7 +87,7 @@ func TestTheCapacityBlockedStateHasOneShape(t *testing.T) {
 		[]runstate.UsageLimitExhaustion{
 			conversationRefusal(capacityReadAt.Add(-40*time.Minute), "chat-91253e0e070c17b0663651cc48602122", &resets),
 		},
-		capacityReadAt, 30*time.Minute,
+		capacityReadAt, 30*time.Minute, CapacityEvidence{},
 	)
 	encoded, err := json.MarshalIndent(blocked, "", "  ")
 	if err != nil {
@@ -128,7 +128,7 @@ func TestTheCapacityBlockedStateHasOneShape(t *testing.T) {
 
 	// Nothing held is two empty lists, never two absent ones: a script has to
 	// tell "nothing is held" from "the key was left out".
-	none, err := json.Marshal(ReadCapacityBlocked(nil, nil, capacityReadAt, 30*time.Minute))
+	none, err := json.Marshal(ReadCapacityBlocked(nil, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{}))
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestTheCapacityBlockedStateHasOneShape(t *testing.T) {
 func TestARunTheHarnessWouldNotWaitForIsCapacityBlocked(t *testing.T) {
 	t.Parallel()
 
-	blocked := ReadCapacityBlocked([]runstate.State{blockedRun("run-9f8e7d6c", "yoyodyne-ifd.141")}, nil, capacityReadAt, 30*time.Minute)
+	blocked := ReadCapacityBlocked([]runstate.State{blockedRun("run-9f8e7d6c", "yoyodyne-ifd.141")}, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 	if len(blocked.Runs) != 1 {
 		t.Fatalf("runs = %+v, want the stopped run", blocked.Runs)
 	}
@@ -190,7 +190,7 @@ func TestARunTheUsageWindowStoppedIsCapacityBlockedUntilItsReset(t *testing.T) {
 			Cause: runstate.CauseUsageWindow, RecordedAt: stopped, ResetsAt: &resetsAt, Settled: true, Refused: true,
 		},
 	}
-	blocked := ReadCapacityBlocked([]runstate.State{run}, nil, capacityReadAt, 30*time.Minute)
+	blocked := ReadCapacityBlocked([]runstate.State{run}, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 	if len(blocked.Runs) != 1 {
 		t.Fatalf("runs = %+v, want the stopped run", blocked.Runs)
 	}
@@ -220,7 +220,7 @@ func TestAnOverloadIsCapacityAndAnOutageIsNot(t *testing.T) {
 	held := parkedRun("run-3333cccc", "yoyodyne-ifd.152")
 	held.PauseCause = runstate.PauseOperatorHold
 
-	blocked := ReadCapacityBlocked([]runstate.State{overloaded, loggedOut, held}, nil, capacityReadAt, 30*time.Minute)
+	blocked := ReadCapacityBlocked([]runstate.State{overloaded, loggedOut, held}, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 	if len(blocked.Runs) != 1 || blocked.Runs[0].RunID != "run-1111aaaa" {
 		t.Fatalf("runs = %+v, want only the overloaded run", blocked.Runs)
 	}
@@ -248,7 +248,7 @@ func TestOnlyARunStillRecordingACapacityCauseIsListed(t *testing.T) {
 	vintage := parkedRun("run-6666ffff", "yoyodyne-ifd.162")
 	vintage.PauseCause = ""
 
-	blocked := ReadCapacityBlocked([]runstate.State{resumedThenStopped, cancelledMidWait, vintage}, nil, capacityReadAt, 30*time.Minute)
+	blocked := ReadCapacityBlocked([]runstate.State{resumedThenStopped, cancelledMidWait, vintage}, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 	if len(blocked.Runs) != 1 || blocked.Runs[0].RunID != "run-6666ffff" {
 		t.Fatalf("runs = %+v, want only the vintage parked run: a review stoppage with its cause cleared and a cancelled wait are not held on capacity", blocked.Runs)
 	}
@@ -272,7 +272,7 @@ func TestALaterRunOfTheSameItemSupersedesAParkedOne(t *testing.T) {
 		StartedAt:  capacityReadAt.Add(-time.Hour),
 		UpdatedAt:  capacityReadAt.Add(-time.Minute),
 	}
-	if blocked := ReadCapacityBlocked([]runstate.State{later, earlier}, nil, capacityReadAt, 30*time.Minute); len(blocked.Runs) != 0 {
+	if blocked := ReadCapacityBlocked([]runstate.State{later, earlier}, nil, capacityReadAt, 30*time.Minute, CapacityEvidence{}); len(blocked.Runs) != 0 {
 		t.Fatalf("runs = %+v, want nothing: the item's latest run is not on capacity", blocked.Runs)
 	}
 }
@@ -299,7 +299,7 @@ func TestAConversationIsOneEntryHoweverManyTurnsWereRefused(t *testing.T) {
 		// A refusal with no conversation — a branch review at a terminal — is not
 		// a conversation.
 		refusal(capacityReadAt.Add(-time.Minute), "opus", &secondReset),
-	}, capacityReadAt, 30*time.Minute)
+	}, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 
 	if len(blocked.Conversations) != 1 {
 		t.Fatalf("conversations = %+v, want only the held one", blocked.Conversations)
@@ -319,11 +319,11 @@ func TestAnUntimedConversationRefusalStandsForTheProbeInterval(t *testing.T) {
 	t.Parallel()
 
 	log := []runstate.UsageLimitExhaustion{conversationRefusal(capacityReadAt.Add(-10*time.Minute), "chat-untimed", nil)}
-	blocked := ReadCapacityBlocked(nil, log, capacityReadAt, 30*time.Minute)
+	blocked := ReadCapacityBlocked(nil, log, capacityReadAt, 30*time.Minute, CapacityEvidence{})
 	if len(blocked.Conversations) != 1 || blocked.Conversations[0].ResetsAt != nil {
 		t.Fatalf("conversations = %+v, want the conversation held with no reset named", blocked.Conversations)
 	}
-	if blocked := ReadCapacityBlocked(nil, log, capacityReadAt.Add(25*time.Minute), 30*time.Minute); len(blocked.Conversations) != 0 {
+	if blocked := ReadCapacityBlocked(nil, log, capacityReadAt.Add(25*time.Minute), 30*time.Minute, CapacityEvidence{}); len(blocked.Conversations) != 0 {
 		t.Fatalf("conversations = %+v, want nothing once the probe interval has passed", blocked.Conversations)
 	}
 }

@@ -662,6 +662,7 @@ func record(policy Policy, named, alternate string, refused backend.UsageLimit, 
 		ConversationID: policy.ConversationID,
 		WorkItemID:     policy.WorkItemID,
 		Model:          named,
+		AccountAlias:   strings.TrimSpace(moved.RefusedEndpoint.AccountAlias),
 		ServedBy:       alternate,
 		Substitution:   runstate.SubstitutedForCapacity,
 	}

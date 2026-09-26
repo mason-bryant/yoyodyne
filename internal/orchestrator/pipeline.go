@@ -371,6 +371,12 @@ type Pipeline struct {
 	// optional: a run wired without one waits exactly as it would have, and what
 	// is lost is the record every surface names the wait from.
 	ProviderOutages ProviderOutages
+	// CapacityServed is where every invocation the provider served records the
+	// account and model it was served on, which is what reads a refusal of that
+	// account and model as lifted before the reset it quoted. It is optional: a
+	// run wired without one runs exactly as it would have, and every refusal then
+	// stands until its quoted reset.
+	CapacityServed CapacityServedRecorder
 	// Selection is why this pipeline is running what it runs: who chose the work
 	// and on what grounds. It is recorded with the run so that an operator reading
 	// what is in flight can see why each item was picked, which is the question
@@ -3159,6 +3165,18 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		}
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
+		// An attempt served is also the provider saying the window of the model it
+		// asked for is open on this account, whatever reset an earlier refusal of it
+		// quoted. The model is the one this invocation recorded asking for, as
+		// attemptDevelopment wrote it, rather than the configuration: nothing in a
+		// run moves an attempt onto another model, and if anything ever does, what
+		// the invocation asked for is still what served it.
+		if servedCleanly(providerResult, err) {
+			what := fmt.Sprintf("a developer attempt of run %s of %s", a.state.RunID, a.state.WorkItemID)
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ProviderModel, what); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
 		if !refusedForLimit && !refusedForOverload && !a.mayRelaunch(died) {
 			// The relaunch budget is spent, which is the right bound for a provider
@@ -6317,6 +6335,17 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
 			}
 		}
+		// A review that came back with a verdict, and with no refusal reported
+		// beside it, was served on the model it asked for, which is the provider
+		// saying that model's window is open. The model is the one the invocation
+		// recorded asking for — the reviewer's RequestedModel, written to the run
+		// by attemptReview — rather than the configuration.
+		if err == nil && reported.servedCleanly {
+			what := fmt.Sprintf("a review of run %s of %s", a.state.RunID, a.state.WorkItemID)
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ReviewModel, what); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
 			if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
 				return "", pauseErr
@@ -6525,6 +6554,11 @@ type providerEvidence struct {
 	transientFailure *backend.TransientFailure
 	providerOutage   *backend.ProviderOutage
 	processStatus    execution.ProcessStatus
+	// servedCleanly is a review the provider answered with a verdict, a process
+	// that succeeded, and no refusal reported anywhere on it — the only review
+	// that is evidence a window on its model is open. It is set on the verdict's
+	// path alone; every other field here describes a review that was not made.
+	servedCleanly bool
 }
 
 // reviewReachedProvider reports a review attempt the provider actually
@@ -6746,7 +6780,10 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.RequestedModel != configured {
 		return "", providerEvidence{}, fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
 	}
-	return result.Decision, providerEvidence{}, nil
+	return result.Decision, providerEvidence{
+		servedCleanly: result.ProcessStatus == execution.ProcessSucceeded &&
+			result.UsageLimit == nil && result.ServerOverload == nil && result.ProviderOutage == nil,
+	}, nil
 }
 
 func (a *activeRun) clearReviewEvidence() {

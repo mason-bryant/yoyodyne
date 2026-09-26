@@ -602,7 +602,10 @@ with the reset the provider named, it is on the attention line as your move,
 and the channel [says it again while it stands](reporting.md#the-provider-holding-every-role).
 It is the message that was missing between 2026-09-08 and 09-13, when 134
 refusals were each said once and nothing said that all five agents were on the
-one model being refused, with nothing to fail over to, for five days.
+one model being refused, with nothing to fail over to, for five days. A
+refusal a later served turn on the same account and model has disproved is not
+standing, and neither is one of a conversation its role has replaced; the next
+section says what clears a refusal early.
 
 ### A watch session inside a recorded window
 
@@ -623,7 +626,32 @@ The session records the poll as one made inside the provider's window, so
 channel says the same, and the watch log's idle line carries the window and its
 reset — which is what a maintenance script reads to stand its idle check down.
 It is never reported as a hold: nothing needs releasing, and the first poll past
-the reset pulls again. A limit with no reset named does not hold intake this
+the reset pulls again.
+
+**A served turn clears the window before its reset.** A quoted reset is a claim
+about the provider, and capacity bought mid-window makes it stale: on 2026-09-24
+the operator added capacity a day into a `seven_day` window, every turn after
+that was served, and the record went on quoting 09-27. So every invocation the
+provider serves — a developer attempt, a review with a verdict, a conversation
+turn — writes the account and model it was served on to
+`products/<product>/capacity-served.json` under the state root, and every
+reading of the refusals treats each one recorded before that moment, on that
+account and model, as lifted. Only an invocation that genuinely served counts:
+it ended without error, its process succeeded, and nothing on it reported a
+refusal. One that ended in error — a provider death, a malformed stream, an
+`api_error` the dialect could not classify, which may be a limit being
+enforced — writes nothing, and neither does an answer with a limit, an
+overload, or an outage reported beside it. The model recorded is the one the
+invocation asked for, and for a conversation turn failover moved, the
+alternate that answered. The first poll after such a turn pulls again, with
+nothing released. A refusal written before refusals carried the account is
+lifted by its model being served on any account, and one written before they
+carried the model by anything served at all, because neither can be told apart
+any more finely. A refusal of a conversation its role has since replaced holds
+nothing either: nothing will be asked in that conversation again. Where the
+served record or the conversation records cannot be read, nothing is cleared
+early — the window stands until its quoted reset, which costs time and never a
+refused run. A limit with no reset named does not hold intake this
 way; a dispatch is how that one is asked about. A developer model the record
 does not refuse — a label mapped to a model the provider still serves — holds
 nothing, because work can run on it. A pass that is not watching stops on the window
@@ -2279,7 +2307,12 @@ ask for and to fail over to: a hold stands while a refusal the provider has
 not said lifts yet covers the model every agent's turn ends on — its alternate
 where it names one, its own model otherwise — and at least one of those
 refusals was a turn that actually stopped, or a run that actually parked,
-rather than one an alternate served through. The sentence counts the two as
+rather than one an alternate served through. A refusal is not standing once
+the provider has served the same account and model since it was recorded, or
+once its conversation is no longer its role's, so a window lifted early by
+added capacity ends the hold at the first served turn rather than at the
+quoted reset — see [a watch session inside a recorded
+window](#a-watch-session-inside-a-recorded-window). The sentence counts the two as
 what they are, `2 runs parked and 20 turns refused since …`, and a run is one
 refusal however many probes it makes while it waits. A refusal that names no model,
 which is every one recorded before 2026-09-13, counts only where every agent
@@ -2357,7 +2390,22 @@ the provider is still refusing, read from
 [the refusals recorded outside a run](#a-provider-refusal-outside-a-run): one
 entry per conversation however many turns were stopped, since the earliest
 standing refusal, until the latest reset any of them named, with the turns an
-alternate served through not counted. A run waiting on a login or a network is
+alternate served through not counted. **A block clears before its reset on
+evidence the window lifted.** A turn or a run the provider served on the same
+account and model after a refusal was recorded clears that refusal, so a
+conversation whose every refusal came before such a turn is not listed, and a
+run the provider stopped is not listed once its account and model have been
+served since it stopped; a run still asleep on its deadline stays listed as
+`waiting`, because it is, and `yoyo resume <item>` asks now. A conversation that
+is no longer its role's current one — replaced, as the development manager's
+`chat-419cedb4…` was on 2026-09-24 — is never listed, and its refusals count
+toward no hold. [A watch session inside a recorded
+window](#a-watch-session-inside-a-recorded-window) says how the served turn is
+recorded; the dashboard's capacity section, `yoyo status`, the channel's
+provider-hold message, and the watch session's hold on intake all read this one
+derivation. Where the record of what was served, or the conversation records,
+could not be read, nothing is cleared early and `conversations_problem` says
+which. A run waiting on a login or a network is
 not capacity and is not here; the outage banner says it. Both lists are always
 present, and each says under `runs_problem` or `conversations_problem` when
 its records could not be read rather than reporting an empty list. It is not

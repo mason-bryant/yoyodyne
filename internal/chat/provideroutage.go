@@ -15,6 +15,7 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -75,6 +76,33 @@ func (s *Session) noteProviderServed() {
 	if _, _, err := s.options.ProviderOutages.Clear(); err != nil {
 		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(
 			fmt.Sprintf("record that the provider is answering again: %v", err), maxTrackerFailureBytes))
+	}
+}
+
+// CapacityServed is where a served turn is written down as the evidence that a
+// usage window on its account and model has lifted. It is satisfied by
+// *runstate.CapacityServedStore.
+type CapacityServed interface {
+	Record(served runstate.CapacityServed) error
+}
+
+// noteCapacityServed records the account and model this turn was served on,
+// which every reading of the provider's refusals takes as the window having
+// lifted for each refusal of that account and model recorded before it. What
+// went wrong recording it is carried on the session's own problems, as the
+// outage's clearing is.
+func (s *Session) noteCapacityServed(endpoint backend.Endpoint) {
+	if s.options.CapacityServed == nil || strings.TrimSpace(endpoint.Model) == "" {
+		return
+	}
+	if err := s.options.CapacityServed.Record(runstate.CapacityServed{
+		AccountAlias: endpoint.AccountAlias,
+		Model:        endpoint.Model,
+		At:           s.options.clock().Now(),
+		What:         fmt.Sprintf("a turn of the %s conversation %s", RoleTitle(s.state.Role), s.state.ConversationID),
+	}); err != nil {
+		s.failoverProblem = appendProblem(s.failoverProblem, singleLine(
+			fmt.Sprintf("record that the provider served %s: %v", endpoint.Model, err), maxTrackerFailureBytes))
 	}
 }
 

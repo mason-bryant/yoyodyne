@@ -667,6 +667,13 @@ type Pull struct {
 	// restarted inside a window never has.
 	UsageLimits readmodel.UsageLimits
 	Developers  []readmodel.AgentEndpoint
+	// CapacityServed and Conversations are what the refusals above are read
+	// against before they hold anything: a refusal the provider has since served
+	// its account and model through, or a refusal of a conversation its role has
+	// replaced, holds no intake. Both optional; a pull wired without them holds on
+	// every refusal until its quoted reset, as it did before the record existed.
+	CapacityServed readmodel.CapacityServedRecord
+	Conversations  readmodel.Conversations
 	// Claims gives back the claims with nothing alive behind them. Optional; see
 	// ScheduleClaims.
 	Claims ScheduleClaims
@@ -2895,9 +2902,14 @@ func (s Scheduler) usageWindow(schedule *Schedule, pull Pull) (recordedWindow, b
 	}
 	parked := relevant(readmodel.ParkedRunRefusals(runs))
 	now := s.now()
+	// The refusals are read against the same evidence every surface reads them
+	// against, so intake is never held on a window a served turn has disproved.
+	// Evidence that could not be read clears nothing, and holding on is the
+	// direction that costs only time.
+	evidence, _ := readmodel.ReadCapacityEvidence(pull.CapacityServed, pull.Conversations)
 	// No unknown-reset pause: only a reset the provider named makes a refusal
 	// stand here.
-	hold := readmodel.ReadCapacityHold(pull.Developers, nil, append(parked, relevant(refusals)...), now, 0)
+	hold := readmodel.ReadCapacityHold(pull.Developers, nil, append(parked, relevant(refusals)...), now, 0, evidence)
 	if !hold.Holding || hold.ResetsAt.IsZero() || !now.Before(hold.ResetsAt) {
 		return recordedWindow{}, false
 	}

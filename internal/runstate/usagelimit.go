@@ -78,6 +78,12 @@ type UsageLimitExhaustion struct {
 	// refusal that does not say which model was refused cannot be read back as a
 	// window that has since reopened.
 	Model string `json:"model,omitempty"`
+	// AccountAlias is the configured account the refused invocation ran under,
+	// and empty where the process that recorded it did not say — which is every
+	// refusal recorded before the account was carried. It is what a served turn
+	// is matched against: a window is closed on one account and one model, and a
+	// turn served on another account says nothing about it.
+	AccountAlias string `json:"account,omitempty"`
 	// ServedBy is the permitted alternate that took the turn instead, and empty
 	// where nothing did. It is what makes this entry a substitution rather than a
 	// stoppage: the same refusal happened either way, and what an operator needs
