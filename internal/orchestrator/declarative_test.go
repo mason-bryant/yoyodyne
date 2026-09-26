@@ -38,7 +38,7 @@ import (
 // nothing declarative, which is the whole of what a project writes to roll back.
 // It keeps somewhere to record instances, so what it measures is the key rather
 // than the absence of a store.
-func (f *baselineFixture) legacy(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) legacy(t *testing.T, provider recordingBackend, commands []string) Pipeline {
 	t.Helper()
 	pipeline := f.pipeline(t, provider, commands)
 	pipeline.Config.Execution.DeclarativeDelivery = false
@@ -47,7 +47,7 @@ func (f *baselineFixture) legacy(t *testing.T, provider *fakeBackend, commands [
 
 // automaticLegacy is the same under automatic integration, which is the policy
 // every path but the human-approval one runs under.
-func (f *baselineFixture) automaticLegacy(t *testing.T, provider *fakeBackend, commands []string) Pipeline {
+func (f *baselineFixture) automaticLegacy(t *testing.T, provider recordingBackend, commands []string) Pipeline {
 	t.Helper()
 	return automatic(f.legacy(t, provider, commands), provider)
 }

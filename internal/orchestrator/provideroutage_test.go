@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -27,7 +28,7 @@ const unreachableMessage = "API Error: Can't reach the API server"
 
 // providerAwayBackend refuses the developer's first refusals invocations the way
 // a provider nobody can reach does, and serves the work afterwards.
-func providerAwayBackend(refusals int, cause domain.ProviderOutageCause, verdicts ...string) *fakeBackend {
+func providerAwayBackend(refusals int, cause domain.ProviderOutageCause, verdicts ...string) *orchestratortest.Backend {
 	return refusingBackend(refusals, func(result backend.RunResult) backend.RunResult {
 		result.StopReason = "api_error"
 		result.FinalText = unreachableMessage
@@ -115,13 +116,13 @@ func TestRunWaitsOutAProviderNobodyCanReachSpendingNothing(t *testing.T) {
 	if outcome.TransientRelaunches != 0 || outcome.RepairAttempts != 0 {
 		t.Fatalf("outcome = %#v, want the relaunch and repair counters untouched once the provider returned", outcome)
 	}
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
 	if len(developerRequests) != 5 {
 		t.Fatalf("developer invocations = %d, want the four refused attempts and the one that was served", len(developerRequests))
 	}
 	// Every reissue continues the session the refused attempt established.
-	if developerRequests[4].SessionID != provider.developerSession {
-		t.Fatalf("reissued attempt session = %q, want %q", developerRequests[4].SessionID, provider.developerSession)
+	if developerRequests[4].SessionID != provider.DeveloperSession {
+		t.Fatalf("reissued attempt session = %q, want %q", developerRequests[4].SessionID, provider.DeveloperSession)
 	}
 	finished, err := store.Load(outcome.RunID)
 	if err != nil {
@@ -376,13 +377,13 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	repository := pipelineRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := refusingBackend(0, nil, approveVerdict)
-	served := provider.run
+	served := provider.Respond
 	refused := 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer && refused < 1 {
 			refused++
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession, IsError: true,
+				Backend: domain.BackendClaudeCode, SessionID: provider.ReviewerSession, IsError: true,
 				StopReason: "api_error", FinalText: "Not logged in",
 				ProviderOutage: &backend.ProviderOutage{Cause: domain.ProviderUnauthenticated, Detail: "api_error: Not logged in"},
 				LastEvent:      request.LastSequence,
@@ -420,7 +421,7 @@ func TestRunWaitsOutAnExpiredLoginDuringReview(t *testing.T) {
 	if outcome.Integration == nil || !tracker.closed || outcome.TransientRelaunches != 0 {
 		t.Fatalf("outcome = %#v, want the run finished with no relaunch counted", outcome)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 2 {
 		t.Fatalf("review invocations = %d, want the refused one and the one that answered", reviews)
 	}
 	// The review the provider served is the provider answering again, and it is
