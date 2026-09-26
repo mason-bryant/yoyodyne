@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -27,8 +28,8 @@ func TestTheCheckStageEndsAtItsBoundNamingTheBoundAndTheCheck(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// Two checks a minute each and a third that would run for ninety, each
@@ -46,7 +47,7 @@ func TestTheCheckStageEndsAtItsBoundNamingTheBoundAndTheCheck(t *testing.T) {
 		StageTimeout: 30 * time.Minute,
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() error = nil, want the run stopped at the stage bound")
 	}
@@ -57,7 +58,7 @@ func TestTheCheckStageEndsAtItsBoundNamingTheBoundAndTheCheck(t *testing.T) {
 	}
 	// A stage the bound stopped never judged the change, so the developer is
 	// not asked to repair anything and the run stops on the first attempt.
-	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 1 {
+	if runs := len(provider.RequestsForRole(domain.RoleDeveloper)); runs != 1 {
 		t.Fatalf("developer invocations = %d, want only the first attempt", runs)
 	}
 	if len(outcome.Checks) != 3 || !outcome.Checks[2].StoppedByStage || outcome.Checks[2].Command != "make race" {
@@ -79,7 +80,7 @@ func TestTheCheckStageEndsAtItsBoundNamingTheBoundAndTheCheck(t *testing.T) {
 	if !strings.Contains(state.Failure, "check_stage_timeout bound during make race") {
 		t.Fatalf("recorded failure = %q, want the bound and the check named", state.Failure)
 	}
-	notes := strings.Join(tracker.noteRecords, "\n")
+	notes := strings.Join(tracker.NoteRecords, "\n")
 	if !strings.Contains(notes, "Check stage: 30m0s of the 30m0s execution.check_stage_timeout bound, stopped at the bound during make race") {
 		t.Fatalf("item notes do not say the stage was stopped at its bound:\n%s", notes)
 	}
@@ -92,8 +93,8 @@ func TestTheRecordSaysWhichCheckTheStageIsOnWhileItRuns(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, nil)
@@ -104,7 +105,7 @@ func TestTheRecordSaysWhichCheckTheStageIsOnWhileItRuns(t *testing.T) {
 		"true",
 		"cp " + filepath.Join(store.Root(), pipelineRunID+".json") + " " + recordPath,
 	}
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	recorded, err := os.ReadFile(recordPath)
@@ -153,8 +154,8 @@ func TestEveryCheckIsToldWhichGoPackagesTheChangeTouches(t *testing.T) {
 				writeCommitted(t, repository, "internal/checks/runner.go", "package checks\n")
 				writeCommitted(t, repository, "internal/orchestrator/pipeline.go", "package orchestrator\n")
 			}
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-			provider := roleBackend(func(request backend.RunRequest) error {
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 				path := filepath.Join(request.WorkingDirectory, filepath.FromSlash(test.changes))
 				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					return err
@@ -165,7 +166,7 @@ func TestEveryCheckIsToldWhichGoPackagesTheChangeTouches(t *testing.T) {
 			pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{
 				`printf '%s' "$` + checks.ChangedGoPackagesVariable + `" > ` + told,
 			})
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -183,7 +184,7 @@ func TestEveryCheckIsToldWhichGoPackagesTheChangeTouches(t *testing.T) {
 			if state.CheckStage == nil || !strings.Contains(state.CheckStage.Narrowed, strings.TrimPrefix(test.want, "./...")) {
 				t.Fatalf("recorded stage = %#v, want the narrowing recorded", state.CheckStage)
 			}
-			notes := strings.Join(tracker.noteRecords, "\n")
+			notes := strings.Join(tracker.NoteRecords, "\n")
 			if !strings.Contains(notes, "gate narrowed to: ") {
 				t.Fatalf("item notes do not say what the gate was narrowed to:\n%s", notes)
 			}

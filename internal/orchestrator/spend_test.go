@@ -10,6 +10,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -23,13 +24,13 @@ func TestARunRecordsWhatEachOfItsInvocationsSpent(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Add a feature",
 		AcceptanceCriteria: "feature.txt exists",
 		Status:             "open",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	priceInvocations(provider, 2.5)
@@ -40,7 +41,7 @@ func TestARunRecordsWhatEachOfItsInvocationsSpent(t *testing.T) {
 	// review's price comparable with the change's.
 	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: testReviewerModel, Spend: log}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -61,7 +62,7 @@ func TestARunRecordsWhatEachOfItsInvocationsSpent(t *testing.T) {
 	for _, line := range log.lines {
 		// Both invocations were made for one piece of work, and both say so: what an
 		// item cost is the join this log has to be able to make.
-		if line.RunID != outcome.RunID || line.WorkItemID != tracker.item.ID {
+		if line.RunID != outcome.RunID || line.WorkItemID != tracker.Item.ID {
 			t.Errorf("line = %#v, want the run and the item it served", line)
 		}
 		if !line.Known() || line.AmountUSD != 2.5 {
@@ -143,9 +144,9 @@ func TestARepairAttemptIsChargedToRepairThroughAWholeRun(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		// The first attempt leaves the check failing; the repair attempt makes it
 		// pass in the same worktree.
@@ -161,7 +162,7 @@ func TestARepairAttemptIsChargedToRepairThroughAWholeRun(t *testing.T) {
 	pipeline.Spend = log
 	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: testReviewerModel, Spend: log}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -197,7 +198,7 @@ func TestARepairAttemptIsChargedToRepairThroughAWholeRun(t *testing.T) {
 	if repair.Role != domain.RoleDeveloper || repair.Agent != "developer" {
 		t.Errorf("repair line = %#v, want the developer's", repair)
 	}
-	if repair.RunID != outcome.RunID || repair.WorkItemID != tracker.item.ID {
+	if repair.RunID != outcome.RunID || repair.WorkItemID != tracker.Item.ID {
 		t.Errorf("repair line = %#v, want the run and the item it served", repair)
 	}
 	// The repair resumed the developer's session, so the provider reported $3.00
@@ -266,10 +267,10 @@ func TestABranchReviewRecordsWhatItSpentAgainstTheReview(t *testing.T) {
 // to resume one reports. A run's repair attempts resume the developer's session,
 // so its second terminal says what the session has cost rather than what the
 // attempt did, and the line recorded from it is the difference.
-func priceInvocations(provider *fakeBackend, amount float64) {
-	inner := provider.run
+func priceInvocations(provider *orchestratortest.Backend, amount float64) {
+	inner := provider.Respond
 	reported := map[string]float64{}
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := inner(request)
 		if err != nil {
 			return result, err

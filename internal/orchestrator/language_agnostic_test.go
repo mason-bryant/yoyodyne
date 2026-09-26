@@ -31,6 +31,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -56,19 +57,19 @@ func TestPipelineDrivesANonGoProjectThroughEveryPhase(t *testing.T) {
 	t.Parallel()
 
 	repository := nonGoFixtureRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "typescript-fixture-1",
 		Title:              "Add a farewell greeting",
 		Description:        "Follow docs/design.md",
 		AcceptanceCriteria: "src/farewell.ts exports farewell()",
 		Status:             "open",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "src", "farewell.ts"), []byte(nonGoSource("  ")), 0o600)
 	}, approveVerdict)
 	pipeline, store := nonGoFixturePipeline(t, repository, tracker, provider)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -98,8 +99,8 @@ func TestPipelineDrivesANonGoProjectThroughEveryPhase(t *testing.T) {
 
 	// Context assembly read this project's Markdown, and the reviewer was shown a
 	// diff of its files. Neither step has a language to recognize.
-	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
-	reviewerRequests := provider.requestsForRole(domain.RoleReviewer)
+	developerRequests := provider.RequestsForRole(domain.RoleDeveloper)
+	reviewerRequests := provider.RequestsForRole(domain.RoleReviewer)
 	if len(developerRequests) != 1 || len(reviewerRequests) != 1 {
 		t.Fatalf("invocations: developer = %d, reviewer = %d", len(developerRequests), len(reviewerRequests))
 	}
@@ -126,7 +127,7 @@ func TestPipelineStopsANonGoProjectAtItsFailingCheck(t *testing.T) {
 	t.Parallel()
 
 	repository := nonGoFixtureRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "typescript-fixture-2",
 		Title:              "Add a farewell greeting",
 		Description:        "Follow docs/design.md",
@@ -136,25 +137,25 @@ func TestPipelineStopsANonGoProjectAtItsFailingCheck(t *testing.T) {
 	// The module exports what it should and is indented with a tab, so the
 	// project's first check passes and its second fails. A run stopped by that is
 	// stopped by the check that failed rather than by having checks at all.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "src", "farewell.ts"), []byte(nonGoSource("\t")), 0o600)
 	}, approveVerdict)
 	pipeline, store := nonGoFixturePipeline(t, repository, tracker, provider)
 	before := gitLine(t, repository, "rev-parse", "refs/heads/main")
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	wantFailure := "verification failed after 2 of 2 permitted attempt(s)"
 	if err == nil || !strings.Contains(err.Error(), wantFailure) {
 		t.Fatalf("Run() error = %v, want %q", err, wantFailure)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 0 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 0 {
 		t.Fatal("a failing check in a non-Go project reached the reviewer")
 	}
-	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 3 {
+	if runs := len(provider.RequestsForRole(domain.RoleDeveloper)); runs != 3 {
 		t.Fatalf("developer invocations = %d, want the first attempt and both repairs", runs)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("a failing check reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
+	if outcome.Integration != nil || tracker.Closed {
+		t.Fatalf("a failing check reached integration: %#v, closed = %t", outcome.Integration, tracker.Closed)
 	}
 	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != before {
 		t.Fatalf("main moved on a failing check: %q, want %q", head, before)
@@ -177,16 +178,16 @@ func TestPipelineStopsANonGoProjectAtItsFailingCheck(t *testing.T) {
 
 	// What could not be repaired is recorded where the work is tracked, in the
 	// project's own words rather than a harness paraphrase of them.
-	if !tracker.blocked || !outcome.Blocked {
-		t.Fatalf("spent repair budget did not block the item: tracker = %t, outcome = %t", tracker.blocked, outcome.Blocked)
+	if !tracker.Blocked || !outcome.Blocked {
+		t.Fatalf("spent repair budget did not block the item: tracker = %t, outcome = %t", tracker.Blocked, outcome.Blocked)
 	}
 	for _, want := range []string{
 		"Failing check: " + nonGoIndentationCheck + " (exit 1)",
 		"indented with tabs rather than spaces",
 		"src/farewell.ts",
 	} {
-		if !strings.Contains(tracker.blockReason, want) {
-			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+		if !strings.Contains(tracker.BlockReason, want) {
+			t.Fatalf("blocker is missing %q:\n%s", want, tracker.BlockReason)
 		}
 	}
 
@@ -272,7 +273,7 @@ func nonGoFixtureRepository(t *testing.T) string {
 // declared rather than ones a test chose for it. Everything else is the wiring
 // the Go fixtures use, which is the point: nothing between the two is told what
 // language it is looking at.
-func nonGoFixturePipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend) (Pipeline, *runstate.Store) {
+func nonGoFixturePipeline(t *testing.T, repository string, tracker *orchestratortest.Tracker, provider *orchestratortest.Backend) (Pipeline, *runstate.Store) {
 	t.Helper()
 	cfg, err := config.Load(filepath.Join(repository, config.DirectoryName, "config.yaml"))
 	if err != nil {

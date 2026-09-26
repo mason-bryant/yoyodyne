@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -29,9 +30,9 @@ func TestPipelineCountsTheVerdictThatSentTheWorkBackAndNotTheApproval(t *testing
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		content := "incomplete\n"
 		if attempts > 1 {
@@ -41,7 +42,7 @@ func TestPipelineCountsTheVerdictThatSentTheWorkBackAndNotTheApproval(t *testing
 	}, repairVerdict, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -49,7 +50,7 @@ func TestPipelineCountsTheVerdictThatSentTheWorkBackAndNotTheApproval(t *testing
 		t.Fatalf("Run() outcome = %#v, want the repaired change integrated", outcome)
 	}
 
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -81,20 +82,20 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, "Sure! Here is my review.", repairVerdict, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 3 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 3 {
 		t.Fatalf("reviewer invocations = %d, want the unreadable reply asked again once and the repair judged", reviews)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -127,10 +128,10 @@ func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte(fmt.Sprintf("attempt %d\n", attempts)), 0o600)
 	}, repairVerdict, approveVerdict)
@@ -140,8 +141,8 @@ func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
 	// it; a status that was not clean here would make the charge below prove
 	// nothing about the published case.
 	var statusAtReview []string
-	judge := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	judge := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			status, err := attemptPipelineGit(request.WorkingDirectory, "status", "--porcelain=v1", "--untracked-files=all")
 			if err != nil {
@@ -153,7 +154,7 @@ func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
 	}
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -175,7 +176,7 @@ func TestPipelineChargesTheRepairVerdictOnAPublishedChange(t *testing.T) {
 		}
 	}
 
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}
@@ -202,14 +203,14 @@ func TestPipelineChargesNoRoundForAVerdictOnNoChangeAgainstTheBase(t *testing.T)
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("design content\n"), 0o600)
 	}, repairVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() ended without stopping, so no repair verdict was reached on the empty change")
 	}
@@ -217,17 +218,17 @@ func TestPipelineChargesNoRoundForAVerdictOnNoChangeAgainstTheBase(t *testing.T)
 		t.Fatalf("outcome = %#v, want the run blocked on its unresolved findings", outcome)
 	}
 	// Nothing was published: there was no change against the base to commit.
-	if outcome.PullRequest != nil || len(forge.opened) != 0 {
-		t.Fatalf("outcome pull request = %#v, forge requests = %d; want nothing published for an empty change", outcome.PullRequest, len(forge.opened))
+	if outcome.PullRequest != nil || len(forge.Opened) != 0 {
+		t.Fatalf("outcome pull request = %#v, forge requests = %d; want nothing published for an empty change", outcome.PullRequest, len(forge.Opened))
 	}
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers < 2 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers < 2 {
 		t.Fatalf("developer invocations = %d, want the run to have spent its own repair budget on the empty change", developers)
 	}
 	spent, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	counters, err := store.Triage().Counters(tracker.item.ID)
+	counters, err := store.Triage().Counters(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Counters() error = %v", err)
 	}

@@ -14,8 +14,8 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/selfcheck"
 )
 
-// The in-package fakes below stay for the test files that have not yet moved
-// onto orchestratortest's. pipeline_test.go, which declared them, has.
+// No test file uses the in-package fakes below any more: every one has moved
+// onto orchestratortest's. They stay only until the change that removes them.
 
 type fakeTracker struct {
 	item beads.WorkItem

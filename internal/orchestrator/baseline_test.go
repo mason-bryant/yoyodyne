@@ -43,6 +43,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -530,7 +531,7 @@ func newBaselineFixture(t *testing.T, item beads.WorkItem) *baselineFixture {
 		repository:   pipelineRepository(t),
 		worktreeRoot: filepath.Join(t.TempDir(), "worktrees"),
 		store:        store,
-		tracker:      &fakeTracker{item: item},
+		tracker:      &orchestratortest.Tracker{Item: item},
 	}
 }
 
@@ -644,14 +645,14 @@ func (f *baselineFixture) sweep(t *testing.T, label string) []Reconciliation {
 
 func baselineHumanApproved(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	fixture.invoke(t, "run", fixture.pipeline(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }
 
 func baselineAutomaticPromotion(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }
@@ -661,7 +662,7 @@ func baselineCheckRepaired(t *testing.T) *baselineFixture {
 	attempts := 0
 	// The first attempt leaves the check failing; the repair is what makes it
 	// pass, so the trace carries one attempt of each kind.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if attempts == 1 {
 			return baselineImplements(request)
@@ -674,21 +675,21 @@ func baselineCheckRepaired(t *testing.T) *baselineFixture {
 
 func baselineCheckBudgetSpent(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"exit 1"}))
 	return fixture
 }
 
 func baselineReviewRepaired(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, repairVerdict, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, repairVerdict, approveVerdict)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }
 
 func baselineReviewBudgetSpent(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, repairVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, repairVerdict)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }
@@ -696,7 +697,7 @@ func baselineReviewBudgetSpent(t *testing.T) *baselineFixture {
 func baselineProtectedPathRepaired(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		attempts++
 		if err := baselineImplements(request); err != nil {
 			return err
@@ -719,7 +720,7 @@ func baselineProtectedPathRepaired(t *testing.T) *baselineFixture {
 // the item did grant beside them, and the blocker the item is left carrying.
 func baselineProtectedPathBudgetSpent(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := baselineImplements(request); err != nil {
 			return err
 		}
@@ -739,7 +740,7 @@ func baselineProtectedPathGranted(t *testing.T) *baselineFixture {
 	item.Description = "Correct the brief's own account of the pipeline.\n\n" +
 		protectedpath.GrantMarker + " docs/product/brief.md\n"
 	fixture := newBaselineFixture(t, item)
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := baselineImplements(request); err != nil {
 			return err
 		}
@@ -791,7 +792,7 @@ func baselineOperatorStop(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	// The operator stops the run mid-attempt, from a process holding nothing:
 	// this is the file they write beside the run.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := fixture.store.RecordStop(runstate.StopRequest{
 			SchemaVersion: runstate.StopSchemaVersion,
 			ProductID:     "yoyodyne",
@@ -810,7 +811,7 @@ func baselineOperatorStop(t *testing.T) *baselineFixture {
 
 func baselineReviewDrift(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements,
+	provider := orchestratortest.RoleBackend(baselineImplements,
 		`{"decision":"approve","approves":"implementation","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
@@ -818,7 +819,7 @@ func baselineReviewDrift(t *testing.T) *baselineFixture {
 
 func baselinePartialCleanup(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	// The worktree is removed and the branch deletion fails, which is exactly what
 	// an interrupted two-step removal leaves behind.
@@ -884,7 +885,7 @@ func baselineDirectivePause(t *testing.T) *baselineFixture {
 	directives := newDirectiveStore(t)
 	held := pausingDirective(t, directives, directive.KindArtifact, nil)
 	fixture.mask(held.ID, "<directive-id>")
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.Directives = directives
 	fixture.invoke(t, "run", pipeline)
@@ -898,7 +899,7 @@ func baselineDependencyPause(t *testing.T) *baselineFixture {
 		{ID: "yoyodyne-parent", Type: "parent-child", Status: "open"},
 	}
 	fixture := newBaselineFixture(t, item)
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	fixture.invoke(t, "run", fixture.automatic(t, provider, []string{"test -f feature.txt"}))
 	return fixture
 }
@@ -909,7 +910,7 @@ func baselineOperatorHold(t *testing.T) *baselineFixture {
 	if _, err := holds.Hold(baseTime); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.Holds = holds
 	fixture.invoke(t, "run", pipeline)
@@ -927,7 +928,7 @@ func baselineHeldClaimedRun(t *testing.T) *baselineFixture {
 	// The hold is placed from inside the developer's own invocation, which is the
 	// case the boundary exists for: what is already streaming is not interrupted,
 	// and the next provider call is where the run notices.
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if _, err := holds.Hold(baseTime); err != nil {
 			return err
 		}
@@ -956,7 +957,7 @@ func baselineIntakeHold(t *testing.T) *baselineFixture {
 	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue is heading somewhere wrong", baseTime); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	// A pipeline that accounts for no choice is treated as the harness choosing,
 	// which is exactly the work an intake hold stops.
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
@@ -968,7 +969,7 @@ func baselineIntakeHold(t *testing.T) *baselineFixture {
 func baselineReplayedPromotion(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
 	developed := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := baselineImplements(request); err != nil {
 			return err
 		}
@@ -989,7 +990,7 @@ func baselineReplayedPromotion(t *testing.T) *baselineFixture {
 
 func baselineIntegrationBudgetSpent(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := baselineImplements(request); err != nil {
 			return err
 		}
@@ -1006,7 +1007,7 @@ func baselineIntegrationBudgetSpent(t *testing.T) *baselineFixture {
 
 func baselineReconcileCompleted(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	// Writes stop for good once the run reaches the completing phase, so the
 	// promotion landed and nothing recorded it.
 	halting := &haltingStore{StateStore: fixture.store, at: runstate.PhaseCompleting}
@@ -1021,7 +1022,7 @@ func baselineReconcileCompleted(t *testing.T) *baselineFixture {
 
 func baselineReconcileBlocked(t *testing.T) *baselineFixture {
 	fixture := newBaselineFixture(t, baselineItem())
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	// Writes stop while the developer's work is still the only thing that
 	// happened, so nothing was promoted and nothing can be recovered from the
 	// repository.

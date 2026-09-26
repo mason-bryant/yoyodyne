@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -42,7 +43,7 @@ func TestEverySurfaceReportsTheBranchARunsFlagsSayIsRemoved(t *testing.T) {
 
 	// The claim audit keeps the claim over it rather than releasing it as work
 	// nothing is holding.
-	tracker := &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "in_progress"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "in_progress"}}
 	auditor := ClaimAuditor{
 		Tracker:   tracker,
 		Runs:      fixture.store,
@@ -51,11 +52,11 @@ func TestEverySurfaceReportsTheBranchARunsFlagsSayIsRemoved(t *testing.T) {
 		Remains:   fixture.worktrees,
 		Clock:     fixedClock{at: fixture.now},
 	}
-	sweep, err := auditor.Audit(ctx, []beads.WorkItem{tracker.item})
+	sweep, err := auditor.Audit(ctx, []beads.WorkItem{tracker.Item})
 	if err != nil {
 		t.Fatalf("Audit() error = %v", err)
 	}
-	if len(sweep.Released) != 0 || tracker.released {
+	if len(sweep.Released) != 0 || tracker.Released {
 		t.Fatalf("sweep = %#v, want the claim over a standing branch kept", sweep)
 	}
 
@@ -141,7 +142,7 @@ func TestAnIntegrationStopWhoseChangeIsGoneIsNeitherHeldNorKeptClaimed(t *testin
 	}
 	reason, isHeld := held.Reason(state.WorkItemID)
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Stopped and swept", Status: "in_progress"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: "Stopped and swept", Status: "in_progress"}}
 	auditor := ClaimAuditor{
 		Tracker:   tracker,
 		Runs:      fixture.store,
@@ -150,7 +151,7 @@ func TestAnIntegrationStopWhoseChangeIsGoneIsNeitherHeldNorKeptClaimed(t *testin
 		Remains:   fixture.worktrees,
 		Clock:     fixedClock{at: fixture.now},
 	}
-	sweep, err := auditor.Audit(ctx, []beads.WorkItem{tracker.item})
+	sweep, err := auditor.Audit(ctx, []beads.WorkItem{tracker.Item})
 	if err != nil {
 		t.Fatalf("Audit() error = %v", err)
 	}
@@ -161,8 +162,8 @@ func TestAnIntegrationStopWhoseChangeIsGoneIsNeitherHeldNorKeptClaimed(t *testin
 	if isHeld {
 		t.Fatalf("the item is held for %q, want nothing holding a stop with nothing left to resume", reason)
 	}
-	if strings.Contains(tracker.releaseReason, "triage resume") {
-		t.Fatalf("release note = %q, want no resume named for a change that is gone", tracker.releaseReason)
+	if strings.Contains(tracker.ReleaseReason, "triage resume") {
+		t.Fatalf("release note = %q, want no resume named for a change that is gone", tracker.ReleaseReason)
 	}
 }
 
@@ -176,7 +177,7 @@ func TestAReleaseSaysTheBranchItsRunLeftStanding(t *testing.T) {
 	// A cancelled run hands nobody a decision, so its claim is given back — with
 	// its branch still standing, which is exactly what the note has to say.
 	state := fixture.flaggedRun(t, "yoyodyne-flagged.2", 2, runstate.StatusCancelled)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "in_progress"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "in_progress"}}
 	auditor := ClaimAuditor{
 		Tracker:   tracker,
 		Runs:      fixture.store,
@@ -185,7 +186,7 @@ func TestAReleaseSaysTheBranchItsRunLeftStanding(t *testing.T) {
 		Remains:   fixture.worktrees,
 		Clock:     fixedClock{at: fixture.now},
 	}
-	sweep, err := auditor.Audit(context.Background(), []beads.WorkItem{tracker.item})
+	sweep, err := auditor.Audit(context.Background(), []beads.WorkItem{tracker.Item})
 	if err != nil {
 		t.Fatalf("Audit() error = %v", err)
 	}
@@ -193,8 +194,8 @@ func TestAReleaseSaysTheBranchItsRunLeftStanding(t *testing.T) {
 		t.Fatalf("sweep = %#v, want the claim of a cancelled run given back", sweep)
 	}
 	for _, want := range []string{"What the run left: branch " + state.Branch + " (checked and there at", "That change is still there"} {
-		if !strings.Contains(tracker.releaseReason, want) {
-			t.Fatalf("release note = %q, want it to contain %q", tracker.releaseReason, want)
+		if !strings.Contains(tracker.ReleaseReason, want) {
+			t.Fatalf("release note = %q, want it to contain %q", tracker.ReleaseReason, want)
 		}
 	}
 	recorded := sweep.Released[0].Found
@@ -222,7 +223,7 @@ func TestTheSweepCorrectsAReleaseThatLeftOutAStandingBranch(t *testing.T) {
 	if err := fixture.releases.Append(released); err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: state.WorkItemID, Title: "Flagged", Status: "open"}}
 	reconciler := Reconciler{
 		Tracker:   tracker,
 		Worktrees: fixture.worktrees,
@@ -244,8 +245,8 @@ func TestTheSweepCorrectsAReleaseThatLeftOutAStandingBranch(t *testing.T) {
 		t.Fatalf("branch sweep = %#v, want the branch kept and its item corrected", branch)
 	}
 	for _, want := range []string{"Correction:", state.RunID, "Branch: " + state.Branch + " (checked and there at"} {
-		if !strings.Contains(tracker.notes, want) {
-			t.Fatalf("item notes = %q, want them to contain %q", tracker.notes, want)
+		if !strings.Contains(tracker.Notes, want) {
+			t.Fatalf("item notes = %q, want them to contain %q", tracker.Notes, want)
 		}
 	}
 	corrected, err := fixture.store.Load(state.RunID)
@@ -255,12 +256,12 @@ func TestTheSweepCorrectsAReleaseThatLeftOutAStandingBranch(t *testing.T) {
 	if corrected.ReleaseCorrectedAt == nil {
 		t.Fatalf("record = %#v, want the correction written down so it is made once", corrected)
 	}
-	notes := len(tracker.noteRecords)
+	notes := len(tracker.NoteRecords)
 	if _, err := reconciler.Converge(context.Background()); err != nil {
 		t.Fatalf("second Converge() error = %v", err)
 	}
-	if len(tracker.noteRecords) != notes {
-		t.Fatalf("notes = %q, want the correction made once", tracker.noteRecords)
+	if len(tracker.NoteRecords) != notes {
+		t.Fatalf("notes = %q, want the correction made once", tracker.NoteRecords)
 	}
 }
 

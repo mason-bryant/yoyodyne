@@ -10,6 +10,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -29,7 +30,7 @@ func TestReconcileRecordsThatTheForgeMergedAFailedRunsPullRequest(t *testing.T) 
 		State:  "MERGED",
 		Merged: true,
 	}}
-	calls := len(fixture.tracker.calls)
+	calls := len(fixture.tracker.Calls)
 
 	refreshed := fixture.refresh(t, forge)
 	if len(refreshed) != 1 || !refreshed[0].Updated || refreshed[0].Failure != "" {
@@ -53,8 +54,8 @@ func TestReconcileRecordsThatTheForgeMergedAFailedRunsPullRequest(t *testing.T) 
 	if after.Status != before.Status || after.Integration != nil || after.Blocker != before.Blocker {
 		t.Fatalf("run = %#v, want only its publication record changed", after)
 	}
-	if len(fixture.tracker.calls) != calls {
-		t.Fatalf("the refresh made %v on the work item", fixture.tracker.calls[calls:])
+	if len(fixture.tracker.Calls) != calls {
+		t.Fatalf("the refresh made %v on the work item", fixture.tracker.Calls[calls:])
 	}
 }
 
@@ -225,7 +226,7 @@ type publicationFixture struct {
 	repository   string
 	worktreeRoot string
 	store        *runstate.Store
-	tracker      *fakeTracker
+	tracker      *orchestratortest.Tracker
 }
 
 // newPublicationFixture drives a whole publishing run that ends blocked with
@@ -236,14 +237,14 @@ func newPublicationFixture(t *testing.T) (publicationFixture, runstate.State) {
 	t.Helper()
 	repository, worktreeRoot, store := restartableFixture(t)
 	remote := addBareRemote(t, repository)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, repairVerdict)
-	pipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider), &fakeForge{remote: remote})
+	pipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider), &orchestratortest.Forge{Remote: remote})
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 1
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("Run() error = nil, want the run to end on its spent repair budget")
 	}
 	state := loadRun(t, store, pipelineRunID)
@@ -282,10 +283,10 @@ func loadRun(t *testing.T, store *runstate.Store, runID string) runstate.State {
 }
 
 // answeringForge is the forge reduced to the one question this sweep asks. It
-// is separate from fakeForge because a refresh needs answers no run of the
-// harness produces — a request somebody closed unmerged, a branch some other
-// request answers for — and because counting the questions is how a test proves
-// a settled record is never asked about twice.
+// is separate from orchestratortest.Forge because a refresh needs answers no run
+// of the harness produces — a request somebody closed unmerged, a branch some
+// other request answers for — and because counting the questions is how a test
+// proves a settled record is never asked about twice.
 type answeringForge struct {
 	answer publish.PullRequest
 	err    error

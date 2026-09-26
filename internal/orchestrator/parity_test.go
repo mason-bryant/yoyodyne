@@ -57,6 +57,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/workflow"
 )
@@ -462,7 +463,7 @@ func humanApprovalStoppages() []humanApprovalStoppage {
 			drive: func(t *testing.T) *baselineFixture {
 				t.Helper()
 				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
+				provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 				fixture.invoke(t, "run", fixture.pipeline(t, provider, []string{"exit 1"}))
 				return fixture
 			},
@@ -473,7 +474,7 @@ func humanApprovalStoppages() []humanApprovalStoppage {
 			drive: func(t *testing.T) *baselineFixture {
 				t.Helper()
 				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(func(request backend.RunRequest) error {
+				provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 					if err := baselineImplements(request); err != nil {
 						return err
 					}
@@ -489,7 +490,7 @@ func humanApprovalStoppages() []humanApprovalStoppage {
 			drive: func(t *testing.T) *baselineFixture {
 				t.Helper()
 				fixture := newBaselineFixture(t, baselineItem())
-				provider := roleBackend(baselineImplements, approveVerdict)
+				provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 				pipeline := fixture.pipeline(t, provider, []string{"test -f feature.txt"})
 				pipeline.Checks = refusingChecks{cause: errors.New("no check process could be started")}
 				fixture.invoke(t, "run", pipeline)

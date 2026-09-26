@@ -19,6 +19,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
@@ -80,8 +81,8 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	tracker := newOutcomeTracker()
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(writeFeature, escalateVerdict)
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(writeFeature, escalateVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
 	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
 	if err != nil {
@@ -101,8 +102,8 @@ func TestAnEscalatedRunRecordsThePullRequestItLeftOnTheForge(t *testing.T) {
 	}
 	// Nothing authorized a merge, so nothing asked for one: an escalated change
 	// on the forge is one only a person merges.
-	if len(forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want none for an escalated change", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want none for an escalated change", forge.Merges)
 	}
 	recorded, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -157,7 +158,7 @@ func TestCompletionRefusesARunWhoseRecordLostItsPullRequest(t *testing.T) {
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	tracker := &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}
 	run := &activeRun{
 		pipeline: Pipeline{Tracker: tracker, Store: store},
 		claimed:  true,
@@ -180,8 +181,8 @@ func TestCompletionRefusesARunWhoseRecordLostItsPullRequest(t *testing.T) {
 	}
 	// Nothing about the run was recorded as finished: the item was not closed,
 	// and what the tracker was told is the refusal rather than the outcome.
-	if tracker.closed || countCalls(tracker.calls, "complete") != 0 {
-		t.Errorf("the tracker was asked for %v on a refused completion, want no closure", tracker.calls)
+	if tracker.Closed || countCalls(tracker.Calls, "complete") != 0 {
+		t.Errorf("the tracker was asked for %v on a refused completion, want no closure", tracker.Calls)
 	}
 	refused, err := store.Load(pipelineRunID)
 	if err != nil {
@@ -228,7 +229,7 @@ func TestCompletionRefusesARecordWhoseArmingStateDisagreesWithTheSummary(t *test
 	reported.MergeQueued = true
 	reported.MergeMethod = string(mergeMethod)
 	run := &activeRun{
-		pipeline: Pipeline{Tracker: &fakeTracker{item: beads.WorkItem{ID: itemID, Status: "in_progress"}}, Store: store},
+		pipeline: Pipeline{Tracker: &orchestratortest.Tracker{Item: beads.WorkItem{ID: itemID, Status: "in_progress"}}, Store: store},
 		claimed:  true,
 		state:    state,
 		outcome:  Outcome{PullRequest: &reported},
@@ -264,7 +265,7 @@ func TestAPromotionWithoutARequestIsRecordedAsAnOutstandingPublication(t *testin
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	forge := &fakeForge{}
+	forge := &orchestratortest.Forge{}
 	run := &activeRun{
 		pipeline:   Pipeline{Store: store, Publisher: forge},
 		publishing: true,
@@ -280,8 +281,8 @@ func TestAPromotionWithoutARequestIsRecordedAsAnOutstandingPublication(t *testin
 	if err := run.publishIntegration(context.Background()); err != nil {
 		t.Fatalf("publishIntegration() error = %v", err)
 	}
-	if len(forge.merges) != 0 {
-		t.Fatalf("forge merges = %#v, want nothing asked of the forge without a request to merge", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("forge merges = %#v, want nothing asked of the forge without a request to merge", forge.Merges)
 	}
 	for _, want := range []string{"holds no pull request for branch " + state.Branch, "nothing was asked of the forge", "yoyo reconcile"} {
 		if !strings.Contains(run.outcome.PublishFailure, want) {
@@ -519,7 +520,7 @@ func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
 	}
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	forge := &fakeForge{number: 7}
+	forge := &orchestratortest.Forge{Number: 7}
 	reconciler := Reconciler{
 		Tracker:   newOutcomeTracker(),
 		Worktrees: newObserver(t, repository, worktreeRoot),
@@ -527,8 +528,8 @@ func TestReconcileArmsNothingWithoutTheRecordedApproval(t *testing.T) {
 		Publisher: forge,
 	}
 	recovery := reconciler.armRecoveredMerge(context.Background(), unapproved, runstate.PullRequest{Number: 7, HeadCommit: rearmedCommit}, PublicationRecovery{RunID: unapproved.RunID})
-	if recovery.Armed || len(forge.merges) != 0 {
-		t.Fatalf("recovery = %#v, merges = %#v; want nothing armed without an approving verdict", recovery, forge.merges)
+	if recovery.Armed || len(forge.Merges) != 0 {
+		t.Fatalf("recovery = %#v, merges = %#v; want nothing armed without an approving verdict", recovery, forge.Merges)
 	}
 	if !strings.Contains(recovery.Failure, `review decision "repair"`) || !strings.Contains(recovery.Failure, "nothing authorizes the merge") {
 		t.Errorf("failure = %q, want the missing approval named", recovery.Failure)
@@ -755,7 +756,7 @@ func TestReconcileReportsAPromotionWhoseRequestTheForgeDoesNotHold(t *testing.T)
 		Tracker:   newOutcomeTracker(),
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     store,
-		Publisher: &fakeForge{stateErr: errors.New("no pull request exists for branch " + state.Branch)},
+		Publisher: &orchestratortest.Forge{StateErr: errors.New("no pull request exists for branch " + state.Branch)},
 	}
 	recoveries, err := reconciler.RecoverPublications(context.Background())
 	if err != nil {

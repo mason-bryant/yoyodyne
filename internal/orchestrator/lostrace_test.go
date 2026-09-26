@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -18,11 +19,11 @@ import (
 // lands somebody else's work on the target branch as the verdict is given. That
 // is the window a busy main opens: the change is approved, and by the time it is
 // promoted the target is somewhere else.
-func movingTargetReviewer(t *testing.T, repository string, provider *fakeBackend, races int) {
+func movingTargetReviewer(t *testing.T, repository string, provider *orchestratortest.Backend, races int) {
 	t.Helper()
-	inner := provider.run
+	inner := provider.Respond
 	reviews := 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := inner(request)
 		if err != nil || request.Role != domain.RoleReviewer {
 			return result, err
@@ -58,31 +59,31 @@ func TestARunWhoseReplaysKeepPassingLandsThroughFourLostRaces(t *testing.T) {
 			t.Parallel()
 
 			repository := pipelineRepository(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-			provider := roleBackend(implementsFeature, approveVerdict)
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := orchestratortest.RoleBackend(implementsFeature, approveVerdict)
 			movingTargetReviewer(t, repository, provider, 4)
 			pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 			pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = budget
 
-			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 			if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
 				t.Fatalf("Run() outcome = %#v, want the change landed and the item closed", outcome)
 			}
-			if outcome.Blocked || tracker.blocked {
-				t.Fatalf("blocked = %t / %t (%q), want a lost race never to block the item", outcome.Blocked, tracker.blocked, tracker.blockReason)
+			if outcome.Blocked || tracker.Blocked {
+				t.Fatalf("blocked = %t / %t (%q), want a lost race never to block the item", outcome.Blocked, tracker.Blocked, tracker.BlockReason)
 			}
 			if outcome.IntegrationRetries != 4 || outcome.ChargedReplays != 0 {
 				t.Fatalf("lost races = %d, charged replays = %d; want four races recorded and none charged", outcome.IntegrationRetries, outcome.ChargedReplays)
 			}
 			// Every replay re-earned the gate: a fresh independent review each time,
 			// and the developer never asked for anything.
-			if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 5 {
+			if reviews := provider.RequestsForRole(domain.RoleReviewer); len(reviews) != 5 {
 				t.Fatalf("reviewer invocations = %d, want the first verdict and one per replay", len(reviews))
 			}
-			if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
+			if developers := provider.RequestsForRole(domain.RoleDeveloper); len(developers) != 1 {
 				t.Fatalf("developer invocations = %d, want 1", len(developers))
 			}
 			for race := 1; race <= 4; race++ {
@@ -103,7 +104,7 @@ func TestARunWhoseReplaysKeepPassingLandsThroughFourLostRaces(t *testing.T) {
 			if state.ReplayUnjudged {
 				t.Fatal("replay_unjudged is still set on a run that landed")
 			}
-			record, err := store.Triage().Counters(tracker.item.ID)
+			record, err := store.Triage().Counters(tracker.Item.ID)
 			if err != nil {
 				t.Fatalf("Counters() error = %v", err)
 			}
@@ -116,11 +117,11 @@ func TestARunWhoseReplaysKeepPassingLandsThroughFourLostRaces(t *testing.T) {
 
 // scriptedRaces moves the target branch as the reviewer gives the verdicts
 // numbered in moves, so a test can say which approvals lose their race.
-func scriptedRaces(t *testing.T, repository string, provider *fakeBackend, moves ...int) {
+func scriptedRaces(t *testing.T, repository string, provider *orchestratortest.Backend, moves ...int) {
 	t.Helper()
-	inner := provider.run
+	inner := provider.Respond
 	reviews := 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		result, err := inner(request)
 		if err != nil || request.Role != domain.RoleReviewer {
 			return result, err
@@ -149,28 +150,28 @@ func TestAReplayThatStopsOnTheChangePastTheBudgetStopsThere(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// Verdicts: approve (loses race 1), repair (replay 1 charged), approve (loses
 	// race 2), repair (replay 2 charged past the budget).
-	provider := roleBackend(implementsFeature, approveVerdict, repairVerdict, approveVerdict, repairVerdict)
+	provider := orchestratortest.RoleBackend(implementsFeature, approveVerdict, repairVerdict, approveVerdict, repairVerdict)
 	scriptedRaces(t, repository, provider, 1, 3)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 1
 	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 5
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "2 of 1 permitted replay stop(s) spent") || !strings.Contains(err.Error(), "independent review requires repair") {
 		t.Fatalf("Run() error = %v, want the second charged replay to stop the run on its repair verdict", err)
 	}
 	if !outcome.Blocked || outcome.Integration != nil {
 		t.Fatalf("Run() outcome = %#v, want a blocked run with nothing promoted", outcome)
 	}
-	if !strings.Contains(tracker.blockReason, "Replays that stopped on the change: 2 of 1 permitted") ||
-		!strings.Contains(tracker.blockReason, "Races lost to the moving target: 2") {
-		t.Fatalf("blocker = %q", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "Replays that stopped on the change: 2 of 1 permitted") ||
+		!strings.Contains(tracker.BlockReason, "Races lost to the moving target: 2") {
+		t.Fatalf("blocker = %q", tracker.BlockReason)
 	}
 	// The first charged replay was repaired, and the second was not handed back.
-	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 2 {
+	if developers := provider.RequestsForRole(domain.RoleDeveloper); len(developers) != 2 {
 		t.Fatalf("developer invocations = %d, want the first attempt and the one repair the first charged replay bought", len(developers))
 	}
 	state, err := store.Load(outcome.RunID)
@@ -188,8 +189,8 @@ func TestAtBudgetZeroTheFirstReplayThatFailsItsChecksStopsTheRun(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(implementsFeature, approveVerdict)
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(implementsFeature, approveVerdict)
 	scriptedRaces(t, repository, provider, 1)
 	// The check passes on the first attempt and fails on every run after it, so
 	// the replayed change is the one that fails.
@@ -198,14 +199,14 @@ func TestAtBudgetZeroTheFirstReplayThatFailsItsChecksStopsTheRun(t *testing.T) {
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{check})
 	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "1 of 0 permitted replay stop(s) spent") {
 		t.Fatalf("Run() error = %v, want the failing replay to stop the run", err)
 	}
 	if !outcome.Blocked || outcome.Integration != nil {
 		t.Fatalf("Run() outcome = %#v, want a blocked run with nothing promoted", outcome)
 	}
-	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
+	if developers := provider.RequestsForRole(domain.RoleDeveloper); len(developers) != 1 {
 		t.Fatalf("developer invocations = %d, want nothing handed back", len(developers))
 	}
 	state, err := store.Load(outcome.RunID)

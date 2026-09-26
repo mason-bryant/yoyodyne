@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -23,18 +24,18 @@ func TestReportsAreCollectedWithoutChangingWhatTheRunDid(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict+"\n\n"+reportBlock(`{"severity":"note","message":"the fixture repository declares no checks of its own"}`))
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		reportBlock(`{"severity":"warning","message":"the declared bundle version is inert; nothing reads it."}`)
 	collector := &fakeReports{}
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = collector
 	pipeline.Build = "0123456789abcdef0123456789abcdef01234567"
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -65,7 +66,7 @@ func TestReportsAreCollectedWithoutChangingWhatTheRunDid(t *testing.T) {
 		t.Fatalf("reviewer report = %#v", reported)
 	}
 	for _, collected := range collector.appended {
-		if collected.RunID != outcome.RunID || collected.WorkItemID != tracker.item.ID {
+		if collected.RunID != outcome.RunID || collected.WorkItemID != tracker.Item.ID {
 			t.Fatalf("report is not attributed to the run that made it: %#v", collected)
 		}
 		if collected.Agent != string(collected.Role) {
@@ -100,17 +101,17 @@ func TestAReportThatCannotBeCollectedNeverFailsTheRun(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	provider.developerFinalText = "implemented the work item\n\n" +
+	provider.DeveloperFinalText = "implemented the work item\n\n" +
 		reportBlock(`{"severity":"note","message":"worth knowing"}`)
 	collector := &fakeReports{err: errors.New("the report log is read-only")}
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = collector
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

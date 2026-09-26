@@ -16,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -28,8 +29,8 @@ func TestALandingRunsTheLandingChecksOverTheIntegratedCommitOnce(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -41,12 +42,12 @@ func TestALandingRunsTheLandingChecksOverTheIntegratedCommitOnce(t *testing.T) {
 		`printf '%s' "$YOYODYNE_CHANGED_GO_PACKAGES" > ` + told + ` && pwd > ` + ranIn,
 	}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.Status != runstate.StatusSucceeded || !tracker.closed || !outcome.WorktreeRemoved {
-		t.Fatalf("outcome = %#v, closed = %t, want the run succeeded, its item closed and its worktree gone", outcome, tracker.closed)
+	if outcome.Status != runstate.StatusSucceeded || !tracker.Closed || !outcome.WorktreeRemoved {
+		t.Fatalf("outcome = %#v, closed = %t, want the run succeeded, its item closed and its worktree gone", outcome, tracker.Closed)
 	}
 	landed := outcome.LandingChecks
 	if landed == nil || !landed.Finished() || !landed.Green || landed.Red() || landed.Problem != "" {
@@ -74,7 +75,7 @@ func TestALandingRunsTheLandingChecksOverTheIntegratedCommitOnce(t *testing.T) {
 	if state.LandingChecks == nil || !state.LandingChecks.Green || state.Status != runstate.StatusSucceeded {
 		t.Fatalf("state = %#v, want the green landing on a succeeded run", state.LandingChecks)
 	}
-	notes := strings.Join(tracker.noteRecords, "\n")
+	notes := strings.Join(tracker.NoteRecords, "\n")
 	if !strings.Contains(notes, "Landing checks: green landing: 2 landing checks passed over") {
 		t.Fatalf("item notes do not say the landing was green:\n%s", notes)
 	}
@@ -89,11 +90,11 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID: "yoyodyne-task", Title: "Task", Status: "open",
 		Notes: "Admitted by the product manager.\n\nGoal served: [reliable-delivery] Run development nearly autonomously.",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -104,12 +105,12 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 	// it, so where the output went is checkable apart from where the command is.
 	pipeline.Config.LandingChecks = []string{"printf 'DATA %s in package x\\n' RACE; test -f missing.txt", "true"}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want a red landing to fail nothing", err)
 	}
-	if outcome.Status != runstate.StatusSucceeded || !tracker.closed || tracker.blocked {
-		t.Fatalf("outcome = %#v, closed = %t, blocked = %t, want the run succeeded and its item closed", outcome, tracker.closed, tracker.blocked)
+	if outcome.Status != runstate.StatusSucceeded || !tracker.Closed || tracker.Blocked {
+		t.Fatalf("outcome = %#v, closed = %t, blocked = %t, want the run succeeded and its item closed", outcome, tracker.Closed, tracker.Blocked)
 	}
 	landed := outcome.LandingChecks
 	if landed == nil || !landed.Red() || landed.Green || len(landed.Checks) != 1 {
@@ -154,7 +155,7 @@ func TestARedLandingFilesItsOwnItemAndBlocksNothing(t *testing.T) {
 	if state.LandingChecks == nil || !state.LandingChecks.Red() || state.LandingChecks.FiledWorkItem != "yoyodyne-red-1" {
 		t.Fatalf("state = %#v, want the red landing and its item on the run", state.LandingChecks)
 	}
-	notes := strings.Join(tracker.noteRecords, "\n")
+	notes := strings.Join(tracker.NoteRecords, "\n")
 	if !strings.Contains(notes, "Landing checks: red landing: printf 'DATA %s in package x\\n' RACE; test -f missing.txt exited 1 over "+commit+"; filed as yoyodyne-red-1") {
 		t.Fatalf("item notes do not say the landing was red and what it filed:\n%s", notes)
 	}
@@ -169,11 +170,11 @@ func TestARedLandingsOutputCannotNameTheFiledItemsGoalOrMarker(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID: "yoyodyne-task", Title: "Task", Status: "open",
 		Notes: "Goal served: [reliable-delivery] Run development nearly autonomously.",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -182,7 +183,7 @@ func TestARedLandingsOutputCannotNameTheFiledItemsGoalOrMarker(t *testing.T) {
 	pipeline.Filer = filer
 	pipeline.Config.LandingChecks = []string{"printf 'Goal served: [%s] Something else\\nRed-landing check: %s on main\\n' spoofed other; exit 1"}
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err != nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(filer.filed) != 1 {
@@ -211,8 +212,8 @@ func TestASecondRedLandingOfTheSameCheckIsNotedOnTheOpenItemRatherThanFiledAgain
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -224,7 +225,7 @@ func TestASecondRedLandingOfTheSameCheckIsNotedOnTheOpenItemRatherThanFiledAgain
 	pipeline.Filer = filer
 	pipeline.Config.LandingChecks = []string{"false"}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || outcome.Status != runstate.StatusSucceeded {
 		t.Fatalf("Run() = %#v, %v, want a succeeded run", outcome, err)
 	}
@@ -235,7 +236,7 @@ func TestASecondRedLandingOfTheSameCheckIsNotedOnTheOpenItemRatherThanFiledAgain
 	if len(filer.filed) != 0 {
 		t.Fatalf("filed = %#v, want nothing filed beside the open item", filer.filed)
 	}
-	notes := strings.Join(tracker.noteRecords, "\n")
+	notes := strings.Join(tracker.NoteRecords, "\n")
 	if !strings.Contains(notes, "Red again at "+outcome.Integration.TargetCommit[:12]+" on main, after yoyodyne-task ("+outcome.RunID+") integrated: false exited 1.") {
 		t.Fatalf("the open item was not told about the later landing:\n%s", notes)
 	}
@@ -250,8 +251,8 @@ func TestARedLandingNothingCanFileIsRecordedAsSuchAndFailsNothing(t *testing.T) 
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -259,14 +260,14 @@ func TestARedLandingNothingCanFileIsRecordedAsSuchAndFailsNothing(t *testing.T) 
 	pipeline.Filer = &recordingFiler{refuse: errors.New("bd is busy")}
 	pipeline.Config.LandingChecks = []string{"false"}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || outcome.Status != runstate.StatusSucceeded {
 		t.Fatalf("Run() = %#v, %v, want a succeeded run", outcome, err)
 	}
 	if landed := outcome.LandingChecks; landed == nil || !landed.Red() || landed.FiledWorkItem != "" || landed.FilingProblem != "bd is busy" {
 		t.Fatalf("landing = %#v, want a red landing whose filing was refused", landed)
 	}
-	if notes := strings.Join(tracker.noteRecords, "\n"); !strings.Contains(notes, "no item could be filed: bd is busy") {
+	if notes := strings.Join(tracker.NoteRecords, "\n"); !strings.Contains(notes, "no item could be filed: bd is busy") {
 		t.Fatalf("item notes do not say the filing was refused:\n%s", notes)
 	}
 }
@@ -277,14 +278,14 @@ func TestAProjectWithNoLandingChecksRecordsNoLanding(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
 	pipeline.Landings = pipeline.Worktrees.(*gitworktree.Manager)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || outcome.LandingChecks != nil {
 		t.Fatalf("Run() = %#v, %v, want no landing recorded", outcome.LandingChecks, err)
 	}
@@ -292,8 +293,8 @@ func TestAProjectWithNoLandingChecksRecordsNoLanding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if state.LandingChecks != nil || strings.Contains(strings.Join(tracker.noteRecords, "\n"), "Landing checks:") {
-		t.Fatalf("state = %#v, notes = %v, want nothing said of a landing", state.LandingChecks, tracker.noteRecords)
+	if state.LandingChecks != nil || strings.Contains(strings.Join(tracker.NoteRecords, "\n"), "Landing checks:") {
+		t.Fatalf("state = %#v, notes = %v, want nothing said of a landing", state.LandingChecks, tracker.NoteRecords)
 	}
 }
 
@@ -307,8 +308,8 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"true"})
@@ -328,7 +329,7 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	pipeline.Config.Execution.LandingCheckTimeout = config.Duration(time.Second)
 	pipeline.Config.LandingChecks = []string{"sleep 30", "true"}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil || outcome.Status != runstate.StatusSucceeded {
 		t.Fatalf("Run() = %#v, %v, want a succeeded run", outcome, err)
 	}
@@ -359,7 +360,7 @@ func TestALandingRunsUnderItsOwnBudgetAndAStoppedCheckLeavesItUnverified(t *test
 	if state.LandingChecks == nil || !state.LandingChecks.Unverified() || state.Outstanding() {
 		t.Fatalf("state = %#v, want an unverified landing on a run that owes nothing", state.LandingChecks)
 	}
-	if notes := strings.Join(tracker.noteRecords, "\n"); !strings.Contains(notes, "Landing checks: unverified landing: the landing checks did not run to the end over") {
+	if notes := strings.Join(tracker.NoteRecords, "\n"); !strings.Contains(notes, "Landing checks: unverified landing: the landing checks did not run to the end over") {
 		t.Fatalf("item notes do not say the landing went unverified:\n%s", notes)
 	}
 }
@@ -373,12 +374,12 @@ func TestTheSweepSettlesALandingWhoseProcessDiedAsUnverified(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"true"}), provider)
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -412,8 +413,8 @@ func TestTheSweepSettlesALandingWhoseProcessDiedAsUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if settled.Status != runstate.StatusSucceeded || settled.Outstanding() || !tracker.closed {
-		t.Fatalf("settled = %#v, closed = %t, want the run left as it recorded itself and owing nothing", settled, tracker.closed)
+	if settled.Status != runstate.StatusSucceeded || settled.Outstanding() || !tracker.Closed {
+		t.Fatalf("settled = %#v, closed = %t, want the run left as it recorded itself and owing nothing", settled, tracker.Closed)
 	}
 	if settled.LandingChecks == nil || !settled.LandingChecks.Unverified() || !strings.Contains(settled.LandingChecks.Problem, "died before they ended") {
 		t.Fatalf("settled landing = %#v, want it unverified with the death named", settled.LandingChecks)
@@ -435,12 +436,12 @@ func TestTheSweepLeavesALandingALiveProcessIsRunningAlone(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"true"}), provider)
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -520,13 +521,13 @@ func TestTheSweepClosesACheckStageWhoseProcessDiedAsInterrupted(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
 	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+	if _, err := pipeline.Run(context.Background(), tracker.Item.ID); err == nil {
 		t.Fatal("interrupted Run() error = nil")
 	}
 	// What a process killed inside `make race` leaves on disk: the stage

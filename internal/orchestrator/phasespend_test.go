@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -34,15 +35,15 @@ func TestEveryPricedInvocationOfARunAttributesToThePhaseThatSpentIt(t *testing.T
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := pricingBackend(0, []float64{12.0, 4.0}, 1.0, repairVerdict, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	price, err := store.Price(tracker.item.ID)
+	price, err := store.Price(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Price() error = %v", err)
 	}
@@ -86,7 +87,7 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The provider drops the first invocation mid-response, having already spent
 	// what it spent, and the run is relaunched into the same attempt. Only the
 	// review that follows buys a repair.
@@ -94,7 +95,7 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -102,7 +103,7 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 		t.Fatalf("run made %d relaunch(es) and %d repair attempt(s), want one of each",
 			outcome.TransientRelaunches, outcome.RepairAttempts)
 	}
-	price, err := store.Price(tracker.item.ID)
+	price, err := store.Price(tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Price() error = %v", err)
 	}
@@ -127,20 +128,21 @@ func TestAFailedDeveloperInvocationIsReissuedIntoItsOwnAttempt(t *testing.T) {
 	}
 }
 
-// pricingBackend serves the developer and the reviewer the way roleBackend does
-// and, unlike it, records each invocation the way the provider adapter does: one
-// terminal event carrying the role the invocation was made as and the figure the
-// provider reported for it. That is what makes an assertion about the phase
-// split an assertion about the pipeline rather than about a log a test wrote.
+// pricingBackend serves the developer and the reviewer the way
+// orchestratortest.RoleBackend does and, unlike it, records each invocation the
+// way the provider adapter does: one terminal event carrying the role the
+// invocation was made as and the figure the provider reported for it. That is
+// what makes an assertion about the phase split an assertion about the pipeline
+// rather than about a log a test wrote.
 //
 // deaths is how many of the developer's first invocations the provider drops
 // mid-response, which is the death the harness answers by reissuing into the
 // same attempt. developerCosts is what each developer invocation costs in turn,
 // the last repeating, and reviewerCost is what each review costs.
-func pricingBackend(deaths int, developerCosts []float64, reviewerCost float64, verdicts ...string) *fakeBackend {
-	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+func pricingBackend(deaths int, developerCosts []float64, reviewerCost float64, verdicts ...string) *orchestratortest.Backend {
+	provider := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
 	developed, reviews, died := 0, 0, 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		switch request.Role {
 		case domain.RoleDeveloper:
 			cost := developerCosts[min(developed, len(developerCosts)-1)]
@@ -153,7 +155,7 @@ func pricingBackend(deaths int, developerCosts []float64, reviewerCost float64, 
 				}
 				return backend.RunResult{
 					Backend:          domain.BackendClaudeCode,
-					SessionID:        provider.developerSession,
+					SessionID:        provider.DeveloperSession,
 					IsError:          true,
 					StopReason:       "api_error",
 					FinalText:        connectionClosedMessage,
@@ -171,7 +173,7 @@ func pricingBackend(deaths int, developerCosts []float64, reviewerCost float64, 
 			}
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
-				SessionID:     provider.developerSession,
+				SessionID:     provider.DeveloperSession,
 				ResolvedModel: developerResolved,
 				FinalText:     "implemented the work item",
 				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
@@ -189,7 +191,7 @@ func pricingBackend(deaths int, developerCosts []float64, reviewerCost float64, 
 			}
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
-				SessionID:     provider.reviewerSession,
+				SessionID:     provider.ReviewerSession,
 				ResolvedModel: reviewerResolved,
 				FinalText:     verdict,
 				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},

@@ -10,6 +10,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 )
 
 // A reviewer judging an extraction is given the source file as the change's own
@@ -34,7 +35,7 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 	runPipelineGit(t, repository, "commit", "-m", "the guide as the branch will be cut from it")
 	base := gitLine(t, repository, "rev-parse", "HEAD")
 
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Extract the settings section",
 		Description:        "Move the Settings section of docs/guide.md into docs/settings.md.",
@@ -42,7 +43,7 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 		Status:             "open",
 	}}
 	var reviewerPrompts []string
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "settings.md"), []byte(extracted), 0o600); err != nil {
 			return err
 		}
@@ -55,8 +56,8 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 		runPipelineGit(t, repository, "commit", "-am", "an unrelated promotion rewrites the guide")
 		return nil
 	}, approveVerdict)
-	develop := provider.run
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	develop := provider.Respond
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role == domain.RoleReviewer {
 			reviewerPrompts = append(reviewerPrompts, request.Prompt)
 		}
@@ -64,7 +65,7 @@ func TestReviewerJudgesAnExtractionAgainstTheSourceAtTheChangesBase(t *testing.T
 	}
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

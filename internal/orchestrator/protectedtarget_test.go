@@ -11,6 +11,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -28,8 +29,8 @@ import (
 type protectedRun struct {
 	repository string
 	remote     string
-	tracker    *fakeTracker
-	forge      *fakeForge
+	tracker    *orchestratortest.Tracker
+	forge      *orchestratortest.Forge
 	pipeline   Pipeline
 	store      *runstate.Store
 	// atMerge is local main when the forge was asked to merge, or "" if it never
@@ -37,19 +38,19 @@ type protectedRun struct {
 	atMerge string
 }
 
-func newProtectedRun(t *testing.T, forge *fakeForge) *protectedRun {
+func newProtectedRun(t *testing.T, forge *orchestratortest.Forge) *protectedRun {
 	t.Helper()
 	repository, remote := publishedRepository(t)
 	protectBranch(t, remote, "main")
-	forge.remote = remote
+	forge.Remote = remote
 	run := &protectedRun{
 		repository: repository,
 		remote:     remote,
-		tracker:    &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
+		tracker:    &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
 		forge:      forge,
 	}
-	forge.onMerge = func() { run.atMerge = publishedCommit(t, repository, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge.OnMerge = func() { run.atMerge = publishedCommit(t, repository, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	run.pipeline, run.store = newPublishingPipeline(t, repository, run.tracker, provider, forge, []string{"exit 0"})
@@ -73,20 +74,20 @@ func (r *protectedRun) assertMainNotAhead(t *testing.T) {
 }
 
 func runGitQuiet(directory string, arguments ...string) error {
-	_, err := (&fakeForge{remote: directory}).Git(arguments...)
+	_, err := (&orchestratortest.Forge{Remote: directory}).Git(arguments...)
 	return err
 }
 
 func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *testing.T) {
 	t.Parallel()
 
-	run := newProtectedRun(t, &fakeForge{protection: publish.BranchProtection{Protected: true, By: "ruleset"}})
+	run := newProtectedRun(t, &orchestratortest.Forge{TargetProtection: publish.BranchProtection{Protected: true, By: "ruleset"}})
 	outcome, err := run.pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(run.forge.protectionAsked) == 0 || run.forge.protectionAsked[0] != "main" {
-		t.Fatalf("protection asked about %v, want the target branch", run.forge.protectionAsked)
+	if len(run.forge.ProtectionAsked) == 0 || run.forge.ProtectionAsked[0] != "main" {
+		t.Fatalf("protection asked about %v, want the target branch", run.forge.ProtectionAsked)
 	}
 	// The forge was asked to merge while local main still stood at the base: the
 	// promotion wrote nothing to it first.
@@ -122,8 +123,8 @@ func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *te
 	if state.Integration == nil || !state.Integration.ThroughPullRequest {
 		t.Errorf("durable integration = %#v, want the landing recorded as through the pull request", state.Integration)
 	}
-	if !strings.Contains(run.tracker.notes, "main is protected on the forge by ruleset") {
-		t.Errorf("tracker notes do not say which path the protected target took:\n%s", run.tracker.notes)
+	if !strings.Contains(run.tracker.Notes, "main is protected on the forge by ruleset") {
+		t.Errorf("tracker notes do not say which path the protected target took:\n%s", run.tracker.Notes)
 	}
 	run.assertMainNotAhead(t)
 }
@@ -133,7 +134,7 @@ func TestAProtectedTargetLandsThroughItsPullRequestAndOnlyFastForwardsMain(t *te
 func TestAnUnaskableForgeTakesTheProtectedPath(t *testing.T) {
 	t.Parallel()
 
-	run := newProtectedRun(t, &fakeForge{protectionErr: errors.New("gh: Resource not accessible by integration (HTTP 403)")})
+	run := newProtectedRun(t, &orchestratortest.Forge{ProtectionErr: errors.New("gh: Resource not accessible by integration (HTTP 403)")})
 	outcome, err := run.pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -158,9 +159,9 @@ func TestAnUnaskableForgeTakesTheProtectedPath(t *testing.T) {
 func TestARefusedMergeOnAProtectedTargetLeavesMainWhereTheForgeHasIt(t *testing.T) {
 	t.Parallel()
 
-	run := newProtectedRun(t, &fakeForge{
-		protection: publish.BranchProtection{Protected: true, By: "branch protection"},
-		mergeErr: publish.MergeRefused{
+	run := newProtectedRun(t, &orchestratortest.Forge{
+		TargetProtection: publish.BranchProtection{Protected: true, By: "branch protection"},
+		MergeErr: publish.MergeRefused{
 			Number: 1,
 			Method: publish.MergeCommit,
 			Status: "BLOCKED",
@@ -171,15 +172,15 @@ func TestARefusedMergeOnAProtectedTargetLeavesMainWhereTheForgeHasIt(t *testing.
 	if err == nil {
 		t.Fatalf("Run() = %#v, want the run stopped on the unlanded change", outcome)
 	}
-	if outcome.WorkItemClosed || run.tracker.closed {
-		t.Fatalf("an unmerged change closed the item as integrated: %q", run.tracker.closeReason)
+	if outcome.WorkItemClosed || run.tracker.Closed {
+		t.Fatalf("an unmerged change closed the item as integrated: %q", run.tracker.CloseReason)
 	}
-	if !run.tracker.blocked {
+	if !run.tracker.Blocked {
 		t.Fatal("the unlanded change was not handed to a person")
 	}
 	for _, want := range []string{"did not merge it", "was not moved", "approving review is required", "triage rearm"} {
-		if !strings.Contains(run.tracker.blockReason, want) {
-			t.Errorf("blocker does not say %q:\n%s", want, run.tracker.blockReason)
+		if !strings.Contains(run.tracker.BlockReason, want) {
+			t.Errorf("blocker does not say %q:\n%s", want, run.tracker.BlockReason)
 		}
 	}
 	if local := publishedCommit(t, run.repository, "main"); local != outcome.BaseCommit {
@@ -264,11 +265,11 @@ func TestAnUnprotectedTargetIsStillPromotedLocallyFirst(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	var atMerge string
-	forge := &fakeForge{remote: remote}
-	forge.onMerge = func() { atMerge = publishedCommit(t, repository, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote}
+	forge.OnMerge = func() { atMerge = publishedCommit(t, repository, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -296,12 +297,12 @@ func TestAProtectedTargetThatMovesBeforeTheMergeIsReplayedOnto(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first merge is dropped and the remote target moves during the wait
 	// that follows, so the re-read in front of the retried merge finds it moved.
-	forge := &fakeForge{remote: remote, mergeResets: 1, protection: publish.BranchProtection{Protected: true, By: "ruleset"}}
-	forge.afterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote, MergeResets: 1, TargetProtection: publish.BranchProtection{Protected: true, By: "ruleset"}}
+	forge.AfterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -311,8 +312,8 @@ func TestAProtectedTargetThatMovesBeforeTheMergeIsReplayedOnto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.IntegrationRetries != 1 || len(forge.merges) != 1 {
-		t.Fatalf("integration retries = %d, merges = %d; want one replay and one merge of the replayed change", outcome.IntegrationRetries, len(forge.merges))
+	if outcome.IntegrationRetries != 1 || len(forge.Merges) != 1 {
+		t.Fatalf("integration retries = %d, merges = %d; want one replay and one merge of the replayed change", outcome.IntegrationRetries, len(forge.Merges))
 	}
 	if outcome.PublishFailure != "" || !outcome.WorkItemClosed {
 		t.Fatalf("outcome = %#v, want the replayed change landed cleanly", outcome)
@@ -371,7 +372,7 @@ func TestAnInterruptedLandingIsSettledOnTheForgesAnswer(t *testing.T) {
 				}
 				killed = recorded
 			})
-			provider := roleBackend(func(request backend.RunRequest) error {
+			provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			pipeline := publishing(automatic(newSharedPipeline(t, fixture.repository, fixture.worktreeRoot, fixture.store, fixture.tracker, provider, []string{"exit 0"}), provider), forge)

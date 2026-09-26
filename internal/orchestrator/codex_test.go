@@ -36,6 +36,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -50,9 +51,9 @@ func TestARunOnCodexReachesTheProviderWithThePostureItsRoleRequires(t *testing.T
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	pipeline, store := newAutomaticPipeline(t, repository, tracker,
-		roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
+		orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
 
 	// Selecting Codex in configuration, which is what this is about. The
 	// developer names it, and the pipeline the run validates before it claims
@@ -66,7 +67,7 @@ func TestARunOnCodexReachesTheProviderWithThePostureItsRoleRequires(t *testing.T
 	cli := &scriptedCodexCLI{}
 	pipeline.Backend = codex.Backend{Runner: cli}
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -106,19 +107,19 @@ func TestARunNamesTheBackendWhoseCLIIsMissing(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker,
-		roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
+		orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict), []string{"exit 0"})
 	pipeline.Config.Agents["developer"] = config.AgentConfig{
 		Role: domain.RoleDeveloper, Backend: domain.BackendCodex, Model: testDeveloperModel, Instances: 1,
 	}
 	pipeline.Backend = codex.Backend{Runner: &scriptedCodexCLI{absent: true}}
 
-	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	_, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !strings.Contains(err.Error(), "codex backend is not installed") {
 		t.Fatalf("Run() error = %v, want it to name the backend the agents selected", err)
 	}
-	if tracker.claimed {
+	if tracker.Claimed {
 		t.Error("a run whose provider is not installed claimed the work item anyway")
 	}
 }
@@ -167,7 +168,7 @@ func (c *scriptedCodexCLI) Run(_ context.Context, command execution.Command, obs
 			return execution.ProcessResult{}, err
 		}
 	}
-	for _, line := range codexStream(withVerification("implemented the work item")) {
+	for _, line := range codexStream(orchestratortest.WithVerification("implemented the work item")) {
 		if observer != nil {
 			observer(execution.Output{Stream: execution.StreamStdout, Text: line})
 		}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/separation"
 )
@@ -79,7 +80,7 @@ func TestAProjectsOwnDeliveryDefinitionIsWhatANewRunExecutes(t *testing.T) {
 	configPath := projectConfigPath(t)
 	writeProjectDefinition(t, configPath, DeliveryWorkflowID, projectsOwnDelivery())
 
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.ConfigPath = configPath
 	if outcome := fixture.invoke(t, "run", pipeline); outcome.Status != runstate.StatusSucceeded {
@@ -119,7 +120,7 @@ func TestAProjectThatKeepsNoDefinitionExecutesTheBuiltIn(t *testing.T) {
 	fixture := newBaselineFixture(t, baselineItem())
 	configPath := projectConfigPath(t)
 
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.ConfigPath = configPath
 	if outcome := fixture.invoke(t, "run", pipeline); outcome.Status != runstate.StatusSucceeded {
@@ -188,7 +189,7 @@ func TestADeliveryDefinitionAProjectGotWrongStopsTheRunBeforeItClaims(t *testing
 			configPath := projectConfigPath(t)
 			path := writeProjectDefinition(t, configPath, DeliveryWorkflowID, broken.definition)
 
-			provider := roleBackend(baselineImplements, approveVerdict)
+			provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 			pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 			pipeline.ConfigPath = configPath
 			outcome, err := pipeline.Run(context.Background(), fixture.tracker.Record().Item.ID)
@@ -272,7 +273,7 @@ func TestAProjectDefinitionCannotPromoteWithoutTheGate(t *testing.T) {
 	configPath := projectConfigPath(t)
 	path := writeProjectDefinition(t, configPath, DeliveryWorkflowID, deliveryWithoutAGate)
 
-	provider := roleBackend(baselineImplements, approveVerdict)
+	provider := orchestratortest.RoleBackend(baselineImplements, approveVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.ConfigPath = configPath
 	outcome, err := pipeline.Run(context.Background(), fixture.tracker.Record().Item.ID)
