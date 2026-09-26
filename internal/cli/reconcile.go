@@ -43,6 +43,10 @@ type reconcileOutput struct {
 	// is acted on, which is the development manager's conversation; what this
 	// command reports is that the sweep found something, not what it found.
 	Docketed int `json:"docketed"`
+	// ClosedWithItem is how many docket entries this sweep closed because the item
+	// each is about is one the tracker holds as closed. A count, for the reason
+	// Docketed is one.
+	ClosedWithItem int `json:"closed_with_item"`
 	// Supervision is the whole of what this sweep made of the exchanges the roles
 	// have put to each other. Most of it is what was recovered: a round a dead
 	// process asked and never answered, a thread that ran out of rounds. The rest
@@ -78,17 +82,19 @@ type reconcileOutput struct {
 // reconcileSweep is everything one sweep found, gathered so the reporting takes
 // the sweep rather than a growing list of positional arguments.
 type reconcileSweep struct {
-	Runs          []orchestrator.Reconciliation
-	Recoveries    []orchestrator.PublicationRecovery
-	Publications  []orchestrator.PublicationRefresh
-	Settlements   []orchestrator.PublicationSettlement
-	Convergence   orchestrator.Convergence
-	Docketed      int
-	Supervision   []orchestrator.SupervisionResult
-	Stall         *watchdog.Reading
-	StallProblem  string
-	Continuations []orchestrator.WaitContinuation
-	Updates       []orchestrator.UpdateContinuation
+	Runs         []orchestrator.Reconciliation
+	Recoveries   []orchestrator.PublicationRecovery
+	Publications []orchestrator.PublicationRefresh
+	Settlements  []orchestrator.PublicationSettlement
+	Convergence  orchestrator.Convergence
+	Docketed     int
+	// ClosedWithItem is how many docket entries the sweep closed with their item.
+	ClosedWithItem int
+	Supervision    []orchestrator.SupervisionResult
+	Stall          *watchdog.Reading
+	StallProblem   string
+	Continuations  []orchestrator.WaitContinuation
+	Updates        []orchestrator.UpdateContinuation
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -173,6 +179,13 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if docketErr != nil {
 		err = errors.Join(err, docketErr)
 	}
+	// Every entry standing for an item the tracker holds as closed is closed with
+	// it, whichever process closed the item: a landing, a sweep, or a
+	// conversation. The places that close an item close its entries as they do,
+	// and this is what catches the ones they missed and the ones left standing
+	// from before any of them did.
+	closedWithItem, closedErr := closeEntriesOfClosedItems(ctx, parts)
+	err = errors.Join(err, closedErr)
 	// The exchanges the roles have put to each other are recovered here for the
 	// same reason the runs are: a process died holding something, and this is the
 	// sweep that finds out. It takes each exchange's own lease, so one a live
@@ -192,15 +205,16 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	// sweep: nothing was recorded, and the next pass decides.
 	stall, stallProblem := checkForStall(ctx, parts, *stallAfter)
 	sweep := reconcileSweep{
-		Runs:         results,
-		Recoveries:   recoveries,
-		Publications: publications,
-		Settlements:  settlements,
-		Convergence:  convergence,
-		Docketed:     docketed.Added,
-		Supervision:  supervision,
-		Stall:        stall,
-		StallProblem: stallProblem,
+		Runs:           results,
+		Recoveries:     recoveries,
+		Publications:   publications,
+		Settlements:    settlements,
+		Convergence:    convergence,
+		Docketed:       docketed.Added,
+		ClosedWithItem: closedWithItem,
+		Supervision:    supervision,
+		Stall:          stall,
+		StallProblem:   stallProblem,
 	}
 	// The runs that exited on their in-process usage-limit bound and whose
 	// deadline has since passed are continued last, after everything the sweep
@@ -410,6 +424,38 @@ func checkForStall(ctx context.Context, parts components, threshold time.Duratio
 	return &reading, ""
 }
 
+// closeEntriesOfClosedItems closes every docket entry standing for an item the
+// tracker holds as closed, and reports how many it closed. A tracker that could
+// not be listed closes nothing and is an error of the sweep's: an unread listing
+// says nothing about which items are closed. A docket with nothing standing is
+// not listed against at all, so a product with no entries asks the tracker
+// nothing.
+func closeEntriesOfClosedItems(ctx context.Context, parts components) (int, error) {
+	if parts.docket == nil {
+		return 0, nil
+	}
+	entries, err := parts.docket.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to close the entries of closed items: %w", err)
+	}
+	now := time.Now()
+	standing := false
+	for _, entry := range entries {
+		if entry.Closed == nil || !entry.Closed.Holds(now) {
+			standing = true
+			break
+		}
+	}
+	if !standing {
+		return 0, nil
+	}
+	closed, err := parts.tracker().List(ctx, "closed")
+	if err != nil {
+		return 0, fmt.Errorf("list the closed work items to close their docket entries: %w", err)
+	}
+	return docketerFrom(parts).SettleClosedItems(orchestrator.ClosedItemReasons(closed, "a reconcile sweep"))
+}
+
 // sweepSupervision takes one voice-less pass of the management loop. A product
 // whose roles have never asked each other anything has nothing here, which is
 // not a failure to sweep.
@@ -488,17 +534,18 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 	}
 	if jsonOutput {
 		output := reconcileOutput{
-			Runs:          results,
-			Recoveries:    sweep.Recoveries,
-			Publications:  publications,
-			Settlements:   sweep.Settlements,
-			Convergence:   convergence,
-			Docketed:      docketed,
-			Supervision:   sweep.Supervision,
-			Stall:         sweep.Stall,
-			StallProblem:  sweep.StallProblem,
-			Continuations: sweep.Continuations,
-			Updates:       sweep.Updates,
+			Runs:           results,
+			Recoveries:     sweep.Recoveries,
+			Publications:   publications,
+			Settlements:    sweep.Settlements,
+			Convergence:    convergence,
+			Docketed:       docketed,
+			ClosedWithItem: sweep.ClosedWithItem,
+			Supervision:    sweep.Supervision,
+			Stall:          sweep.Stall,
+			StallProblem:   sweep.StallProblem,
+			Continuations:  sweep.Continuations,
+			Updates:        sweep.Updates,
 		}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
@@ -553,6 +600,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, sweep reco
 		// stopped, on every sweep, is a line nobody reads.
 		if docketed > 0 {
 			fmt.Fprintf(stdout, "%d stopped item(s) added to the triage docket for the development manager\n", docketed)
+		}
+		if sweep.ClosedWithItem > 0 {
+			fmt.Fprintf(stdout, "%d triage docket entry(s) closed because the tracker holds their item as closed\n", sweep.ClosedWithItem)
 		}
 		for _, result := range results {
 			fmt.Fprintf(stdout, "%s (%s): %s\n", result.RunID, result.WorkItemID, result.Action)
@@ -892,7 +942,8 @@ outstanding and says so.
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development
 manager reads them. Docketing is keyed to what stopped, so sweeping twice
-dockets nothing twice.
+dockets nothing twice. Every entry standing for an item the tracker holds as
+closed is closed with its item, with the reason, and the count is reported.
 
 It also recovers the exchanges the roles have put to each other. Each one is
 taken under its own lease, so one a live process is carrying is left alone: a

@@ -67,6 +67,11 @@ package orchestrator
 // same stoppage in the same records and goes on recording nothing, because the
 // key is already there.
 //
+// Its item closing does too. An entry asks something about a work item, and a
+// closed or retired item asks nobody anything, so SettleClosedItems closes every
+// entry standing for one: where the item is closed, and on every reconcile sweep
+// over the tracker's closed items, which catches whatever closed it elsewhere.
+//
 // # What puts one back
 //
 // Two things, and neither is the scan changing its mind. The same work stopping
@@ -108,9 +113,10 @@ import (
 // Docket is the durable docket entries are recorded into and read back from.
 // It is satisfied by runstate.DocketStore.
 //
-// Close is here for the one closure the harness makes rather than a role: a
-// publication entry whose publication a later sweep finished. Every other
-// closure is a triage decision, recorded in the conversation that made it.
+// Close is here for the closures the harness makes rather than a role: a
+// publication entry whose publication a later sweep finished, an unready item
+// the pull found ready, and an entry whose item was closed. Every other closure
+// is a triage decision, recorded in the conversation that made it.
 type Docket interface {
 	RecordOnce(entry triage.Entry) (bool, error)
 	List() ([]triage.Entry, error)
@@ -898,6 +904,98 @@ func (d Docketer) SettleUnreadyItems(reread func(workItemID string) UnreadyReadi
 // carries. It is not one of the development manager's decisions, and is worded
 // so nobody reads it as one.
 const clearedUnreadyDecision = "no-longer-unready"
+
+// closedItemDecision is the word a closure made by SettleClosedItems carries.
+// Like the two beside it it is the harness's and not a triage decision, and it
+// says what settled the entry: the item it is about left the backlog.
+const closedItemDecision = "item-closed"
+
+// SettleClosedItem closes every entry standing on the docket for one work item,
+// because the item has been closed or retired. It reports how many it closed.
+// The reason is what the entries are closed with, and says who closed the item
+// and how, in the words of whatever closed it.
+func (d Docketer) SettleClosedItem(workItemID, reason string) (int, error) {
+	return d.SettleClosedItems(map[string]string{workItemID: reason})
+}
+
+// SettleClosedItems closes every entry standing on the docket whose work item is
+// among those given, and reports how many it closed. The map is the items the
+// tracker holds as closed, each with the reason its entries are closed with.
+//
+// Nothing did this before, and an entry outlived its item for good. A stoppage
+// settled by a re-run that landed, by the product manager closing the item, or by
+// the item being retired stayed on the docket, because the only things that
+// closed an entry were a decision about that entry and the two settlements above.
+// On 2026-09-25 125 of the 187 open entries belonged to closed items, and the
+// development manager's bounded listing showed her 11 of them: the dead ones
+// crowded out the stoppages that were still somebody's to decide.
+//
+// Every class is closed, the unready item included, because every one of them
+// asks a question about the item and a closed item asks nothing. A decision
+// standing over an entry is left as it is, since that entry is already off the
+// docket; one that has lapsed is not, and the entry is closed here.
+func (d Docketer) SettleClosedItems(closed map[string]string) (int, error) {
+	if d.Docket == nil {
+		return 0, errors.New("a triage docket is required to close the entries of closed items")
+	}
+	if len(closed) == 0 {
+		return 0, nil
+	}
+	entries, err := d.Docket.List()
+	if err != nil {
+		return 0, fmt.Errorf("read the triage docket to close the entries of closed items: %w", err)
+	}
+	now := d.now().UTC()
+	settled := 0
+	var problems []error
+	for _, entry := range entries {
+		reason, isClosed := closed[entry.WorkItemID]
+		if !isClosed {
+			continue
+		}
+		if entry.Closed != nil && entry.Closed.Holds(now) {
+			continue
+		}
+		// Never before the entry itself, which the docket would refuse as a decision
+		// about some earlier stoppage.
+		closedAt := now
+		if closedAt.Before(entry.RecordedAt) {
+			closedAt = entry.RecordedAt
+		}
+		took, err := d.Docket.Close(triage.Closure{
+			SchemaVersion: triage.ClosureSchemaVersion,
+			Key:           entry.Key,
+			ProductID:     entry.ProductID,
+			RunID:         entry.RunID,
+			WorkItemID:    entry.WorkItemID,
+			Decision:      closedItemDecision,
+			Reason:        singleLine(reason, triage.MaxMessageBytes),
+			DecidedBy:     "the harness, closing the entry with its item",
+			ClosedAt:      closedAt,
+		})
+		if err != nil {
+			problems = append(problems, fmt.Errorf("close the %s entry of %s with its item: %w", entry.Class, entry.WorkItemID, err))
+			continue
+		}
+		if took {
+			settled++
+		}
+	}
+	return settled, errors.Join(problems...)
+}
+
+// ClosedItemReasons is the reason each item the tracker holds as closed has its
+// docket entries closed with, as a sweep that read the tracker states it.
+func ClosedItemReasons(items []beads.WorkItem, readBy string) map[string]string {
+	reasons := make(map[string]string, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		reasons[item.ID] = fmt.Sprintf("the tracker holds %s as closed, as %s read it, so nothing about this stoppage is anybody's to decide", item.ID, readBy)
+	}
+	return reasons
+}
 
 // samePrerequisites reports an entry quoting exactly what a reading found, in
 // the same order: the same kinds and the same words. The entry's copy is bounded

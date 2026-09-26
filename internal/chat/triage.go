@@ -255,6 +255,13 @@ type TriageEntries interface {
 	Close(ctx context.Context, closure DocketClosure) (int, error)
 }
 
+// ClosedItemEntries closes the docket entries standing for one work item once
+// the item is closed or retired, and reports how many it closed. The reason is
+// what the entries are closed with.
+type ClosedItemEntries interface {
+	CloseForItem(ctx context.Context, workItemID, reason string) (int, error)
+}
+
 // DocketClosure is one recorded triage decision as the docket takes it: which
 // stoppage was decided, which of that run's entries the decision answers, and
 // the reasoning to keep beside them. Who decided is filled in by the session,

@@ -233,6 +233,27 @@ func conversationDocketEntries(parts components, role domain.AgentRole) chat.Tri
 	}
 }
 
+// conversationClosedItems wires the docket for every role that may close or
+// retire an item, so the entries standing for an item leave the docket with it.
+// A product whose parts carry no docket wires nothing, and the reconcile sweep
+// closes those entries instead.
+func conversationClosedItems(parts components) chat.ClosedItemEntries {
+	if parts.docket == nil {
+		return nil
+	}
+	return conversationClosedItemLog{docketer: orchestrator.Docketer{Docket: parts.docket}}
+}
+
+// conversationClosedItemLog closes the entries of one closed item through the
+// docketer, which is the one place the harness closes an entry with its item.
+type conversationClosedItemLog struct {
+	docketer orchestrator.Docketer
+}
+
+func (l conversationClosedItemLog) CloseForItem(_ context.Context, workItemID, reason string) (int, error) {
+	return l.docketer.SettleClosedItem(workItemID, reason)
+}
+
 // conversationDocketLog closes the entries one recorded decision settled. What the
 // conversation supplies is the decision and the reasoning; which entries those
 // answer, when the closing happened, and how long a decision to wait holds, are

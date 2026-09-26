@@ -445,6 +445,56 @@ func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
 	}
 }
 
+// closedItemDocket records which items had their docket entries closed and why.
+type closedItemDocket struct {
+	closed map[string]string
+}
+
+func (d *closedItemDocket) CloseForItem(_ context.Context, workItemID, reason string) (int, error) {
+	if d.closed == nil {
+		d.closed = make(map[string]string)
+	}
+	d.closed[workItemID] = reason
+	return 1, nil
+}
+
+// A closed or retired item asks nobody anything, so the entries standing for it
+// on the triage docket are closed with it, saying who closed it and how.
+func TestClosingOrRetiringAnItemClosesItsDocketEntries(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Make the conversation readable", Status: "open"},
+		"yoyodyne-ifd.23": {ID: "yoyodyne-ifd.23", Title: "Support many repositories", Status: "open"},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("The first landed; the second is not worth doing.",
+			`{"action":"close","id":"yoyodyne-ifd.22","reason":"the work landed"}`,
+			`{"action":"retire","id":"yoyodyne-ifd.23","reason":"the operator dropped multi-repository support"}`)},
+		{SessionID: "session-1", FinalText: "Both are out of the backlog."},
+	}}
+	docket := &closedItemDocket{}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	options.ClosedItems = docket
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Is ifd.23 still worth doing?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if reason := docket.closed["yoyodyne-ifd.22"]; !strings.Contains(reason, "closed as done by the product manager in conversation") {
+		t.Fatalf("closed item's entries closed with %q", reason)
+	}
+	if reason := docket.closed["yoyodyne-ifd.23"]; !strings.Contains(reason, "retired without being done by the product manager in conversation") {
+		t.Fatalf("retired item's entries closed with %q", reason)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
+	if !strings.Contains(rendered, "closed yoyodyne-ifd.22 as done; 1 docket entry(s) standing for it are closed with it") {
+		t.Fatalf("rendered outcomes = %q", rendered)
+	}
+}
+
 // Parking is how work the product manager still wants stops being pulled without
 // leaving the backlog, and it is neither a retirement nor a priority. The
 // priority is what it replaces: putting deferred work at the bottom of the order
