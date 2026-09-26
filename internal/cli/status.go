@@ -286,6 +286,14 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 	var stalls []runstate.StallEvent
 	var stallFailure string
 	if workItemID == "" {
+		// A status is one of the loads that records when each program manager
+		// instance was first seen, so a scheduler that never woke a new one is
+		// still caught; the reading below then measures from that record.
+		if resolved, err := loadConfiguration(*configPath); err == nil {
+			if stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir); err == nil {
+				observeProgramManagers(resolved.Config, stateRoot, time.Now())
+			}
+		}
 		read := readmodel.ReadStanding(context.Background(), standingSources(*configPath))
 		standing = &read
 		// What the product recorded about having gone quiet, read for the whole
@@ -657,17 +665,22 @@ func programManagerSources(sources *readmodel.Sources, cfg config.Config, stateR
 	if store, err := runstate.NewExchangeStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.Exchanges = store
 	}
-	if store := observeProgramManagers(cfg, stateRoot, time.Now()); store != nil {
+	// Read and never written here: this is the path every request the dashboard
+	// answers goes through, and no request writes anything. The loads that
+	// record an instance call observeProgramManagers themselves.
+	if store, err := runstate.NewFirstSeenStore(stateRoot, cfg.Product.ID); err == nil {
 		sources.FirstSeen = store
 	}
 }
 
 // observeProgramManagers records now as the moment each configured program
 // manager instance was first seen, for every one this load carries that the
-// record does not hold yet, and returns the store. Every load of the
-// configuration that builds the harness or reads its standing makes it, so an
+// record does not hold yet, and returns the store. Every command that builds
+// the harness makes it, and so do the loads that read the standing without a
+// scheduler behind them — `yoyo status`, the Slack sink as it starts, and the
+// dashboard as it starts, though none of the dashboard's requests — so an
 // instance is recorded at the first load that carries it whether or not the
-// scheduler ever wakes it — which is what lets a scheduler that never does be
+// scheduler ever wakes it, which is what lets a scheduler that never does be
 // read as stale. A record that cannot be written is not a reason to refuse the
 // load: the reading reads the record back and says when it cannot, and the
 // next load tries the write again.

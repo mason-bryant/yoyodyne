@@ -258,3 +258,42 @@ func TestAProgramManagerNothingHasWokenIsStaleFromTwiceItsScheduleAfterItWasFirs
 		})
 	}
 }
+
+// The standing every dashboard request reads records nothing: reading it for a
+// configuration carrying a new instance leaves no first-seen record behind, and
+// `yoyo status`, one of the loads that does record, then writes it.
+func TestTheStandingADashboardRequestReadsRecordsNoFirstSeenMoment(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, twoArchitectsConfig+`  reliability-pm:
+    role: program-manager
+    backend: claude-code
+    model: opus
+    lane: reliability
+    triggers:
+      every: 2h
+`)
+	root, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runstate.NewFirstSeenStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readmodel.ReadStanding(context.Background(), standingSources(configPath))
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Fatalf("reading the standing left %s behind (stat error %v); a request writes nothing", store.Path(), err)
+	}
+
+	if _, stderr, code := runCLI(t, "status", "--config", configPath); code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	seen, err := store.FirstSeen()
+	if err != nil {
+		t.Fatalf("FirstSeen() error = %v", err)
+	}
+	if _, recorded := seen["reliability-pm"]; !recorded {
+		t.Errorf("first seen = %v after `yoyo status`, want reliability-pm recorded", seen)
+	}
+}

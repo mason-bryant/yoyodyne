@@ -8,7 +8,10 @@ package cli
 // as long as it is left running. It is a projection and nothing else — it owns
 // no state, offers no write, and restarting it changes nothing about the
 // harness — so it is started and stopped freely, and a later supervisor can
-// own its lifecycle without a redesign.
+// own its lifecycle without a redesign. The one record it writes is written
+// once as it starts, never on a request: when each program manager instance
+// was first seen in the configuration, which a never-woken instance's stale
+// reading is measured from.
 //
 // What it prints when it starts is the whole of what an operator needs: the
 // URL, and beside it where the token every request for the read model has to
@@ -29,6 +32,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -75,6 +79,10 @@ func serveDashboard(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	// The one write the dashboard makes, once as it starts and never on a
+	// request: when each program manager instance was first seen, so a new one
+	// the scheduler never wakes still reads stale.
+	observeProgramManagers(resolved.Config, stateRoot, time.Now())
 	// The token is read before anything is bound, so a store that does not hold
 	// it refuses at the terminal with the command that stores it rather than
 	// serving under a token nobody has.
