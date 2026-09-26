@@ -226,9 +226,9 @@ type Execution struct {
 	// re-runs the deterministic checks and obtains a fresh independent review,
 	// because the reviewed change is not the change that would now be promoted,
 	// and a replay that passes both is charged nothing, so a run whose replays
-	// keep passing keeps replaying until it lands. Zero permits no replay, which
-	// is the behavior a run had before this bound existed: the first refusal ends
-	// it.
+	// keep passing keeps replaying until it lands. The replay that takes the
+	// count past the bound stops the run there, on the change; zero means no
+	// replay may stop on the change. A lost race itself never stops a run.
 	IntegrationRetriesBeforeReconciliation int `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
 	// TransientRelaunchesBeforeBlocking bounds how many times a run reissues a
 	// provider invocation that died without judging the work — an API error the

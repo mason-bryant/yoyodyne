@@ -820,6 +820,8 @@ var notAStep = map[string]string{
 	"blockOnUnresolvedFindings":  "hands a spent repair budget to a person",
 	"blockOnMissingVerification": "hands a spent repair budget to a person",
 	"blockOnSpentRelaunchBudget": "hands a spent relaunch budget to a person",
+	"replayStopEnds":             "hands a spent integration budget to a person, on a replay that stopped on the change",
+	"chargeReplayStop":           "spends one of the run's charged replays before a replayed change is handed back",
 
 	// The runtime envelope. Holds, directives, dependency waits, operator stops
 	// and provider pauses are guarantees wrapped around every step rather than

@@ -254,17 +254,3 @@ func (s State) LastIntegrationResumption() (IntegrationResumption, bool) {
 	}
 	return s.IntegrationResumptions[len(s.IntegrationResumptions)-1], true
 }
-
-// ReplaysCharged is how many of this run's replays have spent
-// execution.integration_retries_before_reconciliation: those recorded as
-// charged, and the latest replay too where a repair has been handed back since
-// it was prepared. A replay that passed its checks and drew an approval is
-// charged nothing, so a run that only ever lost races to a moving target reads
-// zero here however many it lost.
-func (s State) ReplaysCharged() int {
-	charged := s.ChargedReplays
-	if s.IntegrationRetries > 0 && s.RepairAttempts > s.ReplayRepairMark {
-		charged++
-	}
-	return charged
-}

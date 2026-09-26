@@ -2617,11 +2617,13 @@ func TestPipelineRefusesToResumeARunThatIsNotInsideItsRepairLoop(t *testing.T) {
 	}
 }
 
-// A drifted target is never integrated onto, and the approved work it refused
-// is preserved. The retry budget is spent to zero here so this stays a test of
-// the refusal itself; a project that permits retries replays the change instead,
-// which TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved covers.
-func TestPipelinePreservesApprovedWorkWhenTheTargetDrifts(t *testing.T) {
+// A drifted target is never integrated onto from the base the change was
+// approved on: the promotion is refused and the change replayed onto where the
+// target went. That holds at an integration budget of zero, because the budget
+// bounds replays that stop on the change and a lost race is not one — so the
+// replayed change, checked and approved again, lands on top of the work that
+// moved the target, and the drift is reported on the item as it happens.
+func TestPipelineNeverIntegratesOntoADriftedTargetEvenAtBudgetZero(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
@@ -2642,30 +2644,28 @@ func TestPipelinePreservesApprovedWorkWhenTheTargetDrifts(t *testing.T) {
 	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
-	if !errors.Is(err, gitworktree.ErrTargetDrift) {
-		t.Fatalf("Run() error = %v, want target drift", err)
+	moved := gitLine(t, repository, "rev-parse", "refs/heads/main^")
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the replayed change to land", err)
 	}
-	if outcome.Integration != nil || tracker.closed {
-		t.Fatalf("drifted target was integrated: %#v, closed = %t", outcome.Integration, tracker.closed)
+	if outcome.Integration == nil || !tracker.closed || outcome.Blocked {
+		t.Fatalf("Run() outcome = %#v, closed = %t", outcome, tracker.closed)
 	}
-	if outcome.ReviewDecision != review.DecisionApprove || outcome.Phase != runstate.PhaseIntegrating {
-		t.Fatalf("Run() outcome = %#v", outcome)
+	if outcome.Integration.PreviousTargetCommit != moved || outcome.BaseCommit != moved {
+		t.Fatalf("promotion base = %q / %q, want the drifted target %q rather than the base the change was approved on",
+			outcome.Integration.PreviousTargetCommit, outcome.BaseCommit, moved)
 	}
-	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
-		t.Fatalf("approved worktree was not preserved after drift: %v", err)
-	}
-	if !strings.Contains(tracker.notes, "moved away from the recorded base commit") || !strings.Contains(tracker.notes, outcome.WorktreePath) {
-		t.Fatalf("drift was not reported to the tracker: %q", tracker.notes)
+	for _, name := range []string{"feature.txt", "concurrent.txt"} {
+		if _, err := os.Stat(filepath.Join(repository, name)); err != nil {
+			t.Fatalf("main is missing %s: %v", name, err)
+		}
 	}
 	state, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if state.Status != runstate.StatusFailed || state.Phase != runstate.PhaseIntegrating || state.Integration != nil {
-		t.Fatalf("state = %#v", state)
-	}
-	if state.ReviewDecision != runstate.ReviewApprove {
-		t.Fatalf("durable review evidence = %#v", state)
+	if state.IntegrationRetries != 1 || state.ChargedReplays != 0 || state.Blocker != "" {
+		t.Fatalf("state: races %d, charged %d, blocker %q; want one race recorded and nothing charged", state.IntegrationRetries, state.ChargedReplays, state.Blocker)
 	}
 }
 
@@ -6403,9 +6403,11 @@ func TestPipelineChargesARoundForARepairThatIsNotTrivial(t *testing.T) {
 	}
 }
 
-// The retry is bounded, and a run that spends the bound records what stopped it
-// on the item rather than disappearing. Nothing here says the change is wrong,
-// so the artifacts are preserved for whoever settles the target branch.
+// The budget is bounded, and what spends it is a replay that stops on the
+// change, never the race. At a budget of zero the replayed change drawing a
+// repair verdict stops the run right there and records it on the item rather
+// than disappearing, with the target keeping what moved it and the replayed
+// change preserved for whoever picks it up.
 func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 
@@ -6419,50 +6421,39 @@ func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
 		runPipelineGit(t, repository, "add", "elsewhere.txt")
 		runPipelineGit(t, repository, "commit", "-m", "concurrent target change")
 		return nil
-	}, approveVerdict)
+	}, approveVerdict, repairVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
-	moved := ""
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
-	moved = gitLine(t, repository, "rev-parse", "refs/heads/main")
-	if err == nil || !strings.Contains(err.Error(), "lost its target branch") {
+	moved := gitLine(t, repository, "rev-parse", "refs/heads/main")
+	if err == nil || !strings.Contains(err.Error(), "stopped on the change") {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if !outcome.Blocked || outcome.Integration != nil || tracker.closed {
 		t.Fatalf("Run() outcome = %#v, closed = %t", outcome, tracker.closed)
 	}
-	if !tracker.blocked || !strings.Contains(tracker.blockReason, "which permits no replay") {
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "Replays that stopped on the change: 1 of 0 permitted") {
 		t.Fatalf("blocker = %t: %q", tracker.blocked, tracker.blockReason)
 	}
-	// The target keeps whatever moved it, and the run's work stays where a person
-	// can pick it up.
-	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != moved {
-		t.Fatalf("main = %q, want the change that moved it (%q)", head, moved)
+	// The target keeps whatever moved it, and the replayed change stays where a
+	// person can pick it up, on the base it was replayed onto.
+	if parent := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD^"); parent != moved {
+		t.Fatalf("worktree HEAD^ = %q, want the moved target %q it was replayed onto", parent, moved)
 	}
 	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
 		t.Fatalf("worktree was not preserved: %v", err)
+	}
+	// Nothing was handed back: the one developer invocation is the first attempt.
+	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
+		t.Fatalf("developer invocations = %d, want 1", len(developers))
 	}
 	state, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if state.Integration != nil || state.IntegrationRetries != 0 {
+	if state.Integration != nil || state.IntegrationRetries != 1 || state.ChargedReplays != 1 || state.BaseCommit != moved {
 		t.Fatalf("state = %#v", state)
-	}
-	// This promotion was refused before it committed anything, so the worktree is
-	// still at the commit the developer's attempt was recorded in and the record
-	// still names it. Nothing about the ownership rule is loosened by the refusal:
-	// the one commit above the base is the attempt's, and the promotion added
-	// none of its own.
-	if state.HarnessCommit == "" {
-		t.Fatalf("the developer attempt recorded no harness commit: %#v", state)
-	}
-	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
-		t.Fatalf("worktree HEAD = %q, want the attempt's recorded commit %q", head, state.HarnessCommit)
-	}
-	if parent := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD^"); parent != state.BaseCommit {
-		t.Fatalf("worktree HEAD^ = %q, want the recorded base %q: the refused promotion committed something of its own", parent, state.BaseCommit)
 	}
 }
 

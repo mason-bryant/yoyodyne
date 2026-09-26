@@ -369,8 +369,9 @@ independent review before trying again. Losing the race spends nothing: a run
 whose replays keep passing keeps replaying until it lands, each lost race said
 in the item's thread as a note and never docketed.
 `execution.integration_retries_before_reconciliation` bounds only the replays
-that stop on the change — one that fails its checks or draws a repair verdict —
-and `0` permits no replay at all. The earlier
+that stop on the change — one that conflicts, or is handed back for a failing
+check or a repair verdict — and the replay that takes the count past it stops
+the run there, on the change; at `0` no replay may stop on the change. The earlier
 approval never carries over, because the diff it approved is not the one that
 would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the

@@ -376,22 +376,27 @@ the change no longer sits on, and an approval that survived a replay would be
 authorizing a promotion nobody judged. Nothing is handed back to the developer,
 so a replay spends no repair attempt — the change is not what went wrong.
 
-**Losing the race spends nothing.** The budget bounds replays that stop on the
-change: one that conflicts, and one whose replayed change fails its checks or
-draws a repair verdict. Those are stops about the change, and a replay is
-charged for one once, at the latest when the next race is lost. A replay that
-passes its checks and is approved is charged nothing, so a run whose replays
-keep passing keeps replaying until it lands, however busy the target is. Every
-lost race is recorded on the run before its replay begins — `integration_retries`
-counts the races and `charged_replays` the replays that spent the budget, so a
-process that dies mid-replay comes back to both — and each is said in the
-item's thread at note severity. A lost race is never docketed and never blocks
-the item. A run whose charged replays have spent the budget stops at its next
-lost race and records a blocker on the work item saying how many replays
-stopped on the change and how many races were lost, and that the change
-standing at the promotion was approved. Setting the bound to `0` permits no
-replay at all: the first refused promotion ends the run, which is the one way a
-lost race by itself stops a run, and only because the project asked for it.
+**Losing the race spends nothing, and never stops the run.** The change
+standing at a refused promotion passed its checks and was approved, so a lost
+race always replays, and a replay that passes its checks and is approved is
+charged nothing: a run whose replays keep passing keeps replaying until it
+lands, however busy the target is and whatever the budget says. Every lost race
+is recorded on the run before its replay begins and is said in the item's
+thread at note severity; it is never docketed and never blocks the item.
+
+The budget bounds replays that stop on the change instead: one that conflicts,
+and one whose replayed change is handed back for a failing check, a refused
+path, missing verification, or a repair verdict. Each replay is charged at most
+once, at the first such stop after it, and the charge is enforced right there.
+While the count is within the budget the replayed change is handed back to the
+developer like any repair; the replay that takes it past the budget stops the
+run at that point, on the change, with a blocker saying what stopped the replay,
+how many replays stopped on the change, and how many races were lost.
+`integration_retries` counts the races and `charged_replays` the replays that
+were charged, both saved before what they count takes effect, so a process that
+dies mid-replay comes back to both. At `0` no replay may stop on the change:
+the first replay that does ends the run there, and a lost race whose replay
+passes still lands.
 
 Whether a replay whose diff is byte-identical to the one approved may promote
 without a fresh review is a question about the gate and the architect's to
@@ -402,9 +407,10 @@ target moves on, the queued head falls behind it, and its checks fail on files
 the change does not touch. `yoyo reconcile` reads a queued merge's checks on
 every sweep and, finding that, withdraws the queued merge and replays the change
 onto the target through the same run — checks again, a fresh review, and the
-merge queued again — under this same budget, read the same way: the update
-is a lost race, and spends nothing unless the replay stops on the change. A run
-whose charged replays have spent it is handed back instead
+merge queued again. The update is a lost race and is never handed back for
+being one; the replay's own gate charges the budget if the replayed change
+stops on the change, as above. A run that cannot be replayed at all is handed
+back instead
 ([operations](../operations.md#recovering-interrupted-runs)).
 
 A replay that **conflicts** is never retried and never resolved automatically.

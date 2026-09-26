@@ -462,8 +462,8 @@ func baselineScenarios() []baselineScenario {
 			drive:   baselineReplayedPromotion,
 		},
 		{
-			name:    "integration-retries-are-bounded-and-block-the-item",
-			freezes: "A run whose project permits no replay -- execution.integration_retries_before_reconciliation at 0 -- stops on its first lost race and blocks with nothing promoted and the change preserved; at any other budget a lost race whose replay passes spends nothing.",
+			name:    "a-replay-that-stops-on-the-change-spends-the-integration-budget",
+			freezes: "A lost race costs nothing; what spends execution.integration_retries_before_reconciliation is a replay that stops on the change, and at 0 the replayed change drawing a repair verdict blocks the run there with nothing promoted and the replayed change preserved.",
 			drive:   baselineIntegrationBudgetSpent,
 		},
 		{
@@ -997,7 +997,7 @@ func baselineIntegrationBudgetSpent(t *testing.T) *baselineFixture {
 		runPipelineGit(t, fixture.repository, "add", "elsewhere.txt")
 		runPipelineGit(t, fixture.repository, "commit", "-m", "concurrent target change")
 		return nil
-	}, approveVerdict)
+	}, approveVerdict, repairVerdict)
 	pipeline := fixture.automatic(t, provider, []string{"test -f feature.txt"})
 	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
 	fixture.invoke(t, "run", pipeline)

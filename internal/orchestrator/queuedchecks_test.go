@@ -56,14 +56,13 @@ func queuedOnProtectedTarget(t *testing.T) (queuedFixture, *checkedForge, Outcom
 }
 
 // sweep is the reconciler the reconcile verb builds: the forge's checks read,
-// the replay budget and a free slot, and — where hosts is set — the run it makes
+// a free slot, and — where hosts is set — the run it makes
 // live continued through the same pipeline a run is.
 func (f queuedFixture) sweep(t *testing.T, forge *checkedForge, hosts bool) Reconciler {
 	t.Helper()
 	reconciler := f.reconciler(t)
 	reconciler.Publisher = forge
 	reconciler.Checks = forge
-	reconciler.IntegrationRetries = 1
 	reconciler.Capacity = 1
 	reconciler.HostsRuns = hosts
 	provider := roleBackend(func(request backend.RunRequest) error {

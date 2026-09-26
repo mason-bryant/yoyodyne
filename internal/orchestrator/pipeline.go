@@ -2298,25 +2298,16 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	if !contendedIntegration(cause) {
 		return false, nil
 	}
-	// Losing the race is not what the budget bounds. A replay whose checks passed
-	// and whose reviewer approved says nothing against the change, so it is
-	// charged nothing and the run replays again; what spends the budget is a
-	// replay that stopped on the change — handed back for a failing check or a
-	// repair verdict, or conflicting. The previous replay's charge is settled
-	// here, now that its gate is over, and the mark moves with it so the same
-	// replay is never read as charged twice. A budget of zero still means the
-	// first refused promotion ends the run, which is what an operator writing it
-	// asked for.
-	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
-	a.state.ChargedReplays = a.state.ReplaysCharged()
-	a.state.ReplayRepairMark = a.state.RepairAttempts
-	a.outcome.ChargedReplays = a.state.ChargedReplays
-	a.outcome.IntegrationRetries = a.state.IntegrationRetries
-	if a.state.ChargedReplays >= limit {
-		a.observe(ctx, deliveryIntegrate, "contended")
-		return false, a.blockOnContendedIntegration(cause, limit)
-	}
+	// Losing the race is not what the budget bounds, and it never stops the run.
+	// The change standing here passed its checks and was approved, so a replay
+	// that passes again is charged nothing and the run replays for as long as the
+	// target keeps moving. What the budget bounds is a replay that stops on the
+	// change — conflicting, or handed back for a failing check or a repair
+	// verdict — and it is enforced where that happens (chargeReplayStop), not
+	// here. The replay being prepared is marked unjudged until its gate says
+	// which it was.
 	a.state.IntegrationRetries++
+	a.state.ReplayUnjudged = true
 	a.outcome.IntegrationRetries = a.state.IntegrationRetries
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
@@ -2332,6 +2323,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
 		// A conflict is a stop about the change, so it is charged as one; the run
 		// ends on it either way, and the count says what the replay cost.
+		a.state.ReplayUnjudged = false
 		a.state.ChargedReplays++
 		a.outcome.ChargedReplays = a.state.ChargedReplays
 		a.observe(ctx, deliveryIntegrate, "conflicted")
@@ -2420,16 +2412,39 @@ func (a *activeRun) block(notes string) error {
 	return nil
 }
 
-// blockOnContendedIntegration ends a run whose target branch moved again once
-// its integration budget was spent — by replays that stopped on the change, or
-// by a budget of zero. It is the integration-side twin of the repair blockers: the change is sound as
-// far as every gate could tell, and what it needs is a person to say what the
-// target is supposed to look like.
-func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
-	blocked := fmt.Errorf("integration lost its target branch with %d of %d permitted replay(s) already stopped on the change: %w",
-		a.state.ChargedReplays, limit, cause)
-	if err := a.block(renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
-		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
+// chargeReplayStop charges the latest replay to the integration budget when
+// its change is about to be handed back, and reports whether that charge
+// spends more than the budget permits. Only the first stop after a replay is
+// charged: the replay is one replay however many repairs it goes on to need,
+// and those are bounded by the repair budget. A run nothing replayed, or whose
+// replay has already been charged, charges nothing. The charge is saved before
+// anything it decides takes effect, as every counter here is.
+func (a *activeRun) chargeReplayStop() (bool, error) {
+	if !a.state.ReplayUnjudged {
+		return false, nil
+	}
+	a.state.ReplayUnjudged = false
+	a.state.ChargedReplays++
+	a.outcome.ChargedReplays = a.state.ChargedReplays
+	a.outcome.IntegrationRetries = a.state.IntegrationRetries
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return false, fmt.Errorf("save charged replay %d: %w", a.state.ChargedReplays, err)
+	}
+	return a.state.ChargedReplays > a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation, nil
+}
+
+// blockOnChargedReplay ends a run whose replayed change stopped on the change
+// once more than the integration budget permits. It is a stop about the change
+// rather than about the target: the target moving is what caused the replay,
+// and it costs nothing, but a change that keeps failing or being sent back on
+// each new base is one a person should look at before another replay.
+func (a *activeRun) blockOnChargedReplay(stop string) error {
+	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
+	blocked := fmt.Errorf("the change replayed onto its moved target stopped on the change with %d of %d permitted replay stop(s) spent: %s",
+		a.state.ChargedReplays, limit, stop)
+	if err := a.block(renderChargedReplayBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
+		return errors.Join(blocked, fmt.Errorf("record the charged replay as a blocker: %w", err))
 	}
 	return blocked
 }
@@ -2544,6 +2559,10 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 					a.observeCheckEnded(ctx, err, budgetSpent)
 					return a.blockOnRefusedPaths(refused, limit)
 				}
+				if spent, chargeErr := a.chargeReplayStop(); chargeErr != nil || spent {
+					a.observeCheckEnded(ctx, err, budgetSpent)
+					return a.replayStopEnds(chargeErr, err.Error())
+				}
 				// Observed before the failure is handed back, because the hand-back is
 				// the next state: the gate has to have left the check before the
 				// developer's own state can be entered again.
@@ -2561,6 +2580,10 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 				if a.state.RepairAttempts >= limit {
 					a.observeCheckEnded(ctx, err, budgetSpent)
 					return a.blockOnMissingVerification(missing, limit)
+				}
+				if spent, chargeErr := a.chargeReplayStop(); chargeErr != nil || spent {
+					a.observeCheckEnded(ctx, err, budgetSpent)
+					return a.replayStopEnds(chargeErr, err.Error())
 				}
 				a.observeCheckEnded(ctx, err, stillRepairable)
 				if err := a.repair(ctx, verificationRepairPrompt(a.deliveredInvariants().Text(), a.scratch,
@@ -2580,6 +2603,10 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if a.state.RepairAttempts >= limit {
 				a.observeCheckEnded(ctx, err, budgetSpent)
 				return a.blockOnFailingCheck(limit)
+			}
+			if spent, chargeErr := a.chargeReplayStop(); chargeErr != nil || spent {
+				a.observeCheckEnded(ctx, err, budgetSpent)
+				return a.replayStopEnds(chargeErr, err.Error())
 			}
 			a.observeCheckEnded(ctx, err, stillRepairable)
 			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), a.scratch, a.pipeline.Config.Checks, *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
@@ -2609,6 +2636,10 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			a.observeReviewEnded(ctx, decision, nil, budgetSpent)
 			return a.blockOnUnresolvedFindings(limit)
 		}
+		if spent, chargeErr := a.chargeReplayStop(); chargeErr != nil || spent {
+			a.observeReviewEnded(ctx, decision, nil, budgetSpent)
+			return a.replayStopEnds(chargeErr, "independent review requires repair: "+a.state.ReviewSummary)
+		}
 		a.observeReviewEnded(ctx, decision, nil, stillRepairable)
 		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.scratch, a.pipeline.Config.Checks, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
@@ -2618,6 +2649,16 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// replayStopEnds is how a repair loop ends on a replay charged past the
+// integration budget: the save that charged it failed, or the charge spent more
+// than the budget permits and the run blocks on the change.
+func (a *activeRun) replayStopEnds(chargeErr error, stop string) error {
+	if chargeErr != nil {
+		return chargeErr
+	}
+	return a.blockOnChargedReplay(stop)
 }
 
 // repairBudget is how many repair attempts this run may make: what the project
@@ -7073,28 +7114,22 @@ func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit i
 	return strings.Join(lines, "\n")
 }
 
-// renderIntegrationBlockerNotes describes a run stopped at its promotion by the
-// integration budget. Losing the race alone never spends it — a replay that
-// passes costs nothing — so a run reaches this either because its project
-// permits no replays at all, or because earlier replays stopped on the change
-// as many times as the budget allows. The note says which, and says plainly
-// that the change standing at the promotion was approved, because the
-// artifacts it preserves are worth picking up rather than replanning.
-func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) string {
-	headline := "Yoyodyne stopped this item: its target branch moved under the promotion after its replays had already stopped on the change as many times as the budget permits, so the change was never integrated."
-	if limit == 0 {
-		headline = "Yoyodyne stopped this item: its target branch moved under the promotion, and execution.integration_retries_before_reconciliation is 0, which permits no replay, so the change was never integrated."
-	}
+// renderChargedReplayBlockerNotes describes a run stopped because a replayed
+// change stopped on the change past the integration budget. It keeps the two
+// counts apart — the races lost, which cost nothing, and the replays that
+// stopped on the change, which are what the budget bounds — so the reader sees
+// that the target moving is not what ended the run.
+func renderChargedReplayBlockerNotes(outcome Outcome, failure string, limit int) string {
 	lines := []string{
-		headline,
+		"Yoyodyne stopped this item: after its target branch moved, the change replayed onto it stopped on the change once more than execution.integration_retries_before_reconciliation permits.",
 		fmt.Sprintf("Replays that stopped on the change: %d of %d permitted", outcome.ChargedReplays, limit),
-		fmt.Sprintf("Races lost to the moving target: %d", outcome.IntegrationRetries+1),
+		fmt.Sprintf("Races lost to the moving target: %d (these cost nothing)", outcome.IntegrationRetries),
 		"Failure: " + failure,
 		"Run: " + outcome.RunID,
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
 		"Base commit: " + outcome.BaseCommit,
-		"The change standing at the promotion passed its checks and the reviewer approved it; nothing here says it is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
+		"What stopped the replay is about the change on its new base: a failing check, a refused path, missing verification, or a repair verdict. The branch and worktree are preserved with the replayed change in them.",
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }

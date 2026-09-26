@@ -2037,21 +2037,22 @@ type State struct {
 	// replaying the change onto where the target went, re-checking it, and
 	// re-reviewing it. It is recorded before the replay begins, so a process that
 	// dies mid-replay comes back to the count it had. It is the record of the
-	// races and not the budget: a lost race whose replay passes costs nothing,
-	// and a run keeps replaying for as long as its replays keep passing.
+	// races and bounds nothing: a lost race never stops a run, and a run keeps
+	// replaying for as long as its replays keep passing.
 	IntegrationRetries int `json:"integration_retries,omitempty"`
-	// ChargedReplays counts the replays that ended in a stop about the change
-	// rather than about the target: the replay conflicted, or the replayed change
-	// failed its checks or drew a repair verdict. These, and only these, spend
-	// execution.integration_retries_before_reconciliation. A replay is charged
-	// once, at the latest when the next race is lost; ReplaysCharged is the
-	// reading that includes a replay whose repair has been handed back and not
-	// yet folded in here.
+	// ChargedReplays counts the replays that stopped on the change rather than on
+	// the target: the replay conflicted, or the replayed change was handed back
+	// for a failing check, a refused path, missing verification, or a repair
+	// verdict. These, and only these, spend
+	// execution.integration_retries_before_reconciliation, and the replay that
+	// takes the count past it stops the run there, on the change. Each replay is
+	// charged at most once.
 	ChargedReplays int `json:"charged_replays,omitempty"`
-	// ReplayRepairMark is RepairAttempts as it stood when the latest replay was
-	// prepared. A repair attempt past it is the replayed change having been
-	// handed back, which is what charges that replay.
-	ReplayRepairMark int `json:"replay_repair_mark,omitempty"`
+	// ReplayUnjudged is set when a replay is prepared and cleared by the first
+	// thing its gate says: a stop on the change, which charges it, or the next
+	// lost race or landing, which says it passed. It is what keeps one replay
+	// from being charged twice however many repairs it goes on to need.
+	ReplayUnjudged bool `json:"replay_unjudged,omitempty"`
 	// TransientRelaunches counts the provider invocations this run has reissued
 	// after one died without judging the work — an API error the provider's own
 	// retries did not outlast, or a response cut off mid-flight. One budget covers
@@ -2561,9 +2562,6 @@ func (s State) Validate() error {
 	}
 	if s.ChargedReplays < 0 {
 		problems = append(problems, errors.New("charged_replays cannot be negative"))
-	}
-	if s.ReplayRepairMark < 0 {
-		problems = append(problems, errors.New("replay_repair_mark cannot be negative"))
 	}
 	if s.TransientRelaunches < 0 {
 		problems = append(problems, errors.New("transient_relaunches cannot be negative"))

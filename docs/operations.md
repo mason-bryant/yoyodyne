@@ -1362,9 +1362,10 @@ does not — writes that onto the run's publication record, and decides on it:
   hosts it, beside the usage-limit continuations: the promotion finds the target
   moved, replays the change onto it, runs the checks again, gets a fresh
   independent review, and queues the merge again. That is a lost race, and like
-  every lost race it spends `execution.integration_retries_before_reconciliation`
-  only if the replay stops on the change; a run whose charged replays have spent
-  it is handed back instead. `yoyo reconcile
+  every lost race it is never handed back for being one: the replay's own gate
+  charges `execution.integration_retries_before_reconciliation` if the replayed
+  change stops on the change. Only a run that cannot be replayed at all is
+  handed back. `yoyo reconcile
   --json` carries what each came to under `updates`. Where the moment is wrong
   rather than the run — intake held, every developer slot taken, or a pass that
   hosts no runs, such as the settle a conversation makes — the merge is left
