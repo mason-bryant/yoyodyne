@@ -147,3 +147,8 @@ func RoleBackend(develop func(backend.RunRequest) error, verdicts ...string) *Ba
 func (f *Backend) RequestsMade() []backend.RunRequest {
 	return f.Requests
 }
+
+// DeveloperSessionID is the session this backend reports serving the developer.
+func (f *Backend) DeveloperSessionID() string {
+	return f.DeveloperSession
+}

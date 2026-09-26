@@ -16,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -28,12 +29,12 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		// The branch must already be published by the time the reviewer is asked,
 		// because a pull request nobody can see is not what a reviewer reviews.
-		if request.Role == domain.RoleReviewer && len(forge.opened) == 0 {
+		if request.Role == domain.RoleReviewer && len(forge.Opened) == 0 {
 			return errors.New("the reviewer ran before the branch was published")
 		}
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
@@ -53,23 +54,23 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 	if outcome.PublishFailure != "" || outcome.PublishSkipped != "" {
 		t.Fatalf("outcome = %#v, want a clean publication", outcome)
 	}
-	if len(forge.opened) != 1 {
-		t.Fatalf("pull requests opened = %d, want exactly one", len(forge.opened))
+	if len(forge.Opened) != 1 {
+		t.Fatalf("pull requests opened = %d, want exactly one", len(forge.Opened))
 	}
-	if forge.opened[0].Base != "main" || forge.opened[0].Head != outcome.Branch {
-		t.Fatalf("pull request request = %#v, want the run branch into main", forge.opened[0])
+	if forge.Opened[0].Base != "main" || forge.Opened[0].Head != outcome.Branch {
+		t.Fatalf("pull request request = %#v, want the run branch into main", forge.Opened[0])
 	}
 	// The forge is what merged, and it was asked for the one method that puts the
 	// promoted commit itself on the remote target, for exactly the commit this
 	// run integrated.
-	if len(forge.merges) != 1 {
-		t.Fatalf("forge merges = %d, want exactly one", len(forge.merges))
+	if len(forge.Merges) != 1 {
+		t.Fatalf("forge merges = %d, want exactly one", len(forge.Merges))
 	}
-	if forge.merges[0].Method != publish.MergeCommit || forge.merges[0].Number != outcome.PullRequest.Number {
-		t.Errorf("merge request = %#v, want the published request merged under a merge commit", forge.merges[0])
+	if forge.Merges[0].Method != publish.MergeCommit || forge.Merges[0].Number != outcome.PullRequest.Number {
+		t.Errorf("merge request = %#v, want the published request merged under a merge commit", forge.Merges[0])
 	}
-	if forge.merges[0].HeadCommit != outcome.Integration.SourceCommit {
-		t.Errorf("merged head = %q, want the integrated commit %q", forge.merges[0].HeadCommit, outcome.Integration.SourceCommit)
+	if forge.Merges[0].HeadCommit != outcome.Integration.SourceCommit {
+		t.Errorf("merged head = %q, want the integrated commit %q", forge.Merges[0].HeadCommit, outcome.Integration.SourceCommit)
 	}
 	if outcome.PullRequest.MergeMethod != string(publish.MergeCommit) {
 		t.Errorf("recorded merge method = %q, want the method the forge was asked for", outcome.PullRequest.MergeMethod)
@@ -108,8 +109,8 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 	if state.PullRequest == nil || !state.PullRequest.Merged || state.PullRequest.Branch != outcome.Branch {
 		t.Fatalf("durable pull request = %#v", state.PullRequest)
 	}
-	if !strings.Contains(tracker.notes, outcome.PullRequest.URL) {
-		t.Errorf("tracker notes do not name the pull request:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, outcome.PullRequest.URL) {
+		t.Errorf("tracker notes do not name the pull request:\n%s", tracker.Notes)
 	}
 }
 
@@ -119,10 +120,10 @@ func TestPipelinePublishesEveryAttemptOntoOnePullRequest(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -139,8 +140,8 @@ func TestPipelinePublishesEveryAttemptOntoOnePullRequest(t *testing.T) {
 	if outcome.RepairAttempts != 1 {
 		t.Fatalf("repair attempts = %d, want one", outcome.RepairAttempts)
 	}
-	if len(forge.opened) != 2 || forge.number != 1 {
-		t.Fatalf("forge saw %d requests and issued number %d, want one pull request updated twice", len(forge.opened), forge.number)
+	if len(forge.Opened) != 2 || forge.Number != 1 {
+		t.Fatalf("forge saw %d requests and issued number %d, want one pull request updated twice", len(forge.Opened), forge.Number)
 	}
 	// Every attempt is published, so what merged is the repaired change rather
 	// than the one the reviewer rejected.
@@ -159,7 +160,7 @@ func TestPipelineOpensAPullRequestThatSaysWhatItContains(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{
 		ID:                 "yoyodyne-task",
 		Title:              "Task",
 		Description:        "The published body says nothing a reader wants.",
@@ -167,8 +168,8 @@ func TestPipelineOpensAPullRequestThatSaysWhatItContains(t *testing.T) {
 		Notes:              "Admitted to the backlog by the product manager.",
 		Status:             "open",
 	}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -177,13 +178,13 @@ func TestPipelineOpensAPullRequestThatSaysWhatItContains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(forge.opened) != 1 {
-		t.Fatalf("pull requests opened = %d, want exactly one", len(forge.opened))
+	if len(forge.Opened) != 1 {
+		t.Fatalf("pull requests opened = %d, want exactly one", len(forge.Opened))
 	}
-	body := forge.opened[0].Body
+	body := forge.Opened[0].Body
 	for _, want := range []string{
-		tracker.item.Description,
-		tracker.item.AcceptanceCriteria,
+		tracker.Item.Description,
+		tracker.Item.AcceptanceCriteria,
 		"feature.txt",
 		"Run: `" + outcome.RunID + "`",
 	} {
@@ -193,7 +194,7 @@ func TestPipelineOpensAPullRequestThatSaysWhatItContains(t *testing.T) {
 	}
 	// The notes are where a run's own record goes, so they are the one part of a
 	// work item a published body must not republish.
-	if strings.Contains(body, tracker.item.Notes) {
+	if strings.Contains(body, tracker.Item.Notes) {
 		t.Errorf("published body carries the item's notes:\n%s", body)
 	}
 }
@@ -366,10 +367,10 @@ func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 	runPipelineGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
 	reduced := strings.Join(strings.SplitAfter(readme.String(), "\n")[:400], "")
 
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	attempts := 0
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
 			return nil
 		}
@@ -388,7 +389,7 @@ func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 	if outcome.Status != runstate.StatusSucceeded || outcome.RepairAttempts != 1 {
 		t.Fatalf("outcome = %#v, want one repair round that was then approved", outcome)
 	}
-	reviews := provider.requestsForRole(domain.RoleReviewer)
+	reviews := provider.RequestsForRole(domain.RoleReviewer)
 	if len(reviews) != 2 {
 		t.Fatalf("reviews = %d, want the first verdict and the repair's", len(reviews))
 	}
@@ -439,8 +440,8 @@ func TestPipelineTellsAReviewerWhatThePatchOfAContinuedRunSpans(t *testing.T) {
 	if outcome.ReviewBaseCommit != state.ReviewBaseCommit || outcome.ReviewHeadCommit != state.ReviewHeadCommit {
 		t.Errorf("outcome review span = %s..%s, want the record's %s..%s", outcome.ReviewBaseCommit, outcome.ReviewHeadCommit, state.ReviewBaseCommit, state.ReviewHeadCommit)
 	}
-	if want := "Reviewed against: base " + state.ReviewBaseCommit + ", tip " + state.ReviewHeadCommit; !strings.Contains(tracker.notes, want) {
-		t.Errorf("item notes are missing %q:\n%s", want, tracker.notes)
+	if want := "Reviewed against: base " + state.ReviewBaseCommit + ", tip " + state.ReviewHeadCommit; !strings.Contains(tracker.Notes, want) {
+		t.Errorf("item notes are missing %q:\n%s", want, tracker.Notes)
 	}
 	if !strings.Contains(repair, "read at tip commit "+state.ReviewHeadCommit) {
 		t.Errorf("the evidence names a different tip from the record's %s:\n%s", state.ReviewHeadCommit, repair)
@@ -453,9 +454,9 @@ func TestPipelineWithoutARemoteRunsExactlyAsItDidBefore(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -467,7 +468,7 @@ func TestPipelineWithoutARemoteRunsExactlyAsItDidBefore(t *testing.T) {
 	if outcome.Integration == nil || !outcome.WorkItemClosed {
 		t.Fatalf("outcome = %#v, want the ordinary local integration", outcome)
 	}
-	if outcome.PullRequest != nil || len(forge.opened) != 0 {
+	if outcome.PullRequest != nil || len(forge.Opened) != 0 {
 		t.Fatalf("a repository with no remote published anyway: %#v", outcome.PullRequest)
 	}
 	if !strings.Contains(outcome.PublishSkipped, "no \"origin\" remote") {
@@ -507,7 +508,7 @@ func TestPipelinePublishingNamesWhicheverRemoteIsMissing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			pipeline := Pipeline{Publisher: &fakeForge{}, Worktrees: expectation.answers}
+			pipeline := Pipeline{Publisher: &orchestratortest.Forge{}, Worktrees: expectation.answers}
 			pipeline.Config.Approvals.Publishing = domain.ApprovalAutomatic
 			pipeline.Config.Execution.Remote = "origin"
 			pipeline.Config.Execution.PushRemote = "fork"
@@ -531,23 +532,23 @@ func TestPipelinePublishingNamesWhicheverRemoteIsMissing(t *testing.T) {
 func TestPipelineRefusesPublishingItCannotPerform(t *testing.T) {
 	t.Parallel()
 
-	for name, forge := range map[string]*fakeForge{
-		"no forge CLI":          {availability: publish.Availability{}},
-		"unauthenticated forge": {availability: publish.Availability{Installed: true}},
+	for name, forge := range map[string]*orchestratortest.Forge{
+		"no forge CLI":          {ReportedAvailability: publish.Availability{}},
+		"unauthenticated forge": {ReportedAvailability: publish.Availability{Installed: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			repository, _ := publishedRepository(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-			provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := orchestratortest.RoleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
 			pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
-			forge.reportAvailability = true
+			forge.ReportAvailability = true
 
 			if _, err := pipeline.Run(context.Background(), "yoyodyne-task"); err == nil {
 				t.Fatal("Run() error = nil, want a refusal before the item is claimed")
 			}
-			if tracker.claimed {
+			if tracker.Claimed {
 				t.Error("the work item was claimed by a run that could not publish")
 			}
 		})
@@ -560,9 +561,9 @@ func TestPipelineReportsAnOutstandingPublicationWithoutFailingThePromotion(t *te
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, stateErr: errors.New("the forge is unreachable")}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, StateErr: errors.New("the forge is unreachable")}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -584,8 +585,8 @@ func TestPipelineReportsAnOutstandingPublicationWithoutFailingThePromotion(t *te
 	if state.PublishFailure == "" {
 		t.Fatal("the outstanding publication was not recorded durably")
 	}
-	if !strings.Contains(tracker.notes, "Publication outstanding") {
-		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Publication outstanding") {
+		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.Notes)
 	}
 }
 
@@ -598,9 +599,9 @@ func TestPipelineMergesIntoATargetThatRefusesDirectPushes(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	protectBranch(t, remote, "main")
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -612,8 +613,8 @@ func TestPipelineMergesIntoATargetThatRefusesDirectPushes(t *testing.T) {
 	if outcome.PublishFailure != "" {
 		t.Fatalf("publish failure = %q, want a protected branch merged into cleanly", outcome.PublishFailure)
 	}
-	if len(forge.merges) != 1 || !outcome.PullRequest.Merged {
-		t.Fatalf("forge merges = %d, pull request = %#v; want the request merged through the forge", len(forge.merges), outcome.PullRequest)
+	if len(forge.Merges) != 1 || !outcome.PullRequest.Merged {
+		t.Fatalf("forge merges = %d, pull request = %#v; want the request merged through the forge", len(forge.Merges), outcome.PullRequest)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
 	if published := publishedCommit(t, remote, outcome.Branch); published != "" {
@@ -628,14 +629,14 @@ func TestPipelineReportsAForgeRefusalAsTheUnmetRequirement(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, mergeErr: publish.MergeRefused{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, MergeErr: publish.MergeRefused{
 		Number: 1,
 		Method: publish.MergeRebase,
 		Status: "BLOCKED",
 		Reason: `Required status check "build" is expected`,
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -681,12 +682,12 @@ func TestPipelineReplaysOntoARemoteTargetSomebodyPushedTo(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	// Someone else's work lands on the remote target after this run published its
 	// branch, which is the window a merge the harness does not perform opens.
-	forge.onEnsure = func() { driftRemoteTarget(t, remote, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge.OnEnsure = func() { driftRemoteTarget(t, remote, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -709,13 +710,13 @@ func TestPipelineReplaysOntoARemoteTargetSomebodyPushedTo(t *testing.T) {
 	}
 	// The change was re-judged on its new ground: the approval that authorized the
 	// first attempt described a diff on a base the target had left.
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 2 {
 		t.Errorf("reviews = %d, want the replayed change reviewed again", reviews)
 	}
 	// The whole point of the replay: both branches end up carrying both changes,
 	// and the local target is not left somewhere the remote cannot be reached from.
-	if len(forge.merges) != 1 {
-		t.Fatalf("forge merges = %#v, want the replayed promotion merged", forge.merges)
+	if len(forge.Merges) != 1 {
+		t.Fatalf("forge merges = %#v, want the replayed promotion merged", forge.Merges)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
 	remoteTarget := publishedCommit(t, remote, "main")
@@ -752,9 +753,9 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -774,11 +775,11 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	if outcome.Integration == nil {
 		t.Fatalf("outcome = %#v, want the local promotion recorded", outcome)
 	}
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("work item closed = %t (tracker %t), want the item left open over the divergence", outcome.WorkItemClosed, tracker.closed)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the item left open over the divergence", outcome.WorkItemClosed, tracker.Closed)
 	}
-	if !outcome.Blocked || !tracker.blocked {
-		t.Fatalf("blocked = %t (tracker %t), want the divergence on the item", outcome.Blocked, tracker.blocked)
+	if !outcome.Blocked || !tracker.Blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the divergence on the item", outcome.Blocked, tracker.Blocked)
 	}
 	// A divergence found after the promotion is the same held catch-up to the
 	// brake as one found before it: a stop the harness made, counted toward
@@ -789,8 +790,8 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	if !environmentalStop(outcome) {
 		t.Fatal("the brake would count this stop, want a diverged target classified environmental where the brake counts stops")
 	}
-	if len(forge.merges) != 0 {
-		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.Merges)
 	}
 	if local := publishedCommit(t, repository, "main"); local != outcome.Integration.TargetCommit {
 		t.Errorf("local main = %q, want the promoted commit %q left where it is", local, outcome.Integration.TargetCommit)
@@ -807,8 +808,8 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 		"origin main: " + publishedCommit(t, remote, "main"),
 		"Unwedging a target branch that diverged from the forge",
 	} {
-		if !strings.Contains(tracker.blockReason, want) {
-			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
+		if !strings.Contains(tracker.BlockReason, want) {
+			t.Errorf("blocker does not name %q:\n%s", want, tracker.BlockReason)
 		}
 	}
 	state, err := store.Load(pipelineRunID)
@@ -865,9 +866,9 @@ func TestPipelineClosesTheItemWhenTheRemoteSweptThePromotionIn(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -886,11 +887,11 @@ func TestPipelineClosesTheItemWhenTheRemoteSweptThePromotionIn(t *testing.T) {
 	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
 		t.Fatalf("outcome = %#v, want the promotion to stand", outcome)
 	}
-	if outcome.Blocked || tracker.blocked {
-		t.Fatalf("blocked = %t (tracker %t), want a reconcilable remote to leave the run alone", outcome.Blocked, tracker.blocked)
+	if outcome.Blocked || tracker.Blocked {
+		t.Fatalf("blocked = %t (tracker %t), want a reconcilable remote to leave the run alone", outcome.Blocked, tracker.Blocked)
 	}
-	if !outcome.WorkItemClosed || !tracker.closed {
-		t.Fatalf("work item closed = %t (tracker %t), want the item closed on work that is on both branches", outcome.WorkItemClosed, tracker.closed)
+	if !outcome.WorkItemClosed || !tracker.Closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the item closed on work that is on both branches", outcome.WorkItemClosed, tracker.Closed)
 	}
 	// The whole safety of closing this item: the remote target really does carry
 	// the commit this run promoted. A branch that closed an item against a remote
@@ -917,8 +918,8 @@ func TestPipelineClosesTheItemWhenTheRemoteSweptThePromotionIn(t *testing.T) {
 	}
 	// What is unfinished is the publication and only the publication: the drift is
 	// named as outstanding, and the merge was never asked for.
-	if len(forge.merges) != 0 {
-		t.Fatalf("the harness asked for a merge into a moved target: %#v", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a moved target: %#v", forge.Merges)
 	}
 	if !strings.Contains(outcome.PublishFailure, "moved away from the content the promotion was written against") {
 		t.Errorf("publish failure = %q, want the drift named", outcome.PublishFailure)
@@ -930,8 +931,8 @@ func TestPipelineClosesTheItemWhenTheRemoteSweptThePromotionIn(t *testing.T) {
 	if state.PublishFailure != outcome.PublishFailure {
 		t.Errorf("durable publish failure = %q, want the reported one %q", state.PublishFailure, outcome.PublishFailure)
 	}
-	if !strings.Contains(tracker.notes, "Publication outstanding") {
-		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.notes)
+	if !strings.Contains(tracker.Notes, "Publication outstanding") {
+		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.Notes)
 	}
 }
 
@@ -946,12 +947,12 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	// A rewritten remote history, which is the movement no fast-forward answers:
 	// the remote target no longer contains the commit this run was cut from.
-	forge.onEnsure = func() { rewriteRemoteTarget(t, remote, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge.OnEnsure = func() { rewriteRemoteTarget(t, remote, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -961,20 +962,20 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cannot be brought onto origin before promoting") {
 		t.Fatalf("Run() error = %v, want the divergence to stop the run", err)
 	}
-	if outcome.Integration != nil || outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("outcome = %#v, closed = %t, want nothing promoted and the item left open", outcome, tracker.closed)
+	if outcome.Integration != nil || outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("outcome = %#v, closed = %t, want nothing promoted and the item left open", outcome, tracker.Closed)
 	}
 	// Nothing was promoted, so nothing was ever asked of the forge either.
-	if len(forge.merges) != 0 {
-		t.Fatalf("the harness asked for a merge into a diverged target: %#v", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a diverged target: %#v", forge.Merges)
 	}
 	if local := publishedCommit(t, repository, "main"); local != base {
 		t.Errorf("local main = %q, want the untouched base %q", local, base)
 	}
 	// The item carries the divergence rather than a closure: both branch
 	// positions, and the statement that neither was chosen over the other.
-	if !outcome.Blocked || !tracker.blocked {
-		t.Fatalf("blocked = %t (tracker %t), want the stoppage on the item", outcome.Blocked, tracker.blocked)
+	if !outcome.Blocked || !tracker.Blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the stoppage on the item", outcome.Blocked, tracker.Blocked)
 	}
 	// And the outcome carries the held catch-up as what stopped the run, which
 	// is what the brake reads to count the stop toward nothing: a refusal the
@@ -992,8 +993,8 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 		"origin main: " + publishedCommit(t, remote, "main"),
 		"Unwedging a target branch that diverged from the forge",
 	} {
-		if !strings.Contains(tracker.blockReason, want) {
-			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
+		if !strings.Contains(tracker.BlockReason, want) {
+			t.Errorf("blocker does not name %q:\n%s", want, tracker.BlockReason)
 		}
 	}
 	// The change is preserved for whoever settles the branches, and the run's own
@@ -1017,8 +1018,8 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 	if outcome.IntegrationStop == nil || outcome.IntegrationStop.Cause != runstate.CauseDivergedTarget {
 		t.Fatalf("outcome integration stop = %#v, want the diverged target on the outcome too", outcome.IntegrationStop)
 	}
-	if !strings.Contains(tracker.blockReason, "`yoyo triage resume "+pipelineRunID+"`") {
-		t.Errorf("blocker does not name the resume:\n%s", tracker.blockReason)
+	if !strings.Contains(tracker.BlockReason, "`yoyo triage resume "+pipelineRunID+"`") {
+		t.Errorf("blocker does not name the resume:\n%s", tracker.BlockReason)
 	}
 }
 
@@ -1032,9 +1033,9 @@ func TestPipelineReportsAMergeThatRewroteThePromotedCommit(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, replayMerge: true}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, ReplayMerge: true}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -1076,11 +1077,11 @@ func TestPipelinePublishesTheRunAfterAForgeMerge(t *testing.T) {
 			return os.WriteFile(filepath.Join(request.WorkingDirectory, name), []byte(content), 0o600)
 		}
 	}
-	first := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-first", Title: "First", Status: "open"}}
-	firstForge := &fakeForge{remote: remote}
+	first := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-first", Title: "First", Status: "open"}}
+	firstForge := &orchestratortest.Forge{Remote: remote}
 	firstPipeline, _ := newPublishingPipeline(t, repository, first,
-		roleBackend(write("first.txt", "first\n"), approveVerdict), firstForge, []string{"exit 0"})
-	firstOutcome, err := firstPipeline.Run(context.Background(), first.item.ID)
+		orchestratortest.RoleBackend(write("first.txt", "first\n"), approveVerdict), firstForge, []string{"exit 0"})
+	firstOutcome, err := firstPipeline.Run(context.Background(), first.Item.ID)
 	if err != nil {
 		t.Fatalf("first Run() error = %v", err)
 	}
@@ -1088,22 +1089,22 @@ func TestPipelinePublishesTheRunAfterAForgeMerge(t *testing.T) {
 		t.Fatalf("first publish failure = %q", firstOutcome.PublishFailure)
 	}
 
-	second := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-second", Title: "Second", Status: "open"}}
-	secondForge := &fakeForge{remote: remote}
+	second := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-second", Title: "Second", Status: "open"}}
+	secondForge := &orchestratortest.Forge{Remote: remote}
 	secondPipeline, store := newPublishingPipeline(t, repository, second,
-		roleBackend(write("second.txt", "second\n"), approveVerdict), secondForge, []string{"exit 0"})
+		orchestratortest.RoleBackend(write("second.txt", "second\n"), approveVerdict), secondForge, []string{"exit 0"})
 	secondRunID := "run-fedcba9876543210fedcba9876543210"
 	secondPipeline.NewRunID = func() (string, error) { return secondRunID, nil }
 
-	outcome, err := secondPipeline.Run(context.Background(), second.item.ID)
+	outcome, err := secondPipeline.Run(context.Background(), second.Item.ID)
 	if err != nil {
 		t.Fatalf("second Run() error = %v", err)
 	}
 	if outcome.PublishFailure != "" {
 		t.Fatalf("second publish failure = %q, want the run after a forge merge to publish too", outcome.PublishFailure)
 	}
-	if len(secondForge.merges) != 1 || !outcome.PullRequest.Merged {
-		t.Fatalf("forge merges = %d, pull request = %#v; want the second run merged as well", len(secondForge.merges), outcome.PullRequest)
+	if len(secondForge.Merges) != 1 || !outcome.PullRequest.Merged {
+		t.Fatalf("forge merges = %d, pull request = %#v; want the second run merged as well", len(secondForge.Merges), outcome.PullRequest)
 	}
 	// The remote is now two forge merge commits ahead of the local branch and
 	// still carries exactly its content, which is the relationship the harness
@@ -1129,9 +1130,9 @@ func TestPipelineRefusesToMergeAPullRequestThatIsNotWhatIntegrated(t *testing.T)
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"printf 'left behind\n' > residue.txt"})
@@ -1143,8 +1144,8 @@ func TestPipelineRefusesToMergeAPullRequestThatIsNotWhatIntegrated(t *testing.T)
 	if outcome.Integration == nil || outcome.PullRequest.HeadCommit == outcome.Integration.SourceCommit {
 		t.Fatalf("outcome = %#v, want a promotion of a commit the branch was never published at", outcome)
 	}
-	if len(forge.merges) != 0 {
-		t.Fatalf("the harness merged a request that is not what integrated: %#v", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("the harness merged a request that is not what integrated: %#v", forge.Merges)
 	}
 	if !strings.Contains(outcome.PublishFailure, "is not what would merge") {
 		t.Fatalf("publish failure = %q, want the mismatch reported", outcome.PublishFailure)
@@ -1306,228 +1307,6 @@ func publishedCommit(t *testing.T, repository, branch string) string {
 	return strings.TrimSpace(gitOutput(t, repository, "for-each-ref", "--format=%(objectname)", "refs/heads/"+branch))
 }
 
-// fakeForge is the harness's forge adapter with the CLI taken out. It issues
-// one pull request per branch, which is what lets a test tell an updated
-// request from a second one, and it performs the merge itself the way the forge
-// does: by moving the target branch on the remote, without a push.
-type fakeForge struct {
-	availability publish.Availability
-	// reportAvailability makes the zero availability meaningful, so a test can
-	// express "the CLI is missing" rather than getting the usable default.
-	reportAvailability bool
-	opened             []publish.Request
-	number             int
-	merged             bool
-	stateErr           error
-	// onEnsure runs when the pull request is opened, which is the moment after
-	// the branch is published and before anything is promoted. It is how a test
-	// expresses the world moving underneath a run.
-	onEnsure func()
-	// remote is the bare repository this forge merges into. A forge with none
-	// records the merge and touches nothing, which is what an operator sees when
-	// a forge reports a merge the remote does not show.
-	remote string
-	merges []publish.MergeRequest
-	// mergeErr is what the forge answers instead of merging, which is how a
-	// refusal by a protected branch is expressed.
-	mergeErr error
-	// queueMerge makes the forge queue the merge instead of performing it, which
-	// is what a base branch with required checks produces: the request is
-	// accepted, nothing moves yet, and the forge merges minutes later. queued is
-	// the merge it is holding.
-	queueMerge bool
-	queued     bool
-	// replayMerge makes the forge rewrite what it merges instead of merging it,
-	// which is what GitHub's rebase and squash methods do: the base ends up with
-	// a fresh commit carrying the same content, and the reviewed commit itself
-	// never arrives.
-	replayMerge bool
-	// openReplies is how many times State reports the pull request still open
-	// before reporting it merged, which is the forge's own record of a request
-	// lagging the merge it just performed.
-	openReplies int
-	stateCalls  int
-	// headCommit is the commit State reports the request carrying, where a test
-	// needs the forge to say. A forge that says nothing leaves the reader to the
-	// commit the harness itself pushed, which is what most tests want.
-	headCommit string
-	// ensureResets and mergeResets are how many times the connection carrying
-	// that call drops before it goes through. They are the failure that killed
-	// four runs on 2026-09-03: nothing about the request reached the forge, so
-	// the class says the next attempt may well succeed.
-	ensureResets int
-	mergeResets  int
-	// afterMergeReset runs when a merge attempt is dropped, which is the moment
-	// the run then spends waiting before it asks again. It is how a test
-	// expresses the world moving during that wait.
-	afterMergeReset func()
-	// protection is what the forge says protects the target branch, and
-	// protectionErr is a forge that could not be asked. protectionAsked is every
-	// branch it was asked about.
-	protection      publish.BranchProtection
-	protectionErr   error
-	protectionAsked []string
-	// onMerge runs when the forge is asked to merge, before it answers. It is
-	// how a test reads where the local target stood at that moment.
-	onMerge func()
-}
-
-// connectionReset is what the transport writes when it drops a request, in the
-// words git and gh actually print. A test states the words rather than a class,
-// because words are what the harness reads.
-func connectionReset(what string) error {
-	return fmt.Errorf("%s: OpenSSL SSL_read: Connection reset by peer, errno 54", what)
-}
-
-func (f *fakeForge) Availability(context.Context) (publish.Availability, error) {
-	if f.reportAvailability {
-		return f.availability, nil
-	}
-	return publish.Availability{Installed: true, Authenticated: true}, nil
-}
-
-func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.PullRequest, error) {
-	if f.ensureResets > 0 {
-		f.ensureResets--
-		return publish.PullRequest{}, connectionReset("open pull request for " + request.Head)
-	}
-	f.opened = append(f.opened, request)
-	if f.onEnsure != nil {
-		f.onEnsure()
-	}
-	if f.number == 0 {
-		f.number = 1
-	}
-	return publish.PullRequest{Number: f.number, URL: fmt.Sprintf("https://example.invalid/pull/%d", f.number), State: "OPEN"}, nil
-}
-
-// Merge is the forge merging the pull request, which is what moves the remote
-// target branch now. The update is written inside the bare remote rather than
-// pushed into it, so a branch that refuses direct pushes is merged into exactly
-// as a real forge merges into one, and it is a real merge commit: a fresh
-// commit whose first parent is the base, whose second parent is the published
-// head, and whose tree is the head's. Modelling that rather than moving the
-// base ref onto the head is the difference between exercising the harness and
-// exercising an assumption — no forge merge method leaves the base at the
-// commit the harness promoted.
-func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publish.MergeResult, error) {
-	if f.mergeResets > 0 {
-		f.mergeResets--
-		if f.afterMergeReset != nil {
-			f.afterMergeReset()
-		}
-		return publish.MergeResult{}, connectionReset(fmt.Sprintf("merge pull request %d", request.Number))
-	}
-	if f.onMerge != nil {
-		f.onMerge()
-	}
-	if f.mergeErr != nil {
-		return publish.MergeResult{}, f.mergeErr
-	}
-	f.merges = append(f.merges, request)
-	// A queued merge accepts the request and moves nothing: what the forge does
-	// with it happens after the run that asked for it has finished.
-	if f.queueMerge {
-		f.queued = true
-		return publish.MergeResult{Queued: true}, nil
-	}
-	if f.remote != "" {
-		if err := f.mergeIntoRemote(f.opened[len(f.opened)-1].Base, request.HeadCommit); err != nil {
-			return publish.MergeResult{}, err
-		}
-	}
-	f.merged = true
-	return publish.MergeResult{}, nil
-}
-
-// PerformQueuedMerge is the forge merging a request it queued, which is what
-// happens once the base branch's required checks pass — minutes after the run
-// that asked for it ended.
-func (f *fakeForge) PerformQueuedMerge(t *testing.T) {
-	t.Helper()
-	if !f.queued {
-		t.Fatal("no merge is queued with the forge")
-	}
-	if err := f.mergeIntoRemote(f.opened[len(f.opened)-1].Base, f.merges[len(f.merges)-1].HeadCommit); err != nil {
-		t.Fatalf("perform the queued merge: %v", err)
-	}
-	f.queued = false
-	f.merged = true
-}
-
-// DropQueuedMerge is the forge giving up on a merge it queued, which is what a
-// required check that failed leaves behind: an open request with nothing
-// waiting to merge it.
-func (f *fakeForge) DropQueuedMerge() {
-	f.queued = false
-}
-
-// mergeIntoRemote writes the forge's own merge of a request into the bare
-// remote. A replaying forge — GitHub's rebase and squash methods — is modelled
-// by leaving the published head out of the new commit's parents, so the commit
-// that was reviewed never reaches the base at all.
-func (f *fakeForge) mergeIntoRemote(base, head string) error {
-	tip, err := f.Git("rev-parse", "refs/heads/"+base)
-	if err != nil {
-		return err
-	}
-	tree, err := f.Git("rev-parse", head+"^{tree}")
-	if err != nil {
-		return err
-	}
-	arguments := []string{
-		"-c", "user.name=Forge",
-		"-c", "user.email=forge@example.invalid",
-		"commit-tree", tree, "-p", tip,
-	}
-	if !f.replayMerge {
-		arguments = append(arguments, "-p", head)
-	}
-	merged, err := f.Git(append(arguments, "-m", fmt.Sprintf("Merge pull request #%d", f.number))...)
-	if err != nil {
-		return err
-	}
-	_, err = f.Git("update-ref", "refs/heads/"+base, merged, tip)
-	return err
-}
-
-func (f *fakeForge) Git(arguments ...string) (string, error) {
-	command := exec.Command("git", append([]string{"-C", f.remote}, arguments...)...)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %v in the forge: %v: %s", arguments, err, output)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-// State reports merged once the forge has merged the request — after
-// openReplies further answers of "still open", which is the forge's own record
-// lagging the merge it performed rather than the merge being unfinished.
-func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) {
-	if f.stateErr != nil {
-		return publish.PullRequest{}, f.stateErr
-	}
-	f.stateCalls++
-	url := fmt.Sprintf("https://example.invalid/pull/%d", f.number)
-	if !f.merged || f.stateCalls <= f.openReplies {
-		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued, HeadCommit: f.headCommit}, nil
-	}
-	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true, HeadCommit: f.headCommit}, nil
-}
-
-// Protection answers what the forge says about the target branch. A forge that
-// was told nothing reports it unprotected, which is the arrangement every test
-// written before protection was asked about assumed.
-func (f *fakeForge) Protection(_ context.Context, branch string) (publish.BranchProtection, error) {
-	f.protectionAsked = append(f.protectionAsked, branch)
-	if f.protectionErr != nil {
-		return publish.BranchProtection{}, f.protectionErr
-	}
-	return f.protection, nil
-}
-
-var _ PullRequests = (*fakeForge)(nil)
-
 // Publishing and automatic integration are separate opt-ins, so a project can
 // have the harness open pull requests and still merge them itself. The run then
 // stops where a human-integration run always stopped: checks pass, nothing is
@@ -1536,9 +1315,9 @@ func TestPipelinePublishesWithoutIntegratingWhenAHumanMerges(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -1575,9 +1354,9 @@ func TestPipelineWaitsForTheForgeToReportItsOwnMerge(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, openReplies: 2}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, OpenReplies: 2}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -1597,8 +1376,8 @@ func TestPipelineWaitsForTheForgeToReportItsOwnMerge(t *testing.T) {
 	if !outcome.PullRequest.Merged {
 		t.Fatalf("pull request = %#v, want it merged", outcome.PullRequest)
 	}
-	if waits != 2 || forge.stateCalls != 3 {
-		t.Errorf("waits = %d and forge queries = %d, want two waits and three queries", waits, forge.stateCalls)
+	if waits != 2 || forge.StateCalls != 3 {
+		t.Errorf("waits = %d and forge queries = %d, want two waits and three queries", waits, forge.StateCalls)
 	}
 	// A confirmation that never arrived would have skipped the branch removal.
 	if published := publishedCommit(t, remote, outcome.Branch); published != "" {
@@ -1612,9 +1391,9 @@ func TestPipelineStopsWaitingForAMergeThatNeverArrives(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, openReplies: 99}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, OpenReplies: 99}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -1630,8 +1409,8 @@ func TestPipelineStopsWaitingForAMergeThatNeverArrives(t *testing.T) {
 	if !strings.Contains(outcome.PublishFailure, "is still open") {
 		t.Fatalf("publish failure = %q, want the unmerged request reported", outcome.PublishFailure)
 	}
-	if forge.stateCalls != len(mergeConfirmationDelays)+1 {
-		t.Errorf("forge queries = %d, want %d", forge.stateCalls, len(mergeConfirmationDelays)+1)
+	if forge.StateCalls != len(mergeConfirmationDelays)+1 {
+		t.Errorf("forge queries = %d, want %d", forge.StateCalls, len(mergeConfirmationDelays)+1)
 	}
 	// Nothing confirmed the merge, so the branch a person may still need is left
 	// exactly where it was published.
@@ -1649,9 +1428,9 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, queueMerge: true}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, QueueMerge: true}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -1671,8 +1450,8 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	// The promotion is made, but nothing has merged it anywhere but here. Closing
 	// the item now would record it integrated against a publication the forge may
 	// yet drop, so the closure waits for the forge's answer.
-	if outcome.WorkItemClosed || tracker.closed {
-		t.Fatalf("a queued merge closed the item as integrated before the forge merged it: reason = %q", tracker.closeReason)
+	if outcome.WorkItemClosed || tracker.Closed {
+		t.Fatalf("a queued merge closed the item as integrated before the forge merged it: reason = %q", tracker.CloseReason)
 	}
 	// A queued merge is not an outstanding publication: the forge accepted it.
 	if outcome.PublishFailure != "" {
@@ -1685,8 +1464,8 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 		t.Errorf("recorded merge method = %q, want the method the forge was asked for", outcome.PullRequest.MergeMethod)
 	}
 	// Nothing is waited for, because nothing can arrive while the run watches.
-	if waits != 0 || forge.stateCalls != 0 {
-		t.Errorf("waits = %d and forge queries = %d, want a run that finished without confirming", waits, forge.stateCalls)
+	if waits != 0 || forge.StateCalls != 0 {
+		t.Errorf("waits = %d and forge queries = %d, want a run that finished without confirming", waits, forge.StateCalls)
 	}
 	// The forge has not merged yet, so the remote target has not moved and the
 	// branch the queued merge will consume must still be there.
@@ -1709,8 +1488,8 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 		t.Error("a run with a queued merge is not outstanding, so nothing would ever settle it")
 	}
 	for _, want := range []string{"Merge queued", "stays open until then"} {
-		if !strings.Contains(tracker.notes, want) {
-			t.Errorf("tracker notes do not report %q:\n%s", want, tracker.notes)
+		if !strings.Contains(tracker.Notes, want) {
+			t.Errorf("tracker notes do not report %q:\n%s", want, tracker.Notes)
 		}
 	}
 }
@@ -1722,13 +1501,13 @@ func TestPipelineReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote, mergeErr: publish.AutoMergeUnavailable{
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote, MergeErr: publish.AutoMergeUnavailable{
 		Number: 1,
 		Status: "BLOCKED",
 		Reason: "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
 	}}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -2244,15 +2023,15 @@ func newQueuedFixture(t *testing.T) queuedFixture {
 		remote:       remote,
 		worktreeRoot: worktreeRoot,
 		store:        store,
-		tracker:      &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
-		forge:        &fakeForge{remote: remote, queueMerge: true},
+		tracker:      &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
+		forge:        &orchestratortest.Forge{Remote: remote, QueueMerge: true},
 	}
 }
 
 // run drives a whole run, which ends with its merge queued rather than made.
 func (f queuedFixture) run(t *testing.T) Outcome {
 	t.Helper()
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline := publishing(automatic(newSharedPipeline(t, f.repository, f.worktreeRoot, f.store, f.tracker, provider, []string{"exit 0"}), provider), f.forge)
@@ -2316,15 +2095,15 @@ func TestResumedRunReportsTheSkippedPublicationToo(t *testing.T) {
 	// The restartable fixture's repository has no remote, which is the case that
 	// degrades to purely local behavior.
 	repository, worktreeRoot, store := restartableFixture(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	write := func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}
 
 	interrupted := &interruptedStore{StateStore: store, atAttempt: 2}
-	first := roleBackend(write, repairVerdict)
-	firstPipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{"exit 0"}), first), &fakeForge{})
-	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	first := orchestratortest.RoleBackend(write, repairVerdict)
+	firstPipeline := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{"exit 0"}), first), &orchestratortest.Forge{})
+	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil || !interrupted.stopped {
 		t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
 	}
@@ -2332,9 +2111,9 @@ func TestResumedRunReportsTheSkippedPublicationToo(t *testing.T) {
 		t.Fatalf("interrupted publish skipped = %q", firstOutcome.PublishSkipped)
 	}
 
-	second := roleBackend(write, approveVerdict)
-	resumed := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second), &fakeForge{})
-	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	second := orchestratortest.RoleBackend(write, approveVerdict)
+	resumed := publishing(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second), &orchestratortest.Forge{})
+	outcome, err := resumed.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -2355,9 +2134,9 @@ func TestPublishedWorkStillReachesTheReviewer(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"),
 			[]byte("the developer's work\n"), 0o600)
 	}, approveVerdict)
@@ -2367,7 +2146,7 @@ func TestPublishedWorkStillReachesTheReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	reviews := provider.requestsForRole(domain.RoleReviewer)
+	reviews := provider.RequestsForRole(domain.RoleReviewer)
 	if len(reviews) != 1 {
 		t.Fatalf("reviewer invocations = %d, want exactly one", len(reviews))
 	}
@@ -2401,15 +2180,15 @@ func TestPipelineRepublishesAReplayedChangeOntoItsPullRequest(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
 	published := ""
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	// The target moves once the branch is published and the pull request exists,
 	// which is the window a losing promotion opens for a published run.
-	forge.onEnsure = func() {
+	forge.OnEnsure = func() {
 		if published != "" {
 			return
 		}
@@ -2433,8 +2212,8 @@ func TestPipelineRepublishesAReplayedChangeOntoItsPullRequest(t *testing.T) {
 	}
 	// The pull request is the one that was opened, carrying the replayed commit
 	// rather than the one it was opened with.
-	if len(forge.opened) != 1 || forge.number != 1 {
-		t.Fatalf("forge saw %d requests, want the one request updated in place", len(forge.opened))
+	if len(forge.Opened) != 1 || forge.Number != 1 {
+		t.Fatalf("forge saw %d requests, want the one request updated in place", len(forge.Opened))
 	}
 	if published == "" || outcome.PullRequest.HeadCommit == published {
 		t.Fatalf("published head = %q, want the replayed commit rather than %q", outcome.PullRequest.HeadCommit, published)
@@ -2442,8 +2221,8 @@ func TestPipelineRepublishesAReplayedChangeOntoItsPullRequest(t *testing.T) {
 	if outcome.PullRequest.HeadCommit != outcome.Integration.SourceCommit {
 		t.Fatalf("published head = %q, want the promoted commit %q", outcome.PullRequest.HeadCommit, outcome.Integration.SourceCommit)
 	}
-	if len(forge.merges) != 1 || forge.merges[0].HeadCommit != outcome.Integration.SourceCommit {
-		t.Fatalf("forge merges = %#v, want the replayed commit merged", forge.merges)
+	if len(forge.Merges) != 1 || forge.Merges[0].HeadCommit != outcome.Integration.SourceCommit {
+		t.Fatalf("forge merges = %#v, want the replayed commit merged", forge.Merges)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
 	state, err := store.Load(pipelineRunID)

@@ -23,10 +23,12 @@ type recordingTracker interface {
 	ForgetSettlement()
 }
 
-// recordingBackend is a provider that remembers every invocation it served.
+// recordingBackend is a provider that remembers every invocation it served and
+// the session it served the developer under.
 type recordingBackend interface {
 	backend.Backend
 	RequestsMade() []backend.RunRequest
+	DeveloperSessionID() string
 }
 
 // queuedForge is a forge a test reads what it was asked and arranges how it
@@ -77,6 +79,10 @@ func (f *fakeTracker) ForgetSettlement() {
 
 func (f *fakeBackend) RequestsMade() []backend.RunRequest {
 	return f.requests
+}
+
+func (f *fakeBackend) DeveloperSessionID() string {
+	return f.developerSession
 }
 
 func (f *fakeForge) OpenedRequests() []publish.Request {

@@ -14,6 +14,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator/orchestratortest"
 	"github.com/mason-bryant/yoyodyne/internal/recovery"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -27,17 +28,21 @@ func TestOneConnectionResetAtTheForgeNoLongerLosesCompletedWork(t *testing.T) {
 
 	for _, boundary := range []struct {
 		name      string
-		forge     func(remote string) *fakeForge
+		forge     func(remote string) *orchestratortest.Forge
 		retriedAt string
 	}{
 		{
-			name:      "opening the pull request",
-			forge:     func(remote string) *fakeForge { return &fakeForge{remote: remote, ensureResets: 1} },
+			name: "opening the pull request",
+			forge: func(remote string) *orchestratortest.Forge {
+				return &orchestratortest.Forge{Remote: remote, EnsureResets: 1}
+			},
 			retriedAt: runstate.RetryOpenPullRequest,
 		},
 		{
-			name:      "merging the pull request",
-			forge:     func(remote string) *fakeForge { return &fakeForge{remote: remote, mergeResets: 1} },
+			name: "merging the pull request",
+			forge: func(remote string) *orchestratortest.Forge {
+				return &orchestratortest.Forge{Remote: remote, MergeResets: 1}
+			},
 			retriedAt: runstate.RetryMerge,
 		},
 	} {
@@ -45,9 +50,9 @@ func TestOneConnectionResetAtTheForgeNoLongerLosesCompletedWork(t *testing.T) {
 			t.Parallel()
 
 			repository, remote := publishedRepository(t)
-			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 			forge := boundary.forge(remote)
-			provider := roleBackend(func(request backend.RunRequest) error {
+			provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 			}, approveVerdict)
 			pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -80,8 +85,8 @@ func TestOneConnectionResetAtTheForgeNoLongerLosesCompletedWork(t *testing.T) {
 			if !strings.Contains(retry.Failure, "Connection reset by peer") {
 				t.Errorf("recorded failure = %q, want the transport's own words", retry.Failure)
 			}
-			if !strings.Contains(tracker.notes, "Waited out a recoverable failure while "+boundary.retriedAt) {
-				t.Errorf("the work item does not say the network was waited out:\n%s", tracker.notes)
+			if !strings.Contains(tracker.Notes, "Waited out a recoverable failure while "+boundary.retriedAt) {
+				t.Errorf("the work item does not say the network was waited out:\n%s", tracker.Notes)
 			}
 		})
 	}
@@ -103,7 +108,7 @@ func (w *resettingPushWorktrees) PublishBranch(ctx context.Context, worktree git
 	publication, err := w.WorktreeManager.PublishBranch(ctx, worktree, message)
 	w.reported = append(w.reported, publication)
 	if err == nil && len(w.reported) == 1 {
-		return publication, connectionReset("push " + worktree.Branch)
+		return publication, orchestratortest.ConnectionReset("push " + worktree.Branch)
 	}
 	return publication, err
 }
@@ -120,9 +125,9 @@ func TestAResetPushIsRetriedAndDoesNotReadAsAnEmptyChange(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{remote: remote}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &orchestratortest.Forge{Remote: remote}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -145,8 +150,8 @@ func TestAResetPushIsRetriedAndDoesNotReadAsAnEmptyChange(t *testing.T) {
 	}
 	// And the publication actually happened, which is what an empty change would
 	// have skipped without failing anything.
-	if len(forge.opened) != 1 {
-		t.Fatalf("pull requests opened = %d, want the retry to have opened exactly one", len(forge.opened))
+	if len(forge.Opened) != 1 {
+		t.Fatalf("pull requests opened = %d, want the retry to have opened exactly one", len(forge.Opened))
 	}
 	if outcome.PullRequest == nil || !outcome.PullRequest.Merged || outcome.PublishFailure != "" {
 		t.Fatalf("outcome = %#v, want a clean publication of the pushed commit", outcome.PullRequest)
@@ -175,12 +180,12 @@ func TestARetriedMergeVerifiesTheRemoteTargetAgainBeforeItIsAsked(t *testing.T) 
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// The first merge is dropped, and the target moves during the wait that
 	// follows — the window a check made in front of the retry would leave open.
-	forge := &fakeForge{remote: remote, mergeResets: 1}
-	forge.afterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote, MergeResets: 1}
+	forge.AfterMergeReset = func() { driftRemoteTarget(t, remote, "main") }
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -192,14 +197,14 @@ func TestARetriedMergeVerifiesTheRemoteTargetAgainBeforeItIsAsked(t *testing.T) 
 	}
 	// The retry re-read the target and refused, so the forge was never asked to
 	// merge into a branch it would have reconciled itself.
-	if len(forge.merges) != 0 {
-		t.Fatalf("the harness merged into a target that moved while it waited: %#v", forge.merges)
+	if len(forge.Merges) != 0 {
+		t.Fatalf("the harness merged into a target that moved while it waited: %#v", forge.Merges)
 	}
 	if !strings.Contains(outcome.PublishFailure, "check the remote target branch before merging") {
 		t.Fatalf("publish failure = %q, want the re-read that refused the retried merge", outcome.PublishFailure)
 	}
-	if !outcome.Blocked || !tracker.blocked {
-		t.Fatalf("blocked = %t (tracker %t), want the divergence handed to a person", outcome.Blocked, tracker.blocked)
+	if !outcome.Blocked || !tracker.Blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the divergence handed to a person", outcome.Blocked, tracker.Blocked)
 	}
 	// And the wait itself is on the record, so what happened reads as a reset
 	// waited out and a target that moved underneath it rather than as a bare
@@ -215,16 +220,16 @@ func TestARetriedMergeVerifiesTheRemoteTargetAgainBeforeItIsAsked(t *testing.T) 
 
 // dyingReviewerBackend serves the developer once and then kills the first deaths
 // reviewer invocations the way a dropped connection does, approving afterwards.
-func dyingReviewerBackend(deaths int) *fakeBackend {
-	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+func dyingReviewerBackend(deaths int) *orchestratortest.Backend {
+	provider := &orchestratortest.Backend{DeveloperSession: "developer-session", ReviewerSession: "reviewer-session"}
 	killed := 0
-	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+	provider.Respond = func(request backend.RunRequest) (backend.RunResult, error) {
 		if request.Role != domain.RoleReviewer {
 			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
 			}
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				Backend: domain.BackendClaudeCode, SessionID: provider.DeveloperSession,
 				ResolvedModel: developerResolved, FinalText: "implemented the work item",
 				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
 			}, nil
@@ -232,7 +237,7 @@ func dyingReviewerBackend(deaths int) *fakeBackend {
 		if killed < deaths {
 			killed++
 			return backend.RunResult{
-				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				Backend: domain.BackendClaudeCode, SessionID: provider.ReviewerSession,
 				IsError: true, StopReason: "api_error", FinalText: connectionClosedMessage,
 				TransientFailure: &backend.TransientFailure{Detail: "api_error: " + connectionClosedMessage},
 				Process:          execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
@@ -240,7 +245,7 @@ func dyingReviewerBackend(deaths int) *fakeBackend {
 			}, nil
 		}
 		return backend.RunResult{
-			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			Backend: domain.BackendClaudeCode, SessionID: provider.ReviewerSession,
 			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
 			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
 		}, nil
@@ -258,7 +263,7 @@ func TestARecoverableReviewerDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// Four reviewer deaths against a budget of two: two relaunches, then two
 	// waits, then the verdict.
 	provider := dyingReviewerBackend(4)
@@ -266,17 +271,17 @@ func TestARecoverableReviewerDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want the dropped connections waited out", err)
 	}
-	if tracker.blocked || outcome.Blocked {
-		t.Fatalf("the run blocked the item: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	if tracker.Blocked || outcome.Blocked {
+		t.Fatalf("the run blocked the item: tracker=%t outcome=%t", tracker.Blocked, outcome.Blocked)
 	}
 	if outcome.Integration == nil || !outcome.WorkItemClosed {
 		t.Fatalf("outcome = %#v, want the approved change promoted and the item closed", outcome)
 	}
-	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 5 {
+	if reviews := len(provider.RequestsForRole(domain.RoleReviewer)); reviews != 5 {
 		t.Fatalf("reviewer invocations = %d, want the four deaths and the one that answered", reviews)
 	}
 	// The change was never handed back: nothing here is a fault in the work, so
@@ -284,7 +289,7 @@ func TestARecoverableReviewerDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	if outcome.RepairAttempts != 0 {
 		t.Errorf("repair attempts = %d, want the provider's weather charged to nobody", outcome.RepairAttempts)
 	}
-	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 1 {
+	if developers := len(provider.RequestsForRole(domain.RoleDeveloper)); developers != 1 {
 		t.Errorf("developer invocations = %d, want the change developed once", developers)
 	}
 	state, err := store.Load(outcome.RunID)
@@ -317,25 +322,25 @@ func TestATrackerWriteThatProducedNoVerdictIsWaitedOutRatherThanFailingTheRun(t 
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{
-		item:                 beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
-		completeFailures:     1,
-		transientCompleteErr: trackerBusy,
+	tracker := &orchestratortest.Tracker{
+		Item:                 beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
+		CompleteFailures:     1,
+		TransientCompleteErr: trackerBusy,
 	}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want the busy store waited out", err)
 	}
 	// The whole point: work that was promoted closes as integrated rather than
 	// being recorded as a failed run over a `bd` that never ran.
-	if !outcome.WorkItemClosed || !tracker.closed {
-		t.Fatalf("work item closed = %t (tracker %t), want the integrated item closed", outcome.WorkItemClosed, tracker.closed)
+	if !outcome.WorkItemClosed || !tracker.Closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the integrated item closed", outcome.WorkItemClosed, tracker.Closed)
 	}
 	if outcome.Status != runstate.StatusSucceeded {
 		t.Fatalf("status = %q, want the run to have succeeded", outcome.Status)
@@ -359,17 +364,17 @@ func TestATrackerThatAnsweredIsNotWaitedOnAtAll(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{
-		item:        beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
-		completeErr: errors.New("bd close failed with status failed and exit code 1: issue yoyodyne-task not found"),
+	tracker := &orchestratortest.Tracker{
+		Item:        beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"},
+		CompleteErr: errors.New("bd close failed with status failed and exit code 1: issue yoyodyne-task not found"),
 	}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() error = nil, want the tracker's own answer to end the run")
 	}
@@ -393,11 +398,11 @@ func TestASpentRecoveryWindowEscalatesWithTheRetriesNamed(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// Far more resets than the window has room for, so what stops the run is the
 	// window rather than the forge recovering.
-	forge := &fakeForge{remote: remote, mergeResets: 1000}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote, MergeResets: 1000}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -442,21 +447,21 @@ func TestARecoverableProviderDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	// Four deaths against a budget of two: two relaunches, then two waits.
 	provider := transientDeathBackend(4, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 	pipeline = waiting(pipeline, &pausingClock{now: baseTime}, 6*time.Hour, 6*time.Hour)
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want the dropped connections waited out", err)
 	}
-	if tracker.blocked || outcome.Blocked {
-		t.Fatalf("the run blocked the item: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	if tracker.Blocked || outcome.Blocked {
+		t.Fatalf("the run blocked the item: tracker=%t outcome=%t", tracker.Blocked, outcome.Blocked)
 	}
-	if attempts := len(provider.requestsForRole(domain.RoleDeveloper)); attempts != 5 {
+	if attempts := len(requestsServed(provider, domain.RoleDeveloper)); attempts != 5 {
 		t.Fatalf("developer invocations = %d, want the four deaths and the attempt that served the work", attempts)
 	}
 	state, err := store.Load(outcome.RunID)
@@ -474,8 +479,8 @@ func TestARecoverableProviderDeathCarriesOnPastTheRelaunchBudget(t *testing.T) {
 	}
 	// The session is the whole reason a relaunch is worth taking, and a wait past
 	// the budget must not drop it.
-	if state.ProviderSessionID != provider.developerSession {
-		t.Errorf("session = %q, want the reissued attempts to have continued %q", state.ProviderSessionID, provider.developerSession)
+	if state.ProviderSessionID != provider.DeveloperSessionID() {
+		t.Errorf("session = %q, want the reissued attempts to have continued %q", state.ProviderSessionID, provider.DeveloperSessionID())
 	}
 }
 
@@ -486,12 +491,12 @@ func TestAnUnclassifiableProviderDeathStillBlocksOnTheRelaunchBudget(t *testing.
 	t.Parallel()
 
 	repository := pipelineRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	provider := opaqueDeathBackend(10, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
 
-	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	outcome, err := pipeline.Run(context.Background(), tracker.Item.ID)
 	if err == nil {
 		t.Fatal("Run() error = nil, want the budget to stop a death nothing classifies")
 	}
@@ -573,10 +578,10 @@ func TestAForgeRefusalIsReportedAtOnceRatherThanRetried(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
-	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker := &orchestratortest.Tracker{Item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	refusal := errors.New("the forge refused to merge pull request 1 with the merge method: the pull request conflicts with the base branch (DIRTY)")
-	forge := &fakeForge{remote: remote, mergeErr: refusal}
-	provider := roleBackend(func(request backend.RunRequest) error {
+	forge := &orchestratortest.Forge{Remote: remote, MergeErr: refusal}
+	provider := orchestratortest.RoleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
 	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
@@ -596,4 +601,17 @@ func TestAForgeRefusalIsReportedAtOnceRatherThanRetried(t *testing.T) {
 	if len(state.Retries) != 0 {
 		t.Errorf("retries = %#v, want a refusal reported at once", state.Retries)
 	}
+}
+
+// requestsServed is every invocation provider served for role. It reads through
+// the accessor both sets of fakes answer, because the backend a shared helper
+// builds may be either.
+func requestsServed(provider recordingBackend, role domain.AgentRole) []backend.RunRequest {
+	var matching []backend.RunRequest
+	for _, request := range provider.RequestsMade() {
+		if request.Role == role {
+			matching = append(matching, request)
+		}
+	}
+	return matching
 }
