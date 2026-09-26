@@ -73,7 +73,7 @@ func TestTheSeptemberStoppageReadsAsAHoldOverEveryRole(t *testing.T) {
 	t.Parallel()
 
 	now := holdOpened.Add(26 * time.Hour)
-	hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, septemberLog(20), now, 30*time.Minute)
+	hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, septemberLog(20), now, 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding {
 		t.Fatal("twenty refusals on a reset five days off, over five agents on one model, read as no hold")
 	}
@@ -109,7 +109,7 @@ func TestTheSeptemberStoppageReadsAsAHoldOverEveryRole(t *testing.T) {
 func TestAHoldLiftsAtTheReset(t *testing.T) {
 	t.Parallel()
 
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, septemberLog(20), holdResets.Add(time.Second), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, septemberLog(20), holdResets.Add(time.Second), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing once the reset has passed", hold)
 	}
 }
@@ -120,12 +120,12 @@ func TestAnUntimedRefusalStandsForTheProbeInterval(t *testing.T) {
 	t.Parallel()
 
 	log := []runstate.UsageLimitExhaustion{refusal(holdOpened, "", nil)}
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(10*time.Minute), 30*time.Minute); !hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(10*time.Minute), 30*time.Minute, CapacityEvidence{}); !hold.Holding {
 		t.Fatal("an untimed refusal ten minutes old reads as no hold inside a thirty-minute interval")
 	} else if !hold.ResetsAt.IsZero() || !strings.Contains(hold.Says(), "named no time it lifts") {
 		t.Fatalf("hold = %+v says %q, want the absence of a reset stated rather than invented", hold, hold.Says())
 	}
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(31*time.Minute), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(31*time.Minute), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing once the interval has passed", hold)
 	}
 }
@@ -144,7 +144,7 @@ func TestASubstitutionThatServedIsNotAHold(t *testing.T) {
 		substitution(holdOpened, "opus", "sonnet", &resets),
 		substitution(holdOpened.Add(time.Hour), "opus", "sonnet", &resets),
 	}
-	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(2*time.Hour), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(2*time.Hour), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing while the alternate is serving every turn", hold)
 	}
 }
@@ -165,7 +165,7 @@ func TestTheAlternateRefusedTooIsAHoldThatNamesBoth(t *testing.T) {
 		// was actually refused on.
 		refusal(holdOpened.Add(time.Hour), "sonnet", &resets),
 	}
-	hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(2*time.Hour), 30*time.Minute)
+	hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(2*time.Hour), 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding {
 		t.Fatal("every agent's alternate refused reads as no hold")
 	}
@@ -188,7 +188,7 @@ func TestOneAgentStillServedIsNotAHold(t *testing.T) {
 	}
 	resets := holdResets
 	log := []runstate.UsageLimitExhaustion{refusal(holdOpened, "opus", &resets)}
-	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(time.Hour), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(time.Hour), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing while the reviewer's model is unrefused", hold)
 	}
 }
@@ -205,7 +205,7 @@ func TestAnUnnamedRefusalHoldsNobodyWhereTheAgentsDiffer(t *testing.T) {
 	}
 	resets := holdResets
 	log := []runstate.UsageLimitExhaustion{refusal(holdOpened, "", &resets)}
-	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(time.Hour), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(agents, nil, log, holdOpened.Add(time.Hour), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing from a refusal nobody can attribute", hold)
 	}
 }
@@ -224,13 +224,13 @@ func TestAnUnnamedRefusalNeverHoldsAnAgentOnItsAlternate(t *testing.T) {
 		agents[index].Alternate, agents[index].AlternateProvider = "sonnet", "claude-code"
 	}
 	now := holdOpened.Add(26 * time.Hour)
-	if hold := ReadCapacityHold(agents, nil, septemberLog(20), now, 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(agents, nil, septemberLog(20), now, 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing from unnamed refusals over agents whose alternate nothing has refused", hold)
 	}
 	// The same log with the alternate refused by name is the hold again.
 	resets := holdResets
 	log := append(septemberLog(20), refusal(holdOpened.Add(21*time.Hour), "sonnet", &resets))
-	if hold := ReadCapacityHold(agents, nil, log, now, 30*time.Minute); !hold.Holding {
+	if hold := ReadCapacityHold(agents, nil, log, now, 30*time.Minute, CapacityEvidence{}); !hold.Holding {
 		t.Fatal("unnamed refusals of opus beside a named refusal of sonnet read as no hold")
 	}
 }
@@ -249,7 +249,7 @@ func TestAnAvailabilitySubstitutionIsNotARefusal(t *testing.T) {
 		ServedBy:      "opus-4-1",
 		Substitution:  runstate.SubstitutedForAvailability,
 	}}
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(time.Minute), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), nil, log, holdOpened.Add(time.Minute), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing from a version the provider has not got", hold)
 	}
 }
@@ -290,7 +290,7 @@ func TestRunsParkedOnTheLimitAreAHoldWithNoConversationRefused(t *testing.T) {
 		runParkedOnTheLimit("run-0000000000000000000000000000000b", "yoyodyne-ifd.141", holdOpened),
 	}
 	now := holdOpened.Add(26 * time.Hour)
-	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, now, 30*time.Minute)
+	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, now, 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding {
 		t.Fatal("two runs parked on a reset five days off, over five agents on one model and no refusal in the log, read as no hold")
 	}
@@ -320,7 +320,7 @@ func TestRunsParkedOnTheLimitAreAHoldWithNoConversationRefused(t *testing.T) {
 	}
 	// And it lifts when they would: at the reset, the same runs account for
 	// nothing.
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdResets.Add(time.Second), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdResets.Add(time.Second), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing once the reset the runs are parked on has passed", hold)
 	}
 }
@@ -331,7 +331,7 @@ func TestParkedRunsAndRefusedTurnsAreOneHold(t *testing.T) {
 	t.Parallel()
 
 	runs := []runstate.State{runParkedOnTheLimit("run-0000000000000000000000000000000a", "yoyodyne-ifd.140", holdOpened.Add(-time.Hour))}
-	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, septemberLog(20), holdOpened.Add(26*time.Hour), 30*time.Minute)
+	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, septemberLog(20), holdOpened.Add(26*time.Hour), 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding || hold.ParkedRuns != 1 || hold.Refusals != 20 {
 		t.Fatalf("hold = %+v, want the run and the twenty turns each counted", hold)
 	}
@@ -356,14 +356,14 @@ func TestARunParkedOnAnUntimedLimitStandsForTheProbeInterval(t *testing.T) {
 	run.UsageLimitResetUnknown = true
 	run.UpdatedAt = holdOpened
 	runs := []runstate.State{run}
-	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdOpened.Add(10*time.Minute), 30*time.Minute)
+	hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdOpened.Add(10*time.Minute), 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding {
 		t.Fatal("a run parked ten minutes ago on an untimed limit reads as no hold inside a thirty-minute interval")
 	}
 	if !hold.ResetsAt.IsZero() || !strings.Contains(hold.Says(), "named no time it lifts") {
 		t.Fatalf("hold = %+v says %q, want the probe deadline read as no reset named rather than as the provider's", hold, hold.Says())
 	}
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdOpened.Add(31*time.Minute), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), runs, nil, holdOpened.Add(31*time.Minute), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing once the interval has passed", hold)
 	}
 }
@@ -380,7 +380,7 @@ func TestARunWaitingOutAnOverloadIsNotAHold(t *testing.T) {
 	run.UsageLimitResetUnknown = true
 	run.UsageLimitKind, run.UsageLimitModel = "", ""
 	run.PauseCause = runstate.PauseServerOverload
-	if hold := ReadCapacityHold(fiveAgentsOnOpus(), []runstate.State{run}, nil, holdOpened.Add(time.Minute), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(fiveAgentsOnOpus(), []runstate.State{run}, nil, holdOpened.Add(time.Minute), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing from a run waiting out an overload", hold)
 	}
 }
@@ -395,7 +395,7 @@ func TestAParkWrittenBeforeItsModelWasCarriedIsReadFromTheRecordItHas(t *testing
 	older := runParkedOnTheLimit("run-0000000000000000000000000000000a", "yoyodyne-ifd.140", holdOpened)
 	older.UsageLimitPausedSince = nil
 	older.UsageLimitModel = ""
-	hold := ReadCapacityHold(fiveAgentsOnOpus(), []runstate.State{older}, nil, holdOpened.Add(26*time.Hour), 30*time.Minute)
+	hold := ReadCapacityHold(fiveAgentsOnOpus(), []runstate.State{older}, nil, holdOpened.Add(26*time.Hour), 30*time.Minute, CapacityEvidence{})
 	if !hold.Holding || !hold.Since.Equal(older.UpdatedAt) {
 		t.Fatalf("hold = %+v, want the developer's own model read as refused and the probe as the start", hold)
 	}
@@ -407,7 +407,7 @@ func TestAParkWrittenBeforeItsModelWasCarriedIsReadFromTheRecordItHas(t *testing
 	}
 	review := older
 	review.Phase = runstate.PhaseReviewing
-	if hold := ReadCapacityHold(agents, []runstate.State{review}, nil, holdOpened.Add(26*time.Hour), 30*time.Minute); hold.Holding {
+	if hold := ReadCapacityHold(agents, []runstate.State{review}, nil, holdOpened.Add(26*time.Hour), 30*time.Minute, CapacityEvidence{}); hold.Holding {
 		t.Fatalf("hold = %+v, want nothing from a refused review that recorded no model, over agents that differ", hold)
 	}
 }

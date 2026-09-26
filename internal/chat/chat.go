@@ -233,6 +233,11 @@ type Options struct {
 	// conversation without one fails a refused turn naming the wait and leaves
 	// no trace of it for anybody else.
 	ProviderOutages ProviderOutages
+	// CapacityServed is where a served turn records the account and model it was
+	// served on, which reads every earlier refusal of that account and model as
+	// lifted. It is optional like the rest, and a conversation without one leaves
+	// those refusals standing until their quoted reset.
+	CapacityServed CapacityServed
 	// Intake is the operator's switch over the work the harness chooses for
 	// itself: what a development manager may pull, as opposed to what the operator
 	// names. It is optional like the rest, and a conversation without one says it
@@ -1777,7 +1782,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 		// per distinct limit rather than one per attempt — and a turn that goes on
 		// to complete drops it, because failing a turn the provider served over a
 		// log write is the report deciding something, which it never does.
-		refusal = errors.Join(refusal, s.noteUsageLimit(result, err, served.Model))
+		refusal = errors.Join(refusal, s.noteUsageLimit(result, err, served.Model, refusedOn.AccountAlias))
 		if !s.options.waitsOutUsageLimits() {
 			break
 		}
@@ -1820,6 +1825,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt, operatorMessage string) 
 	away := s.noteProviderOutage(result, err)
 	if away == nil && err == nil {
 		s.noteProviderServed()
+	}
+	// A turn served on a model is the provider saying that model's window is open
+	// on the account it was served under, whatever reset an earlier refusal of it
+	// quoted — which is what reads that refusal, and every surface built on it,
+	// as lifted.
+	if away == nil && err == nil && refusedForUsageLimit(result, err) == nil {
+		s.noteCapacityServed(s.servingEndpoint(served))
 	}
 	// And it says so in the error the turn fails with. To a person at a terminal
 	// that changes nothing — they are told what happened either way — but a caller

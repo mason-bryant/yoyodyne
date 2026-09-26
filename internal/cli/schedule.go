@@ -739,6 +739,11 @@ func openPull(configPath string, stderr io.Writer) (orchestrator.Pull, error) {
 		// a window the record already holds chooses nothing from its first poll.
 		UsageLimits: parts.usageLimits,
 		Developers:  developerEndpoints(parts.config),
+		// Read against what the provider has served since and which conversations
+		// are still their roles', so intake is never held on a window a served
+		// turn has disproved or on a conversation nothing will speak in again.
+		CapacityServed: parts.capacityServed,
+		Conversations:  pullConversations(parts),
 		// The audit that gives back a claim with nothing alive behind it. It is
 		// wired into the pull rather than into a run for the reason the escalation
 		// is, and a sharper one: the state it catches is a run that is not there, so

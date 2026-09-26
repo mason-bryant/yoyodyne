@@ -371,6 +371,12 @@ type Pipeline struct {
 	// optional: a run wired without one waits exactly as it would have, and what
 	// is lost is the record every surface names the wait from.
 	ProviderOutages ProviderOutages
+	// CapacityServed is where every invocation the provider served records the
+	// account and model it was served on, which is what reads a refusal of that
+	// account and model as lifted before the reset it quoted. It is optional: a
+	// run wired without one runs exactly as it would have, and every refusal then
+	// stands until its quoted reset.
+	CapacityServed CapacityServedRecorder
 	// Selection is why this pipeline is running what it runs: who chose the work
 	// and on what grounds. It is recorded with the run so that an operator reading
 	// what is in flight can see why each item was picked, which is the question
@@ -3159,6 +3165,15 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		}
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
+		// An attempt served on the developer's model is also the provider saying
+		// that model's window is open on this account, whatever reset an earlier
+		// refusal of it quoted.
+		if err == nil && providerResult.ProviderOutage == nil && !refusedForLimit && !refusedForOverload {
+			what := fmt.Sprintf("a developer attempt of run %s of %s", a.state.RunID, a.state.WorkItemID)
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.developerModel(), what); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
 		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
 		if !refusedForLimit && !refusedForOverload && !a.mayRelaunch(died) {
 			// The relaunch budget is spent, which is the right bound for a provider
@@ -6314,6 +6329,14 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		// outage in review is the only invocation that would ever find out.
 		if reviewReachedProvider(reported, err) {
 			if servedErr := a.pipeline.noticeProviderServed(); servedErr != nil {
+				a.outcome.ProviderOutageProblem = servedErr.Error()
+			}
+		}
+		// A review that came back with a verdict was served on the reviewer's
+		// model, which is the provider saying that model's window is open.
+		if err == nil {
+			what := fmt.Sprintf("a review of run %s of %s", a.state.RunID, a.state.WorkItemID)
+			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.pipeline.reviewer().Model, what); servedErr != nil {
 				a.outcome.ProviderOutageProblem = servedErr.Error()
 			}
 		}

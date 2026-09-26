@@ -147,6 +147,10 @@ type components struct {
 	// one have no run between them to write it on, and every surface that names
 	// the wait reads it from here.
 	outages *runstate.ProviderOutageStore
+	// capacityServed is the latest moment the provider served each account and
+	// model, written by every served invocation and read against the usage
+	// limits: a refusal recorded before it on that account and model is lifted.
+	capacityServed *runstate.CapacityServedStore
 	// spend is the cost log every provider invocation this process makes lands
 	// in. It is built under the product beside the usage limits, and for the
 	// mirror-image reason: that log says when the harness could not spend, and
@@ -301,6 +305,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	capacityServed, err := runstate.NewCapacityServedStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	spendLog, err := runstate.NewSpendStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -349,6 +357,7 @@ func buildComponents(configPath string) (components, error) {
 		releasedClaims:  releasedClaims,
 		usageLimits:     usageLimits,
 		outages:         outages,
+		capacityServed:  capacityServed,
 		spend:           spendLog,
 		worktrees:       worktrees,
 		redactValues:    execution.SensitiveEnvironmentValues(os.Environ()),
@@ -503,6 +512,10 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// wired here so a run's wait is one every surface can name, and so the
 		// operator is told what ends it rather than sent to release a hold.
 		ProviderOutages: parts.outages,
+		// Where an invocation the provider served records the account and model it
+		// was served on, which is what reads a refusal of them as lifted before the
+		// reset it quoted.
+		CapacityServed: parts.capacityServed,
 		// A change an agent proposes to a document it may not edit is recorded
 		// here, for the same reason and in the same way: the run that argued the
 		// design was wrong is over long before anybody decides what to do about it,

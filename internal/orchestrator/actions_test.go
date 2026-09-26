@@ -844,6 +844,7 @@ var notAStep = map[string]string{
 	"recovering":                 "waits out a failure whose class says the next attempt may well succeed, and asks the same boundary again",
 	"recoverProvider":            "waits out a provider death whose class says the next invocation may well succeed",
 	"carrySession":               "keeps the session an ended invocation established, so the next one resumes in it",
+	"developerModel":             "reads which model the run's developer invocations ask for, to record it as served",
 	"recordEnvironmentalRefusal": "records that the machine, not the work, refused the round",
 
 	// The environment an invocation is made in, prepared before the first one and
