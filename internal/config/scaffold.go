@@ -285,6 +285,13 @@ execution:
   # reorder while it is running. An idle watch costs one local tracker read per
   # interval and asks no provider anything.
   work_poll: %s
+  # A watching session that finds a build deployed over it waits out the runs it
+  # hosts before restarting into the new build -- for at most this long. Past it
+  # the session restarts anyway and the hosted runs are stopped and preserved
+  # for the session that comes back to re-adopt, with every counter as it was.
+  # The session keeps pulling into free seats and firing its recurring tasks
+  # while it drains; only the runs it hosts are what the drain is about.
+  redeploy_drain_limit: %s
   # The failure-storm brake for a session left running unattended: this many runs
   # blocking in a row, with nothing landing between them, holds intake and
   # summons the development manager at once to decide what happens to it. It is
@@ -409,6 +416,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.CheckStageTimeout),
 		renderScaffoldDuration(effective.Execution.LandingCheckTimeout),
 		renderScaffoldDuration(effective.Execution.WorkPoll),
+		renderScaffoldDuration(effective.Execution.RedeployDrainLimit),
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		renderScaffoldDuration(effective.Execution.BrakeCooldown),
 		effective.Execution.BrakeEscalationCycles,

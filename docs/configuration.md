@@ -500,6 +500,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.check_timeout` (`30m`),
    `execution.check_stage_timeout` (`30m`),
    `execution.landing_check_timeout` (`2h`),
+   `execution.redeploy_drain_limit` (`15m`),
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
    `approvals.publishing` (`human`), `approvals.work_items` (`human`), an
@@ -2377,7 +2378,10 @@ everywhere while they run. What does wait is whatever waits on that process
 returning from the run: `yoyo run` prints its result only once the landing has
 ended, a `yoyo work` drain or a `--limit` returns only once every run it
 started has landed, and the restart a deployed build causes waits out every run
-the session started, landing included. So a landing holds those for up to
+the session started, landing included — up to
+[`redeploy_drain_limit`](#watching-instead-of-draining), past which the
+landing checks are stopped and the landing is recorded as unverified. So a
+landing holds `yoyo run` and a drain or a `--limit` for up to
 `landing_check_timeout` times the number of landing checks — two hours a check
 by default — plus any time it spends waiting its turn behind another landing
 (below), and a project that cannot afford that on a drain lowers the budget or
@@ -2796,6 +2800,7 @@ execution:
   blocked_runs_before_intake_hold: 3   # the default
   brake_cooldown: 30m                  # the default
   brake_escalation_cycles: 4           # the default: two hours at that cooldown
+  redeploy_drain_limit: 15m            # the default
 ```
 
 Nothing else about the pass changes, and nothing needed to. Every pull re-reads
@@ -2948,11 +2953,38 @@ the configuration rather than a reading that failed.
 
 **Beyond the three: a watching session takes up a build deployed over it.** When
 the `yoyo` it is running is written over — you rebuild it, you install it — the
-session stops choosing, waits out every run it already started, and restarts into
-what you deployed. A run in flight is never interrupted for it, and nothing is
-configured: a deploy is the whole of the instruction. What that costs is one
-restart per deploy, and the queue is re-read from scratch on the way back in
-exactly as it is at every poll.
+session drains: it restarts into what you deployed the moment it hosts no run,
+and until then it goes on polling, pulling into free seats, and firing its
+recurring tasks, because the drain is about the runs it hosts and not about the
+scheduler's other duties. A deploy is the whole of the instruction; what is
+configured is only how long the wait may last:
+
+```yaml
+execution:
+  redeploy_drain_limit: 15m            # the default
+```
+
+Past that bound the session restarts anyway. Each run it still hosts is stopped
+where it is — at its developer attempt, its checks, or its review — and
+preserved whole: worktree, branch, claim, developer session, and every counter.
+The session that comes back re-adopts each one at its first pull, ahead of
+anything new, and continues it from the phase it was stopped at — the session
+that stopped it never does, however long it goes on pulling. A run at its
+promotion is the one exception, and is waited out past the bound rather than
+interrupted. A run that has already landed and is running its
+[landing checks](#where-the-whole-suite-runs) is stopped too: nothing about the
+run is at stake by then, and the landing is recorded as unverified and files
+nothing. The bound is minutes rather than hours on purpose: on 2026-09-19 a
+session waited two hours on one run's race suite under load, with its second
+seat empty and two recurring passes missed. What a run the bound stops loses is
+the minutes its current phase had spent; a run stopped at its checks runs them
+again. Set it longer if that trade is wrong for your suite, and never to
+nothing — a drain with no bound is the wait this exists to end, and the
+configuration refuses it. [Operations](operations.md#a-session-draining-to-restart-into-a-deployed-build)
+says what a drain does and does not stop.
+
+What a deploy costs is one restart per deploy, and the queue is re-read from
+scratch on the way back in exactly as it is at every poll.
 
 The bounds cross the restart reduced to what is left of them — `--budget` less
 what the session has spent, `--limit` less what it has started — because a bound
@@ -3003,10 +3035,11 @@ changing them under a running developer would mean a run judged by rules it was
 never started under.
 
 A watching session is the same answer said again: `work_poll`,
-`blocked_runs_before_intake_hold`, `brake_cooldown`, and
-`brake_escalation_cycles` are re-read at every pull too, so an interval you
-shorten or a brake you loosen takes effect at the next wait rather than at the
-next restart, and a bound you tighten under a standing loop is heard at the
+`blocked_runs_before_intake_hold`, `brake_cooldown`,
+`brake_escalation_cycles`, and `redeploy_drain_limit` are re-read at every pull
+too, so an interval you shorten, a brake you loosen, or a drain bound you
+lengthen under a draining session takes effect at the next wait rather than at
+the next restart, and a bound you tighten under a standing loop is heard at the
 next probe.
 
 ### Why each run says why it was there

@@ -475,6 +475,16 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			describeProviderStop(state.ProviderStop), state.WorkItemID, r.vanishedGrace())
 		return result, nil
 	}
+	// A run its hosting watch session stopped for a redeploy is not an
+	// interrupted run either: it recorded the phase it was at and is owed the
+	// rest of the gate from there, by the session that comes back or by `yoyo
+	// run`. Settling it here would cancel work the session only put down.
+	if stoppedForRedeployIsResumable(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("%s; the session that comes back re-adopts it, and `yoyo run %s` continues it otherwise",
+			describeRedeployStop(*state.RedeployStop), state.WorkItemID)
+		return result, nil
+	}
 	// A run whose merge the forge queued is not an interrupted run: it finished,
 	// and what it still owes is the forge's answer about a merge that lands
 	// minutes after the run was over. Asking for that answer is the whole of

@@ -216,6 +216,7 @@ func newResolution() *resolution {
 				CheckStageTimeout:                 defaultCheckStageTimeout,
 				LandingCheckTimeout:               defaultLandingCheckTimeout,
 				WorkPoll:                          defaultWorkPoll,
+				RedeployDrainLimit:                defaultRedeployDrainLimit,
 				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
 				BrakeCooldown:                     defaultBrakeCooldown,
 				BrakeEscalationCycles:             defaultBrakeEscalationCycles,
@@ -300,6 +301,7 @@ func newResolution() *resolution {
 			"execution.check_stage_timeout":                       OriginDefault,
 			"execution.landing_check_timeout":                     OriginDefault,
 			"execution.work_poll":                                 OriginDefault,
+			"execution.redeploy_drain_limit":                      OriginDefault,
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"execution.brake_cooldown":                            OriginDefault,
 			"execution.brake_escalation_cycles":                   OriginDefault,
@@ -344,6 +346,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.check_stage_timeout", execution.CheckStageTimeout, &r.config.Execution.CheckStageTimeout, applied.origin)
 		setValue(r.origins, "execution.landing_check_timeout", execution.LandingCheckTimeout, &r.config.Execution.LandingCheckTimeout, applied.origin)
 		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
+		setValue(r.origins, "execution.redeploy_drain_limit", execution.RedeployDrainLimit, &r.config.Execution.RedeployDrainLimit, applied.origin)
 		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 		setValue(r.origins, "execution.brake_cooldown", execution.BrakeCooldown, &r.config.Execution.BrakeCooldown, applied.origin)
 		setValue(r.origins, "execution.brake_escalation_cycles", execution.BrakeEscalationCycles, &r.config.Execution.BrakeEscalationCycles, applied.origin)
