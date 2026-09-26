@@ -10,6 +10,14 @@ revisions:
       by: architect
       at: 2026-09-25T04:00:00Z
       reason: yoyodyne-ifd.430.6 - the program manager designed on the operator's 2026-09-24 decisions; the ten open questions ruled, the lane enforced in the conversation's authority table, the lane report and the blocked, stale, and working statuses specified as read-model derivations, and the boundary with the development manager's hourly sweep written
+    - action: amended
+      by: architect
+      at: 2026-09-26T19:54:03Z
+      reason: yoyodyne-ifd.437.7 - 'tool posture' removed; the sentence says what the instance can reach in plain words (wording from approved amendment c41c0b30)
+    - action: amended
+      by: architect
+      at: 2026-09-26T19:54:03Z
+      reason: tool-interface companion - the program manager's capabilities are tools under the tool interface; the set stays fixed in code
 ---
 
 # The program manager: one role type, one lane per instance, requests batched to the product manager
@@ -34,7 +42,7 @@ The operator decided the shape on 2026-09-24 and those decisions are restated he
 
 ## The fixed capability set
 
-Stated in the registry's vocabulary; a primitive named here that the registry does not yet declare is added to it in Go with an authority-inventory row, per the parity guard. The bundle holds:
+Stated in the registry's vocabulary, and held as tools under [tool-interface](tool-interface.md): a primitive named here that the registry does not yet declare is added to it in Go with an authority-inventory row and a tool descriptor, per the parity guard. The bundle holds:
 
 **Reads.** `work-item.read` (read one item, survey the open queue); `repository.read` and `repository.list`, as the other management bundles hold them, at a recorded commit; `readmodel.read` — the one read model's queries, delivered two ways: every pass opens with the standing, the throughput windows, the capacity state, the docket as counts, the reports pile as counts, and the other instances' status lines, and a bounded block in the reply asks for one named query in full. There is no other source. Slack is a projection of the same record and is never read; a program manager that wants what the channel said reads the record the channel was rendered from.
 
@@ -44,7 +52,7 @@ Stated in the registry's vocabulary; a primitive named here that the registry do
 
 **Speech.** `report.file` — reports at the three severities, and the digest, which is a report; `amendment.propose` against any governed document, exactly as the developer holds it, because a lane about writing quality finds stale designs and the product manager cannot amend one either; `exchange.ask` and `exchange.answer` on the ask channel, which gains the role as a member; and `service.request-restart`, the one request to the supervisor, specified below.
 
-**Excluded, whatever a persona or a remit says:** every tracker action on an item outside the lane; close and retire anywhere; every triage decision and cap crossing; `run.cause`, `run.repair-continue`, `publication.merge-repeat`; directives, resolutions, and withdrawals; artifact writes; gate evidence of any kind; the human gate; any repository write; any command. It writes no code, and it holds no tool posture but the read-only one the other management roles hold.
+**Excluded, whatever a persona or a remit says:** every tracker action on an item outside the lane; close and retire anywhere; every triage decision and cap crossing; `run.cause`, `run.repair-continue`, `publication.merge-repeat`; directives, resolutions, and withdrawals; artifact writes; gate evidence of any kind; the human gate; any repository write; any command. It writes no code, and it may use no tools, as the other management roles may not: what it reads, the harness reads for it.
 
 ## The lane, and how it is enforced
 

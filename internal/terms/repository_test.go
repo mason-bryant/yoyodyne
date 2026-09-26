@@ -62,9 +62,10 @@ func TestThisRepositoryOwnCoinedTermsAreRegistered(t *testing.T) {
 
 // `posture` was retired on 2026-09-25 (yoyodyne-ifd.437.6): the operator found it
 // unclear. So this repository's own register has to refuse it, and not only a
-// fixture's: a command's string and a governed document the row does not name
-// are both reported, while a document the row names is excused until its owner
-// amends it.
+// fixture's: a command's string and a governed document are both reported. The
+// row excused three governed documents until their owner amended them, and the
+// architect's amendments under yoyodyne-ifd.437.7 took the word out of all three,
+// so the program manager design, once excused, is refused like any other.
 func TestThisRepositoryRefusesPosture(t *testing.T) {
 	t.Parallel()
 
@@ -81,11 +82,11 @@ func TestThisRepositoryRefusesPosture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", RegisterPath, err)
 	}
-	const excused = "docs/designs/program-manager.md"
+	const amended = "docs/designs/program-manager.md"
 	directory := root(t, string(registerBody), map[string]string{
 		"internal/cli/one.go":   "package cli\n\nconst said = \"the reviewer's tool posture\"\n",
 		"docs/designs/other.md": "# Other\n\nEvery role has a posture.\n",
-		excused:                 "# Program manager\n\nIt holds no tool posture.\n",
+		amended:                 "# Program manager\n\nIt holds no tool posture.\n",
 	})
 	problems, err := Check(directory)
 	if err != nil {
@@ -100,12 +101,9 @@ func TestThisRepositoryRefusesPosture(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"internal/cli/one.go", "docs/designs/other.md"} {
+	for _, path := range []string{"internal/cli/one.go", "docs/designs/other.md", amended} {
 		if !reported[path] {
 			t.Errorf("Check() did not refuse posture in %s; reported %v", path, problems)
 		}
-	}
-	if reported[excused] {
-		t.Errorf("Check() refused posture in %s, which the replaced row names as still carrying it", excused)
 	}
 }
