@@ -2520,6 +2520,9 @@ type scheduleHarness struct {
 	carried     []CarryOutTask
 	outstanding func(*scheduleHarness) ([]CarryOutTask, error)
 	carry       func(*scheduleHarness, CarryOutTask) (CarriedOut, Outcome, error)
+	// passedOver is what each pull handed the carry-out as the decisions it
+	// offered and did not attempt, one map per pull, in order.
+	passedOver []map[string]string
 	// paused is the operator's pause over everything the harness spends, as the
 	// pull reads it. A pull is wired with the switch only where a test asks, so
 	// every other test's pass cannot see it — which is what every pass was before.

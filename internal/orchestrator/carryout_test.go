@@ -433,6 +433,19 @@ func (h *scheduleHarness) Carry(_ context.Context, task CarryOutTask) (CarriedOu
 	return carry(h, task)
 }
 
+// RecordUnattempted keeps what each pull said it passed over, and writes
+// nothing: what the real one writes is exercised against the real record.
+func (h *scheduleHarness) RecordUnattempted(_ context.Context, _ time.Duration, passed map[string]string) ([]CarriedOut, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	copied := make(map[string]string, len(passed))
+	for run, why := range passed {
+		copied[run] = why
+	}
+	h.passedOver = append(h.passedOver, copied)
+	return nil, nil
+}
+
 // harnessPause is the operator's pause as the pull reads it, over the harness's
 // own switch.
 type harnessPause struct{ h *scheduleHarness }
@@ -549,9 +562,9 @@ func TestAPassCarriesOutARecordedDecisionBesideTheQueuesOwnWork(t *testing.T) {
 	}
 }
 
-// One per pull, so a backlog of decided stoppages reaches a developer over
-// several polls rather than spending the whole harness at once.
-func TestAPullFiresOneDecisionHoweverManyAreOutstanding(t *testing.T) {
+// A session bounded by --limit fires no more decisions than the bound leaves,
+// because every decision fired is a run started.
+func TestAPullFiresNoMoreDecisionsThanTheSessionsLimitLeaves(t *testing.T) {
 	t.Parallel()
 
 	harness := newScheduleHarness()
@@ -575,6 +588,83 @@ func TestAPullFiresOneDecisionHoweverManyAreOutstanding(t *testing.T) {
 	}
 	if schedule.Stopped != ScheduleLimitReached {
 		t.Fatalf("stopped = %q, want the pass bounded by the limit it was given", schedule.Stopped)
+	}
+}
+
+// decidedTaskOf is a recorded decision about a stoppage of its own, so a pull
+// passing some of them over can say which.
+func decidedTaskOf(workItemID, runID string) CarryOutTask {
+	task := decidedTask(workItemID)
+	task.RunID = runID
+	task.DocketKey = triage.Key(triage.ClassStoppedRun, runID)
+	return task
+}
+
+// A recorded decision is attempted on the first pull that has a slot for it,
+// whatever its place on the docket, and one a pull could not reach is handed to
+// the record with why rather than left unsaid. Until yoyodyne-ifd.428.39 a pull
+// fired the oldest decision and nothing else, however many slots stood free.
+func TestAPullAttemptsEveryDecisionItHasASlotForAndSaysWhyItPassedTheRest(t *testing.T) {
+	t.Parallel()
+
+	first := "run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	second := "run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	third := "run-cccccccccccccccccccccccccccccccc"
+	harness := newScheduleHarness()
+	harness.capacity = 2
+	harness.outstanding = outstandingUntilAttempted(
+		decidedTaskOf("yoyodyne-ifd.346", first), decidedTaskOf("yoyodyne-ifd.347", second), decidedTaskOf("yoyodyne-ifd.348", third))
+	release := make(chan struct{})
+	harness.carry = func(h *scheduleHarness, task CarryOutTask) (CarriedOut, Outcome, error) {
+		// Held until the first pull has accounted for what it passed over, so the
+		// slots it spent are still spent when it does.
+		<-release
+		return CarriedOut{
+			WorkItemID: task.WorkItemID, RunID: task.RunID, Decision: task.Decision,
+			Carried: true, Reason: rerunReasoning,
+		}, h.complete(task.WorkItemID), nil
+	}
+	done := make(chan struct{})
+	var schedule Schedule
+	var err error
+	go func() {
+		defer close(done)
+		schedule, err = (Scheduler{Open: harness.open}).Schedule(context.Background())
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		harness.mu.Lock()
+		accounted := len(harness.passedOver) > 0
+		harness.mu.Unlock()
+		if accounted || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	harness.mu.Lock()
+	var firstPull []string
+	for _, task := range harness.carried {
+		firstPull = append(firstPull, task.RunID)
+	}
+	var passed map[string]string
+	if len(harness.passedOver) > 0 {
+		passed = harness.passedOver[0]
+	}
+	harness.mu.Unlock()
+	close(release)
+	<-done
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(firstPull) != 2 {
+		t.Fatalf("first pull carried %v, want both decisions it had a slot for attempted at once", firstPull)
+	}
+	if why := passed[third]; !strings.Contains(why, "developer slot") || len(passed) != 1 {
+		t.Fatalf("passed over = %#v, want the third decision handed to the record with why the pull did not reach it", passed)
+	}
+	// And the pull after reaches it.
+	if len(harness.carried) != 3 || len(schedule.CarriedOut) != 3 {
+		t.Fatalf("carried = %#v, want every decision attempted by the pass", harness.carried)
 	}
 }
 

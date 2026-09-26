@@ -11,10 +11,10 @@ package cli
 // for and then dropped — and it repeats that merge request, once per publication.
 //
 // Neither of the first two waits on being typed. The scheduling pass fires a
-// recorded repair or re-run itself, one per pull, through exactly those two
-// actions — see orchestrator/carryout.go — so what those verbs are for is firing
-// one now rather than at the next pass, and for a harness where nothing is
-// watching the queue. A re-arm is still typed.
+// recorded repair or re-run itself, as many per pull as it has slots for,
+// through exactly those two actions — see orchestrator/carryout.go — so what
+// those verbs are for is firing one now rather than at the next pass, and for a
+// harness where nothing is watching the queue. A re-arm is still typed.
 //
 // The decision is not made here and cannot be. What each takes is the run the
 // docket entry names, and what it does with it is the harness's own work —

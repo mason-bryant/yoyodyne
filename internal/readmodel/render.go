@@ -284,19 +284,27 @@ func (s Standing) renderNeedsHuman() string {
 // exactly the message that woke somebody. It says nothing at all when neither
 // kind is present, which is a queue held by dependencies and directives and
 // where a clause about triage would be noise.
+//
+// The decisions the harness has not carried out are counted beside it by what
+// became of them — refused by a gate, or never attempted by a pass — whenever
+// either kind stands, because the two are fixed in different places and the
+// second is the one that used to be invisible.
 func (s Standing) heldSplit() string {
 	decision := fmt.Sprintf("%d %s the development manager's decision", s.AwaitingDecision, awaits(s.AwaitingDecision))
 	carryOut := fmt.Sprintf("%d %s the harness carrying out a decision already recorded", s.AwaitingCarryOut, awaits(s.AwaitingCarryOut))
+	var split string
 	switch {
 	case s.AwaitingDecision > 0 && s.AwaitingCarryOut > 0:
-		return "; " + decision + ", " + carryOut
+		split = "; " + decision + ", " + carryOut
 	case s.AwaitingDecision > 0:
-		return "; " + decision
+		split = "; " + decision
 	case s.AwaitingCarryOut > 0:
-		return "; " + carryOut
-	default:
-		return ""
+		split = "; " + carryOut
 	}
+	if s.CarryOutsRefused > 0 || s.CarryOutsUnattempted > 0 {
+		split += fmt.Sprintf("; decisions not carried out: %d refused, %d unattempted", s.CarryOutsRefused, s.CarryOutsUnattempted)
+	}
+	return split
 }
 
 // unreadable is a line whose source could not be read. It is never "nothing":

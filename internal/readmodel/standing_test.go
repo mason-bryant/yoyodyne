@@ -1234,6 +1234,56 @@ func TestHeldWorkIsCountedByWhoseMoveItIsAndOnlyWhereItStopsSomething(t *testing
 	}
 }
 
+// The decisions the harness has not carried out are counted on the held-work
+// line by what became of them: refused by a gate, or never attempted by any
+// pass. The second is what yoyodyne-ifd.192 and .187 sat in for a week with no
+// surface saying so. A finding waiting on a gate shut for everything, and one
+// about a decision since replaced, are neither.
+func TestTheHeldWorkLineCountsUnattemptedDecisionsBesideRefusedOnes(t *testing.T) {
+	t.Parallel()
+
+	stopped := moment.Add(-24 * time.Hour)
+	decided := stopped.Add(time.Hour)
+	sources := quietSources()
+	sources.Tracker = statusTracker{fakeTracker{
+		byStatus: map[string][]beads.WorkItem{"blocked": {
+			{ID: "yoyodyne-ifd.150", Title: "Refused", Status: "blocked"},
+			{ID: "yoyodyne-ifd.151", Title: "Never attempted", Status: "blocked"},
+			{ID: "yoyodyne-ifd.152", Title: "Waiting on the hold", Status: "blocked"},
+		}},
+	}}
+	sources.Stoppages = fakeStoppages{runs: []runstate.State{
+		heldRun("run-a", "yoyodyne-ifd.150", stopped),
+		heldRun("run-b", "yoyodyne-ifd.151", stopped),
+		heldRun("run-c", "yoyodyne-ifd.152", stopped),
+	}}
+	finding := func(run string, unattempted, waiting bool) runstate.TriageCarryOut {
+		attempts := 1
+		if unattempted {
+			attempts = 0
+		}
+		return runstate.TriageCarryOut{RunID: run, Decision: runstate.TriageDecisionRerun, Gate: runstate.TriageGateBudget,
+			Refusal: "said", Clears: "cleared", Unattempted: unattempted, Waiting: waiting, Attempts: attempts, RefusedAt: decided.Add(time.Minute)}
+	}
+	rerun := func(run string) []runstate.TriageDecision {
+		return []runstate.TriageDecision{{Decision: runstate.TriageDecisionRerun, RunID: run, DecidedAt: decided}}
+	}
+	sources.Decisions = recordedDecisions{
+		"yoyodyne-ifd.150": {Decisions: rerun("run-a"), CarryOuts: []runstate.TriageCarryOut{finding("run-a", false, false)}},
+		"yoyodyne-ifd.151": {Decisions: rerun("run-b"), CarryOuts: []runstate.TriageCarryOut{finding("run-b", true, false)}},
+		"yoyodyne-ifd.152": {Decisions: rerun("run-c"), CarryOuts: []runstate.TriageCarryOut{finding("run-c", false, true)}},
+	}
+
+	standing := ReadStanding(context.Background(), sources)
+	if standing.CarryOutsRefused != 1 || standing.CarryOutsUnattempted != 1 {
+		t.Fatalf("standing counts %d refused and %d unattempted, want one of each", standing.CarryOutsRefused, standing.CarryOutsUnattempted)
+	}
+	want := "Not startable (3 of 3 admitted items; 3 await the harness carrying out a decision already recorded; decisions not carried out: 1 refused, 1 unattempted):\n"
+	if rendered := standing.Render(); !strings.Contains(rendered, want) {
+		t.Fatalf("rendered:\n%s\nmissing: %q", rendered, want)
+	}
+}
+
 // A parked item that is also held reads as parked, because releasing the hold
 // would not make it pullable. Counting it as held would put it on a total
 // nothing under the line accounts for.

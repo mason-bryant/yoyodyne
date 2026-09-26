@@ -256,10 +256,11 @@ repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
 run's repair loop on the change it already has rather than starting the item
 over. Its opposite is `yoyo triage rerun`, which starts the item over for a
 change whose ground moved. **A watching `yoyo work` session fires whichever of
-the two she recorded, one per pull, without anybody typing either command**, so
-the verbs are what fires a decision now rather than at the next pull; every gate
-they ask refuses the pass in the same way, and every refusal is written onto the
-item and shown on her docket entry naming the gate and what would clear it.
+the two she recorded, at the first pull with a developer slot for it, without
+anybody typing either command**, so the verbs are what fires a decision now rather
+than at the next pull; every gate they ask refuses the pass in the same way, and
+every refusal is written onto the item and shown on her docket entry naming the
+gate and what would clear it.
 **The two are different acts with different accounting** — one spends the item's repair grant and the review rounds that
 grant buys, the other spends its re-run budget — and neither of them is `yoyo
 run <beads-id>`, which is you naming an item rather than carrying out a decision
@@ -1242,10 +1243,17 @@ docketed both as that stoppage and as an escalation a role raised from it is put
 to her once, as the one entry her docket folds the two into.
 
 **A pass also carries out what she decided about it.** A repair or a re-run she
-recorded is fired by the pass itself, oldest stoppage first, one per pull,
-against a developer slot exactly as a pulled item is — so recording the decision
-is what causes it, and `yoyo triage repair` and `yoyo triage rerun` are what
-fires one now rather than at the next pull. It runs under every gate those verbs
+recorded is fired by the pass itself, oldest stoppage first, as many per pull as
+there are developer slots free for them — and as a session's `--limit` leaves,
+since each is a run started — against a developer slot exactly as a pulled item
+is, so recording the decision is what causes it, and `yoyo triage repair` and
+`yoyo triage rerun` are what fires one now rather than at the next pull. Every
+decision the item's record holds is read, whatever its place on the docket: the
+one about a stoppage docketed as a stopped run, and the item's latest decision
+where it names a run no such entry stands for. A re-run recorded again about a
+stoppage whose one re-run was already claimed is attempted as well, and refused
+on the record — triage re-runs one docketed stoppage once — naming the item's
+latest stoppage as where the decision belongs. It runs under every gate those verbs
 already ask: your pause, your intake hold, the item's own triage budgets,
 developer capacity, and the preserved worktree being what a continued developer
 could be handed back. A refusal spends nothing and is never silent: it is
@@ -1257,7 +1265,25 @@ fire does not starve the ones behind it; a gate shut for everything at once —
 your pause, your intake hold, a full harness — is attempted once while it
 stands and again on the first pull after it opens. Before this, thirty-three
 decided items stood unfired for days because the only executor was a person
-typing one of the two verbs. [Deciding what becomes of stopped
+typing one of the two verbs.
+
+**A decision is never silently unattempted.** Fired or refused are the two
+endings an attempt has, and both are written down; the third ending is a
+decision no pass hands to an action at all — held back because another run of
+the item is in flight, because the slots the pull had went to decisions ahead
+of it, or because the item's own record disagrees about what is left of its
+re-runs — and nothing refuses a decision nobody attempts. So a decision still
+standing one poll interval after it was recorded, with nothing attempted since,
+is written onto the item's triage record as *unattempted*, saying what kept it
+back and what clears it, and her docket entry carries it and puts it ahead of
+the walk. It paces nothing: the first pass that reaches the decision attempts
+it, and what that attempt comes to replaces the record. `yoyo status` counts
+these beside the refused ones on its held-work line — *decisions not carried
+out: 1 refused, 1 unattempted* — because the two are fixed in different places.
+The re-runs recorded for yoyodyne-ifd.192 and .187 on 2026-09-19 sat in that
+third ending for a week with nothing anywhere saying so;
+[the diagnosis](diagnoses/yoyodyne-ifd-428-39-unattempted-carry-outs.md) is how.
+[Deciding what becomes of stopped
 work](conversation.md#deciding-what-becomes-of-stopped-work) is the decision
 side of it.
 
