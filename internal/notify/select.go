@@ -256,6 +256,17 @@ func FromRun(before, after runstate.State, look func(runstate.State) triage.Foun
 		if after.IntegrationStop != nil {
 			remains.Mover = integrationMove(after, mover == readmodel.MoverHarness, found)
 		}
+		// A check stage its bound stopped says that load stopped it rather than the
+		// change, and whose move follows — the harness's, continuing it at its checks,
+		// until its continuations are spent — in the sentence the docket entry
+		// carries.
+		if says := after.CheckStageStopSays(); says != "" {
+			whose := "the development manager's"
+			if mover == readmodel.MoverHarness {
+				whose = "the harness's"
+			}
+			remains.Mover = whose + " — " + says
+		}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
 			sayWith(KindBlockerRecorded, stoppageSeverity(after, mover), Harness(), remains, endingReason(after))
 		} else {

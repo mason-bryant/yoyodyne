@@ -996,6 +996,20 @@ type Entry struct {
 	// from the target branch with the session gone and the uncommitted work in
 	// that worktree gone with it.
 	SessionResumable bool `json:"session_resumable,omitempty"`
+	// CheckStageStop is the run's own account of a stoppage made by the check
+	// stage reaching execution.check_stage_timeout: that load stopped it rather
+	// than the change, and what happens to it next. It is the sentence the
+	// channel says too, so the two cannot come to say different things about one
+	// run. Empty on every other stoppage.
+	CheckStageStop string `json:"check_stage_stop,omitempty"`
+	// CheckStageFailure is the bound's own account of where it stopped the stage,
+	// in the words the run ended on.
+	CheckStageFailure string `json:"check_stage_failure,omitempty"`
+	// HarnessContinuesChecks reports a stoppage the harness continues itself at
+	// its checks, on the change the run already has, with no decision asked of
+	// anybody: the stage bound stopped it, and the harness's own continuations
+	// of it are not yet spent. Validate holds it to an entry that says so.
+	HarnessContinuesChecks bool `json:"harness_continues_checks,omitempty"`
 	// ResumesAt is the phase a resumable stall is continued at, where that is not
 	// a developer attempt: the checks or the review, which a run reaches only once
 	// its developer attempt is complete. It is empty for a stall mid-attempt,
@@ -1287,6 +1301,15 @@ func (e Entry) Validate() error {
 	if len(e.Failure) > MaxBlockerBytes {
 		problems = append(problems, fmt.Errorf("failure is %d bytes, limit is %d", len(e.Failure), MaxBlockerBytes))
 	}
+	if len(e.CheckStageStop) > MaxMessageBytes {
+		problems = append(problems, fmt.Errorf("check_stage_stop is %d bytes, limit is %d", len(e.CheckStageStop), MaxMessageBytes))
+	}
+	if len(e.CheckStageFailure) > MaxBlockerBytes {
+		problems = append(problems, fmt.Errorf("check_stage_failure is %d bytes, limit is %d", len(e.CheckStageFailure), MaxBlockerBytes))
+	}
+	if e.HarnessContinuesChecks && strings.TrimSpace(e.CheckStageStop) == "" {
+		problems = append(problems, errors.New("harness_continues_checks: only a stoppage the check stage bound made is continued at its checks, so it requires check_stage_stop"))
+	}
 	if len(e.Summary) > MaxMessageBytes {
 		problems = append(problems, fmt.Errorf("summary is %d bytes, limit is %d", len(e.Summary), MaxMessageBytes))
 	}
@@ -1368,9 +1391,10 @@ func (e Entry) Validate() error {
 		// Either says what stopped the run, and one of them has to. A stoppage the
 		// harness classified carries the blocker the work item carries; a run that
 		// died before anything could classify it carries the reason it gave for
-		// dying.
-		if strings.TrimSpace(e.Blocker) == "" && strings.TrimSpace(e.Failure) == "" {
-			problems = append(problems, errors.New("a stopped run entry carries the durable blocker that stopped it, or the failure of a death that recorded none"))
+		// dying; a run the check stage bound stopped carries where the bound
+		// stopped it.
+		if strings.TrimSpace(e.Blocker) == "" && strings.TrimSpace(e.Failure) == "" && strings.TrimSpace(e.CheckStageFailure) == "" {
+			problems = append(problems, errors.New("a stopped run entry carries the durable blocker that stopped it, the failure of a death that recorded none, or where the check stage bound stopped it"))
 		}
 		if e.Publication != nil {
 			problems = append(problems, errors.New("a stopped run entry describes a run rather than a publication"))
@@ -1547,6 +1571,12 @@ func (e Entry) Render() string {
 	// because "died holding its change" is exactly what did not happen to either.
 	if e.Blocker == "" && e.Failure != "" && e.Class != ClassUnstartedRun && e.Class != ClassUnstartedAttempt {
 		rendered.WriteString(indented("Died holding its change; the work item carries no blocker for it", e.Failure))
+	}
+	if e.CheckStageStop != "" {
+		rendered.WriteString(indented("Check stage stopped by load", e.CheckStageStop))
+		if e.CheckStageFailure != "" {
+			rendered.WriteString(indented("Where the bound stopped it", e.CheckStageFailure))
+		}
 	}
 	if e.Summary != "" {
 		rendered.WriteString(indented("Review summary", e.Summary))
@@ -1806,6 +1836,13 @@ func (e Entry) renderNextMover() string {
 	}
 	if e.Counters.AwaitingCarryOut() {
 		return "      Next mover: the harness — " + gone + "a decision about this stoppage is already recorded and has not been carried out, so what is outstanding is the carry-out rather than a decision.\n"
+	}
+	// A stage the bound stopped is continued by the harness at its checks, with
+	// nobody deciding anything, until its continuations are spent. It is said
+	// after a recorded decision, because a decision she made about it is what the
+	// harness carries out instead.
+	if e.HarnessContinuesChecks {
+		return "      Next mover: the harness — load stopped this run's check stage rather than the change, so the harness re-runs the checks on the change it already has at the next pull with a slot free and the load low enough; nothing here needs a decision unless you want it to go some other way.\n"
 	}
 	// Nothing of the change left and nothing decided is the one case the pull's
 	// hold lets go of: it holds a stop only while a worktree survives or a

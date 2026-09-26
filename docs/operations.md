@@ -1301,8 +1301,46 @@ the check stage reached its 30m0s execution.check_stage_timeout bound during mak
 
 It is a different stoppage from a check reaching its own budget, and it is
 worded as one, because raising `check_timeout` does nothing for a check the
-stage stopped. Both are docketed for the development manager like any other
-stoppage, and both leave the branch and the worktree where they were.
+stage stopped. Both leave the branch and the worktree where they were.
+
+**The harness continues a stage the bound stopped, at its checks, by itself.**
+What stops a stage at its bound is nearly always the machine — three runs' race
+suites beside each other — rather than the change, and until
+yoyodyne-ifd.429.25 the only thing that fired for one was a re-run from the
+target branch: repair was refused because nothing was handed back, resumption
+covers only approved changes, and the claim audit gave the item back half an
+hour later to a fresh run that redid the development while the finished change
+sat on its branch. Now the stopped run is docketed as it ends, and the watching
+session's pull continues it itself — no development manager decision — on the
+first pull where a developer slot is free and the machine's one-minute load
+average is below its number of cores. The run is made live again at its
+checks, on the same branch and in the same worktree, and the checks are re-run
+on the change it already has; no developer is invoked, and no review round,
+repair grant, or re-run is spent. It is held to the conditions a repair is: the
+worktree has to be as the harness left it and still hold the change, and the
+item has to be one a run may continue on. The operator's pause and the intake
+hold stop it exactly as they stop a recorded decision's carry-out. The claim
+audit leaves such an item's claim alone, so a load that stays high does not
+turn it into a fresh run.
+
+The docket entry and the run's line in the channel say it in one sentence:
+
+```text
+the check stage was stopped by load at its execution.check_stage_timeout bound, not by the change: nothing was judged and nothing was handed back to the developer; the harness continues it itself, re-running the checks on the change the run already has, on the same branch and worktree, at the next pull with a developer slot free and the machine's one-minute load average below its number of cores — no developer is invoked and no review round, repair grant, or re-run is spent (continuation 1 of 2)
+```
+
+and the entry's next mover is the harness. The continuation is recorded on the
+run (`check_stage_continuations`) and noted on the item, and the entry is closed
+in the harness's name. **The harness does this at most twice for one run.** A
+stage the bound stops a third time at a load the harness judged low enough is
+a suite that does not fit its bound — a decision about the gate or the bound,
+not something another try settles — so the entry then says the harness's
+continuations are spent and the stoppage is the development manager's, as it
+was before. So is one whose worktree somebody has been in, or whose change is
+gone: the refusal is written onto the run
+(`check_stage_continuation_refused`), the item is told, and the stoppage is
+docketed again for her, and the harness does not ask again. A stage stopped by
+a check reaching its own `check_timeout` is not continued this way.
 
 **While the checks run, the bound is what `yoyo status` shows.** A run in its
 checks says where the stage stands in place of the bare phase — how much of the
@@ -2713,8 +2751,8 @@ which is what the sweep does from the promotion the record holds.
 **And an item whose latest run ended holding its change is left alone, whatever
 the claim says.** A claim there is not a claim nothing is working on: it is the
 one thing saying an item whose change is sitting on a branch is spoken for, and
-giving it back buys a fresh run started over the top of that change. Three
-endings are in the class, and they are the same three the pull's own
+giving it back buys a fresh run started over the top of that change. Four
+endings are in the class, and they are the same four the pull's own
 [hold](work.md#letting-the-harness-choose-the-work) reads, so the two cannot
 disagree about one run:
 
@@ -2728,8 +2766,12 @@ disagree about one run:
   hands nobody a blocker, so its record ends `failed` rather than `stopped` and
   every rule that looked for a blocker read it as an item with nothing holding
   it.
+- **A run whose check stage its bound stopped**, which ends `timed out` with
+  its finished change on the branch. The harness
+  [continues it at its checks](#what-a-check-stage-may-cost-and-where-the-whole-suite-runs)
+  once the load allows, and the audit leaves it for that.
 
-That last shape is what this rule was written for. On 2026-09-22 run-b0b6d18d's
+The death inside a run's own process is what this rule was written for. On 2026-09-22 run-b0b6d18d's
 change on yoyodyne-ifd.436.4 was approved and then stopped at the promotion by a
 tracker read that timed out; the run ended `failed` at 04:04Z with its branch
 preserved and its pull request open, and the docket named the harness and `yoyo
@@ -2854,7 +2896,7 @@ comes from a small fixed set:
 | `succeeded` | the work landed |
 | `stopped` | it ended on a durable blocker: the item carries it, a person decides what happens next, and nothing was discarded |
 | `cancelled` | something stopped it rather than judged it — the operator, or a killed process |
-| `timed out` | the harness stopped it on time, leaving nobody anything to act on |
+| `timed out` | the harness stopped it on time; nothing judged the change, and only a check stage its bound stopped is acted on afterwards — [continued at its checks by the harness](#what-a-check-stage-may-cost-and-where-the-whole-suite-runs), then the development manager's once those continuations are spent |
 | `failed` | it ended without succeeding and without leaving anybody a blocker |
 | `pending`, `running` | it has not finished |
 

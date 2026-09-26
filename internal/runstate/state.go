@@ -1531,6 +1531,7 @@ func (s *State) recordedTexts() []recordedText {
 	if s.CheckStage != nil {
 		unstated("check_stage.narrowed", "check_stage.narrowed", &s.CheckStage.Narrowed, MaxRecordedTextBytes)
 	}
+	own("check_stage_continuation_refused", &s.CheckStageContinuationRefused, MaxBlockerBytes, truncatedNote(MaxBlockerBytes))
 	if s.LandingChecks != nil {
 		for index := range s.LandingChecks.Checks {
 			nested("landing_checks.checks[].output", at("landing_checks.checks", index, "output"), &s.LandingChecks.Checks[index].Output, MaxCheckOutputBytes)
@@ -1566,6 +1567,11 @@ func (s *State) recordedTexts() []recordedText {
 	}
 	for index := range s.SweepContinuations {
 		nested("sweep_continuations[].reason", at("sweep_continuations", index, "reason"), &s.SweepContinuations[index].Reason, MaxSelectionReasonBytes)
+	}
+	for index := range s.CheckStageContinuations {
+		continuation := &s.CheckStageContinuations[index]
+		nested("check_stage_continuations[].reason", at("check_stage_continuations", index, "reason"), &continuation.Reason, MaxSelectionReasonBytes)
+		nested("check_stage_continuations[].superseded_failure", at("check_stage_continuations", index, "superseded_failure"), &continuation.SupersededFailure, MaxBlockerBytes)
 	}
 	for index := range s.Retries {
 		nested("retries[].failure", at("retries", index, "failure"), &s.Retries[index].Failure, MaxRetryFailureBytes)
@@ -2484,6 +2490,18 @@ type State struct {
 	// every run the sweep never continued, which is nearly all of them. See
 	// sweepcontinue.go.
 	SweepContinuations []SweepContinuation `json:"sweep_continuations,omitempty"`
+	// CheckStageContinuations are the times the harness continued this run at
+	// its checks after execution.check_stage_timeout stopped the stage, on the
+	// change it already had and with no attempt, round, or grant charged. Absent
+	// is every run the bound never stopped, which is nearly all of them. See
+	// checkstagecontinue.go.
+	CheckStageContinuations []CheckStageContinuation `json:"check_stage_continuations,omitempty"`
+	// CheckStageContinuationRefused is why the harness declined to continue a
+	// stage the bound stopped, where what declined it is something only a person
+	// settles — a worktree somebody has been in, a change that is no longer
+	// there. It hands the stoppage to the development manager rather than having
+	// the harness ask again on every pull.
+	CheckStageContinuationRefused string `json:"check_stage_continuation_refused,omitempty"`
 	// IntegrationRetries counts the races for its target branch this run has
 	// lost: each one a promotion refused because the target moved, answered by
 	// replaying the change onto where the target went, re-checking it, and
@@ -3024,6 +3042,7 @@ func (s State) Validate() error {
 	}
 	problems = append(problems, s.validateIntegrationResume()...)
 	problems = append(problems, s.validateSweepContinuations()...)
+	problems = append(problems, s.validateCheckStageContinuations()...)
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
 	}

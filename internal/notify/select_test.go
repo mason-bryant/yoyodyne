@@ -1177,6 +1177,45 @@ func TestEachWayARunEndsIsSaidAsItselfWithWhatRemains(t *testing.T) {
 	}
 }
 
+// A run whose check stage its bound stopped is said as load having stopped it,
+// not the change, and with the harness as the one that continues it — in the
+// run record's own sentence, which the docket entry carries too. Once the
+// harness's continuations are spent, the same line names the development
+// manager instead.
+func TestAStageTheBoundStoppedIsSaidAsLoadWithTheHarnessContinuingIt(t *testing.T) {
+	before := running()
+	after := endedRun(before, runstate.StatusTimedOut)
+	after.Phase = runstate.PhaseChecking
+	after.Failure = "the check stage reached its 30m0s execution.check_stage_timeout bound during make race"
+	after.ProviderSessionID, after.BaseCommit, after.TargetBranch = "developer-session", "7a327265ee14", "main"
+	after.CheckStage = &runstate.CheckStage{StartedAt: time.Now(), BoundSeconds: 1800, Command: "make race", StoppedAtBound: true}
+	say := func(state runstate.State) string {
+		t.Helper()
+		_, notifications := crossed(t, before, state)
+		said := only(t, notifications, KindRunEnded)
+		message, err := Render(said.Topic, said.Speaker, said.Event)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		return message.Body
+	}
+	if !after.HarnessContinuesCheckStage() {
+		t.Fatalf("fixture = %#v, want a run the harness continues at its checks", after)
+	}
+	body := say(after)
+	for _, want := range []string{"the harness's", "stopped by load", "not by the change", "the harness continues it itself"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the ending is said as %q, which does not say %q", body, want)
+		}
+	}
+	for range runstate.MaxCheckStageContinuations {
+		after.CheckStageContinuations = append(after.CheckStageContinuations, runstate.CheckStageContinuation{ContinuedAt: time.Now(), Reason: "continued"})
+	}
+	if body := say(after); !strings.Contains(body, "the development manager's") || strings.Contains(body, "the harness continues it itself") {
+		t.Fatalf("a run past its continuations is said as %q, want it handed to the development manager", body)
+	}
+}
+
 // A stoppage recorded onto a run that had already ended. Reconciliation settles
 // a run some killed process left terminal: it takes a blocker from the tracker
 // and saves it onto a record whose status has not moved since the crash, so the

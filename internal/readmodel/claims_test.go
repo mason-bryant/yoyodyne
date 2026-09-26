@@ -301,8 +301,8 @@ func TestAnIntegrationStopWhoseChangeIsGoneIsReadAlikeByTheHoldAndTheClaimAudit(
 // The wider rule under it, which the stop above is one case of: a run that ended
 // holding its change keeps its item's claim, whether what says so is a blocker
 // the harness handed somebody — a replay that conflicted against a moved target
-// — or a death inside the run's own process, which hands over nothing at all.
-// Both leave a change on a branch that a fresh run would start over the top of.
+// — or a death inside the run's own process, which hands over nothing at all,
+// or a check stage its bound stopped. Each leaves a change on a branch that a fresh run would start over the top of.
 func TestAClaimOverAChangeStillOnItsBranchIsNotGivenBack(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +312,12 @@ func TestAClaimOverAChangeStillOnItsBranchIsNotGivenBack(t *testing.T) {
 		},
 		"a death inside the run's own process": func(s *runstate.State) {
 			s.Failure = "the provider ended this run without judging the work after 2 of 2 permitted relaunch(es)"
+		},
+		// The harness continues this one at its checks once the load allows, and a
+		// claim given back here is a fresh run that redoes the development.
+		"a check stage its bound stopped": func(s *runstate.State) {
+			s.Status, s.Phase = runstate.StatusTimedOut, runstate.PhaseChecking
+			s.CheckStage = &runstate.CheckStage{StartedAt: auditNoon.Add(-10 * time.Hour), BoundSeconds: 1800, Command: "make race", StoppedAtBound: true}
 		},
 	} {
 		run := ended("run-holding", "yoyodyne-ifd.9", runstate.StatusFailed, 9*time.Hour)
