@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -66,7 +67,11 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 	// conversation builds it with and rendered by the section her conversation
 	// renders, so the two never disagree about what is waiting on her.
 	if parts.docket != nil {
-		trigger.Docket = sweepDocket{docketer: docketerFrom(parts)}
+		trigger.Docket = sweepDocket{
+			docketer: docketerFrom(parts),
+			items:    chatTracker(parts.runner, parts.repository),
+			window:   parts.docket,
+		}
 	}
 	// The harness's own reading of the forge on the development manager's pass,
 	// through the same client the publication path opens and merges requests
@@ -96,11 +101,21 @@ func recurringTrigger(parts components, configPath string, stderr io.Writer) orc
 
 // sweepDocket is the triage docket as a scheduled pass of the development
 // manager's carries it: built now, as her conversation builds it when it opens,
-// and rendered by the same section.
+// and windowed and rendered by the same section, from the same walk position.
 type sweepDocket struct {
 	docketer interface {
 		Build() (orchestrator.DocketBuild, error)
 	}
+	// items lists every work item the tracker holds, which is what says whose
+	// entries are on closed work. Nil is a pass with no tracker to ask, and then
+	// no entry is taken for dead and the window says so.
+	items interface {
+		List(ctx context.Context, status string) ([]beads.WorkItem, error)
+	}
+	// window is where the last docket window stopped, shared with her
+	// conversation, so a pass resumes the walk past what she was last shown
+	// wherever she was shown it. Nil starts every pass at the oldest stoppage.
+	window docketWindow
 }
 
 // Window builds the docket and renders it. A build that failed outright is
@@ -111,14 +126,43 @@ type sweepDocket struct {
 func (d sweepDocket) Window() string {
 	built, err := d.docketer.Build()
 	if err != nil && len(built.Entries) == 0 {
-		return contextbundle.TriageDocket(nil, err.Error())
+		rendered, _ := contextbundle.TriageDocket(contextbundle.ProductRequest{TriageDocketUnavailable: err.Error()})
+		return rendered
 	}
-	rendered := contextbundle.TriageDocket(built.Entries, "")
+	request := contextbundle.ProductRequest{TriageDocket: built.Entries, TriageDocketAt: time.Now()}
+	var problems []string
+	if len(built.Entries) > 0 {
+		if d.items == nil {
+			request.TriageDocketItemsUnavailable = "no tracker was given to this pass"
+		} else if items, listErr := d.items.List(context.Background(), ""); listErr != nil {
+			request.TriageDocketItemsUnavailable = listErr.Error()
+		} else {
+			request.TriageDocketItems = items
+		}
+		if d.window != nil {
+			if position, readErr := d.window.WindowPosition(); readErr != nil {
+				problems = append(problems, fmt.Sprintf("where the last docket window stopped could not be read, so this one starts at the oldest stoppage: %v", readErr))
+			} else {
+				request.TriageDocketPosition = position
+			}
+		}
+	}
+	rendered, position := contextbundle.TriageDocket(request)
 	if rendered == "" {
 		return "## Triage docket\n\nNothing is on the docket: no stoppage is waiting on a decision of yours.\n"
 	}
+	// The walk advances as the message carrying it is built, the same moment the
+	// conversation's picture advances it.
+	if position != nil && d.window != nil {
+		if recordErr := d.window.RecordWindowPosition(*position); recordErr != nil {
+			problems = append(problems, fmt.Sprintf("where this docket window stopped could not be recorded, so the next one starts from the same place: %v", recordErr))
+		}
+	}
 	if err != nil {
 		rendered += fmt.Sprintf("\nThe docket could only be built in part, so there may be stoppages it does not list: %v\n", err)
+	}
+	for _, problem := range problems {
+		rendered += "\n" + problem + "\n"
 	}
 	return rendered
 }
