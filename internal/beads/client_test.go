@@ -1532,10 +1532,12 @@ type fakeRunner struct {
 	responses []string
 	results   []execution.ProcessResult
 	args      [][]string
+	commands  []execution.Command
 }
 
 func (f *fakeRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
 	f.args = append(f.args, append([]string(nil), command.Args...))
+	f.commands = append(f.commands, command)
 	index := len(f.args) - 1
 	if index < len(f.results) {
 		return f.results[index], nil
@@ -1982,5 +1984,36 @@ func TestClientRecordsAndReadsBackALanding(t *testing.T) {
 	}
 	if _, err := (Client{Runner: &fakeRunner{}}).RecordLanding(context.Background(), "../escape", landing); err == nil {
 		t.Fatal("RecordLanding() on an invalid id = nil error")
+	}
+}
+
+// TestBDOutputIsRetainedWholeAndACutCopyIsRefused is the regression test for
+// 2026-09-26, when a listing of every item passed the runner's general 8 MiB and
+// the cut copy was decoded, failing every listing-backed path with a complaint
+// about a stray bracket. The client asks for a bound sized for a whole tracker,
+// and a copy the runner still had to cut is refused by name, never decoded.
+func TestBDOutputIsRetainedWholeAndACutCopyIsRefused(t *testing.T) {
+	whole := &fakeRunner{responses: []string{"[]"}}
+	if _, err := (Client{Runner: whole}).run(context.Background(), "list", "--json"); err != nil {
+		t.Fatalf("a whole listing was refused: %v", err)
+	}
+	if got := whole.commands[0].MaxOutputBytes; got != maxBDOutputBytes {
+		t.Fatalf("bd ran with MaxOutputBytes %d, want %d", got, maxBDOutputBytes)
+	}
+	if maxBDOutputBytes <= 8<<20 {
+		t.Fatalf("maxBDOutputBytes %d is not above the runner's 8 MiB default", maxBDOutputBytes)
+	}
+
+	cut := &fakeRunner{results: []execution.ProcessResult{{
+		Status:           execution.ProcessSucceeded,
+		Stdout:           "[{\"id\":\"yoyodyne-1\"",
+		OutputTruncation: "output cut at the bound",
+	}}}
+	_, err := (Client{Runner: cut}).run(context.Background(), "list", "--json")
+	if err == nil {
+		t.Fatal("a cut copy of bd's output was accepted")
+	}
+	if !strings.Contains(err.Error(), "was cut and is not read") {
+		t.Fatalf("the refusal does not say the output was cut: %v", err)
 	}
 }
