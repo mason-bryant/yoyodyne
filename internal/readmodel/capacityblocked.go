@@ -419,7 +419,10 @@ func CapacityBlockedOf(sources Sources, now time.Time) CapacityBlocked {
 	}
 	evidence, evidenceProblem := CapacityEvidenceOf(sources)
 	blocked := ReadCapacityBlocked(runs, refusals, now, sources.UnknownResetPause, evidence)
-	blocked.RunsProblem = runsProblem
+	// The evidence clears stopped runs as well as conversations, so a failure to
+	// read it is said on both halves: each is a list that may be longer than it
+	// would have been.
+	blocked.RunsProblem = joinProblems(runsProblem, evidenceProblem)
 	blocked.ConversationsProblem = joinProblems(refusalsProblem, evidenceProblem)
 	return blocked
 }

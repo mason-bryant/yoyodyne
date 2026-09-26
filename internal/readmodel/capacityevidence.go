@@ -70,23 +70,26 @@ func (e CapacityEvidence) Standing(refusals []runstate.UsageLimitExhaustion) []r
 }
 
 // ReadCapacityEvidence reads the evidence from the two records it lives in,
-// either of which may be absent. A record that could not be read clears nothing
-// and is said as the problem, because a block cleared on evidence nobody could
-// read would be a guess, and one left standing over it is only late.
+// either of which may be absent. Where either could not be read, nothing is
+// cleared early at all — not by the one that could be read either — and the
+// failure is said as the problem: a block cleared on part of the evidence is
+// cleared on a guess about the rest, and one left standing over it is only
+// late. A record that is simply not wired clears nothing of its own kind and is
+// no problem: that caller never asked.
 func ReadCapacityEvidence(served CapacityServedRecord, conversations Conversations) (CapacityEvidence, string) {
 	var evidence CapacityEvidence
-	var problem string
+	var problems []string
 	if served != nil {
 		listed, err := served.List()
 		if err != nil {
-			problem = fmt.Sprintf("what the provider has served since it refused could not be read, so no refusal was read as lifted early: %v", err)
+			problems = append(problems, fmt.Sprintf("what the provider has served since it refused could not be read: %v", err))
 		}
 		evidence.Served = listed
 	}
 	if conversations != nil {
 		recorded, err := conversations.Recorded()
 		if err != nil {
-			problem = joinProblems(problem, fmt.Sprintf("which conversations are still their roles' could not be read, so a retired one may be read as refused: %v", err))
+			problems = append(problems, fmt.Sprintf("which conversations are still their roles' could not be read: %v", err))
 		} else {
 			evidence.Current = make(map[string]bool, len(recorded))
 			for _, conversation := range recorded {
@@ -94,7 +97,10 @@ func ReadCapacityEvidence(served CapacityServedRecord, conversations Conversatio
 			}
 		}
 	}
-	return evidence, problem
+	if len(problems) > 0 {
+		return CapacityEvidence{}, "nothing was read as lifted before its quoted reset, because " + strings.Join(problems, "; and ")
+	}
+	return evidence, ""
 }
 
 // CapacityEvidenceOf reads the evidence from a set of sources.

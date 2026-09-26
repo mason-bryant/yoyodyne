@@ -626,7 +626,11 @@ The session records the poll as one made inside the provider's window, so
 channel says the same, and the watch log's idle line carries the window and its
 reset — which is what a maintenance script reads to stand its idle check down.
 It is never reported as a hold: nothing needs releasing, and the first poll past
-the reset pulls again.
+the reset pulls again. A limit with no reset named does not hold intake this
+way; a dispatch is how that one is asked about. A developer model the record
+does not refuse — a label mapped to a model the provider still serves — holds
+nothing, because work can run on it. A pass that is not watching stops on the window
+instead of waiting it out.
 
 **A served turn clears the window before its reset.** A quoted reset is a claim
 about the provider, and capacity bought mid-window makes it stale: on 2026-09-24
@@ -648,14 +652,12 @@ nothing released. A refusal written before refusals carried the account is
 lifted by its model being served on any account, and one written before they
 carried the model by anything served at all, because neither can be told apart
 any more finely. A refusal of a conversation its role has since replaced holds
-nothing either: nothing will be asked in that conversation again. Where the
-served record or the conversation records cannot be read, nothing is cleared
-early — the window stands until its quoted reset, which costs time and never a
-refused run. A limit with no reset named does not hold intake this
-way; a dispatch is how that one is asked about. A developer model the record
-does not refuse — a label mapped to a model the provider still serves — holds
-nothing, because work can run on it. A pass that is not watching stops on the window
-instead of waiting it out.
+nothing either: nothing will be asked in that conversation again. Where either
+record cannot be read — the served record or the conversation records —
+nothing is cleared early by either of them, the one that could be read
+included: every refusal stands until its quoted reset, which costs time and
+never a refused run, since clearing on half the evidence would be guessing
+about the other half.
 
 Selection is not a fourth place. A watching `yoyo work` session reads the tracker
 and starts runs, so a limit it meets is met by a run it started, bar the turn it
@@ -2403,9 +2405,13 @@ toward no hold. [A watch session inside a recorded
 window](#a-watch-session-inside-a-recorded-window) says how the served turn is
 recorded; the dashboard's capacity section, `yoyo status`, the channel's
 provider-hold message, and the watch session's hold on intake all read this one
-derivation. Where the record of what was served, or the conversation records,
-could not be read, nothing is cleared early and `conversations_problem` says
-which. A run waiting on a login or a network is
+derivation. Where either the record of what was served or the conversation
+records could not be read, nothing is cleared early by either of them, and the
+failure is named in `runs_problem` and `conversations_problem` alike — the
+evidence clears stopped runs as well as conversations, so both lists may be
+longer than they would have been — and on the "Needs a human" line's
+`needs_human_problem`, since the hold over every role reads the same evidence.
+A run waiting on a login or a network is
 not capacity and is not here; the outage banner says it. Both lists are always
 present, and each says under `runs_problem` or `conversations_problem` when
 its records could not be read rather than reporting an empty list. It is not

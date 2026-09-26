@@ -720,6 +720,11 @@ type Outcome struct {
 	// cleared from it. The run waited or carried on exactly as it would have;
 	// what was lost is the record the surfaces name the wait from.
 	ProviderOutageProblem string `json:"provider_outage_problem,omitempty"`
+	// CapacityServedProblem names every served invocation of this run that could
+	// not be recorded as served, joined. The run carried on exactly as it would
+	// have; what was lost is the evidence that would have read an earlier refusal
+	// of that account and model as lifted before its quoted reset.
+	CapacityServedProblem string `json:"capacity_served_problem,omitempty"`
 	// Invariants names the architectural invariants this run delivered to its
 	// developer and to its reviewer. It is the audit record of which durable
 	// constraints the change was actually held to, which is the thing a
@@ -3174,7 +3179,7 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		if servedCleanly(providerResult, err) {
 			what := fmt.Sprintf("a developer attempt of run %s of %s", a.state.RunID, a.state.WorkItemID)
 			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ProviderModel, what); servedErr != nil {
-				a.outcome.ProviderOutageProblem = servedErr.Error()
+				a.outcome.CapacityServedProblem = appendProblem(a.outcome.CapacityServedProblem, servedErr.Error())
 			}
 		}
 		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
@@ -6343,7 +6348,7 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		if err == nil && reported.servedCleanly {
 			what := fmt.Sprintf("a review of run %s of %s", a.state.RunID, a.state.WorkItemID)
 			if servedErr := a.pipeline.noticeCapacityServed(a.state.AccountAlias, a.state.ReviewModel, what); servedErr != nil {
-				a.outcome.ProviderOutageProblem = servedErr.Error()
+				a.outcome.CapacityServedProblem = appendProblem(a.outcome.CapacityServedProblem, servedErr.Error())
 			}
 		}
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {

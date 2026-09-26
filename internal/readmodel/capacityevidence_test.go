@@ -262,6 +262,50 @@ func TestUnreadableEvidenceClearsNothingAndIsNamed(t *testing.T) {
 	}
 }
 
+// One record unreadable withholds every early clearing, not only its own kind:
+// a served turn does not lift a refusal while the conversation records cannot
+// be read, and a replaced conversation is not read as retired while the served
+// record cannot be. The failure is said on both halves of the list, because
+// the evidence clears stopped runs as well as conversations.
+func TestOneUnreadableEvidenceRecordClearsNothingEarly(t *testing.T) {
+	t.Parallel()
+
+	servedTurn := []runstate.CapacityServed{{AccountAlias: everyAgentsAccount, Model: everyAgentsModel, At: capacityAdded}}
+	stopped := blockedRun("run-9f8e7d6c", "yoyodyne-ifd.141")
+	stopped.Phase = runstate.PhaseDeveloping
+	stopped.UsageLimitModel = everyAgentsModel
+	stopped.AccountAlias = everyAgentsAccount
+	stopped.CompletedAt = &sevenDayRefused
+
+	// The conversation records cannot be read; the served record can, and would
+	// lift both the conversation's refusal and the stopped run.
+	sources := capacitySources([]runstate.UsageLimitExhaustion{sevenDayRefusal(sevenDayRefused, productManagerChat)}, servedTurn,
+		fakeConversations{fail: errors.New("product-manager.json: permission denied")})
+	sources.Runs = fakeRuns{recorded: []runstate.State{stopped}, prices: map[string]runstate.ItemPrice{}}
+	blocked := CapacityBlockedOf(sources, dashboardRead)
+	if len(blocked.Conversations) != 1 || len(blocked.Runs) != 1 {
+		t.Fatalf("capacity blocked = %+v, want the conversation and the stopped run still listed while the conversation records cannot be read", blocked)
+	}
+	for name, problem := range map[string]string{"runs": blocked.RunsProblem, "conversations": blocked.ConversationsProblem} {
+		if !strings.Contains(problem, "product-manager.json") || !strings.Contains(problem, "nothing was read as lifted") {
+			t.Errorf("%s problem = %q, want the unreadable record named and nothing read as lifted", name, problem)
+		}
+	}
+	if hold, problem := CapacityHoldOf(sources, dashboardRead); !hold.Holding || !strings.Contains(problem, "product-manager.json") {
+		t.Fatalf("hold = %+v, problem = %q; want every role still held and the unreadable record named", hold, problem)
+	}
+
+	// The served record cannot be read; the conversation records can, and would
+	// read the development manager's replaced conversation as retired.
+	sources = capacitySources([]runstate.UsageLimitExhaustion{sevenDayRefusal(sevenDayRefused, retiredDevelopmentChat)}, nil,
+		currentConversations(currentDevelopmentChat))
+	sources.CapacityServed = fakeCapacityServed{fail: errors.New("capacity-served.json: permission denied")}
+	blocked = CapacityBlockedOf(sources, dashboardRead)
+	if len(blocked.Conversations) != 1 || !strings.Contains(blocked.ConversationsProblem, "capacity-served.json") {
+		t.Fatalf("capacity blocked = %+v, want the replaced conversation still listed while the served record cannot be read", blocked)
+	}
+}
+
 // A run the provider's usage window stopped is not listed once the provider has
 // served its account and model since it stopped; one asleep on its deadline is
 // listed whatever was served, because it is still asleep.
