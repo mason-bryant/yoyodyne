@@ -278,6 +278,12 @@ type Options struct {
 	// bounded. It is optional like the rest, and a conversation without one
 	// records the decision and says the entry is still standing.
 	Docket TriageEntries
+	// ClosedItems is the same docket seen from the item's side: closing or
+	// retiring an item closes the entries standing for it, since a closed item
+	// asks nobody anything. It is optional like the rest, and a conversation
+	// without one leaves those entries to the reconcile sweep, which closes every
+	// entry whose item the tracker holds as closed.
+	ClosedItems ClosedItemEntries
 	// Exchanges is the inter-role ask channel: how a question this role cannot
 	// answer itself reaches the role that can, without the operator relaying it
 	// and without a whole work item. It is optional like the rest, and a

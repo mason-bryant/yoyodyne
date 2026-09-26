@@ -5454,6 +5454,7 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 				return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 			}
 			a.outcome.WorkItemClosed = true
+			p.closeDocketWithItem(a.state, "closed by run "+a.state.RunID+", whose change landed")
 		}
 	}
 	// The item is priced when the run that spent it ends, whether or not the
@@ -5486,6 +5487,18 @@ func (a *activeRun) complete(ctx context.Context) (Outcome, error) {
 	a.outcome.Status = runstate.StatusSucceeded
 	a.outcome.Phase = a.state.Phase
 	return a.outcome, nil
+}
+
+// closeDocketWithItem closes the docket entries standing for an item this run
+// has just closed: a stoppage an earlier run left, settled by this one landing.
+// A closure that could not be written does not fail a run whose work is
+// integrated and whose item is closed. The reconcile sweep closes every entry
+// whose item the tracker holds as closed, so the next sweep closes this one.
+func (p Pipeline) closeDocketWithItem(state runstate.State, reason string) {
+	if p.Docket == nil {
+		return
+	}
+	_, _ = p.Docket.SettleClosedItem(state.WorkItemID, reason)
 }
 
 // cleanUp removes what this run created, once its work is somewhere else, and

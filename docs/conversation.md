@@ -1603,6 +1603,26 @@ what a reader is shown is the join of the two. So the docket in that
 conversation is the stoppages nobody has decided about, and a settled one is
 neither listed there nor delivered again.
 
+**An entry closes with its item.** Every entry is about a work item, and a
+closed item asks nobody anything, so when the item is closed or retired the
+harness closes the entries standing for it, recording the decision
+`item-closed`, who closed the item and how, and when. That is every class but
+one: an unfinished publication asks about a merge the forge holds rather than
+about the item, which closes as its change is integrated while the merge can
+still be dropped or stuck afterwards. So that entry stays until the publication
+settles or the development manager decides it, `rearm` included. A run whose
+change lands, and the product manager's `close` and `retire`, close the item's
+entries in the same act, and the product manager is told how many. Every `yoyo
+reconcile` sweep lists the items the tracker holds as closed and closes any
+entry still standing for one. That catches an item closed by some other hand,
+the merge a sweep settles among them, and the entries left standing from before
+this existed. The sweep reports how many it closed (`closed_with_item` in
+`--json`). Nothing did this
+before. On 2026-09-25, 125 of the docket's 187 open entries were for closed
+items: stoppages settled by a re-run that landed, or by the item closing for
+any other reason, that stayed on the docket and crowded live ones out of the
+bounded listing the development manager is shown.
+
 **What closing does not do is silence the same work stopping again.** A repair
 continues the run that stopped, so a repaired run that dies again is a fresh
 stoppage under the identifier the settled entry carries — and it is docketed,
@@ -1657,7 +1677,7 @@ one. An item the tree is not ready for is closed by the harness instead: every
 pull reads the item again, and takes the entry off once the item asks for nothing
 the tree lacks, has left the backlog, or has been restated — in which case it is
 docketed again in its new words. An attempt that never became a run is closed by
-nothing yet.
+nothing of hers either; like every entry, it closes when its item does.
 
 **It also lands as a record the harness reads**: the decision, the stoppage it
 settles, the reasoning verbatim, and where it was recorded, on the item's durable

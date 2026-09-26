@@ -1881,7 +1881,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.fail(err)
 			return
 		}
-		outcome.applied("closed %s as done", id)
+		outcome.applied("closed %s as done%s", id, s.closeDocketForItem(ctx, id, fmt.Sprintf("closed as done by the %s in conversation %s", RoleTitle(s.state.Role), s.state.ConversationID)))
 	case actionRetire:
 		// Retiring is how admitted work leaves the backlog without being done. The
 		// tracker has one mechanism for taking an item out of the queue, so what
@@ -1893,7 +1893,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.fail(err)
 			return
 		}
-		outcome.applied("retired %s from the backlog without it being done", id)
+		outcome.applied("retired %s from the backlog without it being done%s", id, s.closeDocketForItem(ctx, id, fmt.Sprintf("retired without being done by the %s in conversation %s", RoleTitle(s.state.Role), s.state.ConversationID)))
 	case actionRepair:
 		s.carryOutRepair(ctx, outcome)
 	case actionTriage:
@@ -1907,6 +1907,25 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// than a badly formed request; it is reported as a failure all the same.
 		outcome.Failure = fmt.Sprintf("the harness does not carry out %q", action.Action)
 	}
+}
+
+// closeDocketForItem closes the docket entries standing for an item this
+// conversation has just closed or retired, and says what became of them in the
+// words appended to the action's result. The item is closed either way: an entry
+// that could not be closed here is closed by the next reconcile sweep, which
+// closes every entry whose item the tracker holds as closed.
+func (s *Session) closeDocketForItem(ctx context.Context, id, reason string) string {
+	if s.options.ClosedItems == nil {
+		return ""
+	}
+	closed, err := s.options.ClosedItems.CloseForItem(ctx, id, reason)
+	if err != nil {
+		return fmt.Sprintf("; its docket entries were not closed with it, and the next reconcile sweep closes them: %s", singleLine(err.Error(), maxTrackerFailureBytes))
+	}
+	if closed > 0 {
+		return fmt.Sprintf("; %d docket entry(s) standing for it are closed with it", closed)
+	}
+	return ""
 }
 
 // applied records that the whole action happened, which is what discards
