@@ -68,7 +68,7 @@ in a conversation (`conversation.authority-derived`, which the rest of the
 conversation rows read through), and whose judgement gates an integration
 (`review.policy`). Every other row is answered in that table with the reason a
 bundle cannot express it — a contract's prose, a path gate, the separation of two
-invocations, a posture, or an authority no role holds at all — and those rows
+invocations, which tools a role may use, or an authority no role holds at all — and those rows
 still name what they name.
 
 Two capabilities belong to no role. The promotion lease and the branch it admits a
@@ -173,7 +173,7 @@ could ask for.
 | backend.read-only-role | the product manager, the architect, the development manager, the reviewer, the program manager | `internal/backend/claudecode/backend.go` | `readOnlyRole` | Names the roles that reason over supplied evidence, which is what the tool refusal below is decided from. |
 | backend.supported-role | every role | `internal/backend/claudecode/backend.go` | `supportedRole` | A role this backend cannot assemble an invocation for. |
 | backend.no-tools-for-read-only | the product manager, the architect, the development manager, the reviewer, the program manager | `internal/backend/claudecode/backend.go` | `(Backend).Run` | Tools granted to a role that reasons over bounded supplied evidence, and an unsupported role, before the provider is reached. |
-| backend.codex-sandbox-for-role | every role | `internal/backend/codex/backend.go` | `sandboxFor` | A role this backend cannot assemble an invocation for, and the sandbox every role that it can does run under. Codex has no per-tool control, so what an agent may do is decided here and nowhere else: the role's tool posture picks the sandbox, no caller can name one, and a role nobody has decided a posture for is refused rather than given the developer's. |
+| backend.codex-sandbox-for-role | every role | `internal/backend/codex/backend.go` | `sandboxFor` | A role this backend cannot assemble an invocation for, and the sandbox every role that it can does run under. Codex has no per-tool control, so what an agent may do is decided here and nowhere else: the role's tool access picks the sandbox, no caller can name one, and a role nobody has decided tool access for is refused rather than given the developer's. |
 | promotion.lease | the harness | `internal/runstate/promotion.go` | `(*Store).LeasePromotion` | A second concurrent promotion into one target branch. The lease is the harness's own and no agent acquires, releases, or touches it. |
 | run.integrate-under-lease | the harness | `internal/orchestrator/pipeline.go` | `(*activeRun).integrate` | Moving a target branch without first holding that branch's promotion lease. |
 | landing.lease | the harness | `internal/runstate/landing.go` | `(*Store).LeaseLanding` | A second landing suite running over one target branch while another is. It is the promotion lease's sibling and not the promotion lease, so a landing holds nobody out of integration; the harness takes it in the landing's own process and no agent acquires, releases, or touches it. |
@@ -208,8 +208,8 @@ to make the same judgement out loud instead of the question never being asked.
 | `internal/artifact/ownership.go` | `authority` | Names the capability a kind of document belongs to. It refuses nothing: the lookup that turns it into an owner is `artifact.owner` and the refusal made on it is `artifact.authorize`. |
 | `internal/artifact/references.go` | `ProblemUnauthorizedRevision` | The name of the problem kind `UnauthorizedRevisions` reports; the check is that row. |
 | `internal/backend/endpoint.go` | `(*Registry).EligibleFor` | Names an endpoint in `Serves`'s answer, and decides nothing `Serves` did not. |
-| `internal/backend/endpoint.go` | `(*Registry).Serves` | Reads a provider's declaration to say whether it can serve a role at all — the roles it declares, the tool posture that role requires, and whether this build can launch it. Which provider serves a role is selection and capability, not what the role may do, exactly as `DescriptorFor` below. |
-| `internal/backend/endpoint.go` | `(*Registry).Substitutable` | Refuses a substitution that would move a role onto an endpoint whose sandbox cannot hold its tool posture. It decides where a role may run rather than what it may do once there: the second is `conversation.authority-table` and the run's own contracts, and neither is widened or narrowed by this. |
+| `internal/backend/endpoint.go` | `(*Registry).Serves` | Reads a provider's declaration to say whether it can serve a role at all — the roles it declares, the tool access that role requires, and whether this build can launch it. Which provider serves a role is selection and capability, not what the role may do, exactly as `DescriptorFor` below. |
+| `internal/backend/endpoint.go` | `(*Registry).Substitutable` | Refuses a substitution that would move a role onto an endpoint whose sandbox cannot hold its tool access. It decides where a role may run rather than what it may do once there: the second is `conversation.authority-table` and the run's own contracts, and neither is widened or narrowed by this. |
 | `internal/backend/registry.go` | `DescriptorFor` | Validates a provider plugin declaration, the roles it serves included. Which provider serves a role is selection, not what the role may do. |
 | `internal/capability/capability.go` | `PromotionLease` | The name an action declares the promotion lease by. The lease itself is `promotion.lease`. |
 | `internal/chat/admission.go` | `(*Session).admissionAuthority` | Records what let an item into the queue. It refuses nothing; the refusal is `conversation.admission-gate`. |

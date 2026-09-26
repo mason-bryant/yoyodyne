@@ -149,9 +149,9 @@ func (d Descriptor) RoleRefusal(role domain.AgentRole) string {
 	case !d.SupportsRole(role):
 		return fmt.Sprintf("backend %q does not support role %q", d.ID, role)
 	case posture == "":
-		return fmt.Sprintf("role %q has no tool posture, so no backend can be held to one for it", role)
+		return fmt.Sprintf("role %q has no tool access decided for it, so no backend can be held to any", role)
 	case !d.SupportsPosture(posture):
-		return fmt.Sprintf("backend %q cannot hold the %q tool posture that role %q requires", d.ID, posture, role)
+		return fmt.Sprintf("backend %q cannot hold the %q tool access that role %q requires", d.ID, posture, role)
 	}
 	return ""
 }

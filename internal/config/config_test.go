@@ -320,7 +320,7 @@ func TestValidateAllowsCodexOnlyForTheDeveloper(t *testing.T) {
 	// the operator looking for a role Codex does in fact serve.
 	reviewer := strings.Replace(input, "role: developer", "role: reviewer", 1)
 	_, err = Decode(strings.NewReader(reviewer))
-	if err == nil || !strings.Contains(err.Error(), `cannot hold the "read-only" tool posture`) {
+	if err == nil || !strings.Contains(err.Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("Decode() reviewer Codex error = %v, want a posture refusal", err)
 	}
 	if strings.Contains(err.Error(), "does not support role") {

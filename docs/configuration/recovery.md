@@ -290,13 +290,13 @@ too — switching failover off keeps a choice already made, and there is none to
 keep in a block nobody finished.
 
 A crossing is refused where the file is read if the alternate names a provider
-this project does not name, one that cannot be held to the tool posture the
+this project does not name, one that cannot be held to the tool access the
 agent's role requires, or an account that could not sign that provider in. The
 account is the one the agent would actually be served under — the account it
 names, or the pool's first that can sign its own provider in — rather than only
 the alias the `failover` block wrote down, so an agent that named no account of
 its own is refused here too. The same three are asked again at the moment of the
-substitution, because a posture is not something to take on trust from a check
+substitution, because which tools a role can use is not something to take on trust from a check
 that ran earlier.
 
 A crossing that cannot be resolved when a conversation opens — an account edited
@@ -323,11 +323,11 @@ What happens on a refused turn:
   the cost log says what was spent where rather than billing the alternate's turn
   to the model that refused it. A crossing is charged to the alternate's own
   account and provider, which is the subscription the money actually left.
-- The endpoint the turn would move onto is checked against the tool posture the
+- The endpoint the turn would move onto is checked against the tool access the
   role requires before it is moved. A substitution can never put a role on a
-  provider whose sandbox cannot hold that posture — a reviewer needs a provider
+  provider whose sandbox cannot hold that tool access — a reviewer needs a provider
   that can refuse every tool, and a developer one that can scope writes to a
-  worktree — and a substitution that would is refused with the posture named,
+  worktree — and a substitution that would is refused with the tool access named,
   leaving the turn to take the refusal it would have taken anyway.
 - **A crossing rebuilds rather than resumes.** Every turn but the first resumes a
   provider session, which is why a later turn's prompt carries so little: the

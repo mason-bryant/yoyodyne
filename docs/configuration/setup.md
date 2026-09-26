@@ -266,7 +266,7 @@ the role's name. It is reported and never written: the set is read off the role
 in the harness's own registry, there is no `capabilities` key to put in a
 configuration, and a file that writes one is refused like any other key that
 does not exist. The set of role names is fixed for the same reason —
-every posture the harness derives, a reviewer's absent tools included, is derived
+the tools each role may use, a reviewer's absence of any included, are derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
 [refused when the configuration loads](../configuration.md#what-fails-closed).
@@ -275,10 +275,10 @@ the table itself.
 
 `backend` is `claude-code` or `codex` unless your project declares one of its
 own — and `codex` only for a `developer` agent, since its sandbox cannot hold
-the tool posture every other role requires. A project running a fork, a proxy, or
+the tool access every other role requires. A project running a fork, a proxy, or
 a variant of a provider yoyo already speaks can describe it under a top-level `providers:` key and name it here: which
 compiled adapter launches it, which executable that adapter runs, which roles it
-serves, which tool postures it can hold them to, and how to read what it says
+serves, which kinds of tool access it can hold them to, and how to read what it says
 about rate limits, retries, and reset times. A declared provider describes and
 decides nothing: whether to wait, how long, and against which budget stay the
 harness's, because those are what the

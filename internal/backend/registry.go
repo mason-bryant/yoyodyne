@@ -335,11 +335,11 @@ func DescriptorFor(id domain.Backend, plugin ProviderPlugin) (Descriptor, error)
 		}
 	}
 	if len(plugin.Postures) == 0 {
-		problems = append(problems, fmt.Sprintf("holds no tool posture; postures are %s", describePostures()))
+		problems = append(problems, fmt.Sprintf("holds no tool access; the tool access a provider can hold is %s", describePostures()))
 	}
 	for _, posture := range plugin.Postures {
 		if !posture.Valid() {
-			problems = append(problems, fmt.Sprintf("holds posture %q, which is not one of %s", posture, describePostures()))
+			problems = append(problems, fmt.Sprintf("holds tool access %q, which is not one of %s", posture, describePostures()))
 		}
 	}
 	dialect, err := NewDeclarativeDialect(string(id), plugin.Dialect)

@@ -152,7 +152,7 @@ func TestThePoolRefusesAnEndpointTheRoleMayNotBeServedOn(t *testing.T) {
 	if err == nil {
 		t.Fatal("ChooseEndpoint() served a reviewer on a provider that cannot hold the read-only posture")
 	}
-	if !strings.Contains(err.Error(), `cannot hold the "read-only" tool posture`) {
+	if !strings.Contains(err.Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("ChooseEndpoint() = %v, want the posture named", err)
 	}
 

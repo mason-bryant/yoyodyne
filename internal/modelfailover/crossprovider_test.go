@@ -134,7 +134,7 @@ func TestACrossingOntoAnIneligibleProviderIsRefusedAndTheTurnStays(t *testing.T)
 	if served.Substituted() {
 		t.Fatalf("served = %#v, want the turn left where it was", served)
 	}
-	if len(reported) != 1 || !strings.Contains(reported[0].Error(), `cannot hold the "read-only" tool posture`) {
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("reported = %v, want the posture that could not be held named", reported)
 	}
 	if recorded, err := windows.List(); err != nil || len(recorded) != 0 {

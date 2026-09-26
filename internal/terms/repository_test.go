@@ -11,6 +11,9 @@ package terms
 // same way the link, goals, and artifact gates beside it are.
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +57,55 @@ func TestThisRepositoryOwnCoinedTermsAreRegistered(t *testing.T) {
 		// Reported one at a time rather than as a count: what a reader needs is the
 		// file, the line, and what to write instead.
 		t.Errorf("%s", problem)
+	}
+}
+
+// `posture` was retired on 2026-09-25 (yoyodyne-ifd.437.6): the operator found it
+// unclear. So this repository's own register has to refuse it, and not only a
+// fixture's: a command's string and a governed document the row does not name
+// are both reported, while a document the row names is excused until its owner
+// amends it.
+func TestThisRepositoryRefusesPosture(t *testing.T) {
+	t.Parallel()
+
+	entries, err := Register(repositoryRoot)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Term == "posture" {
+			t.Fatalf("%s:%d registers posture; it was retired and belongs in the replaced table", RegisterPath, entry.Line)
+		}
+	}
+	registerBody, err := os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(RegisterPath)))
+	if err != nil {
+		t.Fatalf("read %s: %v", RegisterPath, err)
+	}
+	const excused = "docs/designs/program-manager.md"
+	directory := root(t, string(registerBody), map[string]string{
+		"internal/cli/one.go":   "package cli\n\nconst said = \"the reviewer's tool posture\"\n",
+		"docs/designs/other.md": "# Other\n\nEvery role has a posture.\n",
+		excused:                 "# Program manager\n\nIt holds no tool posture.\n",
+	})
+	problems, err := Check(directory)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	reported := make(map[string]bool)
+	for _, problem := range problems {
+		if problem.Term == "posture" && problem.Path != RegisterPath {
+			reported[problem.Path] = true
+			if !strings.Contains(problem.Reason, "tool access") {
+				t.Errorf("Check() reason = %q, want the plain wording in it", problem.Reason)
+			}
+		}
+	}
+	for _, path := range []string{"internal/cli/one.go", "docs/designs/other.md"} {
+		if !reported[path] {
+			t.Errorf("Check() did not refuse posture in %s; reported %v", path, problems)
+		}
+	}
+	if reported[excused] {
+		t.Errorf("Check() refused posture in %s, which the replaced row names as still carrying it", excused)
 	}
 }

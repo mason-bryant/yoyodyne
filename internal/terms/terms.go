@@ -173,7 +173,7 @@ var Vocabulary = []Coinage{
 	{Term: "in force", Match: "in force", Whole: true, PlainWords: "active, or still applies"},
 	{Term: "minute zero", Match: "minute zero", PlainWords: "before development begins"},
 	{Term: "pane of glass", Match: "pane of glass", PlainWords: "one window"},
-	{Term: "posture", Match: "posture", PlainWords: "which tools a role may use"},
+	{Term: "posture", Match: "posture", PlainWords: "tool access, meaning the tools a role may use"},
 	{Term: "re-arm", Match: "re-arm", Guides: true, PlainWords: "repeat the merge request"},
 	{Term: "seam", Match: "seam", Whole: true, PlainWords: "name the boundary instead — what attaches to what"},
 	{Term: "sidecar", Match: "sidecar", PlainWords: "a separate directory outside the repository"},

@@ -1094,7 +1094,7 @@ func TestPipelineRefusesAutomaticIntegrationThatIsNotGatedByAReviewer(t *testing
 			degrade: func(pipeline *Pipeline) {
 				pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendCodex, Model: testReviewerModel, Instances: 1}
 			},
-			want: `backend "codex" cannot hold the "read-only" tool posture`,
+			want: `backend "codex" cannot hold the "read-only" tool access`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

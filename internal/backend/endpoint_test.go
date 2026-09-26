@@ -53,7 +53,7 @@ func TestBothBuiltInProvidersAreExpressedAsEndpoints(t *testing.T) {
 	// an adapter — the posture is a fact about the provider's sandbox, and it is
 	// decided at configuration load rather than at dispatch.
 	reviewer := registry.EligibleFor(codex, domain.RoleReviewer)
-	if reviewer == nil || !strings.Contains(reviewer.Error(), `cannot hold the "read-only" tool posture`) {
+	if reviewer == nil || !strings.Contains(reviewer.Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("the reviewer on Codex = %v, want a refusal naming the posture", reviewer)
 	}
 	// The developer's posture Codex can hold, and this build can now launch it, so
@@ -79,7 +79,7 @@ func TestCodexIsDeveloperOnlyByCapabilityWhateverThisBuildCanLaunch(t *testing.T
 		t.Fatalf("Serves(codex, developer) = %v, want the role Codex's sandbox can be held to", err)
 	}
 	refusal := registry.Serves(domain.BackendCodex, domain.RoleReviewer)
-	if refusal == nil || !strings.Contains(refusal.Error(), `cannot hold the "read-only" tool posture`) {
+	if refusal == nil || !strings.Contains(refusal.Error(), `cannot hold the "read-only" tool access`) {
 		t.Fatalf("Serves(codex, reviewer) = %v, want a refusal naming the posture", refusal)
 	}
 
@@ -183,7 +183,7 @@ func TestRoleEligibilityComesFromTheDeclaration(t *testing.T) {
 	}{
 		{name: "a provider that serves the role and holds its posture", provider: "developer-only", role: domain.RoleDeveloper},
 		{name: "a role the provider does not serve", provider: "developer-only", role: domain.RoleReviewer, want: `does not support role "reviewer"`},
-		{name: "a role whose posture the provider cannot hold", provider: "no-writes", role: domain.RoleDeveloper, want: `cannot hold the "worktree-write" tool posture`},
+		{name: "a role whose posture the provider cannot hold", provider: "no-writes", role: domain.RoleDeveloper, want: `cannot hold the "worktree-write" tool access`},
 		{name: "a name that is not a role at all", provider: "no-writes", role: "security-reviewer", want: "not one of the harness's roles"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -313,7 +313,7 @@ func TestTheRoleRefusalIsWhatConfigurationValidationReads(t *testing.T) {
 		t.Fatalf("RoleRefusal(developer) = %q, want the role Codex serves", refusal)
 	}
 	refusal := descriptor.RoleRefusal(domain.RoleReviewer)
-	if !strings.Contains(refusal, `cannot hold the "read-only" tool posture`) {
+	if !strings.Contains(refusal, `cannot hold the "read-only" tool access`) {
 		t.Fatalf("RoleRefusal(reviewer) = %q, want the posture named", refusal)
 	}
 	// The posture is what the refusal names, rather than the role: sending an
