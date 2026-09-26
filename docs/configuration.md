@@ -6169,6 +6169,46 @@ would spend turns against whatever was already failing. What stopped it is
 recorded against the task, so a schedule that is running and producing nothing is
 something you can find.
 
+**A run in flight does not hold the cadence.** A watching session waiting on a
+run of its own goes back round to the schedule when the next task falls due,
+fires it, and returns to waiting. Before this, the wait ended only when the run
+did: on 2026-09-13 one run took twenty hours and the development manager's hourly
+task fired nothing in all of them. A session waiting out a redeploy is the one
+exception. It fires nothing until its runs finish and it restarts. It still
+wakes when a task falls due, though, and records the miss under the redeploy
+before it restarts.
+
+**A task that goes a whole interval unfired is recorded as missed, with what
+kept it.** A task is missed once it is a whole interval past the time it fell
+due. Anything shorter is the ordinary shape of a cadence: one firing per pull,
+and a firing's turns hold the pull while they are taken. A miss is found at the
+first pull that reaches the schedule afterwards, or at the first wake of a
+session waiting out a redeploy. A gap is recorded once, even across a restart:
+a session finding a gap already in the sweep log records and reports nothing.
+`yoyo sweeps` shows it as a pass that took no turn, spanning the gap, and its
+problem names the cause. Each cause is also reported differently:
+
+- **The harness held its own cadence.** The schedule could not be fired, the
+  harness could not be read, the session was waiting out a redeploy, or the pull
+  that reached the task gave its one firing to another task. This is filed as the
+  harness's own report at `critical`, which puts it in front of the operator.
+- **The firing was turned away before it reached the role.** The provider had
+  no capacity, the provider was answering nobody, or the role's conversation was
+  held by another process. The miss quotes the refusal, including the reset the
+  provider named. Where the session's own reading of the provider says more, such
+  as the usage window and when it resets, that is added. This is reported at
+  `warning`, since the provider's wait already has a notice of its own. In
+  practice a refused firing is itself recorded as the pass for that cadence,
+  so this cause names a miss only where the cadence was held without moving.
+- **No session was running** when the task fell due. This is reported at
+  `warning`, since whoever stopped the harness knows. If this session did open
+  late but then found the task held by one of the causes above, that cause is
+  what gets named.
+- **The operator's pause** is recorded and reported to nobody.
+
+The cadence is not moved by a miss. The task is still due, and fires on its own at
+the first pull that reaches it once the cause clears.
+
 **The intake brake summons a development manager's task out of its cadence.**
 The first enabled task whose role is `development-manager` is the one the
 [failure-storm brake](#watching-instead-of-draining) fires the moment it trips,

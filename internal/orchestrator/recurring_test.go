@@ -11,6 +11,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
@@ -1149,5 +1150,161 @@ func TestASummonsCarriesTheDocketBesideTheTrip(t *testing.T) {
 	}
 	if len(role.messages) != 1 || !strings.Contains(role.messages[0], "The intake brake summoned you now") || !strings.Contains(role.messages[0], "on yoyodyne-ifd.429.21") {
 		t.Fatalf("messages = %q, want the trip and the docket in the summons", role.messages)
+	}
+}
+
+// filedReports is the report pile as a missed cadence files into it.
+type filedReports struct {
+	filed []report.Report
+}
+
+func (f *filedReports) Append(reported report.Report) error {
+	f.filed = append(f.filed, reported)
+	return nil
+}
+
+// The schedule is read without firing it, so a session waiting on a run can
+// wake when a task falls due: a task that has fired is due one interval after,
+// one that has never fired is due at once, and reading claims nothing.
+func TestTheCadenceSaysWhenEachTaskIsDueWithoutClaimingIt(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	role := &wokenRole{answers: []scriptedTurn{{result: complete("nothing")}}}
+	clock := &movingRecurringClock{now: recurringNow}
+	trigger := Trigger{Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: role, Clock: clock}
+
+	dues, err := trigger.Cadence(context.Background())
+	if err != nil {
+		t.Fatalf("Cadence() error = %v", err)
+	}
+	if len(dues) != 1 || !dues[0].At.IsZero() || dues[0].Every != time.Hour || dues[0].Role != domain.RoleDevelopmentManager {
+		t.Fatalf("dues = %+v, want the task that has never fired due at once", dues)
+	}
+	if _, found, err := store.Find("a-sweep"); err != nil || found {
+		t.Fatalf("Find() = %v, %v; want reading the cadence to claim nothing", found, err)
+	}
+	if _, err := trigger.Fire(context.Background()); err != nil {
+		t.Fatalf("Fire() error = %v", err)
+	}
+	dues, err = trigger.Cadence(context.Background())
+	if err != nil {
+		t.Fatalf("Cadence() error = %v", err)
+	}
+	if len(dues) != 1 || !dues[0].At.Equal(recurringNow.Add(time.Hour)) {
+		t.Fatalf("dues = %+v, want the task due an hour after it fired", dues)
+	}
+}
+
+// A missed cadence is recorded in the sweep log beside the passes, spanning the
+// gap and saying what kept it, and is said as the harness's own report at the
+// severity it was given. The cadence is not moved: the task is still due.
+func TestAMissedCadenceIsRecordedAndReported(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	filed := &filedReports{}
+	due := recurringNow.Add(-2 * time.Hour)
+	trigger := Trigger{
+		Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: &wokenRole{},
+		Breakage:    filed,
+		Attribution: report.Attribution{ProductID: "example", RepositoryID: "example"},
+		Clock:       recurringClock{},
+	}
+
+	err := trigger.Missed(context.Background(), RecurringMiss{
+		Task: "a-sweep", Role: domain.RoleDevelopmentManager, Every: time.Hour, Due: due,
+		Why:      "the harness could not fire its recurring schedule: the claim could not be taken",
+		Severity: report.SeverityCritical,
+	})
+	if err != nil {
+		t.Fatalf("Missed() error = %v", err)
+	}
+	recorded, _, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded = %+v, want the miss in the sweep log", recorded)
+	}
+	missed := recorded[0]
+	if missed.Turns != 0 || !missed.StartedAt.Equal(due) || !missed.EndedAt.Equal(recurringNow) {
+		t.Errorf("recorded = %+v, want a firing that took no turn spanning the gap", missed)
+	}
+	for _, want := range []string{"fell due at " + due.Format(time.RFC3339), "2h0m0s later", "the claim could not be taken"} {
+		if !strings.Contains(missed.Problem, want) {
+			t.Errorf("problem = %q, want it to say %q", missed.Problem, want)
+		}
+	}
+	if len(filed.filed) != 1 {
+		t.Fatalf("filed = %+v, want the miss said as one report", filed.filed)
+	}
+	said := filed.filed[0]
+	if said.Role != report.HarnessReporter || said.Severity != report.SeverityCritical {
+		t.Errorf("report = %+v, want the harness's own at critical", said)
+	}
+	if !strings.Contains(said.Message, "the claim could not be taken") || !strings.Contains(said.Message, "a-sweep") {
+		t.Errorf("message = %q, want the task and what kept it", said.Message)
+	}
+	if _, found, err := store.Find("a-sweep"); err != nil || found {
+		t.Errorf("Find() = %v, %v; want the cadence left where it was", found, err)
+	}
+}
+
+// The operator's pause is recorded against the cadence and said to nobody: a
+// stop somebody placed on purpose is not breakage.
+func TestAMissUnderThePauseIsRecordedAndNotReported(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	filed := &filedReports{}
+	trigger := Trigger{
+		Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: &wokenRole{},
+		Breakage:    filed,
+		Attribution: report.Attribution{ProductID: "example", RepositoryID: "example"},
+		Clock:       recurringClock{},
+	}
+	if err := trigger.Missed(context.Background(), RecurringMiss{
+		Task: "a-sweep", Role: domain.RoleDevelopmentManager, Every: time.Hour,
+		Due: recurringNow.Add(-90 * time.Minute), Why: "the operator paused harness activity",
+	}); err != nil {
+		t.Fatalf("Missed() error = %v", err)
+	}
+	if recorded, _, _ := store.List(); len(recorded) != 1 {
+		t.Errorf("recorded = %+v, want the miss in the sweep log", recorded)
+	}
+	if len(filed.filed) != 0 {
+		t.Errorf("filed = %+v, want nothing said about the operator's own pause", filed.filed)
+	}
+}
+
+// A gap already in the sweep log — recorded by the session that was running
+// before a restart — is not recorded or reported a second time by the session
+// that comes after it.
+func TestAMissAlreadyRecordedIsNotRecordedAgain(t *testing.T) {
+	t.Parallel()
+
+	store := sweepStore(t)
+	filed := &filedReports{}
+	trigger := Trigger{
+		Tasks: hourlyTask("sweep"), Claims: store, Reports: store, Roles: &wokenRole{},
+		Breakage:    filed,
+		Attribution: report.Attribution{ProductID: "example", RepositoryID: "example"},
+		Clock:       recurringClock{},
+	}
+	miss := RecurringMiss{
+		Task: "a-sweep", Role: domain.RoleDevelopmentManager, Every: time.Hour,
+		Due: recurringNow.Add(-2 * time.Hour), Why: "the harness could not be read", Severity: report.SeverityCritical,
+	}
+	for range 2 {
+		if err := trigger.Missed(context.Background(), miss); err != nil {
+			t.Fatalf("Missed() error = %v", err)
+		}
+	}
+	if recorded, _, _ := store.List(); len(recorded) != 1 {
+		t.Errorf("recorded = %+v, want the gap once", recorded)
+	}
+	if len(filed.filed) != 1 {
+		t.Errorf("filed = %+v, want the gap said once", filed.filed)
 	}
 }
