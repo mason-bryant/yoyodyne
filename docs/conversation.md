@@ -1857,14 +1857,17 @@ and [the paragraph on it below](#resuming-an-approved-change-the-environment-sto
 says why there is none to carry out.
 
 Neither of the first two waits on being typed. A watching `yoyo work` session
-fires a recorded repair or re-run itself, one per pull, oldest stoppage first, through
-these same two actions and under every condition each of them asks — so
+fires a recorded repair or re-run itself, oldest stoppage first and as many per
+pull as there are developer slots for them, through these same two actions and
+under every condition each of them asks — so
 recording the decision is what causes it, and the verbs are what fires one *now*
 rather than at the next pull. A re-arm is still typed: it is the one decision the
 pass does not carry out. Every refusal is written onto the item's own triage record and shown on the
 docket entry the development manager reads, naming which gate refused and what
 would clear it, so a decision that cannot be carried out says so where she is
-already looking. Before that existed, thirty-three items stood decided and
+already looking — and a decision no pass has attempted a poll interval after it
+was recorded is written there too, as unattempted with why, so none is ever
+silently passed over. Before that existed, thirty-three items stood decided and
 unfired, some for days, because the only executor was somebody typing one of these
 two commands.
 

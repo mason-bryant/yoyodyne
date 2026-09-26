@@ -896,6 +896,11 @@ type CarryOut struct {
 	// shut for days.
 	Attempts  int       `json:"attempts,omitempty"`
 	RefusedAt time.Time `json:"refused_at"`
+	// Unattempted marks a decision no pass has attempted at all, a poll interval
+	// or more after it was recorded: Refusal is then why the pass did not reach it
+	// rather than what a gate said, Gate is what kept it from the attempt, and
+	// Attempts is zero.
+	Unattempted bool `json:"unattempted,omitempty"`
 }
 
 // Committed is the round figure the budget is measured against: what this item
@@ -2013,6 +2018,13 @@ func (e Entry) renderCarryOut() string {
 		return ""
 	}
 	var rendered strings.Builder
+	if stopped.Unattempted {
+		fmt.Fprintf(&rendered, "      No pass has attempted the %q you decided, as of %s; %s kept it back: %s\n",
+			stopped.Decision, stopped.RefusedAt.UTC().Format(time.RFC3339), stopped.Gate, strings.TrimSpace(stopped.Refusal))
+		rendered.WriteString(indented("What would clear it", stopped.Clears))
+		rendered.WriteString("      Nothing was spent and the decision still stands; the first pass that reaches it attempts it, and what that attempt comes to replaces this.\n")
+		return rendered.String()
+	}
 	if stopped.Waiting {
 		fmt.Fprintf(&rendered, "      The harness is carrying out the %q you decided and is waiting on %s (%s, last at %s): %s\n",
 			stopped.Decision, stopped.Gate, plural(stopped.Attempts, "attempt", "attempts"),

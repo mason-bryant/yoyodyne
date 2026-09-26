@@ -43,20 +43,23 @@ package orchestrator
 // so where she is already looking, and the action that carries the decision out
 // clears the finding as it starts — whichever hand fired it.
 //
-// # One per pass, and paced when it is refused
+// # As many as there are slots for, and paced when it is refused
 //
 // A carry-out is a run, so it takes a developer slot and the pass starts it
 // exactly as it starts a chosen item: in a goroutine, counted against capacity,
-// waited out with everything else. One per pass is what keeps the queue's own
-// work from being crowded out by a backlog of decided stoppages, and the next
-// pass takes the next.
+// waited out with everything else. A pull fires every decision it has a free
+// slot for, because a decision left behind another for want of nothing but its
+// place on the docket is one nobody attempts and nothing refuses — which is how
+// two re-runs sat unfired and unrecorded for a week (yoyodyne-ifd.428.39). What
+// the slots do not stretch to is written onto the item by RecordUnattempted once
+// it has stood a poll interval, so no decision is ever silently passed over.
 //
 // A refusal is paced, and what decides that is who the gate is shut for. The
-// pass reads the docket every poll interval and carries one decision out per
-// pull, so an unpaced retry of a gate shut for one item — a directive pausing it,
-// work it waits on, a worktree somebody has been in — would take that single
-// carry-out several times a minute for as long as the gate stood, and starve
-// every other decided stoppage behind it. A gate shut for everything at once —
+// pass reads the docket every poll interval and attempts every decision it can,
+// so an unpaced retry of a gate shut for one item — a directive pausing it, work
+// it waits on, a worktree somebody has been in — would take a developer slot
+// several times a minute for as long as the gate stood, and crowd out every
+// decided stoppage and queued item behind it. A gate shut for everything at once —
 // the operator's pause, the intake hold, a full harness — is not paced, because
 // nothing is behind it to starve and pacing it would leave a decision uncarried
 // for a quarter of an hour after the switch was already open, which is the
@@ -95,6 +98,7 @@ type CarryOutDocket interface {
 type CarryOutDecisions interface {
 	Counters(workItemID string) (runstate.TriageCounters, error)
 	RecordCarryOutRefusal(ctx context.Context, workItemID string, refusal runstate.TriageCarryOut, at time.Time) (runstate.TriageCounters, error)
+	RecordCarryOutUnattempted(ctx context.Context, workItemID string, unattempted runstate.TriageCarryOut, at time.Time) (runstate.TriageCounters, error)
 }
 
 // CarryOutReruns is what the harness has already claimed of the re-run decisions.
@@ -194,6 +198,10 @@ type CarryOutTask struct {
 	DocketKey  string `json:"docket_key"`
 	Decision   string `json:"decision"`
 	Reason     string `json:"reason"`
+	// DecidedAt is when the decision was recorded, which is what a decision no
+	// pass has attempted is measured from. It is zero on the harness's own
+	// continuation of a check stage, which nobody decided.
+	DecidedAt time.Time `json:"decided_at,omitempty"`
 }
 
 // CarriedOut is what one attempt came to. It reports an attempt that was stopped
@@ -239,20 +247,55 @@ type CarriedOut struct {
 // left to its pacing, because the finding recorded then is what says so and
 // repeating it every poll would starve every decision behind it.
 //
-// It reads and writes nothing. What it produces is a list somebody else acts on
-// one of, which is what lets the pass take a slot for it before anything is
-// attempted.
+// It reads and writes nothing. What it produces is a list somebody else acts on,
+// which is what lets the pass take a slot for each before anything is attempted.
 func (c CarryOut) Outstanding() ([]CarryOutTask, error) {
+	reading, err := c.read()
+	return reading.tasks, err
+}
+
+// carryOutReading is one sweep of the recorded decisions: the ones a pass may
+// attempt now, and the ones standing that it may not, each with why. The second
+// list is what nothing wrote down before yoyodyne-ifd.428.39 — a decision the
+// sweep passed over was simply absent from the first, and a decision nobody
+// attempts is one nobody refuses, so the item carried no word of it for a week.
+type carryOutReading struct {
+	tasks []CarryOutTask
+	held  []heldDecision
+}
+
+// heldDecision is a standing decision the sweep did not offer, and why: the gate
+// that kept it from being attempted, in the record's own vocabulary, what that
+// gate is, and what would let it through.
+type heldDecision struct {
+	task   CarryOutTask
+	gate   string
+	why    string
+	clears string
+}
+
+// read is the sweep behind Outstanding and RecordUnattempted, so what a pass
+// attempts and what it writes down as unattempted are one reading's two halves.
+//
+// It walks the docket's stopped runs and then, for every item the docket names,
+// the item's latest decision where that decision is about a run no stopped-run
+// entry stands for. The second walk is the half the entry-by-entry reading could
+// never reach: a decision is recorded by run, and an item whose latest stoppage
+// was never docketed as a stopped run — a re-run cancelled on its way out, say —
+// has a decision no entry leads to. Only the latest is taken there, because an
+// earlier decision about another of the item's runs is one she has since decided
+// past.
+func (c CarryOut) read() (carryOutReading, error) {
 	if err := c.validate(); err != nil {
-		return nil, err
+		return carryOutReading{}, err
 	}
 	entries, err := c.Docket.List()
 	if err != nil {
-		return nil, fmt.Errorf("read the triage docket: %w", err)
+		return carryOutReading{}, fmt.Errorf("read the triage docket: %w", err)
 	}
 	inFlight, err := c.itemsInFlight()
 	if err != nil {
-		return nil, err
+		return carryOutReading{}, err
 	}
 	// What the repair grants have already bought is counted from every run the
 	// product has had, which is the one reading here that grows with the history.
@@ -262,44 +305,176 @@ func (c CarryOut) Outstanding() ([]CarryOutTask, error) {
 	history := onceRecorded(c.Runs)
 	now := c.now()
 	read := make(map[string]outstandingItem, len(entries))
-	var tasks []CarryOutTask
+	var items []string
+	docketed := make(map[string]bool, len(entries))
+	var reading carryOutReading
 	var problems []error
-	for _, entry := range entries {
-		if entry.Class != triage.ClassStoppedRun {
-			continue
-		}
-		if _, busy := inFlight[entry.WorkItemID]; busy {
-			continue
-		}
-		item, seen := read[entry.WorkItemID]
+	itemFor := func(workItemID string) outstandingItem {
+		item, seen := read[workItemID]
 		if !seen {
-			item = c.outstandingFor(entry.WorkItemID)
-			read[entry.WorkItemID] = item
+			item = c.outstandingFor(workItemID)
+			read[workItemID] = item
+			items = append(items, workItemID)
 			if item.problem != nil {
 				problems = append(problems, item.problem)
 			}
 		}
-		if item.problem != nil {
-			continue
-		}
-		task, outstanding, err := item.taskFor(entry, now, history)
+		return item
+	}
+	consider := func(entry triage.Entry, item outstandingItem) {
+		task, outstanding, held, err := item.taskFor(entry, now, history)
 		if err != nil {
 			problems = append(problems, err)
-			continue
+			return
+		}
+		if held != nil {
+			reading.held = append(reading.held, *held)
+			return
 		}
 		if !outstanding {
 			task, outstanding, err = c.checkStageTask(entry, item)
 			if err != nil {
 				problems = append(problems, err)
-				continue
+				return
 			}
 		}
 		if !outstanding {
+			return
+		}
+		if running, busy := inFlight[entry.WorkItemID]; busy {
+			// A repair continues the run it was granted for, so that run going again
+			// is the decision being carried out rather than something keeping it back.
+			if running == entry.RunID || task.Decision == DecisionContinueChecks {
+				return
+			}
+			reading.held = append(reading.held, heldDecision{
+				task:   task,
+				gate:   runstate.TriageGateWorkItem,
+				why:    fmt.Sprintf("run %s of %s is in flight, and a decision about an item something is already running is not attempted until that run ends", running, entry.WorkItemID),
+				clears: fmt.Sprintf("run %s ending, which needs nobody; the pass after it attempts the decision", running),
+			})
+			return
+		}
+		reading.tasks = append(reading.tasks, task)
+	}
+	for _, entry := range entries {
+		if entry.WorkItemID == "" {
 			continue
 		}
-		tasks = append(tasks, task)
+		if entry.Class != triage.ClassStoppedRun {
+			itemFor(entry.WorkItemID)
+			continue
+		}
+		docketed[entry.RunID] = true
+		item := itemFor(entry.WorkItemID)
+		if item.problem != nil {
+			continue
+		}
+		consider(entry, item)
 	}
-	return tasks, errors.Join(problems...)
+	for _, workItemID := range items {
+		item := read[workItemID]
+		if item.problem != nil {
+			continue
+		}
+		latest, found := item.latestDecision()
+		if !found || docketed[latest.RunID] {
+			continue
+		}
+		consider(triage.Entry{
+			Key:        triage.Key(triage.ClassStoppedRun, latest.RunID),
+			Class:      triage.ClassStoppedRun,
+			RunID:      latest.RunID,
+			WorkItemID: workItemID,
+		}, item)
+	}
+	return reading, errors.Join(problems...)
+}
+
+// RecordUnattempted writes onto each item's triage record every decision that
+// stands a poll interval or more after it was recorded with no pass having
+// attempted it, and why, and returns an account of each one it wrote.
+//
+// A decision is attempted where a pass handed it to the action that carries it
+// out: the action fires it, or a gate refuses it and the refusal is written. So
+// what this finds is every other ending — a decision the sweep held back, and
+// one the sweep offered that the pass then did not take — and passed is the
+// pass's own account of the second: the offered decisions it did not attempt,
+// by run, with why. An offered decision the pass does not name was attempted.
+//
+// What is already written about the decision since it was made is left to
+// stand: a refusal is the attempt this looks for, and an unattempted record
+// saying the same thing is not written twice. poll is the pass's own interval,
+// which is the whole of the grace a decision is given before its not having been
+// attempted is a finding.
+func (c CarryOut) RecordUnattempted(ctx context.Context, poll time.Duration, passed map[string]string) ([]CarriedOut, error) {
+	reading, err := c.read()
+	var candidates []heldDecision
+	candidates = append(candidates, reading.held...)
+	for _, task := range reading.tasks {
+		why, notTaken := passed[task.RunID]
+		if !notTaken {
+			continue
+		}
+		candidates = append(candidates, heldDecision{
+			task:   task,
+			gate:   runstate.TriageGateCapacity,
+			why:    why,
+			clears: "a pass with a developer slot to give it, which needs nobody; the decision still stands",
+		})
+	}
+	now := c.now()
+	counters := make(map[string]runstate.TriageCounters)
+	var written []CarriedOut
+	var problems []error
+	if err != nil {
+		problems = append(problems, err)
+	}
+	for _, held := range candidates {
+		task := held.task
+		if task.Decision == DecisionContinueChecks || task.DecidedAt.IsZero() || now.Sub(task.DecidedAt) < poll {
+			continue
+		}
+		record, seen := counters[task.WorkItemID]
+		if !seen {
+			read, err := c.Decisions.Counters(task.WorkItemID)
+			if err != nil {
+				problems = append(problems, fmt.Errorf("read what triage has recorded about %s: %w", task.WorkItemID, err))
+				continue
+			}
+			counters[task.WorkItemID], record = read, read
+		}
+		if standing, found := record.CarryOutOf(task.RunID); found && !standing.RefusedAt.Before(task.DecidedAt) {
+			if !standing.Unattempted || (standing.Gate == held.gate && standing.Refusal == strings.TrimSpace(held.why)) {
+				continue
+			}
+		}
+		write, stopWriting := recordContext(ctx)
+		_, err := c.Decisions.RecordCarryOutUnattempted(write, task.WorkItemID, runstate.TriageCarryOut{
+			RunID:    task.RunID,
+			Decision: task.Decision,
+			Gate:     held.gate,
+			Refusal:  held.why,
+			Clears:   held.clears,
+		}, now)
+		stopWriting()
+		account := CarriedOut{
+			WorkItemID: task.WorkItemID,
+			RunID:      task.RunID,
+			DocketKey:  task.DocketKey,
+			Decision:   task.Decision,
+			Gate:       held.gate,
+			Problem: fmt.Sprintf("the %q the development manager decided about the stoppage of run %s at %s has not been attempted by any pass: %s. What clears it: %s",
+				task.Decision, task.RunID, task.DecidedAt.UTC().Format(time.RFC3339), strings.TrimSpace(held.why), strings.TrimSpace(held.clears)),
+		}
+		if err != nil {
+			account.RecordProblem = fmt.Sprintf(
+				"and that could not be written onto %s's triage record, so the docket the development manager reads does not carry it and this pass is the only thing that says it: %v",
+				task.WorkItemID, err)
+		}
+		written = append(written, account)
+	}
+	return written, errors.Join(problems...)
 }
 
 // outstandingItem is one work item's record as this sweep reads it: what has been
@@ -321,6 +496,22 @@ func (c CarryOut) outstandingFor(workItemID string) outstandingItem {
 		return outstandingItem{problem: fmt.Errorf("read the re-runs already carried out for %s: %w", workItemID, err)}
 	}
 	return outstandingItem{counters: counters, claimed: claimed}
+}
+
+// latestDecision is the item's most recently recorded decision, of whatever
+// kind, and whether it has one. A wait or an escalation about a later stoppage
+// is her deciding past an earlier one as surely as a re-run is, so every kind
+// counts; where the latest is one the harness does not carry out, taking it
+// offers nothing.
+func (i outstandingItem) latestDecision() (runstate.TriageDecision, bool) {
+	var latest runstate.TriageDecision
+	found := false
+	for _, decision := range i.counters.Decisions {
+		if !found || !decision.DecidedAt.Before(latest.DecidedAt) {
+			latest, found = decision, true
+		}
+	}
+	return latest, found
 }
 
 // onceRecorded reads every run the product has had, the first time somebody asks
@@ -366,51 +557,56 @@ func (i outstandingItem) repairOutstanding(workItemID string, history func() ([]
 }
 
 // taskFor reports the decision standing about one entry's stoppage that the
-// harness has not acted on, and whether there is one.
+// harness has not acted on, and whether there is one — or, where a decision
+// stands that the sweep will not offer, why not.
 //
 // It asks the same two questions of each decision that the action carrying it out
 // asks, and asks them the same way round: what was decided, and how much of that
 // decision the harness has already spent. The counters alone cannot answer the
 // second — they are totals nothing clears — which is why the claims and the
 // continuations recorded on the item's runs are read beside them.
-//
-// The wiring is asked as well, because a carry-out with no action for a decision
-// cannot act on it and a task nothing can take is a finding nobody asked for.
-func (i outstandingItem) taskFor(entry triage.Entry, now time.Time, history func() ([]runstate.State, error)) (CarryOutTask, bool, error) {
+func (i outstandingItem) taskFor(entry triage.Entry, now time.Time, history func() ([]runstate.State, error)) (CarryOutTask, bool, *heldDecision, error) {
 	decision, found := i.counters.DecisionOf(entry.RunID)
 	if !found {
-		return CarryOutTask{}, false, nil
+		return CarryOutTask{}, false, nil, nil
+	}
+	task := CarryOutTask{
+		WorkItemID: entry.WorkItemID,
+		RunID:      entry.RunID,
+		DocketKey:  entry.Key,
+		Decision:   decision.Decision,
+		Reason:     decision.Reason,
+		DecidedAt:  decision.DecidedAt,
 	}
 	switch decision.Decision {
 	case runstate.TriageDecisionRerun:
-		if !i.rerunOutstanding(entry) {
-			return CarryOutTask{}, false, nil
+		outstanding, held := i.rerunOutstanding(entry, decision)
+		if held != nil {
+			held.task = task
+			return CarryOutTask{}, false, held, nil
+		}
+		if !outstanding {
+			return CarryOutTask{}, false, nil, nil
 		}
 	case runstate.TriageDecisionRepair:
 		outstanding, err := i.repairOutstanding(entry.WorkItemID, history)
 		if err != nil {
-			return CarryOutTask{}, false, err
+			return CarryOutTask{}, false, nil, err
 		}
 		if !outstanding {
-			return CarryOutTask{}, false, nil
+			return CarryOutTask{}, false, nil, nil
 		}
 	default:
 		// A re-scope, a wait, an escalation, and a merge re-arm are decisions the
 		// harness does not carry out: the first three ask for no run at all, and a
 		// re-arm is an integration retry rather than work, which the operator still
 		// takes by hand.
-		return CarryOutTask{}, false, nil
+		return CarryOutTask{}, false, nil, nil
 	}
 	if stopped, refused := i.counters.CarryOutOf(entry.RunID); refused && stopped.Cooling(now) {
-		return CarryOutTask{}, false, nil
+		return CarryOutTask{}, false, nil, nil
 	}
-	return CarryOutTask{
-		WorkItemID: entry.WorkItemID,
-		RunID:      entry.RunID,
-		DocketKey:  entry.Key,
-		Decision:   decision.Decision,
-		Reason:     decision.Reason,
-	}, true, nil
+	return task, true, nil, nil
 }
 
 // checkStageTask reports a stoppage the check stage bound made that the harness
@@ -445,13 +641,39 @@ func (c CarryOut) checkStageTask(entry triage.Entry, item outstandingItem) (Carr
 // this stoppage's own claim is what makes the once-per-stoppage bound, and the
 // count of claims against the count of decisions is what stops one decision
 // authorizing a re-run of every stoppage the item ever has.
-func (i outstandingItem) rerunOutstanding(entry triage.Entry) bool {
+//
+// A claim on this stoppage answers the decision only where the claim came after
+// it. A re-run decided again about a stoppage whose one re-run was already
+// claimed — what the development manager recorded for yoyodyne-ifd.192 and .187
+// on 2026-09-19 — is a decision nothing has acted on, and it is offered so the
+// action refuses it and the refusal is written onto the item, rather than being
+// read as carried out and passed over in silence. It is offered only while it
+// is the item's latest decision: one she has since decided past is not hers to
+// have carried out any more.
+//
+// Where no claim stands on this stoppage and the item's claims already match
+// its re-runs, the decision is held back rather than dropped, with why: the
+// record disagrees with itself, and the item is where that is said.
+func (i outstandingItem) rerunOutstanding(entry triage.Entry, decision runstate.TriageDecision) (bool, *heldDecision) {
 	for _, existing := range i.claimed {
-		if existing.DocketKey == entry.Key {
-			return false
+		if existing.DocketKey != entry.Key {
+			continue
 		}
+		if !decision.DecidedAt.After(existing.ClaimedAt) {
+			return false, nil
+		}
+		latest, found := i.latestDecision()
+		return found && latest.RunID == decision.RunID, nil
 	}
-	return i.counters.Reruns > len(i.claimed)
+	if i.counters.Reruns > len(i.claimed) {
+		return true, nil
+	}
+	return false, &heldDecision{
+		gate: runstate.TriageGateBudget,
+		why: fmt.Sprintf("the item's record counts %d re-run(s) decided and %d already claimed, so by its own arithmetic this re-run has nothing left to carry it out, though no claim stands on this stoppage",
+			i.counters.Reruns, len(i.claimed)),
+		clears: "the development manager recording the re-run again, which spends a further re-run of the item and past the cap is `yoyo triage override`'s to permit",
+	}
 }
 
 // Carry carries one recorded decision out and writes down what became of the
@@ -621,10 +843,10 @@ func (c CarryOut) continueChecks(ctx context.Context, task CarryOutTask, carried
 // either is lifted.
 //
 // A directive and a dependency stop this item and no other. Left as waiting they
-// would be unpaced, and an unpaced refusal on a directive-paused item takes the
-// pass's one carry-out on every poll for as long as the directive stands — which
-// is every other decided stoppage starved by one that cannot fire, and the
-// standing backlog never clearing. They are refusals somebody has to open, and
+// would be unpaced, and an unpaced refusal on a directive-paused item takes a
+// developer slot on every poll for as long as the directive stands — which is
+// the decided stoppages and queued work behind it crowded out by one that cannot
+// fire. They are refusals somebody has to open, and
 // they cool like every other one.
 func pausedGate(outcome Outcome) (gate, clears string, waiting bool) {
 	switch {
@@ -669,7 +891,7 @@ func carryOutGate(err error) (gate, clears string) {
 			"`yoyo triage override` crossing the budget that refused, which is the operator's and nobody else's"
 	case errors.Is(err, runstate.ErrRerunTaken):
 		return runstate.TriageGateBudget,
-			"nothing: triage acts on one docketed stoppage once, so a further attempt at this one is an escalation rather than a larger budget"
+			"the decision being recorded against the stoppage of the item's latest run instead: triage re-runs one docketed stoppage once, so this one's re-run is spent, and a further attempt at it is an escalation rather than a larger budget"
 	default:
 		return runstate.TriageGateHarness, "what the refusal itself names"
 	}
@@ -722,15 +944,16 @@ func (c CarryOut) stopped(ctx context.Context, task CarryOutTask, carried Carrie
 // itemsInFlight names the work items with a run going. A decision about an item
 // something is already running is not one to act on: the item is not stopped work,
 // and both actions refuse it anyway — asking here is what keeps the pass from
-// spending its one carry-out finding out.
-func (c CarryOut) itemsInFlight() (map[string]struct{}, error) {
+// spending a slot finding out. It names the run, so a decision held back for it
+// is written down naming what it waits on.
+func (c CarryOut) itemsInFlight() (map[string]string, error) {
 	incomplete, err := c.Runs.Incomplete()
 	if err != nil {
 		return nil, fmt.Errorf("read what is already in flight: %w", err)
 	}
-	busy := make(map[string]struct{}, len(incomplete))
+	busy := make(map[string]string, len(incomplete))
 	for _, state := range incomplete {
-		busy[state.WorkItemID] = struct{}{}
+		busy[state.WorkItemID] = state.RunID
 	}
 	return busy, nil
 }

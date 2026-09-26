@@ -70,8 +70,9 @@ package orchestrator
 // decision is durable and spends the item's budget as she records it, and until
 // yoyodyne-ifd.346 the only thing that acted on one was a person typing `yoyo
 // triage repair` — which left thirty-three items decided and unfired, some for
-// days. So the pull fires one per pass, against the same capacity everything else
-// is chosen against and before the queue is read, because a stoppage already
+// days. So the pull fires them, as many as it has slots for, against the same
+// capacity everything else is chosen against and before the queue is read,
+// because a stoppage already
 // judged is work this harness has spent a run on and the queue's own entries have
 // not been. Every gate that refused a carry-out typed by hand refuses this one,
 // and every refusal is written onto the item where the development manager reads
@@ -474,7 +475,8 @@ type ScheduleEscalations interface {
 }
 
 // ScheduleCarryOut fires the triage decisions the development manager recorded
-// and nobody has acted on, at most one per pass. It is satisfied by CarryOut.
+// and nobody has acted on, as many per pull as there are developer slots for
+// them, and writes down every one it did not reach. It is satisfied by CarryOut.
 //
 // It is optional, and a pull wired without one pulls exactly the same work: what
 // is lost is the firing, so a recorded decision waits on somebody typing `yoyo
@@ -483,12 +485,19 @@ type ScheduleEscalations interface {
 //
 // It is split in two because a carry-out is a run rather than a turn. The pass
 // asks what is outstanding, which reads records and starts nothing, and then
-// starts the one it chose in a goroutine against a developer slot, exactly as it
+// starts the ones it chose in goroutines against developer slots, exactly as it
 // starts an item the queue offered. A sweep that did both inside the pull would
 // hold the queue closed for the length of a whole run.
+//
+// The third half is the account of what the pass did not attempt. A decision
+// the pass never hands to an action is one no gate refuses, so nothing else
+// writes a word of it: RecordUnattempted is given the offered decisions the pull
+// passed over, with why, and writes onto the item every decision standing a
+// poll interval after it was recorded with nothing attempted.
 type ScheduleCarryOut interface {
 	Outstanding() ([]CarryOutTask, error)
 	Carry(ctx context.Context, task CarryOutTask) (CarriedOut, Outcome, error)
+	RecordUnattempted(ctx context.Context, poll time.Duration, passed map[string]string) ([]CarriedOut, error)
 }
 
 // ScheduleRecurring fires the configured recurring tasks, at most one per pass.
@@ -970,6 +979,12 @@ type Schedule struct {
 	// one line meant the successful attempt erased the account of the item nothing
 	// ever looked at.
 	CarryOutReadProblem string `json:"carry_out_read_problem,omitempty"`
+	// CarryOutUnattempted is the decisions of hers this pass found standing a poll
+	// interval or more after they were recorded with no pass having attempted
+	// them, each with why, and wrote onto the item. A decision the pass attempts
+	// is fired or refused, and both say so; this is the ending that said nothing
+	// until yoyodyne-ifd.428.39, and two re-runs sat in it for a week.
+	CarryOutUnattempted []CarriedOut `json:"carry_out_unattempted,omitempty"`
 	// Fired is the recurring tasks this pass woke a role for, and what came back.
 	// It is on the schedule for the reason the escalations are: a pass that woke a
 	// role and spent turns doing it is a pass that did something, and an operator
@@ -1737,7 +1752,14 @@ pulling:
 		// unpaced record exists to keep. See nextCarryOut.
 		closed := closedGates{intake: held, pause: paused, capacity: free < 1}
 		carrying := false
-		if task, found := s.nextCarryOut(&schedule, pull, occupied, waitingOn, closed); found {
+		// A session bounded by --limit is bounded here too: every decision fired is
+		// a run started, and the bound is on runs started.
+		remaining := 0
+		if s.Limit > 0 {
+			remaining = s.Limit - len(schedule.Started)
+		}
+		tasks, passedCarryOuts := s.nextCarryOuts(&schedule, pull, occupied, waitingOn, closed, free, remaining)
+		for _, task := range tasks {
 			index := len(schedule.Started)
 			schedule.Started = append(schedule.Started, Started{
 				WorkItemID: task.WorkItemID,
@@ -1762,6 +1784,7 @@ pulling:
 				completions <- completed{index: index, outcome: outcome, err: err, carriedOut: &carried}
 			}(task)
 		}
+		s.recordUnattempted(ctx, &schedule, pull, passedCarryOuts)
 
 		// probing is this pull starting the brake's probe run under the hold: one
 		// item, chosen exactly as any other would be, and named on the hold's own
@@ -3083,20 +3106,23 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 	}
 }
 
-// nextCarryOut is the one decision of the development manager's this pull fires,
-// and whether there is one.
+// nextCarryOuts is the decisions of the development manager's this pull fires,
+// and the ones it offered and passed over, by run, with why.
 //
-// One per pass, for the reason the delivery and the firing beside it are bounded
-// the same way and for one more of its own: a carry-out takes a developer slot,
-// so a pass that fired every outstanding decision at once would spend the whole
-// harness on stopped work and leave the queue untouched. The next pass takes the
-// next, and on a poll loop that is an interval later.
+// As many as there are developer slots free for them — and as the session's
+// --limit leaves, since each is a run started — and one where none is: a
+// decision is attempted on every pull it could be, whatever its place in the
+// docket. Until yoyodyne-ifd.428.39 a pull fired one, which put every decision
+// but the oldest behind it however many slots stood empty; a decision attempted
+// with no slot free is refused by the action's own capacity gate, and that
+// refusal is written onto the item where the development manager reads it. The
+// decisions left over once the slots are spent are not attempted, and what the
+// pull says about each is handed to RecordUnattempted, which writes it onto the
+// item once the decision has stood a poll interval.
 //
 // The oldest stoppage goes first, which is the docket's own order — the order
 // the stoppages were recorded in, not the order the decisions about them were
-// made, though the two seldom differ. A stoppage docketed days ago is the one
-// whose decision has been waiting longest, and it is exactly the backlog of
-// those that this exists to clear.
+// made, though the two seldom differ.
 //
 // A reading that failed is reported and starts nothing. That is the same
 // direction every other optional part of a pull fails in: the queue's own work is
@@ -3117,10 +3143,12 @@ func (s Scheduler) correct(ctx context.Context, schedule *Schedule, pull Pull) {
 // whole length of a pause. The gates the pass can see are the three that stop
 // everything — the intake hold, the operator's pause, and a full harness — which
 // is exactly the set the record leaves unpaced. A gate it cannot see is attempted,
-// because the alternative is a decision this session never fires.
-func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[string]runstate.State, waitingOn map[string]string, closed closedGates) (CarryOutTask, bool) {
+// because the alternative is a decision this session never fires. Such a
+// decision was attempted, and its refusal is on the item, so it is not among
+// the ones passed over.
+func (s Scheduler) nextCarryOuts(schedule *Schedule, pull Pull, occupied map[string]runstate.State, waitingOn map[string]string, closed closedGates, free, remaining int) ([]CarryOutTask, map[string]string) {
 	if pull.CarryOut == nil {
-		return CarryOutTask{}, false
+		return nil, nil
 	}
 	outstanding, err := pull.CarryOut.Outstanding()
 	// Kept apart from what a gate said about the attempt this pass then makes.
@@ -3132,16 +3160,71 @@ func (s Scheduler) nextCarryOut(schedule *Schedule, pull Pull, occupied map[stri
 		schedule.CarryOutReadProblem = fmt.Sprintf(
 			"what the development manager has decided and the harness has not carried out could not be read in full, so a decision may be waiting that nothing here fired: %v", err)
 	}
+	slots := free
+	if slots < 1 {
+		slots = 1
+	}
+	bounded := remaining > 0 && remaining < slots
+	if bounded {
+		slots = remaining
+	}
+	var chosen []CarryOutTask
+	passed := make(map[string]string)
+	taken := make(map[string]string)
 	for _, task := range outstanding {
 		if _, busy := occupied[task.WorkItemID]; busy {
+			if run, ours := taken[task.WorkItemID]; ours {
+				passed[task.RunID] = fmt.Sprintf("this pull was already carrying out a decision about run %s of the same item, and one item is never given two runs at once", run)
+			} else {
+				passed[task.RunID] = "this session had already started a run of the item that had not yet reserved, and one item is never given two runs at once"
+			}
 			continue
 		}
 		if gate, stopped := waitingOn[task.WorkItemID]; stopped && closed.stillShut(gate) {
 			continue
 		}
-		return task, true
+		if len(chosen) >= slots {
+			if bounded {
+				passed[task.RunID] = fmt.Sprintf("the session was bounded to %d more run(s) by its --limit, and %d decision(s) ahead of it on the docket took them", remaining, len(chosen))
+			} else {
+				passed[task.RunID] = fmt.Sprintf("every developer slot this pull had was spent on %d decision(s) ahead of it on the docket", len(chosen))
+			}
+			continue
+		}
+		chosen = append(chosen, task)
+		occupied[task.WorkItemID] = runstate.State{WorkItemID: task.WorkItemID}
+		taken[task.WorkItemID] = task.RunID
 	}
-	return CarryOutTask{}, false
+	// The occupancy marked above is only for the choosing: the caller marks each
+	// fired decision again as it starts it, and must see the rest as it was.
+	for id := range taken {
+		delete(occupied, id)
+	}
+	return chosen, passed
+}
+
+// recordUnattempted writes onto the items every decision of hers standing a
+// poll interval with no pass having attempted it, and says so on the pass. A
+// failure to write is said beside the pass rather than stopping it, like every
+// other account the carry-out keeps: it costs the pass nothing it was doing.
+func (s Scheduler) recordUnattempted(ctx context.Context, schedule *Schedule, pull Pull, passed map[string]string) {
+	if pull.CarryOut == nil {
+		return
+	}
+	poll := pull.Poll
+	if poll <= 0 {
+		poll = time.Minute
+	}
+	written, err := pull.CarryOut.RecordUnattempted(ctx, poll, passed)
+	schedule.CarryOutUnattempted = append(schedule.CarryOutUnattempted, written...)
+	if err != nil {
+		problem := fmt.Sprintf("whether every decision the development manager recorded has been attempted could not be read in full, so a decision may stand unattempted that nothing here wrote down: %v", err)
+		if schedule.CarryOutReadProblem == "" {
+			schedule.CarryOutReadProblem = problem
+		} else {
+			schedule.CarryOutReadProblem += "; " + problem
+		}
+	}
 }
 
 // closedGates is what this pull can see of the switches that stop everything at
@@ -4235,6 +4318,9 @@ func (s Schedule) Render() string {
 	// that could not be fired is the half nobody used to be told about at all.
 	for _, carried := range s.CarriedOut {
 		rendered.WriteString(carried.Render())
+	}
+	for _, unattempted := range s.CarryOutUnattempted {
+		rendered.WriteString(unattempted.Render())
 	}
 	if s.CarryOutProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.CarryOutProblem)

@@ -549,13 +549,14 @@ func docketedCarryOut(entry triage.Entry, counters runstate.TriageCounters) *tri
 		return nil
 	}
 	return &triage.CarryOut{
-		Decision:  recorded.Decision,
-		Gate:      recorded.Gate,
-		Refusal:   recorded.Refusal,
-		Clears:    recorded.Clears,
-		Waiting:   recorded.Waiting,
-		Attempts:  recorded.Attempts,
-		RefusedAt: recorded.RefusedAt,
+		Decision:    recorded.Decision,
+		Gate:        recorded.Gate,
+		Refusal:     recorded.Refusal,
+		Clears:      recorded.Clears,
+		Waiting:     recorded.Waiting,
+		Attempts:    recorded.Attempts,
+		RefusedAt:   recorded.RefusedAt,
+		Unattempted: recorded.Unattempted,
 	}
 }
 

@@ -455,6 +455,14 @@ type Standing struct {
 	// the wrong role for days.
 	AwaitingDecision int `json:"awaiting_decision"`
 	AwaitingCarryOut int `json:"awaiting_carry_out"`
+	// CarryOutsRefused and CarryOutsUnattempted count, over the same held items,
+	// the recorded decisions the harness has not carried out, by what became of
+	// them: a gate refused the attempt, or no pass attempted it at all. They are
+	// said beside each other because they send a reader to different places — the
+	// gate, or the pass — and until yoyodyne-ifd.428.39 only the first was ever
+	// written anywhere, so two re-runs nobody attempted read as nothing at all.
+	CarryOutsRefused     int `json:"carry_outs_refused"`
+	CarryOutsUnattempted int `json:"carry_outs_unattempted"`
 	// Startable is how much of the admitted work nothing refuses: the items the
 	// harness would start next, counted over the same entries the refusals are,
 	// so the head of the line, the refusals under it, and this are one set of
@@ -562,6 +570,8 @@ func ReadStanding(ctx context.Context, sources Sources) Standing {
 	standing.Admitted = len(queue.Entries)
 	standing.AwaitingDecision = waits.awaitingDecision
 	standing.AwaitingCarryOut = waits.awaitingCarryOut
+	standing.CarryOutsRefused = waits.carryOutsRefused
+	standing.CarryOutsUnattempted = waits.carryOutsUnattempted
 	standing.Startable = len(waits.startable)
 	standing.StartableItems = waits.startable
 	standing.AdmittedItems = waits.admitted
@@ -1029,6 +1039,7 @@ func readNotStartable(ctx context.Context, sources Sources, held switches, runni
 		switch {
 		case !entry.Ready:
 			waits.count(entry)
+			waits.countCarryOuts(sources.Decisions, entry)
 			refused = append(refused, Refused{WorkItemID: entry.ID, Title: entry.Title, Reason: entry.Hold(), Kind: entry.HoldKind()})
 		case len(covering) > 0:
 			// A covered item is not stalled and never will be: nothing is holding it
@@ -1071,6 +1082,27 @@ type heldWork struct {
 	// saw, in the same order, for the same reason.
 	startable []WorkItemRef
 	admitted  []WorkItemRef
+	// carryOutsRefused and carryOutsUnattempted are the held items' recorded
+	// decisions the harness has not carried out, by what became of them.
+	carryOutsRefused     int
+	carryOutsUnattempted int
+}
+
+// countCarryOuts counts one held item's decisions a gate refused and ones no
+// pass attempted, from the item's own triage record. A record that cannot be
+// read counts nothing here: the hold's own reason already says the record could
+// not be read, which is where that is stated.
+func (h *heldWork) countCarryOuts(decisions Decisions, entry backlog.Entry) {
+	if held, _ := entry.Awaits(); !held || decisions == nil {
+		return
+	}
+	counters, err := decisions.Counters(entry.ID)
+	if err != nil {
+		return
+	}
+	refused, unattempted := counters.CarryOutFindings()
+	h.carryOutsRefused += refused
+	h.carryOutsUnattempted += unattempted
 }
 
 func (h *heldWork) count(entry backlog.Entry) {

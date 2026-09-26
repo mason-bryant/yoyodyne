@@ -93,8 +93,8 @@ const MaxTriageCarryOuts = MaxTriageDecisions
 // TriageCarryOutRetryDelay paces the attempts at a decision a gate refused for
 // something that has to change. A pass reads the docket every poll interval, so
 // an unpaced retry would be the same refusal recorded several times a minute and
-// this pass's one carry-out spent on it every time — which starves every other
-// decided stoppage behind it.
+// a developer slot spent on it every time — which crowds out every other decided
+// stoppage behind it.
 //
 // It does not pace the gates that are shut for every decision at once. See
 // Cooling, which is where that distinction is spent.
@@ -142,14 +142,28 @@ type TriageCarryOut struct {
 	// whole delay. A gate shut for this item alone is the other kind however
 	// promptly it will be opened — a directive that pauses it, work it waits on, a
 	// worktree somebody has been in — because an unpaced retry of one of those
-	// takes the pass's single carry-out on every poll and starves every decision
-	// behind it. See Cooling, which is where that distinction is spent.
+	// takes a developer slot on every poll and crowds out every decision behind
+	// it. See Cooling, which is where that distinction is spent.
 	Waiting bool `json:"waiting,omitempty"`
 	// Attempts is how many times the harness has tried to carry this decision out
 	// and been stopped. It is what tells a gate that is about to clear from one
 	// that has been closed for a week.
 	Attempts  int       `json:"attempts,omitempty"`
 	RefusedAt time.Time `json:"refused_at"`
+	// Unattempted marks a decision no pass has attempted at all, a poll interval
+	// or more after it was recorded, rather than one a gate refused. Refusal then
+	// says why the pass did not reach it and Gate is the gate that kept it from
+	// the attempt, and Attempts is zero, because none was made. It is its own
+	// kind rather than a refusal with a different word in it because the two
+	// send a reader to different places: a refusal to the gate, and this to the
+	// pass that never asked the gate anything.
+	//
+	// It is what ends the one silence a refusal record could not: on 2026-09-19
+	// the re-runs decided for yoyodyne-ifd.192 and .187 were passed over by every
+	// pull for a week, and because nothing was attempted nothing was refused and
+	// nothing was written. See
+	// docs/diagnoses/yoyodyne-ifd-428-39-unattempted-carry-outs.md.
+	Unattempted bool `json:"unattempted,omitempty"`
 }
 
 // Validate reports every contract violation in the record at once.
@@ -179,7 +193,10 @@ func (t TriageCarryOut) Validate() error {
 	case len(clears) > MaxTriageCarryOutClearsBytes:
 		problems = append(problems, fmt.Errorf("what would clear it is %d bytes, limit is %d", len(clears), MaxTriageCarryOutClearsBytes))
 	}
-	if t.Attempts < 1 {
+	switch {
+	case t.Unattempted && t.Attempts != 0:
+		problems = append(problems, fmt.Errorf("a carry-out record of a decision no pass attempted counts %d attempt(s); it records that none was made", t.Attempts))
+	case !t.Unattempted && t.Attempts < 1:
 		problems = append(problems, fmt.Errorf("attempt %d is not an attempt; a carry-out record exists because one was made", t.Attempts))
 	}
 	if t.RefusedAt.IsZero() {
@@ -195,10 +212,13 @@ func (t TriageCarryOut) Validate() error {
 // recorded decision at once, so retrying one of them starves nothing and pacing
 // it would leave a decision uncarried for a quarter of an hour after the switch
 // was already open — which is the latency this whole mechanism exists to remove.
-// Every other gate is paced, because the pass carries one decision out per pull
-// and an unpaced retry of a decision that cannot fire spends every one of them.
+// Every other gate is paced, because the pass attempts every decision it has a
+// slot for on every pull and an unpaced retry of one that cannot fire spends a
+// slot on every one of them.
 func (t TriageCarryOut) Cooling(now time.Time) bool {
-	if t.Waiting {
+	// A decision nobody attempted is not paced: pacing is what stops a refusal
+	// being repeated, and there is no refusal here to repeat.
+	if t.Waiting || t.Unattempted {
 		return false
 	}
 	return now.Before(t.RefusedAt.Add(TriageCarryOutRetryDelay))
@@ -207,6 +227,11 @@ func (t TriageCarryOut) Cooling(now time.Time) bool {
 // Describe says what one carry-out finding is, for whoever is reading the item's
 // record. It leads with the gate because that is what a reader acts on.
 func (t TriageCarryOut) Describe() string {
+	if t.Unattempted {
+		return fmt.Sprintf("the %q decided about the stoppage of run %s has not been attempted by any pass, as of %s, held back by %s: %s. What clears it: %s",
+			t.Decision, t.RunID, t.RefusedAt.UTC().Format(time.RFC3339), t.Gate,
+			strings.TrimSpace(t.Refusal), strings.TrimSpace(t.Clears))
+	}
 	held := "refused by"
 	if t.Waiting {
 		held = "waiting on"
@@ -230,6 +255,27 @@ func (c TriageCounters) CarryOutOf(runID string) (TriageCarryOut, bool) {
 		}
 	}
 	return TriageCarryOut{}, false
+}
+
+// CarryOutFindings counts the findings standing about this item's decisions as
+// they stand now: how many a gate refused, and how many no pass attempted. A
+// finding about a decision since superseded is not counted, and neither is one
+// waiting on a gate shut for everything at once, which is not a refusal of the
+// decision and says so.
+func (c TriageCounters) CarryOutFindings() (refused, unattempted int) {
+	for _, finding := range c.CarryOuts {
+		decision, found := c.DecisionOf(finding.RunID)
+		if !found || decision.Decision != finding.Decision || finding.RefusedAt.Before(decision.DecidedAt) {
+			continue
+		}
+		switch {
+		case finding.Unattempted:
+			unattempted++
+		case !finding.Waiting:
+			refused++
+		}
+	}
+	return refused, unattempted
 }
 
 // RecordCarryOutRefusal writes down that the harness tried to carry one recorded
@@ -273,6 +319,54 @@ func (s *TriageStore) RecordCarryOutRefusal(ctx context.Context, workItemID stri
 		prepared.Attempts = attempts + 1
 		if err := prepared.Validate(); err != nil {
 			return fmt.Errorf("invalid triage carry-out record: %w", err)
+		}
+		counters.CarryOuts = append(standing, prepared)
+		return nil
+	})
+}
+
+// RecordCarryOutUnattempted writes down that no pass has attempted one recorded
+// decision, a poll interval or more after it was recorded, and why, in place of
+// whatever was last recorded about the same stoppage.
+//
+// It is written by the pass that noticed, and only where nothing has been
+// recorded about the decision since it was made: a refusal made after the
+// decision is an attempt, and an attempt that fired clears the record. A second
+// writing that says exactly what the standing one says is not made, so a
+// decision passed over on every pull costs one write rather than one a poll.
+func (s *TriageStore) RecordCarryOutUnattempted(ctx context.Context, workItemID string, unattempted TriageCarryOut, at time.Time) (TriageCounters, error) {
+	when := at
+	if when.IsZero() {
+		when = time.Now()
+	}
+	prepared := unattempted
+	prepared.RunID = strings.TrimSpace(prepared.RunID)
+	prepared.Decision = strings.TrimSpace(prepared.Decision)
+	prepared.Refusal = strings.TrimSpace(prepared.Refusal)
+	prepared.Clears = strings.TrimSpace(prepared.Clears)
+	prepared.Unattempted = true
+	prepared.Waiting = false
+	prepared.Attempts = 0
+	prepared.RefusedAt = when.UTC()
+	if err := prepared.Validate(); err != nil {
+		return TriageCounters{}, fmt.Errorf("invalid triage carry-out record: %w", err)
+	}
+	return s.update(ctx, workItemID, when, func(counters *TriageCounters) error {
+		standing := make([]TriageCarryOut, 0, len(counters.CarryOuts)+1)
+		for _, existing := range counters.CarryOuts {
+			if existing.RunID == prepared.RunID {
+				if existing.Unattempted && existing.Decision == prepared.Decision &&
+					existing.Gate == prepared.Gate && existing.Refusal == prepared.Refusal {
+					return errNoTriageChange
+				}
+				continue
+			}
+			standing = append(standing, existing)
+		}
+		if len(standing) >= MaxTriageCarryOuts {
+			return fmt.Errorf(
+				"%s already carries carry-out findings about %d stoppages, which is the bound: an item this many of whose decisions could not be carried out has something no further attempt settles",
+				counters.WorkItemID, len(standing))
 		}
 		counters.CarryOuts = append(standing, prepared)
 		return nil

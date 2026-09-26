@@ -15,7 +15,8 @@ package cli
 // without asking for it. One stoppage has one now — a run that failed
 // independent review after every permitted attempt is put in front of the
 // development manager by the pass itself, one per pull, and the repair or the
-// re-run she decides about it is fired by the pass too — and the rest of them,
+// re-run she decides about it is fired by the pass too, as many per pull as
+// there are slots for them — and the rest of them,
 // a failing check and a refused path and a replay conflict among them, still
 // wait on somebody reading the docket. `--until-drained` states today's default
 // out loud so that flipping it is one line here rather than a behaviour change
@@ -897,9 +898,10 @@ does not stop it, because the judgment a held queue is waiting on is what the
 delivery produces. What it did, and anything still waiting on a person, is on the
 pass.
 
-Every pull also carries out one of the decisions she recorded. A repair or a
-re-run she settled a stoppage with is fired by the pass itself, oldest stoppage
-first, one per pull, taking a developer slot exactly as a pulled item does -- so
+Every pull also carries out the decisions she recorded. A repair or a re-run
+she settled a stoppage with is fired by the pass itself, oldest stoppage first,
+as many per pull as there are developer slots free for them and --limit leaves,
+each taking a developer slot exactly as a pulled item does -- so
 recording a decision is what causes it and nobody types a verb. "yoyo triage
 repair" and "yoyo triage rerun" still work and are what fires one now rather than
 at the next pass. Every gate those verbs ask refuses this the same way: your pause,
@@ -912,7 +914,10 @@ sitting silently. A re-arm is not carried out by the pass: "yoyo triage rearm"
 is still typed. A gate that stops one item is retried at a paced interval
 rather than every poll; one that stops everything at once -- your pause, your
 intake hold, a full harness -- is attempted once while it stands, so the docket
-says so, and again on the first pull after it opens.
+says so, and again on the first pull after it opens. A decision no pull has
+attempted a poll interval after it was recorded is written onto the item and
+her docket entry as unattempted, with why, and "yoyo status" counts those
+beside the refused ones, so no decision is ever silently passed over.
 
 Every pull also wakes a role whose block of tracker actions the harness refused.
 A block it cannot read is refused whole, so nothing in it happens and the queue
