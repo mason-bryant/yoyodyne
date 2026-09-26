@@ -68,9 +68,11 @@ package orchestrator
 // key is already there.
 //
 // Its item closing does too. An entry asks something about a work item, and a
-// closed or retired item asks nobody anything, so SettleClosedItems closes every
-// entry standing for one: where the item is closed, and on every reconcile sweep
-// over the tracker's closed items, which catches whatever closed it elsewhere.
+// closed or retired item asks nobody anything, so SettleClosedItems closes the
+// entries standing for one: where the item is closed, and on every reconcile
+// sweep over the tracker's closed items, which catches whatever closed it
+// elsewhere. An unfinished publication is the exception, because it asks about a
+// merge the forge holds rather than about the item, which closes on integration.
 //
 // # What puts one back
 //
@@ -930,10 +932,14 @@ func (d Docketer) SettleClosedItem(workItemID, reason string) (int, error) {
 // development manager's bounded listing showed her 11 of them: the dead ones
 // crowded out the stoppages that were still somebody's to decide.
 //
-// Every class is closed, the unready item included, because every one of them
-// asks a question about the item and a closed item asks nothing. A decision
-// standing over an entry is left as it is, since that entry is already off the
-// docket; one that has lapsed is not, and the entry is closed here.
+// Every class that asks a question about the item is closed, the unready item
+// included, because a closed item asks nothing. An unfinished publication is not
+// one of them and is never closed here: it asks about a merge the forge holds,
+// and an item is closed as its change is integrated while that merge can still be
+// dropped or stuck afterwards — which is what `rearm` is for. Its entry closes
+// when the publication settles, or on a decision about it. A decision standing
+// over an entry is left as it is, since that entry is already off the docket; one
+// that has lapsed is not, and the entry is closed here.
 func (d Docketer) SettleClosedItems(closed map[string]string) (int, error) {
 	if d.Docket == nil {
 		return 0, errors.New("a triage docket is required to close the entries of closed items")
@@ -950,7 +956,7 @@ func (d Docketer) SettleClosedItems(closed map[string]string) (int, error) {
 	var problems []error
 	for _, entry := range entries {
 		reason, isClosed := closed[entry.WorkItemID]
-		if !isClosed {
+		if !isClosed || !closesWithItem(entry.Class) {
 			continue
 		}
 		if entry.Closed != nil && entry.Closed.Holds(now) {
@@ -982,6 +988,13 @@ func (d Docketer) SettleClosedItems(closed map[string]string) (int, error) {
 		}
 	}
 	return settled, errors.Join(problems...)
+}
+
+// closesWithItem reports an entry class whose question is answered by its item
+// closing. The unfinished publication is the one that is not: see
+// SettleClosedItems.
+func closesWithItem(class triage.Class) bool {
+	return class != triage.ClassPublication
 }
 
 // ClosedItemReasons is the reason each item the tracker holds as closed has its

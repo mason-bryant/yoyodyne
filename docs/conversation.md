@@ -1605,8 +1605,12 @@ neither listed there nor delivered again.
 
 **An entry closes with its item.** Every entry is about a work item, and a
 closed item asks nobody anything, so when the item is closed or retired the
-harness closes every entry standing for it, whatever class, recording the
-decision `item-closed`, who closed the item and how, and when. A run whose
+harness closes the entries standing for it, recording the decision
+`item-closed`, who closed the item and how, and when. That is every class but
+one: an unfinished publication asks about a merge the forge holds rather than
+about the item, which closes as its change is integrated while the merge can
+still be dropped or stuck afterwards. So that entry stays until the publication
+settles or the development manager decides it, `rearm` included. A run whose
 change lands, and the product manager's `close` and `retire`, close the item's
 entries in the same act, and the product manager is told how many. Every `yoyo
 reconcile` sweep lists the items the tracker holds as closed and closes any

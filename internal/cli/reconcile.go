@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/readmodel"
@@ -434,7 +435,18 @@ func closeEntriesOfClosedItems(ctx context.Context, parts components) (int, erro
 	if parts.docket == nil {
 		return 0, nil
 	}
-	entries, err := parts.docket.List()
+	return sweepClosedItems(ctx, *docketerFrom(parts), parts.tracker())
+}
+
+// closedItemLister is the one tracker reading the sweep over closed items makes.
+// It is satisfied by beads.Client.
+type closedItemLister interface {
+	List(ctx context.Context, status string) ([]beads.WorkItem, error)
+}
+
+// sweepClosedItems is that sweep over a docket and a tracker it is handed.
+func sweepClosedItems(ctx context.Context, docketer orchestrator.Docketer, tracker closedItemLister) (int, error) {
+	entries, err := docketer.Docket.List()
 	if err != nil {
 		return 0, fmt.Errorf("read the triage docket to close the entries of closed items: %w", err)
 	}
@@ -449,11 +461,11 @@ func closeEntriesOfClosedItems(ctx context.Context, parts components) (int, erro
 	if !standing {
 		return 0, nil
 	}
-	closed, err := parts.tracker().List(ctx, "closed")
+	closed, err := tracker.List(ctx, "closed")
 	if err != nil {
 		return 0, fmt.Errorf("list the closed work items to close their docket entries: %w", err)
 	}
-	return docketerFrom(parts).SettleClosedItems(orchestrator.ClosedItemReasons(closed, "a reconcile sweep"))
+	return docketer.SettleClosedItems(orchestrator.ClosedItemReasons(closed, "a reconcile sweep"))
 }
 
 // sweepSupervision takes one voice-less pass of the management loop. A product
@@ -943,7 +955,9 @@ It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development
 manager reads them. Docketing is keyed to what stopped, so sweeping twice
 dockets nothing twice. Every entry standing for an item the tracker holds as
-closed is closed with its item, with the reason, and the count is reported.
+closed is closed with its item, with the reason, and the count is reported; an
+unfinished publication's entry is left, since its merge can still be
+outstanding after the item closed.
 
 It also recovers the exchanges the roles have put to each other. Each one is
 taken under its own lease, so one a live process is carrying is left alone: a

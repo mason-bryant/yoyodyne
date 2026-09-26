@@ -1421,6 +1421,9 @@ than to a run, so the same dead dispatch is one entry however many sessions meet
 it. **The sweep also closes the entries of closed items**: every entry still
 standing for an item the tracker holds as closed or retired is closed with it,
 with the reason, and the sweep says how many (`closed_with_item` in `--json`).
+An unfinished publication's entry is the exception and stays, because an item
+closes on integration while its merge can still be dropped or stuck at the
+forge.
 The places that close an item close its entries as they do; this is what
 catches the rest ([an entry closes with its
 item](conversation.md#deciding-what-becomes-of-stopped-work)). A run

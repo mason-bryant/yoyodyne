@@ -177,3 +177,41 @@ func TestALandingClosesTheEntryItsItemHadStanding(t *testing.T) {
 		t.Fatalf("entry = %#v", entries[0])
 	}
 }
+
+// An unfinished publication asks about a merge the forge holds, not about the
+// item: an item closes as its change is integrated, while the merge can still be
+// dropped or stuck afterwards. So its entry stays standing when the item closes,
+// beside the stopped run's entry, which does not.
+func TestAnUnfinishedPublicationIsNotClosedWithItsItem(t *testing.T) {
+	t.Parallel()
+
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{stoppedState()}, docket)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	stopped := docket.entries[0]
+	publication := stopped
+	publication.Class = triage.ClassPublication
+	publication.Key = triage.PublicationKey(stopped.RunID, 7)
+	docket.entries = append(docket.entries, publication)
+
+	for _, closer := range []func() (int, error){
+		func() (int, error) {
+			return docketer.SettleClosedItem(docketedItem, "closed by run run-x, whose change landed")
+		},
+		func() (int, error) {
+			return docketer.SettleClosedItems(ClosedItemReasons([]beads.WorkItem{{ID: docketedItem, Status: "closed"}}, "a reconcile sweep"))
+		},
+	} {
+		if _, err := closer(); err != nil {
+			t.Fatalf("closing with the item: %v", err)
+		}
+	}
+	if got, closed := docket.closed[stopped.Key]; !closed || got.Decision != closedItemDecision {
+		t.Fatalf("stopped-run closure = %#v, want it closed with its item", got)
+	}
+	if got, closed := docket.closed[publication.Key]; closed {
+		t.Fatalf("publication closure = %#v, want the unfinished publication left standing", got)
+	}
+}
