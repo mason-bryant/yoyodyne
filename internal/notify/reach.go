@@ -121,6 +121,14 @@ var reaches = map[Kind]Reach{
 	// out about on their own: the change is promoted, the item reads as landed, and
 	// the request waits on a person who does not know it is theirs.
 	KindMergeDropped: ReachChannel,
+	// A landing that went red is the target branch broken by a change every
+	// gate passed, which is the other publication fact nobody finds out about on
+	// their own; one that went green is the thread's own story. One the checks
+	// could not run over is neither, and reaches the channel because a landing
+	// nobody verified reads as green to anybody who was not told.
+	KindLandingGreen:      ReachThread,
+	KindLandingRed:        ReachChannel,
+	KindLandingUnverified: ReachChannel,
 	// Work that stopped. A park waits on something outside the run, a blocker is
 	// the development manager's decision and moves nothing until it is made, and a
 	// run that ended without succeeding has materially changed what exists.

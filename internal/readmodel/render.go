@@ -314,9 +314,17 @@ func unreadable(label, problem string) string {
 // model's own words rather than as the bare phase: what an operator who signed
 // overrides for that stop is reading the line for is that the approval stood
 // and nothing was spent.
+//
+// A run in its checks says where the stage stands rather than the bare phase,
+// for the same reason: "checks: 14m of 30m" is what an operator watching a
+// slow stage is reading the line for, and the bound is the number that says
+// whether it is slow.
 func phaseOf(run RunningRun) string {
 	if run.ResumingIntegration {
 		return runstate.ResumingIntegrationSays
+	}
+	if run.Checks != "" {
+		return run.Checks
 	}
 	if strings.TrimSpace(string(run.Phase)) == "" {
 		return "no phase recorded yet"

@@ -181,6 +181,8 @@ execution:
   usage_limit_unknown_reset_pause: 30m
   server_overload_pause: 90s
   check_timeout: 30m
+  check_stage_timeout: 30m
+  landing_check_timeout: 2h
 
 triage:
   stuck_merge_age: 2h
@@ -209,6 +211,7 @@ services:           # the parts of the product, each on or off; see Services
     enabled: true
 
 checks: []          # yours to write; a run with none is refused
+landing_checks: []  # what runs whole, once per landing; see "Where the whole suite runs"
 
 accounts:
   default: {}       # the provider account the agents below run under
@@ -494,6 +497,8 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.usage_limit_unknown_reset_pause` (`30m`),
    `execution.server_overload_pause` (`90s`),
    `execution.check_timeout` (`30m`),
+   `execution.check_stage_timeout` (`30m`),
+   `execution.landing_check_timeout` (`2h`),
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
    `approvals.publishing` (`human`), `approvals.work_items` (`human`), an
@@ -532,8 +537,8 @@ Up to three layers produce the effective configuration, later ones winning:
 2. **The built-in bundle**, named by `extends`, and present only if a project
    asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
    `approvals`, and the five default agents. It deliberately supplies no
-   `product` and no `checks`, because those describe the project rather than the
-   harness.
+   `product`, no `checks`, and no `landing_checks`, because those describe the
+   project rather than the harness.
 3. **The project configuration**, which overlays whatever it names.
 
 A configuration with no `extends` key — which is what `yoyo init` writes — is a
@@ -1021,6 +1026,19 @@ setting that governed proposals while work arrived through the other door would
 say one thing and do another. Decomposition is not admission: a role that may
 only create underneath work you already admitted is building structure under a
 decision that was made, and it is unaffected by either setting.
+
+**One admission is the harness's own and is governed by neither value: the
+item a red landing files.** When the [landing checks](#where-the-whole-suite-runs)
+fail over a commit that every gate passed, the harness files a bug for it
+directly, at priority 0, under either `work_items` setting — the operator's
+standing order of 2026-09-19, that a red landing files its own item. No role
+asks for it and no proposal is put to you: it is the harness reporting that
+the target branch is broken, in the one form that stops the next run being cut
+from it unnoticed. Its notes record that basis — filed by the harness for the
+red landing of the named item and run, on the operator's standing order — and
+carry the `Goal served:` line of the item whose landing went red, so the
+attribution check reads it as work serving that goal rather than as work nobody
+attributed. Nothing else the harness does admits work on its own account.
 
 **`approvals.work_item_exemptions` narrows the per-item gate without lifting it.**
 It is a list of classes of work this project admits without asking, whatever
@@ -2237,6 +2255,197 @@ settings that move them.
 A budget of `0` is refused rather than read as "unbounded": nothing else bounds a
 check, so one that never returns would hold a worktree, a claim, and a run open
 indefinitely.
+
+### What a whole check stage may cost
+
+The budget above bounds one check and says nothing about the list. Four checks
+each inside a thirty-minute budget are a check stage that may run for two hours,
+and on 2026-09-19 one did: a run on this repository sat in its checks for over
+two hours under load, with `make race` alone past ninety minutes, holding its
+developer seat and the watch session's drain for the whole of it. So the stage
+has a bound of its own, beside the per-check one:
+
+```yaml
+execution:
+  check_timeout: 30m         # per check
+  check_stage_timeout: 30m   # the whole list, from the first check starting to the last ending
+```
+
+Each check is given the smaller of its own budget and what the stage has left,
+and a check the stage has nothing left for is not started. A stage that reaches
+its bound **ends the run as a stoppage** — `timed_out`, no repair attempt spent,
+the change preserved — and what it names is the bound, the check it stopped and
+how long that check had run, what the stage had spent across how many checks,
+and the two things that move it: narrow the per-run gate to what the change
+touches, or raise the bound. That is a different failure from a check reaching
+its own budget, and it is reported as one, because raising `check_timeout` does
+nothing for a check the stage stopped.
+
+**The bound is visible while the checks run, not only when it stops them.**
+The run's record carries the stage — when it began, its bound, and which check
+it is on — so `yoyo status` says where a run in its checks stands in place of
+the bare phase:
+
+```text
+Running (1 developer run):
+  yoyodyne-ifd.389 — checks: 14m of 30m, on make race, 1h02m elapsed, $4.10 so far
+```
+
+The same figures reach the item: the run's notes carry `Check stage: 14m0s of
+the 30m0s execution.check_stage_timeout bound` above the per-check lines, with
+what the gate was narrowed to beside it, and a stage the bound stopped says so
+there in the same words `yoyo status` uses for the run. The Slack thread's
+"checks passed" line says what the stage spent of its bound, for the same
+reason the per-check pair is recorded on every run: a stage walking toward its
+bound is visible run after run, before the run the bound stops.
+
+The default is thirty minutes on purpose, and in minutes on purpose. It is the
+per-check default rather than something above it, because the bound is what
+makes the per-run gate worth narrowing: with the race suite narrowed to the
+packages a change touches — [below](#where-the-whole-suite-runs) — this
+repository's whole stage fits it with two runs contending. A project whose
+stage does not fit it is told, on the first run that reaches it, which check
+the bound stopped and what moves it. Like the per-check budget it must be
+positive; a stage with no bound would be every check's budget added up again.
+
+### Where the whole suite runs
+
+A per-run gate that runs the whole suite on every attempt spends the suite's
+cost several times per change and pays it in wall clock under contention, which
+is what the stage bound above then stops. The arrangement that fits inside the
+bound is two halves: the per-run gate runs the expensive suite **narrowed to
+what the change touches**, and the whole suite runs **once per landing** over
+what actually landed.
+
+**Narrowing.** Every check is given `YOYODYNE_CHANGED_GO_PACKAGES` in its
+environment: the Go packages the change touches, as the `./dir` patterns the Go
+command takes, sorted and without repeats. A changed file belongs to the nearest
+directory above it that holds Go source — a package's test data and embedded
+files are the package's, as the Go command itself files them — and a file above
+every package, a document or the Makefile, belongs to none. The variable is
+`./...` where the harness cannot narrow: a change to `go.mod` or `go.sum` or the
+vendor tree reaches every package, and a repository that is no Go module has
+nothing to narrow within. It is empty where the change touches no Go package at
+all. A check that never mentions it runs exactly as it always has; a check
+written to read it runs over that and nothing else. What the narrowing cannot
+see is a package that depends on a touched one, which is what the landing half
+is for. The run's record says what the gate was narrowed to, and so do the
+item's notes.
+
+**Landing checks.** `landing_checks` is a second list beside `checks`, run
+once per landing on the target branch — after a run has integrated, closed its
+item, and removed its worktree — in a detached checkout of the integrated commit
+cut under the worktree root for the purpose and removed afterwards, and told
+`YOYODYNE_CHANGED_GO_PACKAGES=./...` because a landing is where the whole
+suite runs. It runs under a budget of its own:
+
+```yaml
+execution:
+  landing_check_timeout: 2h   # per landing check; the list has no stage bound
+```
+
+The budget is the landing's rather than the gate's on purpose. What is moved
+to the landing is exactly the suite the gate's stage bound cannot hold, so a
+landing held to `check_stage_timeout` would be stopped on every landing of the
+repository that needed it; each landing check gets `landing_check_timeout`
+whole, and the list may take the sum. The default is two hours, which is what
+the whole race suite took under load on 2026-09-19 with room to spare.
+
+**What waits on a landing, and what does not.** The landing checks are run by
+the process that made the landing, after the run is terminal, its item
+settled, and its worktree removed — so the run's developer seat is free and
+`yoyo work` can start the next run beside them, and the run reads as succeeded
+everywhere while they run. What does wait is whatever waits on that process
+returning from the run: `yoyo run` prints its result only once the landing has
+ended, a `yoyo work` drain or a `--limit` returns only once every run it
+started has landed, and the restart a deployed build causes waits out every run
+the session started, landing included. So a landing holds those for up to
+`landing_check_timeout` times the number of landing checks — two hours a check
+by default — and a project that cannot afford that on a drain lowers the
+budget or shortens the list; it does not hold a seat, a claim, or the queue.
+
+A landing whose checks all pass on their own exit is **green**; one where a
+check fails on its own exit is **red**; one whose checks did not run to a
+verdict — no checkout could be cut, a check was stopped at its budget, the
+process running them died — is **unverified**. A stopped check judged nothing,
+which is the rule the per-run gate already applies to a check it stops on
+time, so a landing it happened in files nothing and says why instead. All
+three are recorded on the run, said on the item's notes, and said in the run's
+Slack thread, and a red or unverified landing reaches the channel because it is
+the one fact about a landed change that the run's own ending does not carry.
+
+**A red landing files its own item and blocks nothing.** The run that landed
+the change succeeded on the gate it was given and was approved; a red landing
+is news about the target branch, not a verdict on that run, so nothing is
+reopened, failed, or blocked. What happens instead is that the harness admits a
+bug at priority 0 — the front of the queue, where this project puts an
+operator's order — naming the target branch, the commit, the check that failed,
+and the run and item that landed it, under the goal the landed item served,
+because every run after it is cut from that commit and a red target branch is
+the thing to fix first. What the check printed goes in that item's notes and
+nowhere else: the title and the description are fields the
+[protected-path gate](#protected-paths-in-a-developers-change) reads grants
+from, and check output is text a change can shape, so the harness keeps those
+two to its own words. In the notes it is quoted, a `> ` on every line, because
+the notes are read line by line for the item's `Goal served:` and for the
+marker below, and a check that printed either must not be taken for it. The
+item is named on the run (`filed as
+yoyodyne-ifd.402`) and on the landed item's notes. A target branch that stays
+red is one item rather than one per landing: a later red landing of the same
+check on the same branch finds the item still open — by the
+`Red-landing check:` line its notes carry — notes the later commit on it, and
+files nothing (`red again on yoyodyne-ifd.402, filed by an earlier landing`).
+A red landing the tracker would not take an item for is still recorded and
+said as red, with the refusal beside it. This is the operator's standing order of 2026-09-19, and it
+is the one place the harness admits work on its own account: it goes straight
+to the tracker under either `approvals.work_items` value, which
+[what reaches the queue](#what-reaches-the-queue) states as the exception it
+is.
+
+For this repository the two halves are written as, with the Makefile's `race`
+target taking the packages it covers as `RACE_PACKAGES` and passing on an empty
+one:
+
+```yaml
+checks:
+  - make fmtcheck
+  - make test
+  - make race RACE_PACKAGES="${YOYODYNE_CHANGED_GO_PACKAGES-./...}"
+  - make vet
+
+landing_checks:
+  - make race
+```
+
+**Read the variable with the shell's unset-only default, `${…-./...}`.** The
+variable is set only by the harness's check runner, and the declared checks
+are run in other places too: a developer executes them in its worktree for its
+minute-zero probe and its submission evidence, and a person runs them by hand.
+A line that read an unset variable as "nothing to test" would print that and
+pass, which is a green race check nobody ran. With the unset-only default those
+runs test the whole module, while inside the harness the variable is always
+set — to the packages, to `./...`, or to nothing at all for a change touching
+no Go package, which the Makefile's `race` target says and passes on. A check
+written directly against the Go command wants the same shape:
+`set -- ${YOYODYNE_CHANGED_GO_PACKAGES-./...}; [ $# -eq 0 ] || go test -race "$@"`.
+
+A project that names no landing checks lands exactly as it did before they
+existed, and a check list that never reads the variable is a gate that runs
+whole on every attempt, bounded by the stage. Each entry is a shell line like
+the checks above, non-interactive and non-zero on failure, and an empty one is
+refused when the configuration loads. The landing checks are run by the process
+that made the landing, once its run is over: a run whose process died and whose
+integration `yoyo reconcile` settled afterwards lands without them, and its
+record carries no landing rather than a green one. So does a run whose merge the
+forge queued rather than performed: its change is on no target branch when the
+run ends, and the sweep that settles the merge later runs no landing checks. On a
+[protected target](#a-protected-target-lands-through-its-pull-request) whose
+merge the forge performs at once, the checkout is of the promoted commit the
+pull request carried, which is the tree the merge put on the target. A process that dies inside
+the landing checks leaves a run that is over with a landing the record says is
+running; `yoyo reconcile` settles that landing as unverified, saying the process
+died, and removes the checkout it was running in — a live process running them
+holds the run's lease and is left alone.
 
 ## Scheduling ready work
 
@@ -5051,6 +5260,12 @@ These are all errors, reported before any work is claimed:
 - a persona override missing `version` or `path`;
 - a usage-limit pause bound that is not a duration, or that is negative — `0`
   is accepted, because "never wait" is a choice somebody can mean;
+- an `execution.check_timeout`, `execution.check_stage_timeout`, or
+  `execution.landing_check_timeout` that is zero or negative, since a check or
+  a stage with no bound holds a worktree, a claim, and a developer seat open —
+  or a landing checkout — for as long as it runs; and an empty entry in
+  `checks` or `landing_checks`, which is a line the shell would run as nothing
+  and report as passed;
 - a `triage.stuck_merge_age` that is not a duration, or that is zero or
   negative — unlike the usage-limit pauses, "no time at all" is not a choice
   anybody can mean here;
@@ -5424,7 +5639,9 @@ second holder when the configuration loads, and what a person auditing the
 mapping reads — rather than as a gate an act passes through.
 
 **What keeps an agent out of the goals is two enforcements that do not depend on
-the signature.** A conversation runs with no tools at all, so the roles that
+the signature.** (The one item the harness admits on its own account — the bug
+a [red landing](#where-the-whole-suite-runs) files — is the harness's act and
+not an agent's, and it reaches the queue and never the goals.) A conversation runs with no tools at all, so the roles that
 could argue for a goal cannot run a command; and a run's change is compared
 against the [protected paths](#protected-paths-in-a-developers-change) before any
 check runs and before any reviewer sees it, so an approval a developer wrote is

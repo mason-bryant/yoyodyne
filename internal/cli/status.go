@@ -1067,6 +1067,27 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		fmt.Fprintf(writer, "  failing check: %s exited %d\n", singleLine(run.FailingCheck.Command), run.FailingCheck.ExitCode)
 		printed = true
 	}
+	// The check stage is said where it is what the run is doing now or what
+	// stopped it: how much of its bound it spent, and the check it was on. A
+	// stage that ended inside its bound is the ordinary case and says nothing
+	// here — the reason line above already answers for a run the bound stopped,
+	// and this is the figure beside it.
+	//
+	// A stage still running is only said of a run still in flight: a run that
+	// ended with its stage open is one whose process died inside it, and the
+	// sweep closes that stage as interrupted when it settles the run.
+	if stage := run.CheckStage; stage != nil && ((stage.Running() && run.Status.InFlight()) || stage.StoppedAtBound || stage.Interrupted) {
+		fmt.Fprintf(writer, "  %s\n", singleLine(stage.Describe(time.Now())))
+		printed = true
+	}
+	// What the landing checks made of the integrated commit is said on every run
+	// that has one, because a red landing is the one fact about a landed change
+	// that its run's ending does not carry: the run succeeded, and the target
+	// branch is red.
+	if run.LandingChecks != nil {
+		fmt.Fprintf(writer, "  %s\n", singleLine(run.LandingChecks.Describe()))
+		printed = true
+	}
 	// A refused path is said here rather than left to the run's JSON for the
 	// reason the failing check is: it is what stopped the run, and the worktree
 	// that would have shown it is removed when the run is cleaned up.

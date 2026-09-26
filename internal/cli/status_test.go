@@ -347,6 +347,69 @@ func TestStatusNamesARunNothingObserved(t *testing.T) {
 	}
 }
 
+// A run the check stage's bound stopped says so under its reason, with what the
+// stage spent and the check it was on; a run in its checks says how much of the
+// bound has gone; and a run that landed says what its landing checks made of
+// the commit, because a red landing is the one fact about a landed change that
+// the run's own ending does not carry.
+func TestStatusSaysWhereTheCheckStageStoodAndWhatTheLandingMade(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	stopped := completedAt
+	landed := completedAt.Add(20 * time.Minute)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  3,
+		Recorded: 3,
+		Runs: []runstate.RunSummary{{
+			RunID:       "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:  "yoyodyne-ifd.389",
+			Status:      runstate.StatusTimedOut,
+			Outcome:     runstate.OutcomeTimedOut,
+			Phase:       runstate.PhaseChecking,
+			StartedAt:   completedAt.Add(-time.Hour),
+			CompletedAt: &completedAt,
+			Failure:     "the check stage reached its 30m0s execution.check_stage_timeout bound during make race",
+			CheckStage: &runstate.CheckStage{
+				StartedAt: completedAt.Add(-30 * time.Minute), BoundSeconds: 1800, Command: "make race",
+				FinishedAt: &stopped, ElapsedSeconds: 1800, StoppedAtBound: true,
+			},
+		}, {
+			RunID:      "run-1123456789abcdef0123456789abcdef",
+			WorkItemID: "yoyodyne-ifd.401",
+			Status:     runstate.StatusRunning,
+			Phase:      runstate.PhaseChecking,
+			StartedAt:  time.Now().Add(-time.Hour),
+			CheckStage: &runstate.CheckStage{StartedAt: time.Now().Add(-14 * time.Minute), BoundSeconds: 1800, Command: "make test"},
+		}, {
+			RunID:       "run-2123456789abcdef0123456789abcdef",
+			WorkItemID:  "yoyodyne-ifd.400",
+			Status:      runstate.StatusSucceeded,
+			Outcome:     runstate.OutcomeSucceeded,
+			Phase:       runstate.PhaseComplete,
+			StartedAt:   completedAt.Add(-time.Hour),
+			CompletedAt: &completedAt,
+			Integrated:  true,
+			LandingChecks: &runstate.LandingChecks{
+				Commit: strings.Repeat("d", 40), StartedAt: completedAt, FinishedAt: &landed, BoundSeconds: 1800, Ran: true,
+				Checks:        []runstate.LandingCheckResult{{Command: "make race", ExitCode: 2}},
+				FiledWorkItem: "yoyodyne-ifd.402",
+			},
+		}},
+	}, "", false)
+	rendered := out.String()
+	for _, want := range []string{
+		"  checks: 30m of 30m, stopped at the bound during make race\n",
+		"  checks: 14m of 30m, on make test\n",
+		"  red landing: make race exited 2 over dddddddddddd; filed as yoyodyne-ifd.402\n",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want %q", rendered, want)
+		}
+	}
+}
+
 // A proposal or a report the harness could not keep is named on the run, because
 // this record is the only place it survives: the outcome that used to carry it
 // alone was printed by `yoyo run` and gone, so a refused proposal read afterwards

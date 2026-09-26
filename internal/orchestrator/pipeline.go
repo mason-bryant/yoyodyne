@@ -24,6 +24,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
 	"github.com/mason-bryant/yoyodyne/internal/landing"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
@@ -243,7 +244,33 @@ type StateStore interface {
 }
 
 type CheckRunner interface {
-	Run(ctx context.Context, runID, directory string, commands []string, lastSequence uint64, sink func(execution.Event) error) ([]checks.Result, uint64, error)
+	Run(ctx context.Context, request checks.Request, sink func(execution.Event) error) ([]checks.Result, uint64, error)
+}
+
+// LandingCheckouts cuts a checkout of an integrated commit for the landing
+// checks to run in, and removes it afterwards. It is satisfied by
+// gitworktree.Manager, and it is its own interface rather than two more methods
+// on WorktreeManager because it is asked after the run's own worktree is gone
+// and about a commit rather than a change: nothing about a run's worktree, its
+// branch, or its promotion is involved.
+type LandingCheckouts interface {
+	CheckoutCommit(ctx context.Context, runID, commit string) (string, error)
+	RemoveCheckout(ctx context.Context, path string) error
+}
+
+// WorkFiler admits a work item the harness itself found: today, the item a red
+// landing files. It is satisfied by beads.Client, and it is separate from
+// WorkTracker because that is what a run does to the item it is running and
+// this brings work into existence — the caller is responsible for having the
+// authority to ask, and the only caller is the landing, under the operator's
+// standing order that a red landing files its own item.
+type WorkFiler interface {
+	Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error)
+	// List is what a landing reads before it files: an open item the harness
+	// already filed for the same check on the same branch is noted rather than
+	// filed again, so a target branch left red for several landings is one item
+	// at the front of the queue and not one per landing.
+	List(ctx context.Context, status string) ([]beads.WorkItem, error)
 }
 
 // Directives is what the operator has told the harness, as a run reads it.
@@ -386,7 +413,16 @@ type Pipeline struct {
 	// by the time it is docketed, so a pipeline wired without one stops exactly
 	// as it would have and loses only the delivery.
 	Docket *Docketer
-	Clock  execution.Clock
+	// Landings is where a landing's checks are given a checkout of the integrated
+	// commit. It is optional: a pipeline wired without one lands exactly as it
+	// would have, and what is lost is the landing checks, which the run's record
+	// says could not run rather than saying nothing.
+	Landings LandingCheckouts
+	// Filer is what a red landing files its work item through. It is optional in
+	// the same way: a red landing nothing can file is still recorded and reported
+	// as red, with the record saying no item could be filed and why.
+	Filer WorkFiler
+	Clock execution.Clock
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
 	// by a cancelled context rather than holding the process past a shutdown.
@@ -619,12 +655,21 @@ type Outcome struct {
 	// ProviderSessionID identifies the developer session; ReviewSessionID
 	// identifies the separate reviewer session that judged its work. The model
 	// pairs are the requested selector and what the provider reported serving.
-	ProviderSessionID     string                    `json:"provider_session_id,omitempty"`
-	ProviderModel         string                    `json:"provider_model,omitempty"`
-	ProviderResolvedModel string                    `json:"provider_resolved_model,omitempty"`
-	Checks                []checks.Result           `json:"checks,omitempty"`
-	Changes               gitworktree.ChangeSummary `json:"changes"`
-	Summary               string                    `json:"summary,omitempty"`
+	ProviderSessionID     string          `json:"provider_session_id,omitempty"`
+	ProviderModel         string          `json:"provider_model,omitempty"`
+	ProviderResolvedModel string          `json:"provider_resolved_model,omitempty"`
+	Checks                []checks.Result `json:"checks,omitempty"`
+	// CheckStage is the check stage the checks above ran in: its bound and what
+	// it spent, and the narrowing every check was told. It is on the outcome so
+	// the notes the item carries say what the stage cost against what it was
+	// allowed, beside the per-check figures.
+	CheckStage *runstate.CheckStage `json:"check_stage,omitempty"`
+	// LandingChecks is what the landing checks made of the integrated commit,
+	// once the run was over. It is absent from a run that integrated nothing and
+	// from a project that configured no landing checks.
+	LandingChecks *runstate.LandingChecks   `json:"landing_checks,omitempty"`
+	Changes       gitworktree.ChangeSummary `json:"changes"`
+	Summary       string                    `json:"summary,omitempty"`
 	// Reports are what this run's agents noticed and reported while their work
 	// carried on: risks worked around, assumptions that may not hold, things
 	// outside the assigned work. They are collected beside the run rather than
@@ -4690,7 +4735,8 @@ func (a *activeRun) verify(ctx context.Context) error {
 	// against a handful of prefixes and the suite costs whatever the project's
 	// suite costs. A change that is not allowed to stand does not get a check
 	// suite spent on it first.
-	if err := a.gateProtectedPaths(ctx); err != nil {
+	changed, err := a.gateProtectedPaths(ctx)
+	if err != nil {
 		return err
 	}
 	// And the developer's own execution record is settled before the suite too,
@@ -4700,9 +4746,41 @@ func (a *activeRun) verify(ctx context.Context) error {
 	if err := a.gateSelfVerification(ctx); err != nil {
 		return err
 	}
-	checkResults, lastSequence, err := p.Checks.Run(ctx, a.state.RunID, a.worktree.Path, p.Config.Checks, a.state.LastSequence, a.sink)
+	// What the change touches is worked out once, here, and told to every check:
+	// a check the operator wrote to narrow itself reads it, and one that did not
+	// is unaffected. The stage's record is written before the first check runs
+	// rather than after the last, because the record is what a surface reads to
+	// say how much of the bound has gone while the checks are still running.
+	//
+	// Both writes of it are best effort. The record is visibility and nothing
+	// reads it to decide anything, so a store that refuses it costs the status
+	// line a figure and costs the stage nothing — and the first event the checks
+	// persist is what says the store has gone, in the words it always said it in.
+	narrowing := checks.NarrowGoPackages(a.worktree.Path, changed)
+	stage := &runstate.CheckStage{
+		StartedAt:    p.clock().Now(),
+		BoundSeconds: int64(p.checkStageTimeout() / time.Second),
+		Narrowed:     narrowing.Describe(),
+	}
+	a.state.CheckStage = stage
+	a.state.UpdatedAt = p.clock().Now()
+	_ = p.Store.Save(a.state)
+	checkResults, lastSequence, err := p.Checks.Run(ctx, checks.Request{
+		RunID:        a.state.RunID,
+		Directory:    a.worktree.Path,
+		Commands:     p.Config.Checks,
+		LastSequence: a.state.LastSequence,
+		Env:          []string{narrowing.Env()},
+		// Which check the stage is on goes onto the record as each begins.
+		Started: func(command string, _ time.Duration) {
+			stage.Command = command
+			a.state.UpdatedAt = p.clock().Now()
+			_ = p.Store.Save(a.state)
+		},
+	}, a.sink)
 	a.outcome.Checks = checkResults
 	a.state.LastSequence = lastSequence
+	a.closeCheckStage(stage, checkResults)
 	if err != nil {
 		return fmt.Errorf("verification infrastructure failed: %w", err)
 	}
@@ -4715,10 +4793,20 @@ func (a *activeRun) verify(ctx context.Context) error {
 		// was stopped, so it ends the run rather than spending an attempt on a
 		// developer that would be stopped the same way.
 		var cause error = fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode)
-		switch check.Process.Status {
-		case execution.ProcessFailed:
+		switch {
+		case check.Process.Status == execution.ProcessFailed:
 			cause = checkFailure{result: check}
-		case execution.ProcessTimedOut:
+		case check.StoppedByStage:
+			// The stage reached its bound, which is a different fact from a
+			// check reaching its own: raising the per-check budget would not
+			// have saved it, and the check it stopped may be one that had only
+			// just started. So the stoppage names the bound, the check, what the
+			// stage had spent across how many checks, and the two things that
+			// move it — narrowing the gate, or raising the bound.
+			cause = fmt.Errorf(
+				"the check stage reached its %s execution.check_stage_timeout bound during %s, which had run for %s; the stage had spent %s across %d check(s) (gate narrowed to: %s); narrow the per-run gate to what the change touches with $%s, move the whole suite to landing_checks, or raise the bound",
+				stage.Bound(), check.Command, check.Elapsed().Round(time.Second), stage.Elapsed().Round(time.Second), len(checkResults), stage.Narrowed, checks.ChangedGoPackagesVariable)
+		case check.Process.Status == execution.ProcessTimedOut:
 			// A check stopped on time says nothing about the change: the work
 			// may have been passing the whole way, as it was when this bound
 			// was flat and a contended suite grew past it. So the failure names
@@ -4734,6 +4822,43 @@ func (a *activeRun) verify(ctx context.Context) error {
 	// was handed is no longer this run's outstanding repair input.
 	a.state.CheckFailure = nil
 	return nil
+}
+
+// closeCheckStage records how the stage ended: when, what it spent, and
+// whether it was the bound that ended it. The last check's figures are the
+// stage's, because the runner measures the stage as its checks run; a stage no
+// check reported on ended at the moment it is closed.
+func (a *activeRun) closeCheckStage(stage *runstate.CheckStage, results []checks.Result) {
+	finished := a.pipeline.clock().Now()
+	stage.FinishedAt = &finished
+	stage.ElapsedSeconds = int64(finished.Sub(stage.StartedAt) / time.Second)
+	if last := len(results) - 1; last >= 0 {
+		stage.Command = results[last].Command
+		stage.ElapsedSeconds = int64(results[last].StageElapsed / time.Second)
+		stage.StoppedAtBound = results[last].StoppedByStage
+	}
+	a.outcome.CheckStage = stage
+	a.state.UpdatedAt = finished
+}
+
+// landingCheckTimeout is the budget each landing check is given, read from the
+// configuration with the same fallback the stage bound has.
+func (p Pipeline) landingCheckTimeout() time.Duration {
+	if budget := p.Config.Execution.LandingCheckTimeout.Duration(); budget > 0 {
+		return budget
+	}
+	return checks.DefaultLandingCheckTimeout
+}
+
+// checkStageTimeout is the bound the stage is recorded under. It is read from
+// the configuration rather than from the runner, which is an interface here,
+// and a configuration that names none — a pipeline assembled in a test — is
+// recorded at the runner's own default so the record and the runner agree.
+func (p Pipeline) checkStageTimeout() time.Duration {
+	if bound := p.Config.Execution.CheckStageTimeout.Duration(); bound > 0 {
+		return bound
+	}
+	return checks.DefaultStageTimeout
 }
 
 // gateProtectedPaths refuses a change that touched an upstream artifact this
@@ -4754,10 +4879,14 @@ func (a *activeRun) verify(ctx context.Context) error {
 // is wrong, only that part of it is not this run's to make, so it goes back to
 // the same developer inside the same repair loop as any other failure that
 // stands between a change and its reviewer.
-func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
+//
+// It reports the paths it read, because the check stage after it narrows on
+// the same listing and a second reading of the worktree would be a second
+// chance for the two to disagree about one change.
+func (a *activeRun) gateProtectedPaths(ctx context.Context) ([]string, error) {
 	changed, err := a.pipeline.Worktrees.ChangedPaths(ctx, a.worktree)
 	if err != nil {
-		return fmt.Errorf("list the paths this change touches: %w", err)
+		return nil, fmt.Errorf("list the paths this change touches: %w", err)
 	}
 	protected := protectedpath.Protect(a.pipeline.Config, a.pipeline.Worktrees.CurrentExports()...)
 	granted := protectedpath.Grants(grantEvidence(a.item)...)
@@ -4766,9 +4895,9 @@ func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
 		// The change in the worktree is within its scope now, so a refusal an
 		// earlier attempt was handed no longer describes it.
 		a.state.PathRefusal = nil
-		return nil
+		return changed, nil
 	}
-	return phaseError{status: runstate.StatusFailed, cause: pathRefusal{
+	return nil, phaseError{status: runstate.StatusFailed, cause: pathRefusal{
 		refusal: boundedPathRefusal(refused, granted),
 		set:     protected,
 	}}
@@ -4966,7 +5095,262 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		return a.pipeline.reportOutstandingCleanup(a.state, a.outcome, err)
 	}
 	a.observe(ctx, deliveryCleanUp, "cleaned")
+	// The landing checks come after everything the run is judged by. The run is
+	// terminal, its item is settled, and its artifacts are gone; what runs now is
+	// over the target branch rather than over the change, and nothing it finds
+	// changes what was just recorded.
+	a.runLandingChecks(ctx)
 	return a.outcome, nil
+}
+
+// runLandingChecks runs the configured landing checks over the commit this run
+// integrated, and records what they made of it on the run and on the item.
+//
+// They run here, after the run is over, because they are the other half of a
+// per-run gate that is narrowed to what a change touches: the suite the gate no
+// longer runs whole is run whole once per landing, over what actually landed,
+// rather than once per attempt over each candidate. A landing that goes red is
+// news about the target branch and not a verdict on this run — the run passed
+// its own gate and was approved — so it never fails the run, never reopens the
+// item, and never blocks anything. It is recorded, said, and filed as its own
+// work, under the operator's standing order that a red landing files its own
+// item.
+//
+// Nothing here returns an error. Every way the landing can go wrong short of a
+// red result — no checkout, checks that could not run, a checkout that would
+// not go away, an item the tracker would not take, a note the item would not
+// take — is written onto the record as what it was, because a landing nobody
+// can read is the one thing worse than a red one.
+func (a *activeRun) runLandingChecks(ctx context.Context) {
+	p := a.pipeline
+	if a.outcome.Integration == nil || len(p.Config.LandingChecks) == 0 {
+		return
+	}
+	commit := a.outcome.Integration.TargetCommit
+	budget := p.landingCheckTimeout()
+	landed := &runstate.LandingChecks{
+		Commit:       commit,
+		StartedAt:    p.clock().Now(),
+		BoundSeconds: int64(budget / time.Second),
+	}
+	a.state.LandingChecks = landed
+	a.outcome.LandingChecks = landed
+	a.saveLanding(landed)
+	var problems []string
+	if p.Landings == nil {
+		problems = append(problems, "nothing is wired to cut a checkout of the integrated commit for them")
+	} else if path, err := p.Landings.CheckoutCommit(ctx, a.state.RunID, commit); err != nil {
+		problems = append(problems, fmt.Sprintf("no checkout of the integrated commit could be cut: %v", err))
+	} else {
+		results, lastSequence, err := p.Checks.Run(ctx, checks.Request{
+			RunID:        a.state.RunID,
+			Directory:    path,
+			Commands:     p.Config.LandingChecks,
+			LastSequence: a.state.LastSequence,
+			// A landing is where the whole suite runs, so a landing check written
+			// to read the narrowing is told there is none — and it is given the
+			// landing's own budget with no stage bound, because the suite moved
+			// here is the one the gate's stage bound cannot hold.
+			Env:       []string{checks.Narrowing{Whole: true, Reason: "a landing runs the whole suite"}.Env()},
+			Timeout:   budget,
+			Unbounded: true,
+		}, a.sink)
+		a.state.LastSequence = lastSequence
+		if removeErr := p.Landings.RemoveCheckout(ctx, path); removeErr != nil {
+			problems = append(problems, fmt.Sprintf("the landing checkout at %s could not be removed and is left for somebody to remove by hand: %v", path, removeErr))
+		}
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("the landing checks could not be run: %v", err))
+		}
+		stopped := ""
+		for _, result := range results {
+			// A check killed on time or cancelled judged nothing, which is the
+			// same rule the per-run gate applies: it is neither a pass nor a
+			// failure, and a landing it happened in is unverified rather than
+			// red, filing nothing.
+			atBudget := result.Process.Status == execution.ProcessTimedOut
+			if atBudget {
+				stopped = fmt.Sprintf("%s was stopped at its %s execution.landing_check_timeout budget after %s and judged nothing", result.Command, budget, result.Elapsed().Round(time.Second))
+			} else if result.Process.Status == execution.ProcessCancelled || result.Process.Status == execution.ProcessStalled {
+				stopped = fmt.Sprintf("%s was %s after %s and judged nothing", result.Command, result.Process.Status, result.Elapsed().Round(time.Second))
+			}
+			landed.Checks = append(landed.Checks, runstate.LandingCheckResult{
+				Command:        result.Command,
+				Passed:         result.Passed,
+				ExitCode:       result.Process.ExitCode,
+				ElapsedSeconds: int64(result.Elapsed() / time.Second),
+				StoppedAtBound: atBudget,
+				Output:         landingCheckOutput(result),
+			})
+		}
+		if stopped != "" {
+			problems = append(problems, stopped)
+		}
+		// Every check ran to its own exit and passed is green; one that failed
+		// on its own exit is red; a list stopped short of a verdict is neither.
+		landed.Ran = err == nil && len(results) > 0 && stopped == ""
+		landed.Green = landed.Ran && len(results) == len(p.Config.LandingChecks) && landed.AllPassed()
+	}
+	finished := p.clock().Now()
+	landed.FinishedAt = &finished
+	if landed.Red() {
+		a.fileRedLanding(ctx, landed)
+	}
+	landed.Problem = strings.Join(problems, "; ")
+	a.saveLanding(landed)
+	// The item the change landed for carries the landing's result too, so a
+	// reader of the item sees what its landing made of the target branch without
+	// opening the run. The item is closed by now, and appending a note to a
+	// closed item is the one write to it that is still right. The write is
+	// bounded rather than recovered: the run is over, and a `bd` too busy to
+	// take a note is recorded as such rather than waited out.
+	noteCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := p.Tracker.RecordOutcome(noteCtx, a.state.WorkItemID, "Landing checks: "+landed.Describe()); err != nil {
+		landed.Problem = strings.Join(append(problems, fmt.Sprintf("the item could not be told: %v", err)), "; ")
+		a.saveLanding(landed)
+	}
+}
+
+// saveLanding writes the landing as it stands onto the run's record. The run is
+// terminal by now, so a save that fails loses only the landing's account of
+// itself, and that loss is put on the outcome rather than swallowed.
+func (a *activeRun) saveLanding(landed *runstate.LandingChecks) {
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		landed.Problem = strings.TrimPrefix(landed.Problem+"; the run's record would not take the landing: "+err.Error(), "; ")
+	}
+}
+
+// fileRedLanding admits the work a red landing is: the failing check, over the
+// commit, after the run that landed it, with the check's own output in it. It
+// is filed under the goal the landed item served, because a break in work that
+// served a goal is work serving the same goal, and at the front of the queue,
+// because a red target branch is what every run after it is cut from.
+//
+// It is filed once per landing and never again for the same commit: a landing
+// is one run's, and the record it is written on says whether it was filed.
+func (a *activeRun) fileRedLanding(ctx context.Context, landed *runstate.LandingChecks) {
+	p := a.pipeline
+	if p.Filer == nil {
+		landed.FilingProblem = "nothing is wired to file a work item"
+		return
+	}
+	failing, _ := landed.Failing()
+	commit := landed.Commit
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	target := a.outcome.Integration.TargetBranch
+	what := fmt.Sprintf("%s exited %d", failing.Command, failing.ExitCode)
+	marker := redLandingMarker(target, failing.Command)
+	// A red target branch that stays red is one item, not one per landing: an
+	// open item the harness filed for the same check on the same branch is told
+	// about this landing instead of a second being filed beside it, which the
+	// scheduler would otherwise start concurrently with the first.
+	existing, err := a.openRedLandingItem(ctx, marker)
+	if err != nil {
+		landed.FilingProblem = fmt.Sprintf("could not read whether a red-landing item is already open: %v", err)
+		return
+	}
+	if existing != "" {
+		landed.FiledWorkItem = existing
+		landed.FiledEarlier = true
+		note := fmt.Sprintf("Red again at %s on %s, after %s (%s) integrated: %s.", commit, target, a.state.WorkItemID, a.state.RunID, what)
+		if _, err := p.Tracker.RecordOutcome(ctx, existing, note); err != nil {
+			landed.FilingProblem = fmt.Sprintf("the open item %s could not be told about this landing: %v", existing, err)
+		}
+		return
+	}
+	// The title and the description are the harness's own words and nothing
+	// else. Both are fields the protected-path gate reads grants from, so what a
+	// check printed — text a change can shape — goes in the notes, which the gate
+	// deliberately never reads.
+	description := fmt.Sprintf("Red landing on %s at %s, after %s (%s) integrated: %s.\n\n"+
+		"The per-run gate passed on the change and the reviewer approved it; the landing checks then ran the whole suite over the integrated commit and this one failed. "+
+		"So %s is red at %s, and every run cut from it starts on a red base until this is fixed or the landing is shown to have been the suite's fault. "+
+		"Reproduce with `%s` at %s. What the check said is in this item's notes.",
+		target, commit, a.state.WorkItemID, a.state.WorkItemTitle, what, target, commit, failing.Command, landed.Commit)
+	notes := fmt.Sprintf("Filed by the harness for the red landing of %s (%s) at %s on %s, under the operator's standing order that a red landing files its own item.\n%s",
+		a.state.WorkItemID, a.state.RunID, commit, target, marker)
+	// The goal line is written in the words the landed item states it in, and
+	// the tracker client's Create derives the goal witness from the notes it is
+	// handed — every creation that writes a `Goal served:` line records
+	// yoyodyne_goal_recorded beside it — so the filed item's attribution is
+	// witnessed exactly as an admission's is.
+	if statement, named := goal.NamedIn(a.item.Notes); named {
+		notes += "\n\n" + goal.Note(statement)
+	}
+	if output := strings.TrimSpace(failing.Output); output != "" {
+		notes += "\n\nWhat the check said (bounded):\n\n" + quotedOutput(output)
+	}
+	// Priority 0 is where this project puts an operator's order, and a red
+	// target branch is that: every run until it is fixed is cut from it.
+	priority := 0
+	created, err := p.Filer.Create(ctx, beads.NewWorkItem{
+		Title:       fmt.Sprintf("Red landing on %s at %s: %s after %s integrated", target, commit, what, a.state.WorkItemID),
+		Description: description,
+		Type:        "bug",
+		Notes:       notes,
+		Priority:    &priority,
+	})
+	if err != nil {
+		landed.FilingProblem = err.Error()
+		return
+	}
+	landed.FiledWorkItem = created.ID
+}
+
+// redLandingMarker is the line a red-landing item's notes carry naming the
+// branch and the check, which is what a later landing reads to find it. It is
+// in the notes rather than the title because a title is prose somebody may
+// edit, and the notes are what the harness appends to and never rewrites.
+func redLandingMarker(target, command string) string {
+	return "Red-landing check: " + command + " on " + target
+}
+
+// openRedLandingItem is the identifier of an unfinished item the harness filed
+// for the same check on the same branch, or nothing. It reads the queue's
+// three unfinished statuses, because an item somebody has claimed or that is
+// blocked is still the item that answers this branch being red.
+func (a *activeRun) openRedLandingItem(ctx context.Context, marker string) (string, error) {
+	for _, status := range []string{"open", "in_progress", "blocked"} {
+		items, err := a.pipeline.Filer.List(ctx, status)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range items {
+			for _, line := range strings.Split(item.Notes, "\n") {
+				if strings.TrimSpace(line) == marker {
+					return item.ID, nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+// quotedOutput sets what a check printed apart from the harness's own lines in
+// a note, one "> " per line. The notes are read line by line for two things a
+// check's output must never be taken for — the newest `Goal served:` line is
+// the item's attribution, and a `Red-landing check:` line is what a later
+// landing finds the item by — and both readers match a line that begins with
+// their prefix, which a quoted line does not.
+func quotedOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	for index, line := range lines {
+		lines[index] = "> " + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+// landingCheckOutput is what a failing landing check said, cut as a repair
+// attempt's input is cut. A check that passed said nothing worth carrying.
+func landingCheckOutput(result checks.Result) string {
+	if result.Passed {
+		return ""
+	}
+	return boundedCheckOutput(result.Process)
 }
 
 // complete records the outcome on the work item, closes an integrated item whose
@@ -7494,14 +7878,33 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.Changes.DiffStat != "" {
 		lines = append(lines, "Diff stat:\n"+outcome.Changes.DiffStat)
 	}
+	lines = append(lines, renderCheckNotes(outcome)...)
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderCheckNotes records what the checks cost against what they were
+// allowed, on the item itself, so a suite growing toward its budget is visible
+// run after run rather than only in the run the budget finally stops. The
+// stage is said first and whole — what it spent of its bound, and what the
+// gate was narrowed to — because the per-check figures under it answer a
+// different question: which check, not whether the stage fits.
+func renderCheckNotes(outcome Outcome) []string {
+	var lines []string
+	if stage := outcome.CheckStage; stage != nil {
+		line := fmt.Sprintf("Check stage: %s of the %s execution.check_stage_timeout bound", stage.Elapsed().Round(time.Second), stage.Bound())
+		if stage.StoppedAtBound {
+			line += ", stopped at the bound during " + stage.Command
+		}
+		if stage.Narrowed != "" {
+			line += " (gate narrowed to: " + stage.Narrowed + ")"
+		}
+		lines = append(lines, line)
+	}
 	for _, check := range outcome.Checks {
-		// What a check spent against what it was allowed is recorded on the item
-		// itself, so a suite growing toward its budget is visible run after run
-		// rather than only in the run the budget finally stops.
 		lines = append(lines, fmt.Sprintf("Check: %s (passed=%t, exit=%d, %s of %s)",
 			check.Command, check.Passed, check.Process.ExitCode, check.Elapsed().Round(time.Second), check.Timeout))
 	}
-	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+	return lines
 }
 
 // renderInvariantNotes records which durable constraints this change was held to,
@@ -7617,6 +8020,10 @@ func renderFailureNotes(outcome Outcome) string {
 	if outcome.Changes.DiffStat != "" {
 		lines = append(lines, "Diff stat when the run ended:\n"+outcome.Changes.DiffStat)
 	}
+	// A failed run's checks are recorded for the reason a successful run's are,
+	// and with more at stake: a run the stage bound stopped is read from this
+	// note, and the note has to say the stage was what stopped it.
+	lines = append(lines, renderCheckNotes(outcome)...)
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 

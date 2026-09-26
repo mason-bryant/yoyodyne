@@ -435,9 +435,19 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			// The budget every check gets is configured rather than fixed,
 			// because it is a property of the project's suite and of how many
 			// runs share the machine with it, neither of which the harness knows.
-			Timeout:      cfg.Execution.CheckTimeout.Duration(),
+			Timeout: cfg.Execution.CheckTimeout.Duration(),
+			// And the budget the whole stage gets, for the reason it is
+			// configured at all: a stage bounded only check by check is bounded
+			// at the sum of the list, which is hours.
+			StageTimeout: cfg.Execution.CheckStageTimeout.Duration(),
 			RedactValues: redactValues,
 		},
+		// The landing checks run in a checkout of the integrated commit the
+		// worktree manager cuts for them, and a red landing files its item through
+		// the tracker. Both are the harness's own access, wired here so that no
+		// agent is ever asked to perform either.
+		Landings: parts.worktrees,
+		Filer:    parts.tracker(),
 		// The reviewer runs its own provider invocation, so it is built from a
 		// separate backend value rather than sharing the developer's, and with
 		// the reviewer agent's own required model selector and effective
@@ -841,6 +851,13 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 				fmt.Fprintf(stdout, "branch removed: %s\n", outcome.Branch)
 			} else {
 				fmt.Fprintf(stdout, "branch NOT removed: %s\n", outcome.Branch)
+			}
+			// What the landing checks made of the integrated commit is said last
+			// among the facts of the landing, because it is the one that is not
+			// about this run: the run succeeded whichever way it went, and a red
+			// one is the target branch's news and the item it filed.
+			if outcome.LandingChecks != nil {
+				fmt.Fprintf(stdout, "landing checks: %s\n", outcome.LandingChecks.Describe())
 			}
 		}
 		if outcome.CleanupFailure != "" {
