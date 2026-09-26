@@ -393,3 +393,69 @@ func age(elapsed time.Duration) string {
 		return fmt.Sprintf("%dd%02dh", int(elapsed.Hours())/24, int(elapsed.Hours())%24)
 	}
 }
+
+// RenderProgramManagers is one line per program manager instance, printed under
+// the four lines rather than as a fifth: nothing on it waits on a person, and
+// the operator reads an instance when he chooses. Each line names the instance,
+// its lane, and its status word, and says why where the word is not working.
+// It is empty where no instance is configured and none has asked for anything,
+// and says so where the instances were listed but something behind them could
+// not be read.
+func (s Standing) RenderProgramManagers() string {
+	if len(s.ProgramManagers) == 0 && s.ProgramManagersProblem == "" {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "Program managers (%d):\n", len(s.ProgramManagers))
+	for _, instance := range s.ProgramManagers {
+		lane := instance.Lane
+		if lane == "" {
+			lane = "no lane configured"
+		} else {
+			lane = "lane " + lane
+		}
+		fmt.Fprintf(&rendered, "  %s — %s — %s%s\n", instance.Agent, lane, instance.Status, instance.why())
+	}
+	if s.ProgramManagersProblem != "" {
+		rendered.WriteString(partialRead + s.ProgramManagersProblem + "\n")
+	}
+	return rendered.String()
+}
+
+// why is what follows an instance's status word: the reason it is stale, how
+// many open asks of its own block it, and how many of its report's blockers the
+// record does not bear out. Both halves are said where both hold, because stale
+// outranks blocked in the word and the reader should still see the second.
+func (p ProgramManager) why() string {
+	var parts []string
+	if p.Stale {
+		parts = append(parts, p.StaleSays)
+	}
+	if p.Blocked {
+		cited := make([]string, 0, len(p.Blockers))
+		for _, blocker := range p.Blockers {
+			cited = append(cited, blocker.Cites)
+		}
+		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", count(len(p.Blockers), "open ask"), strings.Join(cited, ", ")))
+	}
+	if len(p.Claims) > 0 {
+		parts = append(parts, fmt.Sprintf("%s its report names that the record does not bear out", count(len(p.Claims), "blocker")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(parts, "; ")
+}
+
+// StaleProgramManagersLine is the count the channel's hourly line carries of
+// stale instances, and empty where none is stale. It is said only inside a
+// message that line already posts for another reason: a stale instance is
+// something the operator reviews when he chooses, and a message sent for it
+// alone would be the push he asked not to be sent.
+func (s Standing) StaleProgramManagersLine() string {
+	stale := s.StaleProgramManagers()
+	if len(stale) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Program managers stale: %d of %d (%s)\n", len(stale), len(s.ProgramManagers), strings.Join(stale, ", "))
+}

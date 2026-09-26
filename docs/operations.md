@@ -2297,6 +2297,52 @@ it is the same fact with less inference — and the hold is still on the
 attention line. Nothing else is ever put above the four lines: every other
 reason the harness is choosing nothing is inside them.
 
+**Under the four lines, one line per [program manager](designs/program-manager.md)
+instance**, where any is configured or any has a restart request open:
+
+```text
+Program managers (2):
+  factory-pgm — lane reliability — stale: no pass has completed since 2026-09-25T07:00:00Z, and its schedule is every 1h0m0s
+  writing-pgm — lane writing — blocked: blocked on 1 open ask (exchange-0123456789abcdef); 1 blocker its report names that the record does not bear out
+```
+
+It is not a fifth line, and nothing on it waits on you: you read an instance
+when you choose. Each instance says its name, its lane, and one word — **blocked**,
+**stale**, or **working** — and, where the word is not `working`, why. The word
+is derived by the read model, and nothing an instance writes sets it:
+
+- **Blocked** is a blocker in the instance's latest
+  [lane report](conversation.md#a-program-managers-lane-report) whose `cites`
+  names a record of the instance's own that is still open: a report the product
+  manager has not handled, an amendment nobody has decided, an exchange still
+  open, or a restart request nothing has answered. A citation that names
+  nothing, names another instance's record, or names one already decided blocks
+  nothing; it is carried as a claim, with the reason, and the line counts them.
+- **Stale** is no completed pass within twice the instance's `triggers.every`,
+  measured from the last pass that ended in an account. A pass the provider
+  refused, a turn the size backstop rejected, and a scheduler that died all look
+  the same here, which is the point: it is the sign that the watcher is not
+  watching, and it is plain Go over the pass records with no provider call on
+  the path, held there by the sweep in `internal/watchdog` that holds the stall
+  reading to the same. An instance that has never completed a pass is stale from
+  twice its schedule after its first conversation was opened — the configuration
+  records no moment an instance was added, so an instance nothing has ever woken
+  is not called stale — and one with no `every` is never stale.
+- **Working** is neither. Stale outranks blocked in the word, and both are
+  carried.
+
+`--json` carries each instance under `standing.program_managers`: its `agent`,
+`lane`, `status`, `stale` and `blocked` separately, `stale_says`,
+`last_completed_pass_at`, the `blockers` each with its mover (`waiting_on`),
+its citation, and the kind of record it resolved to, the `claims` each with its
+`reason`, the report's `report_path` and `report_written_at`, and its open
+`restart_requests`. A record behind them that could not be read is said under
+the line and in `program_managers_problem`, and never read as none: a pass log
+nobody could open calls nobody stale. The channel's hourly line counts the
+stale instances — `Program managers stale: 1 of 2 (factory-pgm)` — inside the
+message it already posts for a stopped line, and posts nothing for a stale
+instance alone.
+
 Naming an item leaves the four lines out. They are about the product, and a
 question about one piece of work is a different question. `--json` carries the
 same derivation under `standing`, so a second surface reads the answer rather

@@ -8,16 +8,140 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/sweep"
 )
 
 type fakeRestartRequests struct {
-	open []runstate.RestartRequest
-	err  error
+	requests []runstate.RestartRequest
+	err      error
 }
 
-func (f fakeRestartRequests) Open() ([]runstate.RestartRequest, error) { return f.open, f.err }
+func (f fakeRestartRequests) List() ([]runstate.RestartRequest, error) { return f.requests, f.err }
+
+type fakeLaneReports struct {
+	reports map[string]runstate.LaneReport
+	err     error
+}
+
+func (f fakeLaneReports) Current(agent string) (runstate.LaneReport, bool, error) {
+	if f.err != nil {
+		return runstate.LaneReport{}, false, f.err
+	}
+	current, written := f.reports[agent]
+	return current, written, nil
+}
+
+func (f fakeLaneReports) ReportPath(agent string) string {
+	return "/state/products/yoyodyne/program-managers/" + agent + "/report.json"
+}
+
+type fakePasses struct {
+	passes     []runstate.Sweep
+	unreadable []runstate.UnreadableSweep
+	err        error
+}
+
+func (f fakePasses) List() ([]runstate.Sweep, []runstate.UnreadableSweep, error) {
+	return f.passes, f.unreadable, f.err
+}
+
+type fakeExchanges struct {
+	exchanges []exchange.Exchange
+	err       error
+}
+
+func (f fakeExchanges) List() ([]exchange.Exchange, error) { return f.exchanges, f.err }
+
+const (
+	factoryConversation = "chat-00000000000000000000000000000001"
+	writingConversation = "chat-00000000000000000000000000000002"
+)
+
+// programManagerSources is a quiet harness with two configured instances, each
+// with an hourly schedule and a conversation opened three hours before the
+// reading, and every record their status is derived from wired and empty. Each
+// test moves one record.
+func programManagerSources() Sources {
+	sources := quietSources()
+	sources.ProgramManagers = []ProgramManagerInstance{
+		{Agent: "factory-pgm", Lane: "reliability", Every: time.Hour},
+		{Agent: "writing-pgm", Lane: "writing", Every: time.Hour},
+	}
+	sources.Conversations = fakeConversations{recorded: []runstate.Conversation{
+		{ConversationID: factoryConversation, Agent: "factory-pgm", Role: domain.RoleProgramManager, StartedAt: moment.Add(-3 * time.Hour)},
+		{ConversationID: writingConversation, Agent: "writing-pgm", Role: domain.RoleProgramManager, StartedAt: moment.Add(-3 * time.Hour)},
+	}}
+	sources.RestartRequests = fakeRestartRequests{}
+	sources.LaneReports = fakeLaneReports{}
+	sources.Exchanges = fakeExchanges{}
+	sources.Passes = fakePasses{passes: []runstate.Sweep{
+		completedPass(factoryConversation, moment.Add(-30*time.Minute)),
+		completedPass(writingConversation, moment.Add(-30*time.Minute)),
+	}}
+	return sources
+}
+
+// completedPass is a pass that ended in an account, in one conversation.
+func completedPass(conversation string, ended time.Time) runstate.Sweep {
+	return runstate.Sweep{
+		Task: "pgm-pass", Role: domain.RoleProgramManager, ConversationID: conversation,
+		StartedAt: ended.Add(-time.Minute), EndedAt: ended, Turns: 1,
+		Result: &sweep.Result{Summary: "the lane is moving"},
+	}
+}
+
+// blockedBy is a lane report naming one blocker per citation.
+func blockedBy(agent string, cites ...string) runstate.LaneReport {
+	blockers := make([]runstate.LaneReportBlocker, 0, len(cites))
+	for _, cited := range cites {
+		blockers = append(blockers, runstate.LaneReportBlocker{What: "waiting on " + cited, WaitingOn: string(MoverProductManager), Cites: cited})
+	}
+	return runstate.LaneReport{
+		SchemaVersion: runstate.LaneReportSchemaVersion, ProductID: "yoyodyne", Agent: agent, Version: 3,
+		Report:     runstate.LaneReportContent{Summary: "moving", Remaining: []string{}, Blockers: blockers},
+		Stamp:      runstate.LaneReportStamp{ConversationID: factoryConversation, Turn: 4},
+		RecordedAt: moment.Add(-20 * time.Minute),
+	}
+}
+
+func instanceNamed(t *testing.T, sources Sources, agent string) ProgramManager {
+	t.Helper()
+	instance, known, problem := ProgramManagerOf(sources, agent)
+	if !known {
+		t.Fatalf("ProgramManagerOf(%s) knows no such instance", agent)
+	}
+	if problem != "" {
+		t.Fatalf("ProgramManagerOf(%s) problem = %q, want none", agent, problem)
+	}
+	return instance
+}
+
+func filedBy(id, agent string) report.Report {
+	filed := filedReport(id, report.SeverityNote, moment.Add(-time.Hour))
+	filed.Role, filed.Agent = domain.RoleProgramManager, agent
+	return filed
+}
+
+func restartRequest(id, agent string) runstate.RestartRequest {
+	return runstate.RestartRequest{
+		SchemaVersion: runstate.RestartRequestSchemaVersion, ProductID: "yoyodyne", ID: id,
+		Agent: agent, Part: config.ServiceScheduler, Reason: "died four times in an hour", RequestedAt: moment.Add(-time.Hour),
+	}
+}
+
+func proposalBy(id, agent string) amendment.Record {
+	return amendment.Record{Proposal: &amendment.Proposal{ID: id, Role: domain.RoleProgramManager, Agent: agent, RaisedAt: moment.Add(-time.Hour)}}
+}
+
+func askedBy(id, agent string, outcome exchange.Outcome) exchange.Exchange {
+	return exchange.Exchange{ID: id, Asker: exchange.Party{Role: domain.RoleProgramManager, Agent: agent}, Outcome: outcome}
+}
 
 // An instance's open restart requests are carried by its query and by the
 // standing under program_managers, beside every configured instance with none,
@@ -25,23 +149,16 @@ func (f fakeRestartRequests) Open() ([]runstate.RestartRequest, error) { return 
 func TestAProgramManagersOpenRestartRequestsAreInItsQueryAndTheStanding(t *testing.T) {
 	t.Parallel()
 
-	at := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
-	request := runstate.RestartRequest{
-		SchemaVersion: runstate.RestartRequestSchemaVersion,
-		ProductID:     "yoyodyne",
-		ID:            "restart-0123456789abcdef",
-		Agent:         "factory-pgm",
-		Part:          config.ServiceScheduler,
-		Reason:        "died four times in an hour",
-		RequestedAt:   at,
-	}
-	sources := quietSources()
-	sources.ProgramManagers = []string{"writing-pgm", "factory-pgm"}
-	sources.RestartRequests = fakeRestartRequests{open: []runstate.RestartRequest{request}}
+	request := restartRequest("restart-0123456789abcdef", "factory-pgm")
+	answered := restartRequest("restart-fedcba9876543210", "factory-pgm")
+	at := moment.Add(-10 * time.Minute)
+	answered.AnsweredAt, answered.Answer = &at, "restarted"
+	sources := programManagerSources()
+	sources.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{request, answered}}
 
-	instance, known, problem := ProgramManagerOf(sources, "factory-pgm")
-	if !known || problem != "" || len(instance.RestartRequests) != 1 || instance.RestartRequests[0].ID != request.ID {
-		t.Fatalf("ProgramManagerOf(factory-pgm) = %+v, %t, %q; want its one open request", instance, known, problem)
+	instance := instanceNamed(t, sources, "factory-pgm")
+	if len(instance.RestartRequests) != 1 || instance.RestartRequests[0].ID != request.ID {
+		t.Fatalf("RestartRequests = %+v; want the one open request and not the answered one", instance.RestartRequests)
 	}
 
 	standing := ReadStanding(context.Background(), sources)
@@ -58,9 +175,14 @@ func TestAProgramManagersOpenRestartRequestsAreInItsQueryAndTheStanding(t *testi
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	if !strings.Contains(string(encoded), `"program_managers":[{"agent":"factory-pgm","restart_requests":[{`) ||
-		!strings.Contains(string(encoded), `"restart_requests":[]`) {
-		t.Errorf("standing JSON does not carry the instances under program_managers:\n%s", encoded)
+	for _, want := range []string{
+		`"program_managers":[{"agent":"factory-pgm","lane":"reliability","status":"working"`,
+		`"restart_requests":[{`,
+		`"restart_requests":[]`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("standing JSON does not carry %s:\n%s", want, encoded)
+		}
 	}
 }
 
@@ -69,11 +191,278 @@ func TestAProgramManagersOpenRestartRequestsAreInItsQueryAndTheStanding(t *testi
 func TestAnUnreadableRestartRequestLogIsSaidRatherThanReadAsNone(t *testing.T) {
 	t.Parallel()
 
-	sources := quietSources()
-	sources.ProgramManagers = []string{"factory-pgm"}
+	sources := programManagerSources()
 	sources.RestartRequests = fakeRestartRequests{err: errors.New("torn line")}
 	standing := ReadStanding(context.Background(), sources)
-	if len(standing.ProgramManagers) != 1 || !strings.Contains(standing.ProgramManagersProblem, "torn line") {
-		t.Errorf("ProgramManagers = %+v, problem %q; want the instance and the reason", standing.ProgramManagers, standing.ProgramManagersProblem)
+	if len(standing.ProgramManagers) != 2 || !strings.Contains(standing.ProgramManagersProblem, "torn line") {
+		t.Errorf("ProgramManagers = %+v, problem %q; want the instances and the reason", standing.ProgramManagers, standing.ProgramManagersProblem)
+	}
+}
+
+// Each kind of record an instance can raise blocks it while it is its own and
+// still open: a report nobody has handled, an amendment nobody has decided, an
+// exchange still open, and a restart request nothing has answered. Each
+// blocker carries its mover and its citation, and the query carries the
+// report's path and when it was written.
+func TestAnOpenAskOfTheInstancesOwnBlocksIt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		cites string
+		kind  CitedRecord
+		wire  func(*Sources)
+	}{
+		{"a report the product manager has not handled", "report-00000000000000000000000000000001", CitedReport, func(s *Sources) {
+			s.Reports = fakeReports{reports: []report.Report{filedBy("report-00000000000000000000000000000001", "factory-pgm")}}
+		}},
+		{"an amendment nobody has decided", "97e14527", CitedAmendment, func(s *Sources) {
+			s.Amendments = fakeAmendments{records: []amendment.Record{proposalBy("97e14527", "factory-pgm")}}
+		}},
+		{"an exchange still open", "exchange-0123456789abcdef", CitedExchange, func(s *Sources) {
+			s.Exchanges = fakeExchanges{exchanges: []exchange.Exchange{askedBy("exchange-0123456789abcdef", "factory-pgm", "")}}
+		}},
+		{"a restart request nothing has answered", "restart-0123456789abcdef", CitedRestartRequest, func(s *Sources) {
+			s.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{restartRequest("restart-0123456789abcdef", "factory-pgm")}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sources := programManagerSources()
+			sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{"factory-pgm": blockedBy("factory-pgm", tc.cites)}}
+			tc.wire(&sources)
+
+			instance := instanceNamed(t, sources, "factory-pgm")
+			if instance.Status != ProgramManagerBlocked || !instance.Blocked || instance.Stale {
+				t.Fatalf("status = %s (blocked %t, stale %t), want blocked", instance.Status, instance.Blocked, instance.Stale)
+			}
+			want := ProgramManagerBlocker{What: "waiting on " + tc.cites, WaitingOn: MoverProductManager, Cites: tc.cites, Record: tc.kind}
+			if len(instance.Blockers) != 1 || instance.Blockers[0] != want || len(instance.Claims) != 0 {
+				t.Fatalf("blockers = %+v, claims = %+v; want exactly %+v", instance.Blockers, instance.Claims, want)
+			}
+			if instance.ReportPath != "/state/products/yoyodyne/program-managers/factory-pgm/report.json" ||
+				instance.ReportWrittenAt == nil || !instance.ReportWrittenAt.Equal(moment.Add(-20*time.Minute)) {
+				t.Errorf("report path %q written at %v, want the store's path and the version's moment", instance.ReportPath, instance.ReportWrittenAt)
+			}
+		})
+	}
+}
+
+// A citation the record does not bear out blocks nothing and is carried as a
+// claim with the reason: one that resolves to nothing, one that resolves to
+// another instance's record, and one that resolves to a record already
+// decided — a handled report, a decided amendment, a closed exchange, an
+// answered restart request.
+func TestACitationTheRecordDoesNotBearOutIsAClaimWithItsReason(t *testing.T) {
+	t.Parallel()
+
+	answered := restartRequest("restart-fedcba9876543210", "factory-pgm")
+	at := moment.Add(-10 * time.Minute)
+	answered.AnsweredAt = &at
+	cases := []struct {
+		name   string
+		cites  string
+		reason string
+		wire   func(*Sources)
+	}{
+		{"a citation that resolves to nothing", "report-99999999999999999999999999999999",
+			"which is no request, report, amendment, or exchange on record", func(*Sources) {}},
+		{"a citation to another instance's report", "report-00000000000000000000000000000002",
+			"which writing-pgm filed rather than this instance", func(s *Sources) {
+				s.Reports = fakeReports{reports: []report.Report{filedBy("report-00000000000000000000000000000002", "writing-pgm")}}
+			}},
+		{"a citation to another instance's restart request", "restart-0123456789abcdef",
+			"which writing-pgm made rather than this instance", func(s *Sources) {
+				s.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{restartRequest("restart-0123456789abcdef", "writing-pgm")}}
+			}},
+		{"a citation to a handled report", "report-00000000000000000000000000000003",
+			"which the product-manager handled at 2026-08-30T11:30:00Z", func(s *Sources) {
+				s.Reports = fakeReports{
+					reports: []report.Report{filedBy("report-00000000000000000000000000000003", "factory-pgm")},
+					handlings: []report.Handling{{ReportID: "report-00000000000000000000000000000003", Role: domain.RoleProductManager,
+						Reason: "admitted", RecordedAt: moment.Add(-30 * time.Minute)}},
+				}
+			}},
+		{"a citation to a decided amendment", "97e14527",
+			"which was decided (declined)", func(s *Sources) {
+				s.Amendments = fakeAmendments{records: []amendment.Record{
+					proposalBy("97e14527", "factory-pgm"),
+					{Decision: &amendment.Decision{ProposalID: "97e14527", Verdict: amendment.VerdictDeclined, DecidedAt: moment.Add(-5 * time.Minute)}},
+				}}
+			}},
+		{"a citation to a closed exchange", "exchange-0123456789abcdef",
+			"which closed resolved", func(s *Sources) {
+				s.Exchanges = fakeExchanges{exchanges: []exchange.Exchange{askedBy("exchange-0123456789abcdef", "factory-pgm", exchange.OutcomeResolved)}}
+			}},
+		{"a citation to an answered restart request", "restart-fedcba9876543210",
+			"which was answered at 2026-08-30T11:50:00Z", func(s *Sources) {
+				s.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{answered}}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sources := programManagerSources()
+			sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{"factory-pgm": blockedBy("factory-pgm", tc.cites)}}
+			tc.wire(&sources)
+
+			instance := instanceNamed(t, sources, "factory-pgm")
+			if instance.Status != ProgramManagerWorking || instance.Blocked || len(instance.Blockers) != 0 {
+				t.Fatalf("status = %s, blockers = %+v; a claim the record does not bear out blocks nothing", instance.Status, instance.Blockers)
+			}
+			if len(instance.Claims) != 1 || instance.Claims[0].Cites != tc.cites || instance.Claims[0].WaitingOn != MoverProductManager ||
+				!strings.Contains(instance.Claims[0].Reason, tc.reason) {
+				t.Fatalf("claims = %+v, want one citing %s with a reason saying %q", instance.Claims, tc.cites, tc.reason)
+			}
+		})
+	}
+}
+
+// A citation that resolves to none of what could be read, while some of it
+// could not be, is not said to resolve to nothing: the reason names what could
+// not be read.
+func TestACitationNothingReadableHoldsSaysWhatCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{"factory-pgm": blockedBy("factory-pgm", "exchange-0123456789abcdef")}}
+	sources.Exchanges = fakeExchanges{err: errors.New("disk gone")}
+
+	instance, _, problem := ProgramManagerOf(sources, "factory-pgm")
+	if instance.Blocked || len(instance.Claims) != 1 || !strings.Contains(instance.Claims[0].Reason, "the exchanges could not be read") {
+		t.Fatalf("claims = %+v, want the one claim saying the exchanges could not be read", instance.Claims)
+	}
+	if !strings.Contains(problem, "disk gone") {
+		t.Errorf("problem = %q, want the exchanges' own failure", problem)
+	}
+}
+
+// Stale is no completed pass within twice the schedule, from the last one that
+// completed; a pass that produced no account is not a completed pass.
+func TestAnInstanceWithNoCompletedPassWithinTwiceItsScheduleIsStale(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	refused := completedPass(factoryConversation, moment.Add(-10*time.Minute))
+	refused.Result, refused.Problem = nil, "the provider refused the turn"
+	sources.Passes = fakePasses{passes: []runstate.Sweep{
+		completedPass(factoryConversation, moment.Add(-150*time.Minute)),
+		refused,
+		completedPass(writingConversation, moment.Add(-110*time.Minute)),
+	}}
+
+	factory := instanceNamed(t, sources, "factory-pgm")
+	if factory.Status != ProgramManagerStale || !factory.Stale ||
+		!strings.Contains(factory.StaleSays, "no pass has completed since 2026-08-30T09:30:00Z, and its schedule is every 1h0m0s") {
+		t.Fatalf("factory-pgm = %s, %q; want stale from its last completed pass, the refused one not counted", factory.Status, factory.StaleSays)
+	}
+	if factory.LastCompletedPassAt == nil || !factory.LastCompletedPassAt.Equal(moment.Add(-150*time.Minute)) {
+		t.Errorf("LastCompletedPassAt = %v, want the completed pass", factory.LastCompletedPassAt)
+	}
+	if writing := instanceNamed(t, sources, "writing-pgm"); writing.Status != ProgramManagerWorking || writing.Stale {
+		t.Errorf("writing-pgm = %s; a pass inside twice the schedule is working", writing.Status)
+	}
+}
+
+// An instance that has never completed a pass is stale from twice its schedule
+// after it was first woken, and not before.
+func TestAnInstanceWithNoCompletedPassIsStaleFromTwiceItsScheduleAfterActivation(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Conversations = fakeConversations{recorded: []runstate.Conversation{
+		{ConversationID: factoryConversation, Agent: "factory-pgm", Role: domain.RoleProgramManager, StartedAt: moment.Add(-3 * time.Hour)},
+		{ConversationID: writingConversation, Agent: "writing-pgm", Role: domain.RoleProgramManager, StartedAt: moment.Add(-90 * time.Minute)},
+	}}
+	sources.Passes = fakePasses{}
+
+	if factory := instanceNamed(t, sources, "factory-pgm"); factory.Status != ProgramManagerStale ||
+		!strings.Contains(factory.StaleSays, "no pass has ever completed, and it was first woken at 2026-08-30T09:00:00Z") {
+		t.Errorf("factory-pgm = %s, %q; want stale three hours after activation on an hourly schedule", factory.Status, factory.StaleSays)
+	}
+	if writing := instanceNamed(t, sources, "writing-pgm"); writing.Status != ProgramManagerWorking {
+		t.Errorf("writing-pgm = %s; ninety minutes after activation is inside twice an hourly schedule", writing.Status)
+	}
+}
+
+// Stale outranks blocked in the one word shown, and both are carried.
+func TestStaleOutranksBlockedAndBothAreCarried(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Passes = fakePasses{passes: []runstate.Sweep{completedPass(factoryConversation, moment.Add(-5*time.Hour))}}
+	sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{"factory-pgm": blockedBy("factory-pgm", "restart-0123456789abcdef")}}
+	sources.RestartRequests = fakeRestartRequests{requests: []runstate.RestartRequest{restartRequest("restart-0123456789abcdef", "factory-pgm")}}
+
+	instance := instanceNamed(t, sources, "factory-pgm")
+	if instance.Status != ProgramManagerStale || !instance.Stale || !instance.Blocked || len(instance.Blockers) != 1 {
+		t.Fatalf("instance = %+v; want the word stale with the blocker still carried", instance)
+	}
+}
+
+// A pass log that could not be read calls nobody stale and says why, rather
+// than deriving staleness from a file nobody could open.
+func TestAnUnreadablePassLogCallsNobodyStaleAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Passes = fakePasses{err: errors.New("permission denied")}
+	standing := ReadStanding(context.Background(), sources)
+	for _, instance := range standing.ProgramManagers {
+		if instance.Stale {
+			t.Errorf("%s is stale over a pass log nobody could read", instance.Agent)
+		}
+	}
+	if !strings.Contains(standing.ProgramManagersProblem, "permission denied") {
+		t.Errorf("problem = %q, want the pass log's failure", standing.ProgramManagersProblem)
+	}
+}
+
+// An instance whose schedule is events alone has nothing to be stale against.
+func TestAnInstanceWithNoScheduleIsNeverStale(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.ProgramManagers = []ProgramManagerInstance{{Agent: "factory-pgm", Lane: "reliability"}}
+	sources.Passes = fakePasses{}
+	if instance := instanceNamed(t, sources, "factory-pgm"); instance.Stale {
+		t.Errorf("instance = %+v; an instance with no every is never stale", instance)
+	}
+}
+
+// `yoyo status` prints a line per instance under the four lines, with its
+// status word and why; the hourly line's count names the stale ones and is
+// empty where none is.
+func TestTheInstancesAreRenderedOneLineEachAndTheStaleOnesCounted(t *testing.T) {
+	t.Parallel()
+
+	sources := programManagerSources()
+	sources.Passes = fakePasses{passes: []runstate.Sweep{
+		completedPass(factoryConversation, moment.Add(-5*time.Hour)),
+		completedPass(writingConversation, moment.Add(-10*time.Minute)),
+	}}
+	sources.LaneReports = fakeLaneReports{reports: map[string]runstate.LaneReport{
+		"writing-pgm": blockedBy("writing-pgm", "exchange-0123456789abcdef", "report-99999999999999999999999999999999"),
+	}}
+	sources.Exchanges = fakeExchanges{exchanges: []exchange.Exchange{askedBy("exchange-0123456789abcdef", "writing-pgm", "")}}
+	standing := ReadStanding(context.Background(), sources)
+
+	want := "Program managers (2):\n" +
+		"  factory-pgm — lane reliability — stale: no pass has completed since 2026-08-30T07:00:00Z, and its schedule is every 1h0m0s\n" +
+		"  writing-pgm — lane writing — blocked: blocked on 1 open ask (exchange-0123456789abcdef); 1 blocker its report names that the record does not bear out\n"
+	if got := standing.RenderProgramManagers(); got != want {
+		t.Errorf("RenderProgramManagers() =\n%s\nwant\n%s", got, want)
+	}
+	if got := standing.StaleProgramManagersLine(); got != "Program managers stale: 1 of 2 (factory-pgm)\n" {
+		t.Errorf("StaleProgramManagersLine() = %q", got)
+	}
+	if got := ReadStanding(context.Background(), programManagerSources()).StaleProgramManagersLine(); got != "" {
+		t.Errorf("StaleProgramManagersLine() with nothing stale = %q, want nothing", got)
+	}
+	if got := ReadStanding(context.Background(), quietSources()).RenderProgramManagers(); got != "" {
+		t.Errorf("RenderProgramManagers() with no instance = %q, want nothing", got)
 	}
 }

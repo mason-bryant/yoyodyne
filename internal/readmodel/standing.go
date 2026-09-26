@@ -222,12 +222,20 @@ type Sources struct {
 	// them all off — a part the supervisor has left down is the one state here
 	// that nothing else reports.
 	Supervision Supervision
-	// ProgramManagers names every configured agent on the program manager role,
-	// and RestartRequests is the log of their requests that the supervisor
-	// restart a part. Both are optional: a reading without them carries no
-	// program managers rather than reporting that none has asked for anything.
-	ProgramManagers []string
+	// ProgramManagers is every configured agent on the program manager role,
+	// with its lane and its schedule, and RestartRequests is the log of their
+	// requests that the supervisor restart a part. LaneReports, Passes, and
+	// Exchanges are the rest of what an instance's status is derived from: its
+	// report's citations are resolved against the requests, the reports, the
+	// amendments, and the exchanges, and its passes are attributed to it through
+	// the conversations. All are optional: a reading without the instances
+	// carries none, and one without a store it needs says so rather than
+	// reporting what it could not read as nothing.
+	ProgramManagers []ProgramManagerInstance
 	RestartRequests RestartRequests
+	LaneReports     LaneReports
+	Passes          Passes
+	Exchanges       Exchanges
 	// Agents is every configured agent, as the configuration resolved it: what
 	// each asks for and what each may be served by instead. It is the other half
 	// of the hold above, because a refusal holds a role only against what that
@@ -483,9 +491,11 @@ type Standing struct {
 	ServicesProblem string    `json:"services_problem,omitempty"`
 
 	// ProgramManagers is each program manager instance as its one query carries
-	// it, today its open restart requests. It is not a fifth line: a request is
-	// waiting on the supervisor's pass rather than on a person, and it is
-	// carried for the surfaces that show the instance. It is absent where no
+	// it: its lane, its status, what its report is blocked on, and its open
+	// restart requests. It is not a fifth line: nothing here is waiting on a
+	// person, and the operator reviews an instance when he chooses. `yoyo status`
+	// prints a line per instance under the four, and the channel's hourly line
+	// counts the stale ones where it already posts. It is absent where no
 	// instance is configured and none has asked for anything.
 	ProgramManagers        []ProgramManager `json:"program_managers,omitempty"`
 	ProgramManagersProblem string           `json:"program_managers_problem,omitempty"`

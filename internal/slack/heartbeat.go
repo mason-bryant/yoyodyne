@@ -251,11 +251,17 @@ func lineMover(state readmodel.Stall, held switches) string {
 // sentence that says the line has stopped and enough of the standing to place it.
 // The whole rendering is what `yoyo status` prints for somebody who typed it, and
 // what an @mention here is answered with, because both of those are asks.
+//
+// The stale program managers are counted under the lines here and only here:
+// this message is already being posted for a stopped line, and a count riding
+// on it costs nobody an interruption. Nothing posts for a stale instance alone,
+// because the operator reviews an instance when he chooses.
 func (f *HarnessFeed) standing(ctx context.Context) string {
 	if f.Standing == nil {
 		return ""
 	}
-	return readmodel.ReadStanding(ctx, *f.Standing).RenderBrief()
+	read := readmodel.ReadStanding(ctx, *f.Standing)
+	return read.RenderBrief() + read.StaleProgramManagersLine()
 }
 
 // standingLines is the same reading with the paused banner left off, for the one

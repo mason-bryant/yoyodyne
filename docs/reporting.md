@@ -894,6 +894,12 @@ says the line has stopped. The entries are what `yoyo status` prints for somebod
 who typed it, and what @-mentioning the app is answered with — both of those are
 asks.
 
+Under the four lines it counts the [program managers that are
+stale](operations.md#where-the-harness-stands-the-four-lines) — `Program managers
+stale: 1 of 2 (factory-pgm)` — where any is. That count rides on this message
+and on nothing else: a stale instance is something you review when you choose,
+so it never causes a message of its own.
+
 Before this the message said that choosing had stopped and
 nothing whatever about what the machine was doing instead, which is exactly what
 somebody woken by it at three in the morning then had to reconstruct. A sink

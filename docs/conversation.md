@@ -1365,7 +1365,10 @@ remains, or nothing is blocking. Each blocker names `what` is blocked,
 request, report, amendment, or exchange the instance raised about it). The
 mover comes from the read model's own vocabulary, narrowed to the movers a lane
 can wait on: `operator`, `product-manager`, `development-manager`, `architect`,
-`harness`, `forge`, or `provider`.
+`harness`, `forge`, or `provider`. What each citation resolves to decides
+whether the instance reads as blocked: only an open record of its own does, and
+the rest are shown as claims with the reason ([the instance's
+status](operations.md#where-the-harness-stands-the-four-lines)).
 
 The report is kept under the state root at
 `products/<product>/program-managers/<agent>/report.json`. Beside it,
