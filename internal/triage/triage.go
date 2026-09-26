@@ -1072,11 +1072,75 @@ type Entry struct {
 	// log, and for the sharpest version of the same reason: the attempt is made
 	// after the decision, which is made after the entry.
 	CarryOut *CarryOut `json:"carry_out,omitempty"`
+	// Earlier is every other open docketing of the same stopped run, oldest first,
+	// each whole: its blocker or failure, findings, failing check, branch and
+	// worktree, session, integration stop, publication, counters, decision, and
+	// carry-out, exactly as it would read listed on its own. Like the closure it is
+	// joined where the docket is read rather than written into the log: the docket
+	// holds one live entry per stopped run, and a run docketed again — a stoppage a
+	// sweep then found its publication stuck behind, a role's escalation beside the
+	// stoppage it ended the run on — is that entry with the newer account on top and
+	// the earlier evidence beneath it, rather than a second entry beside it. See
+	// Fold.
+	Earlier []Entry `json:"earlier,omitempty"`
 	// CountersProblem is why the item's durable triage record could not be read
 	// for this entry. It is stated rather than left to zeros, which would read as
 	// an item nothing has been decided about — the one reading that turns an
 	// unreadable record into a second decision nobody meant to make.
 	CountersProblem string `json:"counters_problem,omitempty"`
+}
+
+// Fold makes the open docket one live entry per stopped run. Entries of one run
+// — a stopped run, its escalation, its unfinished publication — are one question
+// to whoever decides it: the work is still there and nothing is going to pick it
+// up. Listed apart, the same stoppage is put to the development manager once per
+// class, and before this a window of sixty-two entries held thirty-eight items.
+//
+// The entry recorded last stands, in its own place in the order, with the
+// others beneath it as Earlier, each carrying all of its own evidence: the
+// fold changes what is listed, never what can be read. Entries that name no run are left as they are:
+// an unready item and an attempt that never became a run are keyed to the item,
+// and each is already one entry per finding.
+//
+// Fold is asked of open entries only. A run that stops again after a decision
+// settled its last stoppage is docketed afresh, and the settled one is not open
+// to fold beneath it.
+func Fold(entries []Entry) []Entry {
+	latest := make(map[string]int, len(entries))
+	for index, entry := range entries {
+		run := strings.TrimSpace(entry.RunID)
+		if run == "" {
+			continue
+		}
+		held, found := latest[run]
+		if !found || !entry.RecordedAt.Before(entries[held].RecordedAt) {
+			latest[run] = index
+		}
+	}
+	earlier := make(map[string][]Entry, len(latest))
+	for index, entry := range entries {
+		run := strings.TrimSpace(entry.RunID)
+		if run == "" || latest[run] == index {
+			continue
+		}
+		earlier[run] = append(earlier[run], entry)
+	}
+	if len(earlier) == 0 {
+		return entries
+	}
+	folded := make([]Entry, 0, len(latest))
+	for index, entry := range entries {
+		run := strings.TrimSpace(entry.RunID)
+		if run != "" && latest[run] != index {
+			continue
+		}
+		if beneath := earlier[run]; run != "" && len(beneath) > 0 {
+			slices.SortStableFunc(beneath, func(a, b Entry) int { return a.RecordedAt.Compare(b.RecordedAt) })
+			entry.Earlier = append(slices.Clone(entry.Earlier), beneath...)
+		}
+		folded = append(folded, entry)
+	}
+	return folded
 }
 
 // Key names the durable event an entry is about. It is derived rather than
@@ -1513,6 +1577,28 @@ func (e Entry) Render() string {
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
 	rendered.WriteString(e.renderDecisions())
+	rendered.WriteString(e.renderEarlier())
+	return rendered.String()
+}
+
+// renderEarlier puts every earlier docketing of the same run beneath everything
+// this entry says now, each rendered whole and indented under it, so what the
+// decision is made from is all of it and not only the newest account. A decision
+// about this entry settles these too, so nothing below is a question of its own.
+func (e Entry) renderEarlier() string {
+	if len(e.Earlier) == 0 {
+		return ""
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Docketed %d time(s) before for this run; one decision here settles all of it, and each earlier docketing follows in full:\n", len(e.Earlier))
+	for _, earlier := range e.Earlier {
+		for _, line := range strings.SplitAfter(earlier.Render(), "\n") {
+			if line == "" {
+				continue
+			}
+			rendered.WriteString("      " + line)
+		}
+	}
 	return rendered.String()
 }
 

@@ -72,8 +72,8 @@ func newDroppedProtectedRun(t *testing.T) droppedProtectedRun {
 		t.Fatalf("local main = %q after the drop, want the base %q the change never left", local, outcome.BaseCommit)
 	}
 	docketer := docketerOverStore(fixture.docket, fixture.store, docketConfig())
-	if built, err := docketer.Build(); err != nil || len(built.Entries) != 2 {
-		t.Fatalf("docket = %#v, %v; want the stoppage and the publication both docketed", built, err)
+	if built, err := docketer.Build(); err != nil || len(built.Entries) != 1 || len(built.Entries[0].Earlier) != 1 {
+		t.Fatalf("docket = %#v, %v; want the stoppage and the publication both docketed, as one live entry for the run", built, err)
 	}
 
 	// The development manager decides a re-arm, which spends the publication's

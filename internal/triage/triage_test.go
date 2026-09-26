@@ -1394,3 +1394,50 @@ func TestARenderedEntrySaysWhichGateStoppedTheCarryOut(t *testing.T) {
 		t.Fatalf("an entry nothing was stopped on reports a carry-out:\n%s", rendered)
 	}
 }
+
+// Fold keeps one live entry per run, the one recorded last and in its own place,
+// with the rest beneath it oldest first — lapsed decisions included — and leaves
+// the entries that name no run exactly as they were.
+func TestFoldKeepsOneLiveEntryPerRun(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedRunEntry()
+	lapsed := Closure{SchemaVersion: ClosureSchemaVersion, Key: stopped.Key, Decision: "wait", ClosedAt: stopped.RecordedAt.Add(time.Minute)}
+	stopped.Closed = &lapsed
+	escalated := stoppedRunEntry()
+	escalated.Key = Key(ClassEscalation, escalated.RunID)
+	escalated.Class = ClassEscalation
+	escalated.Blocker = ""
+	escalated.Escalation = &Escalation{RaisedBy: domain.RoleReviewer, Reason: "the criteria contradict the design"}
+	escalated.RecordedAt = stopped.RecordedAt.Add(time.Hour)
+	published := stoppedRunEntry()
+	published.Key = PublicationKey(published.RunID, 42)
+	published.Class = ClassPublication
+	published.Blocker = ""
+	published.Publication = &Publication{Number: 42, ApprovedAt: stopped.RecordedAt}
+	published.RecordedAt = stopped.RecordedAt.Add(2 * time.Hour)
+	unready := Entry{Class: ClassUnreadyItem, Key: "unready_item:yoyodyne-other:file", WorkItemID: "yoyodyne-other", RecordedAt: stopped.RecordedAt}
+
+	folded := Fold([]Entry{unready, published, stopped, escalated})
+	if len(folded) != 2 || folded[0].Key != unready.Key || folded[1].Key != published.Key {
+		t.Fatalf("folded = %#v, want the unready item and the run's latest entry, in place", folded)
+	}
+	earlier := folded[1].Earlier
+	if len(earlier) != 2 || earlier[0].Class != ClassStoppedRun || earlier[1].Class != ClassEscalation {
+		t.Fatalf("earlier = %#v, want the stoppage then the escalation beneath", earlier)
+	}
+	if earlier[0].Closed == nil || earlier[0].Closed.Decision != "wait" || earlier[1].Escalation == nil {
+		t.Fatalf("earlier = %#v, want each docketing kept whole, its decision with it", earlier)
+	}
+	// Folded is not summarized: the stoppage's own evidence renders beneath the
+	// live entry exactly as it would listed on its own.
+	rendered := folded[1].Render()
+	for _, want := range []string{stopped.Blocker, "the criteria contradict the design", "Docketed 2 time(s) before"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered live entry is missing %q:\n%s", want, rendered)
+		}
+	}
+	if again := Fold([]Entry{stopped}); len(again) != 1 || again[0].Earlier != nil {
+		t.Fatalf("Fold of one entry = %#v, want it untouched", again)
+	}
+}

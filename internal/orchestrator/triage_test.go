@@ -1044,8 +1044,8 @@ func TestAPublicationWaitedOnComesBackOnceTheWaitHasRunOut(t *testing.T) {
 }
 
 // One run can have stopped and left a publication nobody merged. They are two
-// entries because they are two events, and one of them being docketed must not
-// hide the other.
+// records because they are two events, and one of them being docketed must not
+// hide the other — but they are one live entry, with the earlier beneath.
 func TestOneRunCanBeDocketedForBothWhatStoppedAndWhatWasNeverMerged(t *testing.T) {
 	t.Parallel()
 
@@ -1059,6 +1059,118 @@ func TestOneRunCanBeDocketedForBothWhatStoppedAndWhatWasNeverMerged(t *testing.T
 	}
 	if built.Added != 2 {
 		t.Fatalf("build = %#v, want the stoppage and the publication both docketed", built)
+	}
+	if len(built.Entries) != 1 || built.Folded != 1 || len(built.Entries[0].Earlier) != 1 {
+		t.Fatalf("build = %#v, want one live entry with the other beneath it", built)
+	}
+}
+
+// The case of 2026-09-25, when yoyodyne-ifd.362 stood on the docket six times:
+// one run docketed three ways — its stoppage as it ended, the developer's
+// escalation it ended on, and the publication a later scan found stuck behind it
+// — is one live entry, with the earlier two beneath it whole rather than
+// summarized. A wait decided about it lapses back as that same one entry,
+// carrying the decision.
+func TestOneStoppageDocketedThreeWaysIsOneLiveEntry(t *testing.T) {
+	t.Parallel()
+
+	state := stoppedState()
+	state.Blocker = "Yoyodyne stopped this item: its target branch moved, and this change conflicts with what the branch now holds."
+	state.LandingOutcome = runstate.LandingEscalate
+	state.LandingReason = "the criteria ask for a file the design forbids"
+	state.ReviewDecision = runstate.ReviewApprove
+	state.PullRequest = &runstate.PullRequest{
+		Remote: "origin", Branch: state.Branch, Number: 42,
+		URL: "https://forge.invalid/pull/42", HeadCommit: strings.Repeat("b", 40), State: "OPEN",
+	}
+	ended := *state.CompletedAt
+	docket := &memoryDocket{}
+	at := func(moment time.Time) Docketer {
+		docketer := docketerOver([]runstate.State{state}, docket)
+		docketer.Clock = docketClockAt{at: moment}
+		return docketer
+	}
+
+	// The run dockets its own stoppage, and the escalation it ended on, as it ends.
+	if created, err := at(ended).RecordStoppedRun(state); err != nil || !created {
+		t.Fatalf("RecordStoppedRun() = %t, error = %v, want the stoppage docketed", created, err)
+	}
+	if created, err := at(ended.Add(time.Second)).RecordEscalation(state); err != nil || !created {
+		t.Fatalf("RecordEscalation() = %t, error = %v, want the escalation docketed", created, err)
+	}
+	// A sweep re-derives both, and a later scan finds the publication stuck.
+	if swept, err := at(ended.Add(30 * time.Minute)).Build(); err != nil || swept.Added != 0 {
+		t.Fatalf("sweep build = %#v, error = %v, want nothing docketed twice", swept, err)
+	}
+	later, err := at(ended.Add(3 * time.Hour)).Build()
+	if err != nil || later.Added != 1 {
+		t.Fatalf("later build = %#v, error = %v, want the stuck publication recorded", later, err)
+	}
+	if len(docket.entries) != 3 {
+		t.Fatalf("docket log = %v, want three records kept for the run", docket.keys())
+	}
+
+	if len(later.Entries) != 1 || later.Folded != 2 {
+		t.Fatalf("docket = %#v, want one live entry for the run", later.Entries)
+	}
+	live := later.Entries[0]
+	if live.Class != triage.ClassPublication || len(live.Earlier) != 2 ||
+		live.Earlier[0].Class != triage.ClassStoppedRun || live.Earlier[1].Class != triage.ClassEscalation {
+		t.Fatalf("live entry = %#v, want the publication on top and the stoppage then the escalation beneath", live)
+	}
+	// Beneath means whole: the stoppage keeps its findings, its failing check, and
+	// its preserved branch, which is what separates a repair from a re-run.
+	stoppage := live.Earlier[0]
+	if len(stoppage.Findings) != 1 || stoppage.Check == nil || stoppage.Artifacts.Branch != state.Branch {
+		t.Fatalf("folded stoppage = %#v, want its whole evidence kept", stoppage)
+	}
+	rendered := live.Render()
+	for _, want := range []string{
+		"Docketed 2 time(s) before for this run",
+		"its target branch moved",
+		"add the missing file",
+		"Failing check: make test (exit 1)",
+		"the criteria ask for a file the design forbids",
+		"yoyodyne/task/abc",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// A wait decided about the one entry settles all three, and when it lapses it
+	// is the same one entry that comes back, carrying the decision.
+	decided := ended.Add(3*time.Hour + time.Minute)
+	for _, key := range docket.keys() {
+		docket.waitOn(key, decided, decided.Add(2*time.Hour))
+	}
+	if held, err := at(decided.Add(time.Hour)).Build(); err != nil || len(held.Entries) != 0 {
+		t.Fatalf("build while waiting = %#v, error = %v, want nothing listed", held, err)
+	}
+	lapsed, err := at(decided.Add(3 * time.Hour)).Build()
+	if err != nil || lapsed.Added != 0 || len(lapsed.Entries) != 1 || lapsed.Folded != 2 {
+		t.Fatalf("build after the wait = %#v, error = %v, want the one entry back and nothing docketed again", lapsed, err)
+	}
+	if back := lapsed.Entries[0]; back.Closed == nil || back.Closed.Decision != "wait" ||
+		back.Earlier[0].Closed == nil || back.Earlier[0].Closed.Decision != "wait" {
+		t.Fatalf("entry = %#v, want the lapsed decision carried on it and beneath it", back)
+	}
+}
+
+// A separate run of the same item is separate stopped work, and is not folded:
+// the fold is one entry per stopped run, not per item.
+func TestAnotherRunOfTheSameItemIsItsOwnEntry(t *testing.T) {
+	t.Parallel()
+
+	first := stoppedState()
+	second := stoppedState()
+	second.RunID = "run-fedcba9876543210fedcba9876543210"
+	built, err := docketerOver([]runstate.State{first, second}, &memoryDocket{}).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 2 || built.Folded != 0 {
+		t.Fatalf("build = %#v, want one entry per stopped run", built)
 	}
 }
 
