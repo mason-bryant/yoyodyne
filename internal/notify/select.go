@@ -21,6 +21,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/readmodel"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
@@ -211,11 +212,11 @@ func FromRun(before, after runstate.State, look func(runstate.State) triage.Foun
 	}
 	// A run that ended without succeeding, said in the read model's own outcome
 	// vocabulary rather than in one word over all four. A stoppage somebody has to
-	// decide about is the one thing nobody finds out about on their own, so it
-	// keeps the critical crossing it always had; the other three endings leave
-	// nobody a decision and are said as themselves rather than as a blocker
-	// nobody recorded. Both state what remains of the change, because the attempt
-	// being over says nothing about whether the work is.
+	// decide about is said as loudly as whoever decides it and whatever stopped it
+	// warrant — see stoppageSeverity; the other three endings leave nobody a
+	// decision and are said as themselves rather than as a blocker nobody
+	// recorded. Both state what remains of the change, because the attempt being
+	// over says nothing about whether the work is.
 	//
 	// There are two crossings rather than one because the two facts are written in
 	// two saves on a path that matters. Reconciliation settles a run some killed
@@ -225,7 +226,7 @@ func FromRun(before, after runstate.State, look func(runstate.State) triage.Foun
 	// and then nothing at all when the stoppage arrived — the ending an operator
 	// most needs, silently swallowed by the fact the run was already over. So a
 	// blocker appearing on a run that had already ended is itself a crossing, and
-	// the critical line it says corrects the warning that preceded it.
+	// the stoppage line it says corrects the ending that preceded it.
 	endedNow := !endedBadly(before) && endedBadly(after)
 	stoppageNow := !handedToAPerson(before) && handedToAPerson(after)
 	if endedNow || stoppageNow {
@@ -238,11 +239,15 @@ func FromRun(before, after runstate.State, look func(runstate.State) triage.Foun
 		// carries and the repair verb refuses in. That holds while the run's branch
 		// is there; once it is gone the resume would refuse, so the line says what
 		// is gone and that a re-run is the way on, as those surfaces then do.
+		found := lookedAt(after, look)
+		// A stoppage is new when it is said, so no triage decision can stand about
+		// it yet and the carry-out the read model also distinguishes cannot arise.
+		mover := readmodel.StoppageMover(after, found, false)
 		if after.IntegrationStop != nil {
-			remains.Mover = integrationMove(after, look)
+			remains.Mover = integrationMove(after, mover == readmodel.MoverHarness, found)
 		}
 		if outcome := after.Outcome(); outcome == runstate.OutcomeStopped {
-			sayWith(KindBlockerRecorded, report.SeverityCritical, Harness(), remains, endingReason(after))
+			sayWith(KindBlockerRecorded, stoppageSeverity(after, mover), Harness(), remains, endingReason(after))
 		} else {
 			remains.Ending = string(outcome)
 			// A run that died before it claimed anything is the one ending here that
@@ -283,25 +288,83 @@ func endingReason(state runstate.State) string {
 
 // integrationMove is whose move follows an approved change the environment
 // stopped: the harness's, by `yoyo triage resume`, in the sentence the run's
-// record words for every surface — while its branch is there, by the rule
-// (triage.IntegrationResumable) the docket, the pull's hold, `yoyo status`, and
-// the repair verb's refusal ask. Once it is gone the move is the sentence those
-// surfaces say of it instead, naming the re-run and no verb that would refuse.
-// It is derived beside the fact the message states rather than worded again
-// here, so the channel line and those surfaces cannot come to say different
-// things about one run.
-func integrationMove(state runstate.State, look func(runstate.State) triage.Found) string {
-	if look == nil {
-		if triage.IntegrationResumable(nil, state.BranchRemoved) {
-			return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
-		}
-		return triage.IntegrationGoneSays(state.RunID, fmt.Sprintf("branch %s removed as the run's record says, not checked", state.Branch))
-	}
-	found := look(state)
-	if triage.IntegrationResumable(&found, false) {
+// record words for every surface — while its branch is there, by the read
+// model's reading of the stoppage (readmodel.StoppageMover, over
+// triage.IntegrationResumable) that the docket, the pull's hold, `yoyo status`,
+// and the repair verb's refusal share. Once it is gone the move is the sentence
+// those surfaces say of it instead, naming the re-run and no verb that would
+// refuse. It is derived beside the fact the message states rather than worded
+// again here, so the channel line and those surfaces cannot come to say
+// different things about one run.
+func integrationMove(state runstate.State, resumable bool, found *triage.Found) string {
+	if resumable {
 		return "the harness's — " + state.IntegrationStop.ResumeSays(state.RunID)
 	}
+	if found == nil {
+		return triage.IntegrationGoneSays(state.RunID, fmt.Sprintf("branch %s removed as the run's record says, not checked", state.Branch))
+	}
 	return triage.IntegrationGoneSays(state.RunID, found.Describe())
+}
+
+// lookedAt is what the repository holds of an approved change the environment
+// stopped, asked once, and nil where nothing was wired to look or the run was
+// not stopped that way — which the read model answers from the run's own
+// removal flag, and which has no promotion to resume.
+func lookedAt(state runstate.State, look func(runstate.State) triage.Found) *triage.Found {
+	if state.IntegrationStop == nil || look == nil {
+		return nil
+	}
+	found := look(state)
+	return &found
+}
+
+// stoppageCause is the environmental cause the record gives for a stoppage: the
+// integration stop's where an approved change was stopped on its way to the
+// target, and otherwise the refusal a settled round was classified by. A cause
+// recorded on a round that delivered a change anyway is not one: that round
+// spent as any round does, and what stopped the run is the work.
+func stoppageCause(state runstate.State) (runstate.EnvironmentalCause, bool) {
+	if stop := state.IntegrationStop; stop != nil {
+		return stop.Cause, true
+	}
+	if refused := state.Environmental; refused != nil && refused.Refused {
+		return refused.Cause, true
+	}
+	return "", false
+}
+
+// stoppageSeverity is how loudly a stoppage is said, from who moves next and
+// what stopped it. Critical is what reaches the operator wherever he is, so it
+// is kept for a stoppage that is his to act on: on 2026-09-25 he was paged as
+// critical for an approved change that lost its race for main twice and waited
+// on the development manager to re-run it, which was ordinary.
+//
+// The mover is the read model's (readmodel.StoppageMover) and is not relabelled
+// here. What makes a stoppage the operator's even so is its cause: one only a
+// person clears on the machine — a target branch that diverged from the
+// remote's, a credential the remote refused, a primary checkout carrying state
+// the harness does not own. The harness's resume or her decision is still the
+// next move the message names, and neither can happen until he has, so that
+// cause is critical whoever moves after him.
+//
+// Otherwise a stoppage is one of two things. Where the environment stopped it —
+// a lost race, a replay the harness killed, a tracker or forge that did not
+// answer, a usage window, any refusal the settle classified — nothing was
+// judged and the move is routine, so it is a note, and a note reaches the
+// item's thread rather than the channel (see reachOf). Where the work stopped
+// it — findings nobody repaired, checks that kept failing, paths the item never
+// granted, a replay that conflicted, or anything the record does not name as
+// the environment's — it is a warning: a real decision about the change, and
+// the development manager's to make.
+func stoppageSeverity(state runstate.State, mover readmodel.Mover) report.Severity {
+	cause, environmental := stoppageCause(state)
+	if mover == readmodel.MoverOperator || (environmental && cause.NeedsAPerson()) {
+		return report.SeverityCritical
+	}
+	if environmental || state.LostItsRace() {
+		return report.SeverityNote
+	}
+	return report.SeverityWarning
 }
 
 // endingSeverity is how loudly a run ending without a blocker is said. A

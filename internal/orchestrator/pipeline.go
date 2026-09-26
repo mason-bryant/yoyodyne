@@ -2448,8 +2448,8 @@ func (a *activeRun) block(notes string) error {
 // far as every gate could tell, and what it needs is a person to say what the
 // target is supposed to look like.
 func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
-	blocked := fmt.Errorf("integration lost its target branch after %d of %d permitted retry(s): %w",
-		a.state.IntegrationRetries, limit, cause)
+	blocked := fmt.Errorf("%s after %d of %d permitted retry(s): %w",
+		runstate.ContendedIntegrationFailure, a.state.IntegrationRetries, limit, cause)
 	if err := a.block(renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
 		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
 	}

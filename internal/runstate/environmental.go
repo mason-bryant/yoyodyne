@@ -206,6 +206,14 @@ func (c EnvironmentalCause) ClearedBy() string {
 	}
 }
 
+// NeedsAPerson reports a cause somebody has to clear on the machine before
+// anything can move: the causes ClearedBy names a remedy for. Every other cause
+// passes by itself or is the harness's own to retry, which is what decides how
+// loudly a stoppage on it is said — the operator is needed only for this set.
+func (c EnvironmentalCause) NeedsAPerson() bool {
+	return c.ClearedBy() != ""
+}
+
 // EndsTheRoundUnjudged reports a cause that ends the round before anything
 // could judge what it holds, so the round is refused without the worktree
 // being asked whether it delivered. Only the provider's usage window does: see
