@@ -143,6 +143,11 @@ var triageDecisions = append(runstate.TriageDecisionVocabulary(), decisionCross)
 // the development manager's to decide until they answer — leaving half of it on
 // her docket would put a question to her that she has already passed on.
 //
+// These classes say which entries a decision answers, not the whole of what it
+// closes: the docket folds a run's open entries into one live entry, and a
+// decision that answers any of them settles every open entry of that run, so
+// what was folded beneath is not put to her again on its own.
+//
 // A decision whose class the run has no open entry of closes nothing, which is
 // the safe direction: the entry stands and is put to her again, exactly as every
 // entry did before closing existed. The two entries that name no run — an item

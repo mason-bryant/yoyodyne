@@ -201,8 +201,8 @@ func TestReconcileFinishesADroppedMergeSomebodyMadeByHand(t *testing.T) {
 	if dropped.Blocker == "" || dropped.MergeDrop == nil || !fixture.tracker.Record().Blocked || fixture.tracker.Record().Closed {
 		t.Fatalf("dropped = blocker %q, drop %#v, item blocked %t closed %t; want the item handed back", dropped.Blocker, dropped.MergeDrop, fixture.tracker.Record().Blocked, fixture.tracker.Record().Closed)
 	}
-	if built, err := docketer.Build(); err != nil || len(built.Entries) != 2 {
-		t.Fatalf("docket = %#v, %v; want the stoppage and the publication both docketed", built, err)
+	if built, err := docketer.Build(); err != nil || len(built.Entries) != 1 || len(built.Entries[0].Earlier) != 1 {
+		t.Fatalf("docket = %#v, %v; want the stoppage and the publication both docketed, as one live entry for the run", built, err)
 	}
 	if !dropped.AwaitingForge() || !heldItemsOf(t, fixture.store, fixture.tracker.Record().Item.ID)[fixture.tracker.Record().Item.ID] {
 		t.Fatal("a dropped merge is neither counted as awaiting the forge nor holding its item")

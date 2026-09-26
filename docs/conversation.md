@@ -1591,6 +1591,19 @@ entry between them, and a run that is merely parked — waiting out a usage limi
 held by a directive, or paused by you — is never docketed at all, because it is
 owed a continuation rather than a decision.
 
+**An entry is one per stopped run.** One run can be docketed more than once on
+the same stoppage — it stops on a blocker, and a later scan finds the
+publication it left sitting unmerged behind it; a role's escalation and the
+stoppage it ended the run on — and those are one question. So the docket she
+reads holds one live entry for the run: the account recorded last, with every
+other open docketing of that run kept beneath it in its own words and with what
+was decided about it, rather than listed beside it. One decision settles the
+whole entry, including what is folded beneath it. The log keeps every record, and
+the fold is made wherever the docket is built, so the sweep folds the repeats
+already standing the first time it runs. On 2026-09-25 the docket held 62 open
+entries for 38 items, yoyodyne-ifd.362 six times. A different run of the same
+item is different stopped work and is its own entry.
+
 **A decision closes the entry it settled**, which is the other half of that
 lifecycle: an entry is created where work stops and closed where somebody
 decides. The docket is rebuilt from the durable records at every scan, so an
@@ -1669,7 +1682,10 @@ claimed, and the escalation a role raised from it the run carries; a re-arm or a
 wait closes the unfinished publication's entry, `wait` only until the merge has
 been sitting there as long again and `rearm` for good; and an escalation closes
 all of them, because an escalated item is waiting on you and none of it is hers
-to decide until you answer. Every decision but `wait` closes its entry for good,
+to decide until you answer. Those are the entries a decision answers; what it
+closes is the run's whole live entry, so a decision that answers any of a run's
+open entries closes the rest of them with it, and a re-run decided on a stopped
+run settles the stuck publication folded beneath it too. Every decision but `wait` closes its entry for good,
 and what puts one of those back on the docket is the same work stopping again
 rather than anything about the decision. The two entries that name no run are
 closed by no decision of hers, because a decision names a run and neither has

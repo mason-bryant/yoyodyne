@@ -91,6 +91,17 @@ package orchestrator
 // disappearing on the strength of a decision to look at it again. It comes back
 // when the decision lapses, carrying what was decided, and nothing is docketed
 // twice for it.
+//
+// # One live entry per stopped run
+//
+// A key names a class of event as well as the run, so one run can stand on the
+// log under more than one: it stops on a blocker, and a later scan finds the
+// publication it left sitting unmerged behind the same stoppage. Those are one
+// question, and on 2026-09-25 they were listed as several — yoyodyne-ifd.362 six
+// times. So the docket a build hands over folds every open entry of one run into
+// the one recorded last, with the rest beneath it, and a decision about that
+// entry closes all of them (cli's conversationDocketLog). The log is not
+// rewritten; the fold is a join, like the closure.
 
 import (
 	"context"
@@ -223,6 +234,11 @@ type DocketBuild struct {
 	// that silently shows a subset is one a reader takes for the whole: the number
 	// says the rest were settled rather than never noticed.
 	Closed int `json:"closed"`
+	// Folded is how many open entries are listed beneath a later docketing of the
+	// same run rather than beside it, which is what one live entry per stopped run
+	// comes to: they are still open, and a decision about the entry above them
+	// settles them with it.
+	Folded int `json:"folded,omitempty"`
 }
 
 // Build scans every recorded run, dockets what has stopped and is not docketed
@@ -300,8 +316,13 @@ func (d Docketer) Build() (DocketBuild, error) {
 	listable, unlisted := listableDocket(entries, now)
 	problems = append(problems, d.joinDecisions(listable, publicationsOf(recorded))...)
 	open, closed := openDocket(listable, now)
-	d.lookAgain(open, recorded)
-	return DocketBuild{Entries: open, Added: added, Closed: closed + unlisted}, errors.Join(problems...)
+	// One live entry per stopped run. The repeats are folded here, where every
+	// docket anybody reads is built, rather than rewritten on the log — so the
+	// sweep folds the ones already standing the first time it builds, and a run
+	// docketed again tomorrow folds the same way.
+	live := triage.Fold(open)
+	d.lookAgain(live, recorded)
+	return DocketBuild{Entries: live, Added: added, Closed: closed + unlisted, Folded: len(open) - len(live)}, errors.Join(problems...)
 }
 
 // lookAgain puts what the repository holds now onto every open entry whose run

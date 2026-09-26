@@ -1044,8 +1044,8 @@ func TestAPublicationWaitedOnComesBackOnceTheWaitHasRunOut(t *testing.T) {
 }
 
 // One run can have stopped and left a publication nobody merged. They are two
-// entries because they are two events, and one of them being docketed must not
-// hide the other.
+// records because they are two events, and one of them being docketed must not
+// hide the other — but they are one live entry, with the earlier beneath.
 func TestOneRunCanBeDocketedForBothWhatStoppedAndWhatWasNeverMerged(t *testing.T) {
 	t.Parallel()
 
@@ -1059,6 +1059,86 @@ func TestOneRunCanBeDocketedForBothWhatStoppedAndWhatWasNeverMerged(t *testing.T
 	}
 	if built.Added != 2 {
 		t.Fatalf("build = %#v, want the stoppage and the publication both docketed", built)
+	}
+	if len(built.Entries) != 1 || built.Folded != 1 || len(built.Entries[0].Earlier) != 1 {
+		t.Fatalf("build = %#v, want one live entry with the other beneath it", built)
+	}
+}
+
+// The case of 2026-09-25, when yoyodyne-ifd.362 stood on the docket six times:
+// one stoppage docketed three ways — by the run as it ended, by the sweep that
+// settled it, and by a later scan that found its publication stuck behind it —
+// is one live entry, the latest account on top and the earlier beneath.
+func TestOneStoppageDocketedThreeWaysIsOneLiveEntry(t *testing.T) {
+	t.Parallel()
+
+	state := publishedState(3 * time.Hour)
+	state.Status = runstate.StatusFailed
+	state.Blocker = "Yoyodyne stopped this item: its target branch moved, and this change conflicts with what the branch now holds."
+	ended := *state.CompletedAt
+	docket := &memoryDocket{}
+
+	// The run dockets its own stoppage as it ends.
+	asItEnded := docketerOver([]runstate.State{state}, docket)
+	asItEnded.Clock = docketClockAt{at: ended}
+	if created, err := asItEnded.RecordStoppedRun(state); err != nil || !created {
+		t.Fatalf("RecordStoppedRun() = %t, error = %v, want the stoppage docketed", created, err)
+	}
+	// A sweep settles the run half an hour later and re-derives the same stoppage.
+	sweep := docketerOver([]runstate.State{state}, docket)
+	sweep.Clock = docketClockAt{at: ended.Add(30 * time.Minute)}
+	swept, err := sweep.Build()
+	if err != nil {
+		t.Fatalf("sweep Build() error = %v", err)
+	}
+	if swept.Added != 0 || len(swept.Entries) != 1 {
+		t.Fatalf("sweep build = %#v, want the one stoppage already docketed", swept)
+	}
+	// A later scan finds the publication the run left sitting unmerged.
+	later, err := docketerOver([]runstate.State{state}, docket).Build()
+	if err != nil {
+		t.Fatalf("later Build() error = %v", err)
+	}
+	if later.Added != 1 {
+		t.Fatalf("later build = %#v, want the stuck publication recorded", later)
+	}
+
+	if len(later.Entries) != 1 || later.Folded != 1 {
+		t.Fatalf("docket = %#v, want one live entry for the run", later.Entries)
+	}
+	live := later.Entries[0]
+	if live.Class != triage.ClassPublication || live.RunID != state.RunID {
+		t.Fatalf("live entry = %#v, want the latest account of the run on top", live)
+	}
+	if len(live.Earlier) != 1 || live.Earlier[0].Class != triage.ClassStoppedRun || live.Earlier[0].Says != state.Blocker {
+		t.Fatalf("earlier = %#v, want the stoppage's own blocker kept beneath", live.Earlier)
+	}
+	rendered := live.Render()
+	for _, want := range []string{"Docketed 1 time(s) before for this run", "its target branch moved"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+	// The log keeps both records; the fold is what the docket is read as.
+	if len(docket.entries) != 2 {
+		t.Fatalf("docket log = %v, want both records kept", docket.keys())
+	}
+}
+
+// A separate run of the same item is separate stopped work, and is not folded:
+// the fold is one entry per stopped run, not per item.
+func TestAnotherRunOfTheSameItemIsItsOwnEntry(t *testing.T) {
+	t.Parallel()
+
+	first := stoppedState()
+	second := stoppedState()
+	second.RunID = "run-fedcba9876543210fedcba9876543210"
+	built, err := docketerOver([]runstate.State{first, second}, &memoryDocket{}).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 2 || built.Folded != 0 {
+		t.Fatalf("build = %#v, want one entry per stopped run", built)
 	}
 }
 

@@ -562,6 +562,58 @@ func TestADecisionToWaitLapsesAfterTheConfiguredStuckMergeAge(t *testing.T) {
 	}
 }
 
+// A run docketed twice — its stoppage, and later the publication stuck behind it
+// — is one live entry, so one decision settles it. A re-run answers the stopped
+// run, and it closes the publication folded with it too, rather than leaving
+// that to be put to her again on its own.
+func TestADecisionClosesEveryEntryFoldedIntoTheRunsLiveEntry(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	const runID = "run-0123456789abcdef0123456789abcdef"
+	stopped := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	for _, entry := range []triage.Entry{
+		{
+			SchemaVersion: triage.SchemaVersion, Key: triage.Key(triage.ClassStoppedRun, runID), Class: triage.ClassStoppedRun,
+			ProductID: "yoyodyne", RunID: runID, WorkItemID: "yoyodyne-task", RecordedAt: stopped,
+			Blocker: "Yoyodyne stopped this item: its target branch moved.",
+		},
+		{
+			SchemaVersion: triage.SchemaVersion, Key: triage.PublicationKey(runID, 42), Class: triage.ClassPublication,
+			ProductID: "yoyodyne", RunID: runID, WorkItemID: "yoyodyne-task", RecordedAt: stopped.Add(2 * time.Hour),
+			Publication: &triage.Publication{Number: 42, State: "OPEN", ApprovedAt: stopped},
+		},
+	} {
+		if _, err := store.RecordOnce(entry); err != nil {
+			t.Fatalf("RecordOnce() error = %v", err)
+		}
+	}
+	closer := conversationDocketLog{store: store, clock: stoppedClock{at: stopped.Add(3 * time.Hour)}, revisitAfter: 2 * time.Hour}
+	rerun := chat.DocketClosure{
+		RunID:     runID,
+		Classes:   []triage.Class{triage.ClassStoppedRun, triage.ClassUnstartedRun, triage.ClassEscalation},
+		Decision:  "rerun",
+		Reason:    "the ground moved under a change that was never wrong",
+		DecidedBy: "the development manager in conversation chat-0123456789abcdef",
+	}
+	closed, err := closer.Close(context.Background(), rerun)
+	if err != nil || closed != 2 {
+		t.Fatalf("Close() = %d, error = %v, want both of the run's entries settled", closed, err)
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Closed == nil || entry.Closed.Decision != "rerun" {
+			t.Fatalf("entry %s = %#v, want it settled by the one decision", entry.Key, entry.Closed)
+		}
+	}
+}
+
 // Every other role gathers no docket at all: deciding what becomes of stopped
 // work belongs to one role, and a section the reader cannot act on is one every
 // conversation pays for and reads past.

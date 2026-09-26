@@ -264,7 +264,16 @@ type conversationDocketLog struct {
 	revisitAfter time.Duration
 }
 
-// Close settles the run's open entries of the classes the decision answers.
+// Close settles the run's open entries of the classes the decision answers, and
+// with them every other open entry of the same run.
+//
+// The second half is what one live entry per stopped run means for a decision.
+// The docket the development manager reads folds a run's open entries into one
+// (triage.Fold), so the decision she records is about that one entry and all it
+// carries beneath it. Closing only the classes the decision names would leave
+// the rest standing, and the same stoppage would be put to her again as the
+// entry that was folded under the one she answered. A decision whose classes the
+// run has no open entry of still closes nothing, which is the safe direction.
 //
 // Every entry it can close is attempted rather than stopping at the first
 // failure, and what failed is reported: a run with two open entries where one
@@ -288,20 +297,27 @@ func (d conversationDocketLog) Close(_ context.Context, closure chat.DocketClosu
 		}
 		revisit = decidedAt.Add(d.revisitAfter)
 	}
+	// The run's open entries: an entry a standing decision already settled is not
+	// this one's; one whose decision has lapsed is, because that entry is a
+	// question again and this is the answer to it.
+	var open []triage.Entry
+	answers := false
+	for _, entry := range entries {
+		if entry.RunID != closure.RunID || (entry.Closed != nil && entry.Closed.Holds(decidedAt)) {
+			continue
+		}
+		open = append(open, entry)
+		// A decision that answers none of the run's kinds of stoppage closes
+		// nothing, which leaves the entry standing rather than taking a question off
+		// the docket that nobody answered.
+		answers = answers || slices.Contains(closure.Classes, entry.Class)
+	}
+	if !answers {
+		return 0, nil
+	}
 	closed := 0
 	var problems []error
-	for _, entry := range entries {
-		// A decision that answers neither kind of stoppage closes nothing, which
-		// leaves the entry standing rather than taking a question off the docket
-		// that nobody answered. An entry a standing decision already settled is not
-		// this one's either; one whose decision has lapsed is, because that entry is
-		// a question again and this is the answer to it.
-		if entry.RunID != closure.RunID || !slices.Contains(closure.Classes, entry.Class) {
-			continue
-		}
-		if entry.Closed != nil && entry.Closed.Holds(decidedAt) {
-			continue
-		}
+	for _, entry := range open {
 		took, err := d.store.Close(triage.Closure{
 			SchemaVersion: triage.ClosureSchemaVersion,
 			Key:           entry.Key,
