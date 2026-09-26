@@ -171,8 +171,9 @@ func (r Reconciler) handBackRedMerge(ctx context.Context, state runstate.State, 
 // onto the target, re-earns the checks and the review, and queues the merge
 // again.
 //
-// What it will not do is hand the replay a budget the run has spent, or a run it
-// cannot replay: a local promotion is already on the target and has no head to
+// A lost race is never a reason to hand it back — the replay's own gate is
+// where the integration budget is enforced. What it will not do is replay a
+// run it cannot replay: a local promotion is already on the target and has no head to
 // rewrite, and a run whose worktree, branch, or sessions are gone has nothing to
 // replay from. Those are handed back as a red merge is. Where the replay is
 // possible and the moment is not — no sweep hosting runs, intake held, every
@@ -186,11 +187,11 @@ func (r Reconciler) updateQueuedHead(ctx context.Context, state runstate.State, 
 			"the forge's checks on pull request %d fail on files this change does not touch while its head is behind %s, and the harness cannot bring it up to date: %s: %s. The harness withdrew the queued merge rather than leave a red change queued, and the pull request needs a person",
 			published.Number, target, refusal, describe))
 	}
-	if state.IntegrationRetries >= r.IntegrationRetries {
-		return r.handBackRedMerge(ctx, state, fmt.Sprintf(
-			"the forge's checks on pull request %d fail on files this change does not touch while its head is behind %s, and bringing it up to date would be integration retry %d of %d permitted: %s. The harness withdrew the queued merge rather than leave a red change queued, and the pull request needs a person",
-			published.Number, target, state.IntegrationRetries+1, r.IntegrationRetries, describe))
-	}
+	// A head that fell behind is a race the change lost after its merge was
+	// queued, and a lost race is never a reason to hand anything back: the
+	// change is replayed as any lost race is, and the replay's own gate is where
+	// the integration budget is enforced, against a replay that stops on the
+	// change.
 	waiting := func(why string) (Reconciliation, error) {
 		result.Detail += fmt.Sprintf("; its head is to be brought up to date onto %s, and %s, so it is left queued for the next sweep", target, why)
 		return result, nil
@@ -220,8 +221,8 @@ func (r Reconciler) updateQueuedHead(ctx context.Context, state runstate.State, 
 	if err := r.Checks.DisableAutoMerge(ctx, published.Number); err != nil {
 		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("withdraw the queued merge of pull request %d before updating run %s: %w", published.Number, state.RunID, err)
 	}
-	reason := fmt.Sprintf("the forge's checks on pull request %d fail on files this change does not touch while its head is %d commit(s) behind %s (%s), so the reconcile sweep withdrew the queued merge and put the run back at its promotion to be brought up to date onto %s, checked and reviewed again, and queued again, as a replay is; this is integration retry %d of %d permitted",
-		published.Number, published.Checks.BehindBy, target, describe, target, state.IntegrationRetries+1, r.IntegrationRetries)
+	reason := fmt.Sprintf("the forge's checks on pull request %d fail on files this change does not touch while its head is %d commit(s) behind %s (%s), so the reconcile sweep withdrew the queued merge and put the run back at its promotion to be brought up to date onto %s, checked and reviewed again, and queued again, as a replay is; this is lost race %d, and a lost race costs nothing",
+		published.Number, published.Checks.BehindBy, target, describe, target, state.IntegrationRetries+1)
 	// The item is told first, as a resumption tells it first: a run made live
 	// behind an item that says nothing about it is one nobody reading the item
 	// can account for.

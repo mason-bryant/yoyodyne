@@ -2358,15 +2358,27 @@ type State struct {
 	// every run the sweep never continued, which is nearly all of them. See
 	// sweepcontinue.go.
 	SweepContinuations []SweepContinuation `json:"sweep_continuations,omitempty"`
-	// IntegrationRetries counts the promotions this run has re-prepared after
-	// losing a race for its target branch: the change replayed onto where the
-	// target went, re-checked, and re-reviewed. It is recorded before the retry
-	// begins, for the same reason the repair count is, so a process that dies
-	// mid-retry resumes against the budget it had rather than a fresh one. It is
-	// bounded separately from the repair budget because it bounds a different
-	// thing: how long a run keeps chasing a moving target, rather than how many
-	// times a developer is asked to fix its own change.
+	// IntegrationRetries counts the races for its target branch this run has
+	// lost: each one a promotion refused because the target moved, answered by
+	// replaying the change onto where the target went, re-checking it, and
+	// re-reviewing it. It is recorded before the replay begins, so a process that
+	// dies mid-replay comes back to the count it had. It is the record of the
+	// races and bounds nothing: a lost race never stops a run, and a run keeps
+	// replaying for as long as its replays keep passing.
 	IntegrationRetries int `json:"integration_retries,omitempty"`
+	// ChargedReplays counts the replays that stopped on the change rather than on
+	// the target: the replay conflicted, or the replayed change was handed back
+	// for a failing check, a refused path, missing verification, or a repair
+	// verdict. These, and only these, spend
+	// execution.integration_retries_before_reconciliation, and the replay that
+	// takes the count past it stops the run there, on the change. Each replay is
+	// charged at most once.
+	ChargedReplays int `json:"charged_replays,omitempty"`
+	// ReplayUnjudged is set when a replay is prepared and cleared by the first
+	// thing its gate says: a stop on the change, which charges it, or the next
+	// lost race or the promotion, which says it passed. It is what keeps one replay
+	// from being charged twice however many repairs it goes on to need.
+	ReplayUnjudged bool `json:"replay_unjudged,omitempty"`
 	// TransientRelaunches counts the provider invocations this run has reissued
 	// after one died without judging the work — an API error the provider's own
 	// retries did not outlast, or a response cut off mid-flight. One budget covers
@@ -2883,6 +2895,9 @@ func (s State) Validate() error {
 	}
 	if s.IntegrationRetries < 0 {
 		problems = append(problems, errors.New("integration_retries cannot be negative"))
+	}
+	if s.ChargedReplays < 0 {
+		problems = append(problems, errors.New("charged_replays cannot be negative"))
 	}
 	if s.TransientRelaunches < 0 {
 		problems = append(problems, errors.New("transient_relaunches cannot be negative"))

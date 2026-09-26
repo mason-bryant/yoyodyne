@@ -384,14 +384,16 @@ func parityScenarios() []parityScenario {
 			terminal: "delivered",
 		},
 		{
-			trace:    "integration-retries-are-bounded-and-block-the-item",
+			trace:    "a-replay-that-stops-on-the-change-spends-the-integration-budget",
 			workflow: DeliveryWorkflowID,
 			steps: []parityStep{
 				{parityClaim, "claimed"},
 				{parityDevelop, "produced"},
 				{parityCheck, "passed"},
 				{parityReview, "approved"},
-				{parityIntegrate, "contended"},
+				{parityIntegrate, "superseded"},
+				{parityCheck, "passed"},
+				{parityReview, "unresolved"},
 			},
 			terminal: "blocked",
 		},

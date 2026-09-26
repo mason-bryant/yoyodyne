@@ -365,8 +365,13 @@ and it may not be: the run ahead of it in the queue can have promoted into it,
 and committing to it yourself while a run is working moves it just as
 effectively. The promotion fails closed either way, and the run then replays its
 change onto where the target went, re-runs the checks, and gets a fresh
-independent review before trying again — up to
-`execution.integration_retries_before_reconciliation` times. The earlier
+independent review before trying again. Losing the race spends nothing: a run
+whose replays keep passing keeps replaying until it lands, each lost race said
+in the item's thread as a note and never docketed.
+`execution.integration_retries_before_reconciliation` bounds only the replays
+that stop on the change — one that conflicts, or is handed back for a failing
+check or a repair verdict — and the replay that takes the count past it stops
+the run there, on the change; at `0` no replay may stop on the change. The earlier
 approval never carries over, because the diff it approved is not the one that
 would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the

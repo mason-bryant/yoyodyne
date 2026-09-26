@@ -113,6 +113,7 @@ var reaches = map[Kind]Reach{
 	KindPathRefused:    ReachThread,
 	KindReviewApproved: ReachThread,
 	KindReviewRepairs:  ReachThread,
+	KindRaceLost:       ReachThread,
 	KindPromoted:       ReachThread,
 	KindPublished:      ReachThread,
 	KindMergeQueued:    ReachThread,
